@@ -1,0 +1,414 @@
+{
+  "version": "0.8.4",
+  "children": [
+    {
+      "type": "frame",
+      "id": "n1",
+      "name": "首页 Home",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 412.0,
+      "height": 844.0,
+      "layout": "vertical",
+      "fill": [
+        {
+          "type": "solid",
+          "color": "#F5F6F8"
+        }
+      ],
+      "children": [
+        {
+          "type": "frame",
+          "id": "n2",
+          "name": "StatusBar",
+          "width": "fill_container",
+          "height": 34.0,
+          "layout": "horizontal",
+          "padding": [
+            10.0,
+            22.0,
+            0.0,
+            22.0
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "n3",
+              "name": "Time",
+              "width": "fit_content",
+              "height": "fit_content",
+              "content": "12:30",
+              "fontSize": 13.0,
+              "fontWeight": 600,
+              "fill": [
+                {
+                  "type": "solid",
+                  "color": "#171A1F"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "n4",
+              "name": "StatusIcons",
+              "layout": "horizontal",
+              "gap": 6.0,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "n5",
+                  "name": "Net",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "content": "5G",
+                  "fontSize": 11.0,
+                  "fontWeight": 600,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#3C4049"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "n6",
+                  "name": "Battery",
+                  "width": 24.0,
+                  "height": 12.0,
+                  "layout": "horizontal",
+                  "padding": 2.0,
+                  "cornerRadius": 3.0,
+                  "stroke": {
+                    "thickness": 1.0,
+                    "fill": [
+                      {
+                        "type": "solid",
+                        "color": "#3C4049"
+                      }
+                    ]
+                  },
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "n7",
+                      "name": "BatteryCore",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "cornerRadius": 1.0,
+                      "fill": [
+                        {
+                          "type": "solid",
+                          "color": "#3C4049"
+                        }
+                      ],
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "n8",
+          "name": "AppBar",
+          "width": "fill_container",
+          "height": 44.0,
+          "layout": "horizontal",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "n9",
+              "name": "AppName",
+              "width": "fit_content",
+              "height": "fit_content",
+              "content": "APP名称",
+              "fontSize": 17.0,
+              "fontWeight": 600,
+              "fill": [
+                {
+                  "type": "solid",
+                  "color": "#171A1F"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "n10",
+          "name": "Content",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 10.0,
+          "padding": [
+            8.0,
+            16.0,
+            16.0,
+            16.0
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "n11",
+              "name": "AppGridCard",
+              "width": "fill_container",
+              "layout": "vertical",
+              "padding": [
+                18.0,
+                14.0,
+                18.0,
+                14.0
+              ],
+              "cornerRadius": 12.0,
+              "fill": [
+                {
+                  "type": "solid",
+                  "color": "#FFFFFF"
+                }
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "n12",
+                  "name": "Row0",
+                  "width": "fill_container",
+                  "layout": "horizontal",
+                  "padding": [
+                    0.0,
+                    6.0,
+                    0.0,
+                    6.0
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "n13",
+                      "name": "校园地图",
+                      "width": 70.0,
+                      "layout": "vertical",
+                      "gap": 7.0,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "n14",
+                          "name": "校园地图Icon",
+                          "width": 46.0,
+                          "height": 46.0,
+                          "layout": "vertical",
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "cornerRadius": 12.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#00B578"
+                            }
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "n15",
+                              "name": "校园地图Glyph",
+                              "width": "fit_content",
+                              "height": "fit_content",
+                              "content": "图",
+                              "fontSize": 20.0,
+                              "fontWeight": 600,
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#FFFFFF"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "n16",
+                          "name": "校园地图Label",
+                          "width": "fit_content",
+                          "height": "fit_content",
+                          "content": "校园地图",
+                          "fontSize": 12.0,
+                          "fontWeight": 500,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#4A4F66"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "n17",
+          "name": "TabBar",
+          "width": "fill_container",
+          "layout": "vertical",
+          "fill": [
+            {
+              "type": "solid",
+              "color": "#FFFFFF"
+            }
+          ],
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "n18",
+              "name": "Divider",
+              "width": "fill_container",
+              "height": 1.0,
+              "fill": [
+                {
+                  "type": "solid",
+                  "color": "#E5E6EB"
+                }
+              ],
+              "children": []
+            },
+            {
+              "type": "frame",
+              "id": "n19",
+              "name": "Tabs",
+              "width": "fill_container",
+              "layout": "horizontal",
+              "padding": [
+                7.0,
+                10.0,
+                8.0,
+                10.0
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "n20",
+                  "name": "Tab-首页",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4.0,
+                  "padding": [
+                    3.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "path",
+                      "id": "n21",
+                      "name": "IconHome",
+                      "d": "M4 10.5L12 3l8 7.5V21h-5.5v-6h-5v6H4Z",
+                      "width": 21.0,
+                      "height": 20.0,
+                      "fill": [
+                        {
+                          "type": "solid",
+                          "color": "#0082EF"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "n22",
+                      "name": "TabLabelHome",
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "content": "首页",
+                      "fontSize": 10.0,
+                      "fontWeight": 600,
+                      "fill": [
+                        {
+                          "type": "solid",
+                          "color": "#0082EF"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "n23",
+                  "name": "Tab-我的",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4.0,
+                  "padding": [
+                    3.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "path",
+                      "id": "n24",
+                      "name": "IconMe",
+                      "d": "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 21a7.5 7.5 0 0 1 15 0",
+                      "width": 20.0,
+                      "height": 20.0,
+                      "fill": [
+                        {
+                          "type": "solid",
+                          "color": "#00000000"
+                        }
+                      ],
+                      "stroke": {
+                        "thickness": 1.6,
+                        "fill": [
+                          {
+                            "type": "solid",
+                            "color": "#8A8F99"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "n25",
+                      "name": "TabLabelMe",
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "content": "我的",
+                      "fontSize": 10.0,
+                      "fontWeight": 500,
+                      "fill": [
+                        {
+                          "type": "solid",
+                          "color": "#8A8F99"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "editorMeta": {
+    "activePageIndex": 0,
+    "preserveAuthoredGeometry": false
+  }
+}
