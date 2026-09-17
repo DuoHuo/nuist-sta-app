@@ -1,0 +1,108 @@
+/* DeepSeek 鲸鱼 · 粒子交互 —— 页面外壳样式
+   背景渐变 + 文案层；所有视觉效果都在 canvas 上完成。 */
+
+:root {
+  --ink: #e9f1ff;
+  --ink-dim: #8f9dc4;
+  --bg-0: #04050c;
+  --bg-1: #0a0f22;
+  --bg-2: #131a36;
+  --accent: #4d6bfe;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(1200px 820px at 50% 44%, var(--bg-2) 0%, rgba(19, 26, 54, 0) 62%),
+    radial-gradient(900px 620px at 12% 104%, rgba(77, 107, 254, 0.20) 0%, rgba(77, 107, 254, 0) 68%),
+    radial-gradient(760px 560px at 92% -8%, rgba(34, 211, 238, 0.13) 0%, rgba(34, 211, 238, 0) 70%),
+    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+  color: var(--ink);
+  font-family: "Inter", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* 光标划过是主要交互，禁用移动端默认手势干扰 */
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+body.is-drawing,
+body.is-drawing * { cursor: none; }
+
+#stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 1;
+}
+
+/* 文案层不拦截指针事件，保证光标始终能扫到粒子 */
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  padding: 0 1.25rem clamp(1.5rem, 5vh, 3.25rem);
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+}
+
+.wordmark {
+  margin: 0;
+  font-size: clamp(1.5rem, 5.4vw, 2.85rem);
+  font-weight: 650;
+  letter-spacing: 0.42em;
+  /* 抵消末位字母的字距，保持视觉居中 */
+  text-indent: 0.42em;
+  background: linear-gradient(100deg, #ffffff 8%, #b9c8ff 46%, #6fe4ff 92%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 26px rgba(96, 140, 255, 0.42));
+}
+
+.tagline {
+  margin: 0;
+  font-size: clamp(0.8rem, 2.5vw, 0.98rem);
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+}
+
+.hint {
+  margin: 0;
+  font-size: clamp(0.68rem, 2.1vw, 0.78rem);
+  letter-spacing: 0.24em;
+  color: rgba(143, 157, 196, 0.62);
+}
+
+.hint span { white-space: nowrap; }
+
+/* canvas / SVG 栅格化都失败时的兜底提示（几乎不会触发） */
+.fallback {
+  position: absolute;
+  inset: auto 0 50% 0;
+  z-index: 3;
+  text-align: center;
+  color: var(--ink-dim);
+  font-size: 0.95rem;
+}
+.fallback[hidden] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wordmark { filter: none; }
+}

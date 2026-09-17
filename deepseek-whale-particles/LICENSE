@@ -1,0 +1,37 @@
+MIT License
+
+Copyright (c) 2026 <your-name>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+Note on third-party marks
+-------------------------
+
+The MIT license above covers the source code of this project only.
+
+The whale silhouette embedded in `index.html` originates from DeepSeek's
+official whale icon (taken from the `favicon.svg` shipped with the
+DeepSeek Harness frontend). "DeepSeek", the whale icon and related marks are
+trademarks of their respective owner. They are NOT covered by the MIT license
+granted here, and no endorsement by or affiliation with DeepSeek is implied.
+If you redistribute this project or use it commercially, verify that your use
+of the mark complies with the owner's brand guidelines, or replace the
+silhouette with your own shape.
