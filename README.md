@@ -8,8 +8,8 @@ NUIST赛博分院帽 - 众社团共建
   - 顶栏居中标题（`APP名称` 为占位，定稿后改 `lib/main.dart` 里的 `kAppName` 一处即可）
   - 应用宫格卡片，数据驱动、可扩展：新增应用只需在 `HomePage.apps` 加一条 `AppItem`
   - 底部双页签：首页 / 我的
+- [x] 我的页面（基础版：用户登录卡片 + 我的社团/我的活动/设置/关于）
 - [ ] 校园地图页面
-- [ ] 我的页面
 - [ ] 分院帽测试等社团功能
 
 ## 如何运行
@@ -26,4 +26,4 @@ flutter build apk    # 构建 release APK
 
 ## 设计稿
 
-`design/home.op` 为首页设计稿（OpenPencil 格式）。
+`design/home.op` 为设计稿（OpenPencil 格式），含「首页」「我的」两个页面。
