@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- H5 小程序（WebView）联网；debug 模板自带，release 必须显式声明 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="APP名称"
         android:name="${applicationName}"
