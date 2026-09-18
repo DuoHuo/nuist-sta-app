@@ -1,174 +1,270 @@
 {
   "version": "0.8.4",
-  "children": [
+  "pages": [
     {
-      "type": "frame",
-      "id": "n1",
+      "id": "n87",
       "name": "首页 Home",
-      "x": 0.0,
-      "y": 0.0,
-      "width": 412.0,
-      "height": 844.0,
-      "layout": "vertical",
-      "fill": [
-        {
-          "type": "solid",
-          "color": "#F5F6F8"
-        }
-      ],
       "children": [
         {
           "type": "frame",
-          "id": "n2",
-          "name": "StatusBar",
-          "width": "fill_container",
-          "height": 34.0,
-          "layout": "horizontal",
-          "padding": [
-            10.0,
-            22.0,
-            0.0,
-            22.0
+          "id": "n1",
+          "name": "首页 Home",
+          "x": 0.0,
+          "y": 0.0,
+          "width": 412.0,
+          "height": 844.0,
+          "layout": "vertical",
+          "fill": [
+            {
+              "type": "solid",
+              "color": "#F5F6F8"
+            }
           ],
-          "justifyContent": "space_between",
-          "alignItems": "center",
           "children": [
             {
-              "type": "text",
-              "id": "n3",
-              "name": "Time",
-              "width": "fit_content",
-              "height": "fit_content",
-              "content": "12:30",
-              "fontSize": 13.0,
-              "fontWeight": 600,
-              "fill": [
-                {
-                  "type": "solid",
-                  "color": "#171A1F"
-                }
-              ]
-            },
-            {
               "type": "frame",
-              "id": "n4",
-              "name": "StatusIcons",
+              "id": "n2",
+              "name": "StatusBar",
+              "width": "fill_container",
+              "height": 34.0,
               "layout": "horizontal",
-              "gap": 6.0,
+              "padding": [
+                10.0,
+                22.0,
+                0.0,
+                22.0
+              ],
+              "justifyContent": "space_between",
               "alignItems": "center",
               "children": [
                 {
                   "type": "text",
-                  "id": "n5",
-                  "name": "Net",
+                  "id": "n3",
+                  "name": "Time",
                   "width": "fit_content",
                   "height": "fit_content",
-                  "content": "5G",
-                  "fontSize": 11.0,
+                  "content": "12:30",
+                  "fontSize": 13.0,
                   "fontWeight": 600,
                   "fill": [
                     {
                       "type": "solid",
-                      "color": "#3C4049"
+                      "color": "#171A1F"
                     }
                   ]
                 },
                 {
                   "type": "frame",
-                  "id": "n6",
-                  "name": "Battery",
-                  "width": 24.0,
-                  "height": 12.0,
+                  "id": "n4",
+                  "name": "StatusIcons",
                   "layout": "horizontal",
-                  "padding": 2.0,
-                  "cornerRadius": 3.0,
-                  "stroke": {
-                    "thickness": 1.0,
-                    "fill": [
-                      {
-                        "type": "solid",
-                        "color": "#3C4049"
-                      }
-                    ]
-                  },
+                  "gap": 6.0,
+                  "alignItems": "center",
                   "children": [
                     {
-                      "type": "rectangle",
-                      "id": "n7",
-                      "name": "BatteryCore",
-                      "width": "fill_container",
-                      "height": "fill_container",
-                      "cornerRadius": 1.0,
+                      "type": "text",
+                      "id": "n5",
+                      "name": "Net",
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "content": "5G",
+                      "fontSize": 11.0,
+                      "fontWeight": 600,
                       "fill": [
                         {
                           "type": "solid",
                           "color": "#3C4049"
                         }
-                      ],
-                      "children": []
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "n6",
+                      "name": "Battery",
+                      "width": 24.0,
+                      "height": 12.0,
+                      "layout": "horizontal",
+                      "padding": 2.0,
+                      "cornerRadius": 3.0,
+                      "stroke": {
+                        "thickness": 1.0,
+                        "fill": [
+                          {
+                            "type": "solid",
+                            "color": "#3C4049"
+                          }
+                        ]
+                      },
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "n7",
+                          "name": "BatteryCore",
+                          "width": "fill_container",
+                          "height": "fill_container",
+                          "cornerRadius": 1.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#3C4049"
+                            }
+                          ],
+                          "children": []
+                        }
+                      ]
                     }
                   ]
                 }
               ]
-            }
-          ]
-        },
-        {
-          "type": "frame",
-          "id": "n8",
-          "name": "AppBar",
-          "width": "fill_container",
-          "height": 44.0,
-          "layout": "horizontal",
-          "justifyContent": "center",
-          "alignItems": "center",
-          "children": [
-            {
-              "type": "text",
-              "id": "n9",
-              "name": "AppName",
-              "width": "fit_content",
-              "height": "fit_content",
-              "content": "APP名称",
-              "fontSize": 17.0,
-              "fontWeight": 600,
-              "fill": [
-                {
-                  "type": "solid",
-                  "color": "#171A1F"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "type": "frame",
-          "id": "n10",
-          "name": "Content",
-          "width": "fill_container",
-          "height": "fill_container",
-          "layout": "vertical",
-          "gap": 10.0,
-          "padding": [
-            8.0,
-            16.0,
-            16.0,
-            16.0
-          ],
-          "children": [
+            },
             {
               "type": "frame",
-              "id": "n11",
-              "name": "AppGridCard",
+              "id": "n8",
+              "name": "AppBar",
+              "width": "fill_container",
+              "height": 44.0,
+              "layout": "horizontal",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "n9",
+                  "name": "AppName",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "content": "APP名称",
+                  "fontSize": 17.0,
+                  "fontWeight": 600,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#171A1F"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "n10",
+              "name": "Content",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 10.0,
+              "padding": [
+                8.0,
+                16.0,
+                16.0,
+                16.0
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "n11",
+                  "name": "AppGridCard",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "padding": [
+                    18.0,
+                    14.0,
+                    18.0,
+                    14.0
+                  ],
+                  "cornerRadius": 12.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#FFFFFF"
+                    }
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "n12",
+                      "name": "Row0",
+                      "width": "fill_container",
+                      "layout": "horizontal",
+                      "padding": [
+                        0.0,
+                        6.0,
+                        0.0,
+                        6.0
+                      ],
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "n13",
+                          "name": "校园地图",
+                          "width": 70.0,
+                          "layout": "vertical",
+                          "gap": 7.0,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "n14",
+                              "name": "校园地图Icon",
+                              "width": 46.0,
+                              "height": 46.0,
+                              "layout": "vertical",
+                              "justifyContent": "center",
+                              "alignItems": "center",
+                              "cornerRadius": 12.0,
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#00B578"
+                                }
+                              ],
+                              "children": [
+                                {
+                                  "type": "path",
+                                  "id": "n26",
+                                  "name": "IconMap",
+                                  "d": "M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5.5l.16-.03L9 18.9l6 2.1 5.64-1.9c.21-.07.36-.25.36-.48V3.5c0-.28-.22-.5-.5-.5zM15 19l-6-2.11V5l6 2.11V19z",
+                                  "width": 26.0,
+                                  "height": 26.0,
+                                  "fill": [
+                                    {
+                                      "type": "solid",
+                                      "color": "#FFFFFF"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "n16",
+                              "name": "校园地图Label",
+                              "width": "fit_content",
+                              "height": "fit_content",
+                              "content": "校园地图",
+                              "fontSize": 12.0,
+                              "fontWeight": 500,
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#4A4F66"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "n17",
+              "name": "TabBar",
               "width": "fill_container",
               "layout": "vertical",
-              "padding": [
-                18.0,
-                14.0,
-                18.0,
-                14.0
-              ],
-              "cornerRadius": 12.0,
               "fill": [
                 {
                   "type": "solid",
@@ -177,53 +273,356 @@
               ],
               "children": [
                 {
+                  "type": "rectangle",
+                  "id": "n18",
+                  "name": "Divider",
+                  "width": "fill_container",
+                  "height": 1.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#E5E6EB"
+                    }
+                  ],
+                  "children": []
+                },
+                {
                   "type": "frame",
-                  "id": "n12",
-                  "name": "Row0",
+                  "id": "n19",
+                  "name": "Tabs",
                   "width": "fill_container",
                   "layout": "horizontal",
                   "padding": [
-                    0.0,
-                    6.0,
-                    0.0,
-                    6.0
+                    7.0,
+                    10.0,
+                    8.0,
+                    10.0
                   ],
                   "children": [
                     {
                       "type": "frame",
-                      "id": "n13",
-                      "name": "校园地图",
-                      "width": 70.0,
+                      "id": "n20",
+                      "name": "Tab-首页",
+                      "width": "fill_container",
                       "layout": "vertical",
-                      "gap": 7.0,
+                      "gap": 4.0,
+                      "padding": [
+                        3.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "path",
+                          "id": "n21",
+                          "name": "IconHome",
+                          "d": "M4 10.5L12 3l8 7.5V21h-5.5v-6h-5v6H4Z",
+                          "width": 21.0,
+                          "height": 20.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#0082EF"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "n22",
+                          "name": "TabLabelHome",
+                          "width": "fit_content",
+                          "height": "fit_content",
+                          "content": "首页",
+                          "fontSize": 10.0,
+                          "fontWeight": 600,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#0082EF"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "n23",
+                      "name": "Tab-我的",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4.0,
+                      "padding": [
+                        3.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "path",
+                          "id": "n24",
+                          "name": "IconMe",
+                          "d": "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 21a7.5 7.5 0 0 1 15 0",
+                          "width": 20.0,
+                          "height": 20.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#00000000"
+                            }
+                          ],
+                          "stroke": {
+                            "thickness": 1.6,
+                            "fill": [
+                              {
+                                "type": "solid",
+                                "color": "#8A8F99"
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "n25",
+                          "name": "TabLabelMe",
+                          "width": "fit_content",
+                          "height": "fit_content",
+                          "content": "我的",
+                          "fontSize": 10.0,
+                          "fontWeight": 500,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#8A8F99"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "n88",
+      "name": "我的 Profile",
+      "children": [
+        {
+          "type": "frame",
+          "id": "n90",
+          "name": "我的 Profile",
+          "x": 0.0,
+          "y": 0.0,
+          "width": 412.0,
+          "height": 844.0,
+          "layout": "vertical",
+          "fill": [
+            {
+              "type": "solid",
+              "color": "#F5F6F8"
+            }
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "n91",
+              "name": "StatusBar",
+              "width": "fill_container",
+              "height": 34.0,
+              "layout": "horizontal",
+              "padding": [
+                10.0,
+                22.0,
+                0.0,
+                22.0
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "n92",
+                  "name": "Time",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "content": "12:30",
+                  "fontSize": 13.0,
+                  "fontWeight": 600,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#171A1F"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "n93",
+                  "name": "StatusIcons",
+                  "layout": "horizontal",
+                  "gap": 6.0,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "n94",
+                      "name": "Net",
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "content": "5G",
+                      "fontSize": 11.0,
+                      "fontWeight": 600,
+                      "fill": [
+                        {
+                          "type": "solid",
+                          "color": "#3C4049"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "n95",
+                      "name": "Battery",
+                      "width": 24.0,
+                      "height": 12.0,
+                      "layout": "horizontal",
+                      "padding": 2.0,
+                      "cornerRadius": 3.0,
+                      "stroke": {
+                        "thickness": 1.0,
+                        "fill": [
+                          {
+                            "type": "solid",
+                            "color": "#3C4049"
+                          }
+                        ]
+                      },
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "n96",
+                          "name": "BatteryCore",
+                          "width": "fill_container",
+                          "height": "fill_container",
+                          "cornerRadius": 1.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#3C4049"
+                            }
+                          ],
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "n97",
+              "name": "AppBar",
+              "width": "fill_container",
+              "height": 44.0,
+              "layout": "horizontal",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "n98",
+                  "name": "ProfileTitle",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "content": "我的",
+                  "fontSize": 17.0,
+                  "fontWeight": 600,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#171A1F"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "n99",
+              "name": "Content",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 10.0,
+              "padding": [
+                8.0,
+                16.0,
+                16.0,
+                16.0
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "n100",
+                  "name": "UserCard",
+                  "width": "fill_container",
+                  "height": 92.0,
+                  "layout": "horizontal",
+                  "padding": [
+                    0.0,
+                    16.0,
+                    0.0,
+                    16.0
+                  ],
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "cornerRadius": 12.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#FFFFFF"
+                    }
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "n101",
+                      "name": "UserLeft",
+                      "layout": "horizontal",
+                      "gap": 14.0,
                       "alignItems": "center",
                       "children": [
                         {
                           "type": "frame",
-                          "id": "n14",
-                          "name": "校园地图Icon",
-                          "width": 46.0,
-                          "height": 46.0,
-                          "layout": "vertical",
-                          "justifyContent": "center",
-                          "alignItems": "center",
-                          "cornerRadius": 12.0,
+                          "id": "n102",
+                          "name": "UserAvatar",
+                          "width": 56.0,
+                          "height": 56.0,
+                          "cornerRadius": 28.0,
                           "fill": [
                             {
                               "type": "solid",
-                              "color": "#00B578"
+                              "color": "#0082EF"
                             }
                           ],
                           "children": [
                             {
-                              "type": "text",
-                              "id": "n15",
-                              "name": "校园地图Glyph",
-                              "width": "fit_content",
-                              "height": "fit_content",
-                              "content": "图",
-                              "fontSize": 20.0,
-                              "fontWeight": 600,
+                              "type": "path",
+                              "id": "n103",
+                              "name": "UserAvatarGlyph",
+                              "x": 15.0,
+                              "y": 15.0,
+                              "d": "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
+                              "width": 26.0,
+                              "height": 26.0,
                               "fill": [
                                 {
                                   "type": "solid",
@@ -234,138 +633,55 @@
                           ]
                         },
                         {
-                          "type": "text",
-                          "id": "n16",
-                          "name": "校园地图Label",
-                          "width": "fit_content",
-                          "height": "fit_content",
-                          "content": "校园地图",
-                          "fontSize": 12.0,
-                          "fontWeight": 500,
-                          "fill": [
+                          "type": "frame",
+                          "id": "n104",
+                          "name": "UserText",
+                          "layout": "vertical",
+                          "gap": 5.0,
+                          "children": [
                             {
-                              "type": "solid",
-                              "color": "#4A4F66"
+                              "type": "text",
+                              "id": "n105",
+                              "name": "UserName",
+                              "width": "fit_content",
+                              "height": "fit_content",
+                              "content": "点击登录",
+                              "fontSize": 17.0,
+                              "fontWeight": 600,
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#171A1F"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "n106",
+                              "name": "UserHint",
+                              "width": "fit_content",
+                              "height": "fit_content",
+                              "content": "登录后同步我的社团与活动",
+                              "fontSize": 11.0,
+                              "fontWeight": 400,
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#9AA0B4"
+                                }
+                              ]
                             }
                           ]
                         }
                       ]
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "type": "frame",
-          "id": "n17",
-          "name": "TabBar",
-          "width": "fill_container",
-          "layout": "vertical",
-          "fill": [
-            {
-              "type": "solid",
-              "color": "#FFFFFF"
-            }
-          ],
-          "children": [
-            {
-              "type": "rectangle",
-              "id": "n18",
-              "name": "Divider",
-              "width": "fill_container",
-              "height": 1.0,
-              "fill": [
-                {
-                  "type": "solid",
-                  "color": "#E5E6EB"
-                }
-              ],
-              "children": []
-            },
-            {
-              "type": "frame",
-              "id": "n19",
-              "name": "Tabs",
-              "width": "fill_container",
-              "layout": "horizontal",
-              "padding": [
-                7.0,
-                10.0,
-                8.0,
-                10.0
-              ],
-              "children": [
-                {
-                  "type": "frame",
-                  "id": "n20",
-                  "name": "Tab-首页",
-                  "width": "fill_container",
-                  "layout": "vertical",
-                  "gap": 4.0,
-                  "padding": [
-                    3.0,
-                    0.0,
-                    0.0,
-                    0.0
-                  ],
-                  "alignItems": "center",
-                  "children": [
-                    {
-                      "type": "path",
-                      "id": "n21",
-                      "name": "IconHome",
-                      "d": "M4 10.5L12 3l8 7.5V21h-5.5v-6h-5v6H4Z",
-                      "width": 21.0,
-                      "height": 20.0,
-                      "fill": [
-                        {
-                          "type": "solid",
-                          "color": "#0082EF"
-                        }
-                      ]
                     },
                     {
-                      "type": "text",
-                      "id": "n22",
-                      "name": "TabLabelHome",
-                      "width": "fit_content",
-                      "height": "fit_content",
-                      "content": "首页",
-                      "fontSize": 10.0,
-                      "fontWeight": 600,
-                      "fill": [
-                        {
-                          "type": "solid",
-                          "color": "#0082EF"
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "type": "frame",
-                  "id": "n23",
-                  "name": "Tab-我的",
-                  "width": "fill_container",
-                  "layout": "vertical",
-                  "gap": 4.0,
-                  "padding": [
-                    3.0,
-                    0.0,
-                    0.0,
-                    0.0
-                  ],
-                  "alignItems": "center",
-                  "children": [
-                    {
                       "type": "path",
-                      "id": "n24",
-                      "name": "IconMe",
-                      "d": "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 21a7.5 7.5 0 0 1 15 0",
-                      "width": 20.0,
-                      "height": 20.0,
+                      "id": "n107",
+                      "name": "ChevronUser",
+                      "d": "M9 6l6 6-6 6",
+                      "width": 16.0,
+                      "height": 16.0,
                       "fill": [
                         {
                           "type": "solid",
@@ -373,28 +689,694 @@
                         }
                       ],
                       "stroke": {
-                        "thickness": 1.6,
+                        "thickness": 1.8,
                         "fill": [
                           {
                             "type": "solid",
-                            "color": "#8A8F99"
+                            "color": "#C9CDD4"
                           }
                         ]
                       }
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "n108",
+                  "name": "ListCard",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "padding": [
+                    2.0,
+                    16.0,
+                    2.0,
+                    16.0
+                  ],
+                  "cornerRadius": 12.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#FFFFFF"
+                    }
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "n109",
+                      "name": "Row-我的社团",
+                      "width": "fill_container",
+                      "height": 52.0,
+                      "layout": "horizontal",
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "n110",
+                          "name": "Left",
+                          "layout": "horizontal",
+                          "gap": 12.0,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "path",
+                              "id": "n111",
+                              "name": "IconClub",
+                              "d": "M6 4v17M6 4h11l-2.5 3.8L17 11.5H6",
+                              "width": 20.0,
+                              "height": 20.0,
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#00000000"
+                                }
+                              ],
+                              "stroke": {
+                                "thickness": 1.6,
+                                "fill": [
+                                  {
+                                    "type": "solid",
+                                    "color": "#4A4F66"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "id": "n112",
+                              "name": "Label",
+                              "width": "fit_content",
+                              "height": "fit_content",
+                              "content": "我的社团",
+                              "fontSize": 14.0,
+                              "fontWeight": 500,
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#1F2329"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "path",
+                          "id": "n113",
+                          "name": "Chevron",
+                          "d": "M9 6l6 6-6 6",
+                          "width": 16.0,
+                          "height": 16.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#00000000"
+                            }
+                          ],
+                          "stroke": {
+                            "thickness": 1.8,
+                            "fill": [
+                              {
+                                "type": "solid",
+                                "color": "#C9CDD4"
+                              }
+                            ]
+                          }
+                        }
+                      ]
                     },
                     {
-                      "type": "text",
-                      "id": "n25",
-                      "name": "TabLabelMe",
-                      "width": "fit_content",
-                      "height": "fit_content",
-                      "content": "我的",
-                      "fontSize": 10.0,
-                      "fontWeight": 500,
+                      "type": "rectangle",
+                      "id": "n114",
+                      "name": "RowDivider",
+                      "width": "fill_container",
+                      "height": 1.0,
                       "fill": [
                         {
                           "type": "solid",
-                          "color": "#8A8F99"
+                          "color": "#F0F1F3"
+                        }
+                      ],
+                      "children": []
+                    },
+                    {
+                      "type": "frame",
+                      "id": "n115",
+                      "name": "Row-我的活动",
+                      "width": "fill_container",
+                      "height": 52.0,
+                      "layout": "horizontal",
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "n116",
+                          "name": "Left",
+                          "layout": "horizontal",
+                          "gap": 12.0,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "path",
+                              "id": "n117",
+                              "name": "IconEvent",
+                              "d": "M4 6.5h16v14H4zM8 3.5v4.5M16 3.5v4.5M4 11h16",
+                              "width": 20.0,
+                              "height": 20.0,
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#00000000"
+                                }
+                              ],
+                              "stroke": {
+                                "thickness": 1.6,
+                                "fill": [
+                                  {
+                                    "type": "solid",
+                                    "color": "#4A4F66"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "id": "n118",
+                              "name": "Label",
+                              "width": "fit_content",
+                              "height": "fit_content",
+                              "content": "我的活动",
+                              "fontSize": 14.0,
+                              "fontWeight": 500,
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#1F2329"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "path",
+                          "id": "n119",
+                          "name": "Chevron",
+                          "d": "M9 6l6 6-6 6",
+                          "width": 16.0,
+                          "height": 16.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#00000000"
+                            }
+                          ],
+                          "stroke": {
+                            "thickness": 1.8,
+                            "fill": [
+                              {
+                                "type": "solid",
+                                "color": "#C9CDD4"
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "rectangle",
+                      "id": "n120",
+                      "name": "RowDivider",
+                      "width": "fill_container",
+                      "height": 1.0,
+                      "fill": [
+                        {
+                          "type": "solid",
+                          "color": "#F0F1F3"
+                        }
+                      ],
+                      "children": []
+                    },
+                    {
+                      "type": "frame",
+                      "id": "n121",
+                      "name": "Row-设置",
+                      "width": "fill_container",
+                      "height": 52.0,
+                      "layout": "horizontal",
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "n122",
+                          "name": "Left",
+                          "layout": "horizontal",
+                          "gap": 12.0,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "n123",
+                              "name": "IconSettings",
+                              "width": 20.0,
+                              "height": 20.0,
+                              "children": [
+                                {
+                                  "type": "rectangle",
+                                  "id": "n124",
+                                  "x": 1.0,
+                                  "y": 7.2,
+                                  "width": 9.0,
+                                  "height": 1.6,
+                                  "cornerRadius": 0.8,
+                                  "fill": [
+                                    {
+                                      "type": "solid",
+                                      "color": "#4A4F66"
+                                    }
+                                  ],
+                                  "children": []
+                                },
+                                {
+                                  "type": "rectangle",
+                                  "id": "n125",
+                                  "x": 14.5,
+                                  "y": 7.2,
+                                  "width": 4.5,
+                                  "height": 1.6,
+                                  "cornerRadius": 0.8,
+                                  "fill": [
+                                    {
+                                      "type": "solid",
+                                      "color": "#4A4F66"
+                                    }
+                                  ],
+                                  "children": []
+                                },
+                                {
+                                  "type": "ellipse",
+                                  "id": "n126",
+                                  "x": 9.6,
+                                  "y": 5.1,
+                                  "width": 4.6,
+                                  "height": 4.6,
+                                  "fill": [
+                                    {
+                                      "type": "solid",
+                                      "color": "#00000000"
+                                    }
+                                  ],
+                                  "stroke": {
+                                    "thickness": 1.6,
+                                    "fill": [
+                                      {
+                                        "type": "solid",
+                                        "color": "#4A4F66"
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "type": "rectangle",
+                                  "id": "n127",
+                                  "x": 1.0,
+                                  "y": 15.2,
+                                  "width": 4.5,
+                                  "height": 1.6,
+                                  "cornerRadius": 0.8,
+                                  "fill": [
+                                    {
+                                      "type": "solid",
+                                      "color": "#4A4F66"
+                                    }
+                                  ],
+                                  "children": []
+                                },
+                                {
+                                  "type": "rectangle",
+                                  "id": "n128",
+                                  "x": 10.0,
+                                  "y": 15.2,
+                                  "width": 9.0,
+                                  "height": 1.6,
+                                  "cornerRadius": 0.8,
+                                  "fill": [
+                                    {
+                                      "type": "solid",
+                                      "color": "#4A4F66"
+                                    }
+                                  ],
+                                  "children": []
+                                },
+                                {
+                                  "type": "ellipse",
+                                  "id": "n129",
+                                  "x": 5.2,
+                                  "y": 13.1,
+                                  "width": 4.6,
+                                  "height": 4.6,
+                                  "fill": [
+                                    {
+                                      "type": "solid",
+                                      "color": "#00000000"
+                                    }
+                                  ],
+                                  "stroke": {
+                                    "thickness": 1.6,
+                                    "fill": [
+                                      {
+                                        "type": "solid",
+                                        "color": "#4A4F66"
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "n130",
+                              "name": "Label",
+                              "width": "fit_content",
+                              "height": "fit_content",
+                              "content": "设置",
+                              "fontSize": 14.0,
+                              "fontWeight": 500,
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#1F2329"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "path",
+                          "id": "n131",
+                          "name": "Chevron",
+                          "d": "M9 6l6 6-6 6",
+                          "width": 16.0,
+                          "height": 16.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#00000000"
+                            }
+                          ],
+                          "stroke": {
+                            "thickness": 1.8,
+                            "fill": [
+                              {
+                                "type": "solid",
+                                "color": "#C9CDD4"
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "rectangle",
+                      "id": "n132",
+                      "name": "RowDivider",
+                      "width": "fill_container",
+                      "height": 1.0,
+                      "fill": [
+                        {
+                          "type": "solid",
+                          "color": "#F0F1F3"
+                        }
+                      ],
+                      "children": []
+                    },
+                    {
+                      "type": "frame",
+                      "id": "n133",
+                      "name": "Row-关于",
+                      "width": "fill_container",
+                      "height": 52.0,
+                      "layout": "horizontal",
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "n134",
+                          "name": "Left",
+                          "layout": "horizontal",
+                          "gap": 12.0,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "n135",
+                              "name": "IconAbout",
+                              "width": 20.0,
+                              "height": 20.0,
+                              "children": [
+                                {
+                                  "type": "ellipse",
+                                  "id": "n136",
+                                  "x": 1.0,
+                                  "y": 1.0,
+                                  "width": 18.0,
+                                  "height": 18.0,
+                                  "fill": [
+                                    {
+                                      "type": "solid",
+                                      "color": "#00000000"
+                                    }
+                                  ],
+                                  "stroke": {
+                                    "thickness": 1.6,
+                                    "fill": [
+                                      {
+                                        "type": "solid",
+                                        "color": "#4A4F66"
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "type": "ellipse",
+                                  "id": "n137",
+                                  "x": 8.5,
+                                  "y": 5.2,
+                                  "width": 3.0,
+                                  "height": 3.0,
+                                  "fill": [
+                                    {
+                                      "type": "solid",
+                                      "color": "#4A4F66"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "rectangle",
+                                  "id": "n138",
+                                  "x": 9.2,
+                                  "y": 10.2,
+                                  "width": 1.6,
+                                  "height": 5.5,
+                                  "cornerRadius": 0.8,
+                                  "fill": [
+                                    {
+                                      "type": "solid",
+                                      "color": "#4A4F66"
+                                    }
+                                  ],
+                                  "children": []
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "n139",
+                              "name": "Label",
+                              "width": "fit_content",
+                              "height": "fit_content",
+                              "content": "关于",
+                              "fontSize": 14.0,
+                              "fontWeight": 500,
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#1F2329"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "path",
+                          "id": "n140",
+                          "name": "Chevron",
+                          "d": "M9 6l6 6-6 6",
+                          "width": 16.0,
+                          "height": 16.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#00000000"
+                            }
+                          ],
+                          "stroke": {
+                            "thickness": 1.8,
+                            "fill": [
+                              {
+                                "type": "solid",
+                                "color": "#C9CDD4"
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "n141",
+              "name": "TabBar",
+              "width": "fill_container",
+              "layout": "vertical",
+              "fill": [
+                {
+                  "type": "solid",
+                  "color": "#FFFFFF"
+                }
+              ],
+              "children": [
+                {
+                  "type": "rectangle",
+                  "id": "n142",
+                  "name": "Divider",
+                  "width": "fill_container",
+                  "height": 1.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#E5E6EB"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "type": "frame",
+                  "id": "n143",
+                  "name": "Tabs",
+                  "width": "fill_container",
+                  "layout": "horizontal",
+                  "padding": [
+                    7.0,
+                    10.0,
+                    8.0,
+                    10.0
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "n144",
+                      "name": "Tab-首页",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4.0,
+                      "padding": [
+                        3.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "path",
+                          "id": "n145",
+                          "name": "IconHome",
+                          "d": "M4 10.5L12 3l8 7.5V21h-5.5v-6h-5v6H4Z",
+                          "width": 21.0,
+                          "height": 20.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#00000000"
+                            }
+                          ],
+                          "stroke": {
+                            "thickness": 1.6,
+                            "fill": [
+                              {
+                                "type": "solid",
+                                "color": "#8A8F99"
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "n146",
+                          "name": "TabLabelHome",
+                          "width": "fit_content",
+                          "height": "fit_content",
+                          "content": "首页",
+                          "fontSize": 10.0,
+                          "fontWeight": 500,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#8A8F99"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "n147",
+                      "name": "Tab-我的",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4.0,
+                      "padding": [
+                        3.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "path",
+                          "id": "n148",
+                          "name": "IconMe",
+                          "d": "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 21a7.5 7.5 0 0 1 15 0",
+                          "width": 20.0,
+                          "height": 20.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#0082EF"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "n149",
+                          "name": "TabLabelMe",
+                          "width": "fit_content",
+                          "height": "fit_content",
+                          "content": "我的",
+                          "fontSize": 10.0,
+                          "fontWeight": 600,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#0082EF"
+                            }
+                          ]
                         }
                       ]
                     }
@@ -407,6 +1389,7 @@
       ]
     }
   ],
+  "children": [],
   "editorMeta": {
     "activePageIndex": 0,
     "preserveAuthoredGeometry": false
