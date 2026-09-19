@@ -12,6 +12,11 @@ NUIST赛博分院帽 - 众社团共建
 - [x] 我的页面（基础版：用户登录卡片 + 我的社团/我的活动/设置/关于）
 - [x] 绑定统一门户（我的 → 内嵌门户登录 → 自动注册软件 Passkey → 私钥存本机安全存储，
       凭据格式与 `authserver_login/passkey.local.json` 一致；后续 APP 内免二次验证登录靠它）
+  - 状态页显示绑定学号/设备名/绑定时间，支持重新绑定与解除绑定，
+    debug 构建下多一个「测试登录」按钮可验证凭据是否仍有效
+- [x] 统一门户登录服务（`core/auth/`，`authserver_login/NuistLogin.py` 的 Dart 移植）：
+      纯网络层 Passkey 登录，不开 WebView；会话落盘复用、CAS 票根复用、失效自动重登，
+      壳与所有小程序共用，见下文「取用门户登录态」
 - [x] 前端架构：大 APP 壳 + 小程序注册表（原生 Flutter 为主，预留 H5/WebView 小程序）
 - [ ] 分院帽
 - [ ] 成绩查询/通知
@@ -40,7 +45,7 @@ lib/
 │   ├── colors.dart            # AppColors 设计稿色板
 │   ├── wip.dart               # showWipSnackBar 开发中占位反馈
 │   ├── app_manifest.dart      # AppManifest：小程序描述（id/名称/图标/入口）
-│   └── auth/                  # 统一门户 Passkey 凭据模型 + 安全存储（PasskeyStore）
+│   └── auth/                  # 统一门户：Passkey 凭据 + 安全存储 + 登录服务（PortalSession）
 ├── shell/                     # 大 APP 的壳（社团一般不用动）
 │   ├── root_page.dart         # 底部双页签
 │   ├── home/                  # 首页宫格
@@ -64,6 +69,30 @@ lib/
 
 只需在 `registry.dart` 加一条带 `url` 的 `AppManifest`，点击后由
 `mini_apps/web/mini_web_view_page.dart` 通用承载页打开。
+
+### 取用门户登录态
+
+需要教务、电费这类登录后才能访问的接口时，不要自己搓登录流程，用
+`core/auth/portal_session.dart` 的全局会话。它首次调用时用本机 Passkey 登录，
+之后复用会话（换 service 走 CAS 票根快路径，省掉一次签名）；会话落盘保存，
+重开 APP 一般不用重登；万一过期会自动重登一次并重放请求。
+
+原生小程序：
+
+```dart
+final response = await PortalSession.instance.request(
+  PortalServices.jwxt,                    // CAS 的 service 参数，按精确匹配校验
+  (http) => http.get(Uri.parse('https://jwxt.campus.invalid/...')),
+);
+```
+
+H5 小程序：在注册表那条 `AppManifest` 上加 `requiresPortal: true`，承载页会先把
+会话 Cookie 灌进 WebView 再加载页面，网页里直接就是登录态。
+
+失败分三类，按 `PortalException` 的子类判断：`PortalNetworkError`（网络问题，
+可重试）、`PortalCredentialError`（通行密钥被吊销，需引导用户重新绑定）、
+`PortalLoginError`（其他）。请务必把前两类区分开——把没网说成「需要重新绑定」
+会让用户白跑一趟去重绑。
 
 ### 依赖规则（协作约定）
 

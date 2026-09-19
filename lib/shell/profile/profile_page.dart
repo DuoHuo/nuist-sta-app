@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/auth/passkey_store.dart';
+import '../../core/auth/portal_exceptions.dart';
+import '../../core/auth/portal_session.dart';
 import '../../core/wip.dart';
 import 'profile_list_tile.dart';
 import 'user_card.dart';
@@ -43,15 +45,6 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    final portalTile = ProfileTile(
-      icon: Icons.verified_user_outlined,
-      label: '绑定统一门户',
-      trailing: switch (_portalBound) {
-        null => null,
-        true => '已绑定',
-        false => '未绑定',
-      },
-    );
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
       body: ListView(
@@ -67,10 +60,23 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
             child: Column(
               children: [
-                ProfileListTile(
-                  tile: portalTile,
-                  showDivider: true,
-                  onTap: _openPortalBind,
+                // 凭据被门户拒绝过的话，这一行要能看出来，否则用户只会觉得
+                // 「明明绑了，功能却用不了」。
+                ValueListenableBuilder<PortalCredentialError?>(
+                  valueListenable: PortalSession.instance.credentialError,
+                  builder: (context, credentialError, _) => ProfileListTile(
+                    tile: ProfileTile(
+                      icon: Icons.verified_user_outlined,
+                      label: '绑定统一门户',
+                      trailing: switch (_portalBound) {
+                        null => null,
+                        true => credentialError == null ? '已绑定' : '已失效',
+                        false => '未绑定',
+                      },
+                    ),
+                    showDivider: true,
+                    onTap: _openPortalBind,
+                  ),
                 ),
                 for (final tile in _wipTiles)
                   ProfileListTile(

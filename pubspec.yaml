@@ -37,6 +37,11 @@ dependencies:
   go_router: ^18.0.1
   webview_flutter: ^4.14.1
   flutter_secure_storage: ^11.2.0
+  dio: ^5.11.1
+  cookie_jar: ^4.0.9
+  dio_cookie_manager: ^3.5.0
+  pointycastle: ^4.0.0
+  asn1lib: ^1.6.5
 
 dev_dependencies:
   flutter_test:

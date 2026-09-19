@@ -18,10 +18,15 @@ class AppManifest {
     this.icon,
     this.entry,
     this.url,
+    this.requiresPortal = false,
   }) : assert(
-          (entry == null) != (url == null),
-          '$id 必须且只能提供 entry（原生）或 url（H5）之一',
-        );
+         (entry == null) != (url == null),
+         '$id 必须且只能提供 entry（原生）或 url（H5）之一',
+       ),
+       assert(
+         !requiresPortal || url != null,
+         '$id 的 requiresPortal 只对 H5 小程序有意义；原生小程序请直接用 PortalSession',
+       );
 
   /// 路由标识，如 'campus-map'，全注册表唯一，跳转 `/apps/$id` 用。
   final String id;
@@ -43,6 +48,15 @@ class AppManifest {
 
   /// H5 小程序的地址。
   final String? url;
+
+  /// H5 小程序是否需要统一门户登录态。
+  ///
+  /// 为 true 时，承载页会先确保门户已登录、把会话 Cookie 灌进 WebView，再加载
+  /// 页面，于是 H5 打开即是登录状态，不用自己再登一次。未绑定门户时会提示用户
+  /// 先去「我的 → 绑定统一门户」。
+  ///
+  /// 原生小程序不需要这个开关，直接用 `PortalSession.instance` 取会话即可。
+  final bool requiresPortal;
 
   /// 是否为 H5 形态。
   bool get isWeb => url != null;

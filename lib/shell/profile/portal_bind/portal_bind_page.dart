@@ -94,10 +94,23 @@ class _PortalBindPageState extends State<PortalBindPage> {
   }
 
   Future<void> _start() async {
-    // 清掉旧会话，保证绑定的是用户此刻登录的账号。
+    // 刻意**不清** WebView 的 Cookie：门户那边还登录着的话，用户就不必再输一
+    // 遍密码和验证码。残留的万一不是本人账号，顶部有「换个账号」可以退出，
+    // 且注册通行密钥本身要过一次身份验证、绑完状态页还会把学号摆出来，绑错
+    // 了看得见。
+    await _controller.loadRequest(Uri.parse(PortalBindPage.portalUrl));
+  }
+
+  /// 退出门户登录态，从头登一个别的账号。
+  Future<void> _switchAccount() async {
     try {
       await WebViewCookieManager().clearCookies();
     } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _error = null;
+      _hint = '已退出登录，请用要绑定的账号重新登录';
+    });
     await _controller.loadRequest(Uri.parse(PortalBindPage.portalUrl));
   }
 
@@ -262,7 +275,12 @@ class _PortalBindPageState extends State<PortalBindPage> {
                     ),
                   ),
                   if (error != null)
-                    TextButton(onPressed: _retry, child: const Text('重试')),
+                    TextButton(onPressed: _retry, child: const Text('重试'))
+                  else if (!_finished)
+                    TextButton(
+                      onPressed: _switchAccount,
+                      child: const Text('换个账号'),
+                    ),
                 ],
               ),
             ),
