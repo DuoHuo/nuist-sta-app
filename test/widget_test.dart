@@ -46,7 +46,7 @@ void main() {
 
     expect(find.text('点击登录'), findsOneWidget);
     expect(find.text('登录后同步我的社团与活动'), findsOneWidget);
-    for (final label in ['我的社团', '我的活动', '设置', '关于']) {
+    for (final label in ['绑定统一门户', '我的社团', '我的活动', '设置', '关于']) {
       expect(find.text(label), findsOneWidget);
     }
   });

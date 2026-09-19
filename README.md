@@ -10,6 +10,8 @@ NUIST赛博分院帽 - 众社团共建
   - 底部双页签：首页 / 我的
 - [ ] 校园地图页面（入口链路已打通，页面为占位）
 - [x] 我的页面（基础版：用户登录卡片 + 我的社团/我的活动/设置/关于）
+- [x] 绑定统一门户（我的 → 内嵌门户登录 → 自动注册软件 Passkey → 私钥存本机安全存储，
+      凭据格式与 `authserver_login/passkey.local.json` 一致；后续 APP 内免二次验证登录靠它）
 - [x] 前端架构：大 APP 壳 + 小程序注册表（原生 Flutter 为主，预留 H5/WebView 小程序）
 - [ ] 分院帽
 - [ ] 成绩查询/通知
@@ -37,11 +39,12 @@ lib/
 │   ├── app_info.dart          # kAppName
 │   ├── colors.dart            # AppColors 设计稿色板
 │   ├── wip.dart               # showWipSnackBar 开发中占位反馈
-│   └── app_manifest.dart      # AppManifest：小程序描述（id/名称/图标/入口）
+│   ├── app_manifest.dart      # AppManifest：小程序描述（id/名称/图标/入口）
+│   └── auth/                  # 统一门户 Passkey 凭据模型 + 安全存储（PasskeyStore）
 ├── shell/                     # 大 APP 的壳（社团一般不用动）
 │   ├── root_page.dart         # 底部双页签
 │   ├── home/                  # 首页宫格
-│   └── profile/               # 我的页面
+│   └── profile/               # 我的页面（含 portal_bind/ 绑定统一门户）
 └── mini_apps/                 # 所有小程序，每个一个目录
     ├── registry.dart          # ★ 全量注册表：新增小程序只改这里
     ├── campus_map/            # 校园地图（原生示例）

@@ -5,6 +5,7 @@ import 'core/app_manifest.dart';
 import 'mini_apps/registry.dart';
 import 'mini_apps/web/mini_web_view_page.dart';
 import 'shell/home/home_page.dart';
+import 'shell/profile/portal_bind/portal_bind_page.dart';
 import 'shell/profile/profile_page.dart';
 import 'shell/root_page.dart';
 
@@ -16,6 +17,7 @@ import 'shell/root_page.dart';
 /// - `/apps/:appId`：小程序全屏入口，与壳平级 —— 进入小程序后不带底部页签，
 ///   系统返回键自然退回宫格。原生小程序进 [AppManifest.entry]，
 ///   H5 小程序进通用 WebView 承载页。
+/// - `/portal-bind`：绑定统一门户（内嵌登录 + 注册 Passkey），同样全屏。
 GoRouter buildRouter() => GoRouter(
   routes: [
     StatefulShellRoute.indexedStack(
@@ -48,6 +50,7 @@ GoRouter buildRouter() => GoRouter(
             : manifest.entry!(context);
       },
     ),
+    GoRoute(path: '/portal-bind', builder: (_, _) => const PortalBindPage()),
   ],
 );
 

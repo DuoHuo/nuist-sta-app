@@ -4,10 +4,13 @@ import '../../core/colors.dart';
 
 /// 「我的」页的功能入口行数据。
 class ProfileTile {
-  const ProfileTile({required this.icon, required this.label});
+  const ProfileTile({required this.icon, required this.label, this.trailing});
 
   final IconData icon;
   final String label;
+
+  /// 右侧灰色状态文字（如「已绑定」），没有则只显示箭头。
+  final String? trailing;
 }
 
 /// 「我的」页的功能入口行。
@@ -44,6 +47,13 @@ class ProfileListTile extends StatelessWidget {
                   ),
                 ),
                 const Spacer(),
+                if (tile.trailing != null) ...[
+                  Text(
+                    tile.trailing!,
+                    style: const TextStyle(color: AppColors.hint, fontSize: 13),
+                  ),
+                  const SizedBox(width: 4),
+                ],
                 const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
               ],
             ),

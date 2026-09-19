@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  仅 debug 源集：信任用户手动安装的 CA 证书，让 mitmproxy / Charles 这类
+  抓包代理能解开 App（含 WebView）的 HTTPS 流量。release 构建不包含本文件，
+  线上只信任系统证书。
+
+  为什么不用 <debug-overrides>：WebView 不认它，而我们要抓的恰恰是 WebView 的流量，
+  所以只能写在 base-config 里、靠 debug 源集来保证不外泄。
+
+  刻意不加 cleartextTrafficPermitted="true"：门户会 302 到 http，明文一放开，
+  debug 下就走通了、release 下却被拦，行为分叉反而更难排障。
+  明文跳转由 PortalBindPage 的 _rewriteToHttps 统一改写成 https。
+-->
+<network-security-config>
+    <base-config>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

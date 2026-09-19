@@ -44,12 +44,15 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
         title: Text(widget.manifest.label),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(2),
-          child: LinearProgressIndicator(
-            minHeight: 2,
-            value: _progress > 0 && _progress < 100 ? _progress / 100 : null,
-            color: Theme.of(context).colorScheme.primary,
-            backgroundColor: AppColors.rowDivider,
-          ),
+          // 加载完成后隐藏；value 传 null 会变成无限循环的不确定进度动画。
+          child: _progress < 100
+              ? LinearProgressIndicator(
+                  minHeight: 2,
+                  value: _progress / 100,
+                  color: Theme.of(context).colorScheme.primary,
+                  backgroundColor: AppColors.rowDivider,
+                )
+              : const SizedBox(height: 2),
         ),
       ),
       body: WebViewWidget(controller: _controller),
