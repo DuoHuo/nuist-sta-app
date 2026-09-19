@@ -38,7 +38,9 @@ class HomePage extends StatelessWidget {
                 for (final app in appRegistry)
                   AppGridItem(
                     app: app,
-                    onTap: () => context.go('/apps/${app.id}'),
+                    // 必须 push 而非 go：go 会把小程序页替换成栈底，
+                    // 导致顶栏无返回按钮、系统返回键也退不回宫格。
+                    onTap: () => context.push('/apps/${app.id}'),
                   ),
               ],
             ),
