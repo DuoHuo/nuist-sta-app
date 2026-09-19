@@ -29,6 +29,10 @@ abstract final class PortalServices {
   static const icard =
       'https://icard.campus.invalid/berserker-auth/cas/login/wisedu'
       '?targetUrl=https://icard.campus.invalid/plat-pc/?name=loginTransit';
+
+  /// 信息门户 i.campus.invalid（学业数据等 cus 接口）。实测未登录访问会被
+  /// 302 到 `authserver/login?service=https://i.campus.invalid/login`。
+  static const iportal = 'https://i.campus.invalid/login';
 }
 
 /// 统一门户的全局会话，是壳和所有小程序取用登录态的唯一入口。
