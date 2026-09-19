@@ -133,7 +133,7 @@
                   "name": "AppName",
                   "width": "fit_content",
                   "height": "fit_content",
-                  "content": "APP名称",
+                  "content": "NUIST STA",
                   "fontSize": 17.0,
                   "fontWeight": 600,
                   "fill": [

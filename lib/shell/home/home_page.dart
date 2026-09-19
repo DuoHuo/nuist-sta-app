@@ -5,7 +5,8 @@ import '../../core/app_info.dart';
 import '../../mini_apps/registry.dart';
 import 'app_grid_item.dart';
 
-/// 首页：小程序启动宫格，数据源是全量注册表 [appRegistry]。
+/// 首页：小程序信息卡片（[AppManifest.homeCard]）+ 启动宫格，数据源都是
+/// 全量注册表 [appRegistry]。
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
@@ -16,6 +17,11 @@ class HomePage extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         children: [
+          for (final app in appRegistry)
+            if (app.homeCard != null) ...[
+              Builder(builder: app.homeCard!),
+              const SizedBox(height: 12),
+            ],
           Container(
             padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 14),
             decoration: BoxDecoration(

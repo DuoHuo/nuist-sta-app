@@ -3,7 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/colors.dart';
 
-/// 大 APP 的壳：底部双页签（首页 / 我的），页签内容由路由的
+/// 大 APP 的壳：底部三页签（首页 / 学习 / 我的），页签内容由路由的
 /// StatefulShellRoute 提供（各 branch 独立保留导航状态）。
 class RootPage extends StatelessWidget {
   const RootPage({super.key, required this.navigationShell});
@@ -37,6 +37,11 @@ class RootPage extends StatelessWidget {
               icon: Icon(Icons.home_outlined),
               activeIcon: Icon(Icons.home),
               label: '首页',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.school_outlined),
+              activeIcon: Icon(Icons.school),
+              label: '学习',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.person_outline),

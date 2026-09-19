@@ -19,10 +19,10 @@ void main() {
     }
   });
 
-  testWidgets('首页展示 APP名称 标题与校园地图入口', (WidgetTester tester) async {
+  testWidgets('首页展示 NUIST STA 标题与校园地图入口', (WidgetTester tester) async {
     await tester.pumpWidget(const NuistApp());
 
-    expect(find.text('APP名称'), findsOneWidget);
+    expect(find.text('NUIST STA'), findsOneWidget);
     expect(find.text('校园地图'), findsOneWidget);
     expect(find.text('首页'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);
