@@ -47,7 +47,9 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
           centerText = '尚未绑定宿舍';
           centerColor = AppColors.hint;
           footer = '点击设置';
-          onTap = () => context.go('/apps/electricity');
+          // 与首页宫格一致用 push：go 会把小程序页替换成栈底，
+          // 导致顶栏无返回按钮、系统返回键也退不回首页。
+          onTap = () => context.push('/apps/electricity');
         } else {
           centerText = latest == null ? '--' : formatKwh(latest.kwh);
           centerColor = c.isOverdue
@@ -56,7 +58,7 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
               ? ElecColors.warning
               : AppColors.titleText;
           footer = room.displayName;
-          onTap = () => context.go('/apps/electricity');
+          onTap = () => context.push('/apps/electricity');
         }
         final showValue = room != null && c.portalBound;
 
