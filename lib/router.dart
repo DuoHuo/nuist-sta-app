@@ -9,12 +9,14 @@ import 'shell/profile/portal_bind/portal_bind_page.dart';
 import 'shell/profile/portal_bind/portal_status_page.dart';
 import 'shell/profile/profile_page.dart';
 import 'shell/root_page.dart';
+import 'shell/study/study_page.dart';
 
 /// 全局路由的构建工厂：由 NuistApp 在初始化时创建一次，
 /// 保证每次挂载都是干净实例（widget 测试之间不互相串状态）。
 ///
 /// 结构：
-/// - StatefulShellRoute：壳（底部双页签），branch 0 = 首页 `/`，branch 1 = 我的 `/profile`
+/// - StatefulShellRoute：壳（底部三页签），branch 0 = 首页 `/`，
+///   branch 1 = 学习 `/study`，branch 2 = 我的 `/profile`
 /// - `/apps/:appId`：小程序全屏入口，与壳平级 —— 进入小程序后不带底部页签，
 ///   系统返回键自然退回宫格。原生小程序进 [AppManifest.entry]，
 ///   H5 小程序进通用 WebView 承载页。
@@ -31,6 +33,11 @@ GoRouter buildRouter() => GoRouter(
         StatefulShellBranch(
           routes: [
             GoRoute(path: '/', builder: (_, _) => const HomePage()),
+          ],
+        ),
+        StatefulShellBranch(
+          routes: [
+            GoRoute(path: '/study', builder: (_, _) => const StudyPage()),
           ],
         ),
         StatefulShellBranch(
