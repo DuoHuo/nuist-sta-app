@@ -19,6 +19,7 @@ class AppManifest {
     this.entry,
     this.url,
     this.requiresPortal = false,
+    this.homeCard,
   }) : assert(
          (entry == null) != (url == null),
          '$id 必须且只能提供 entry（原生）或 url（H5）之一',
@@ -57,6 +58,11 @@ class AppManifest {
   ///
   /// 原生小程序不需要这个开关，直接用 `PortalSession.instance` 取会话即可。
   final bool requiresPortal;
+
+  /// 可选：在首页宫格上方额外展示的信息卡片（如电费余额）。
+  ///
+  /// 壳只负责把它摆出来，卡片内部的数据与跳转由小程序自己处理，壳不感知。
+  final WidgetBuilder? homeCard;
 
   /// 是否为 H5 形态。
   bool get isWeb => url != null;

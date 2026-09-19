@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import 'aia_trust.dart';
 import 'nuist_login.dart';
 import 'passkey_bundle.dart';
 import 'passkey_store.dart';
@@ -19,6 +23,12 @@ import 'secure_cookie_storage.dart';
 abstract final class PortalServices {
   static const jwxt =
       'https://jwxt.campus.invalid/jwapp/sys/emaphome/portal/index.do';
+
+  /// 校园一卡通（电费）。登录落地 URL 的 query 里带 `synjones-auth`，这才是
+  /// icard 接口真正认的凭据，Cookie 在那边没用。
+  static const icard =
+      'https://icard.campus.invalid/berserker-auth/cas/login/wisedu'
+      '?targetUrl=https://icard.campus.invalid/plat-pc/?name=loginTransit';
 }
 
 /// 统一门户的全局会话，是壳和所有小程序取用登录态的唯一入口。
@@ -50,6 +60,7 @@ class PortalSession {
 
   late final PersistCookieJar _jar;
   late final PortalHttp _http;
+  late final AiaTrust _trust;
   bool _ready = false;
 
   /// 本进程内已建立会话的 service → 落地 URL。
@@ -195,6 +206,13 @@ class PortalSession {
       ignoreExpires: true,
       storage: const SecureCookieStorage(),
     );
+    final trust = AiaTrust(
+      resolveCacheDir: () async {
+        final base = await getApplicationSupportDirectory();
+        return Directory('${base.path}${Platform.pathSeparator}aia_certs');
+      },
+    );
+    _trust = trust;
     final dio = Dio(
       BaseOptions(
         headers: {
@@ -203,7 +221,10 @@ class PortalSession {
         },
       ),
     )..interceptors.add(CookieManager(_jar));
-    _http = PortalHttp(dio);
+    dio.httpClientAdapter = IOHttpClientAdapter(
+      createHttpClient: trust.createHttpClient,
+    );
+    _http = PortalHttp(dio, trust: trust);
     _ready = true;
   }
 
@@ -212,6 +233,8 @@ class PortalSession {
     void Function(String stage)? onStage,
   ) async {
     _ensureReady();
+    // 先把缓存的中间证书灌进信任库，这样冷启动第一次握手就能直接成功。
+    await _trust.preload();
     final PasskeyBundle? bundle = await PasskeyStore.read();
     if (bundle == null) {
       throw const PortalCredentialError('尚未绑定统一门户，请先完成绑定');

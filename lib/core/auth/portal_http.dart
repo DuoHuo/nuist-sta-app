@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 
+import 'aia_trust.dart';
 import 'portal_exceptions.dart';
 
 /// 门户登录相关的日志出口，由 [PortalSession] 在 debug 构建下接到 debugPrint。
@@ -16,9 +18,12 @@ void portalLog(String message) => portalLogger?.call('[portal] $message');
 /// 登录流程和登录之后的业务请求都要用它，核心原因是重定向必须由我们自己跟
 /// 随（见 [followRedirects]）。
 class PortalHttp {
-  const PortalHttp(this.dio);
+  const PortalHttp(this.dio, {this.trust});
 
   final Dio dio;
+
+  /// 有它时，握手因证书链不完整失败会自动补链重试一次（见 [AiaTrust]）。
+  final AiaTrust? trust;
 
   static const timeout = Duration(seconds: 30);
   static const maxRedirects = 10;
@@ -92,8 +97,9 @@ class PortalHttp {
     } on DioException catch (e) {
       portalLog(
         '${e.requestOptions.method} ${_short(e.requestOptions.uri)} '
-        '✗ ${e.type.name}: ${e.message}',
+        '✗ ${e.type.name}: ${e.message ?? e.error}',
       );
+      if (await _repairedChain(e)) return send(request);
       throw switch (e.type) {
         DioExceptionType.connectionTimeout ||
         DioExceptionType.sendTimeout ||
@@ -106,9 +112,25 @@ class PortalHttp {
         DioExceptionType.badCertificate => const PortalNetworkError(
           '门户证书校验失败，请检查网络环境',
         ),
-        _ => PortalLoginError('请求失败：${e.message ?? e.type.name}'),
+        _ => PortalLoginError('请求失败：${e.message ?? e.error ?? e.type.name}'),
       };
     }
+  }
+
+  /// 握手失败且补链成功时返回 true。[AiaTrust] 对同一主机只补一次，所以
+  /// [send] 里的递归重试不会打转。
+  Future<bool> _repairedChain(DioException e) async {
+    final trust = this.trust;
+    if (trust == null || !AiaTrust.isHandshakeFailure(e.error)) return false;
+    final host = e.requestOptions.uri.host;
+    if (!await trust.tryRepair(host)) return false;
+    // SecurityContext 变了，旧 HttpClient 的连接池还带着旧上下文，必须换新。
+    dio.httpClientAdapter.close(force: true);
+    dio.httpClientAdapter = IOHttpClientAdapter(
+      createHttpClient: trust.createHttpClient,
+    );
+    portalLog('已补全 $host 的证书链，重试');
+    return true;
   }
 
   /// 手动跟随重定向，**刻意不用 dio 的自动重定向**。
