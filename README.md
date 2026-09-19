@@ -5,7 +5,7 @@ NUIST赛博分院帽 - 众社团共建
 ## TO-DO
 
 - [x] 首页框架（Flutter，Android 优先）
-  - 顶栏居中标题（`APP名称` 为占位，定稿后改 `lib/core/app_info.dart` 里的 `kAppName` 一处即可）
+  - 顶栏居中标题（`NUIST STA` 为占位，定稿后改 `lib/core/app_info.dart` 里的 `kAppName` 一处即可）
   - 应用宫格卡片：按小程序注册表渲染、数据驱动（见下文「前端架构」）
   - 底部双页签：首页 / 我的
 - [ ] 校园地图页面（入口链路已打通，页面为占位）
