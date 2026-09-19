@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 abstract final class ElecColors {
   /// 低电量 / 警戒线。
   static const warning = Color(0xFFFF7D00);
+
+  /// 已欠费（余额为负）。
+  static const danger = Color(0xFFF53F3F);
 }
 
 String _two(int n) => n.toString().padLeft(2, '0');

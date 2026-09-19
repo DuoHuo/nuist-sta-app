@@ -176,7 +176,11 @@ class _StatusHeader extends StatelessWidget {
       );
     }
 
-    final valueColor = c.isLow ? ElecColors.warning : AppColors.titleText;
+    final valueColor = c.isOverdue
+        ? ElecColors.danger
+        : c.isLow
+        ? ElecColors.warning
+        : AppColors.titleText;
     return _Card(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 16, 8, 16),
@@ -238,7 +242,13 @@ class _StatusHeader extends StatelessWidget {
                       height: 1.4,
                     ),
                   ),
-                  if (c.isLow) ...[
+                  if (c.isOverdue) ...[
+                    const SizedBox(height: 4),
+                    const Text(
+                      '已欠费，请尽快充值',
+                      style: TextStyle(fontSize: 11, color: ElecColors.danger),
+                    ),
+                  ] else if (c.isLow) ...[
                     const SizedBox(height: 4),
                     const Text(
                       '电量不足，请及时充值',

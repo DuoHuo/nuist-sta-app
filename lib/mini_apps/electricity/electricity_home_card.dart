@@ -50,7 +50,11 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
           onTap = () => context.go('/apps/electricity');
         } else {
           centerText = latest == null ? '--' : formatKwh(latest.kwh);
-          centerColor = c.isLow ? ElecColors.warning : AppColors.titleText;
+          centerColor = c.isOverdue
+              ? ElecColors.danger
+              : c.isLow
+              ? ElecColors.warning
+              : AppColors.titleText;
           footer = room.displayName;
           onTap = () => context.go('/apps/electricity');
         }

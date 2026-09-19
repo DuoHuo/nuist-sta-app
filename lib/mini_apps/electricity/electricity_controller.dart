@@ -37,6 +37,9 @@ class ElectricityController extends ChangeNotifier {
 
   bool get isLow => (_latest?.kwh ?? double.infinity) < lowKwhThreshold;
 
+  /// 余额为负即欠费，比 [isLow] 更严重，UI 上优先展示。
+  bool get isOverdue => (_latest?.kwh ?? double.infinity) < 0;
+
   /// 读本地缓存并自动刷新一次；重复调用只会执行一次。
   Future<void> ensureStarted() {
     if (_started) return _starting ?? Future.value();
