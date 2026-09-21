@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/app_manifest.dart';
+import 'mini_apps/innovation_credit/innovation_credit_page.dart';
+import 'mini_apps/labor_score/labor_score_page.dart';
 import 'mini_apps/registry.dart';
 import 'mini_apps/web/mini_web_view_page.dart';
 import 'shell/home/home_page.dart';
@@ -23,6 +25,8 @@ import 'shell/study/study_page.dart';
 /// - `/portal-bind`：统一门户的绑定状态页（学号、凭据信息、重新绑定/解绑），
 ///   其子路由 `/portal-bind/register` 才是内嵌登录 + 注册 Passkey 的流程页。
 ///   两者都与壳平级，全屏展示。
+/// - `/innovation-credit`、`/labor-score`：学习页两张卡片的详情页，同样与壳
+///   平级全屏展示，返回键退回学习页。
 GoRouter buildRouter() => GoRouter(
   routes: [
     StatefulShellRoute.indexedStack(
@@ -67,6 +71,11 @@ GoRouter buildRouter() => GoRouter(
         GoRoute(path: 'register', builder: (_, _) => const PortalBindPage()),
       ],
     ),
+    GoRoute(
+      path: '/innovation-credit',
+      builder: (_, _) => const InnovationCreditPage(),
+    ),
+    GoRoute(path: '/labor-score', builder: (_, _) => const LaborScorePage()),
   ],
 );
 

@@ -51,6 +51,19 @@ void main() {
     }
   });
 
+  testWidgets('切到学习页展示四张卡片的标题', (WidgetTester tester) async {
+    await tester.pumpWidget(const NuistApp());
+
+    await tester.tap(find.text('学习'));
+    await tester.pumpAndSettle();
+
+    // 测试环境没有平台通道，各卡读不到本地状态、也不会去请求网络，
+    // 只保证壳把四张卡都摆出来了。
+    for (final label in ['本学期', '学业概览', '双创学分', '劳动积分']) {
+      expect(find.text(label), findsOneWidget);
+    }
+  });
+
   testWidgets('我的页点击设置显示开发中提示', (WidgetTester tester) async {
     await tester.pumpWidget(const NuistApp());
 

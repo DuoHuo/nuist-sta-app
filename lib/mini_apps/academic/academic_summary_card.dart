@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/colors.dart';
-import '../electricity/electricity_format.dart' show formatShortTime;
+import '../../core/time_format.dart';
 import 'academic_controller.dart';
 import 'academic_models.dart';
 

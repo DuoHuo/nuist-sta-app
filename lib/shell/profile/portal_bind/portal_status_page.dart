@@ -7,6 +7,8 @@ import '../../../core/auth/passkey_store.dart';
 import '../../../core/auth/portal_exceptions.dart';
 import '../../../core/auth/portal_session.dart';
 import '../../../core/colors.dart';
+import '../../../mini_apps/student_info/student_info_models.dart';
+import '../../../mini_apps/student_info/student_info_store.dart';
 
 /// 「绑定统一门户」的状态页：展示当前绑定的学号与凭据信息，并提供重新绑定、
 /// 解除绑定入口。debug 构建下多一个「测试登录」按钮，用真实流程验证凭据。
@@ -19,6 +21,10 @@ class PortalStatusPage extends StatefulWidget {
 
 class _PortalStatusPageState extends State<PortalStatusPage> {
   PasskeyBundle? _bundle;
+
+  /// 信息门户给的登录人资料（学习页拉取并缓存的），用来在学号旁边把姓名、
+  /// 学院班级也摆出来，「绑的是不是我」一眼就能看出来。
+  PortalUser? _user;
   bool _loading = true;
 
   // 「测试登录」的运行状态，只在 debug 构建下用得到。
@@ -34,9 +40,14 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
 
   Future<void> _load() async {
     final bundle = await PasskeyStore.read();
+    final info = await StudentInfoStore.read();
     if (!mounted) return;
     setState(() {
       _bundle = bundle;
+      // 缓存可能是换绑之前那个账号的，学号对不上就不显示。
+      _user = info != null && info.user.studentId == bundle?.studentId
+          ? info.user
+          : null;
       _loading = false;
     });
   }
@@ -85,6 +96,7 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
     if (!mounted) return;
     setState(() {
       _bundle = null;
+      _user = null;
       _testResult = null;
     });
     ScaffoldMessenger.of(
@@ -209,7 +221,7 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
                     ),
                     if (bundle != null) ...[
                       const SizedBox(height: 12),
-                      _InfoCard(bundle: bundle),
+                      _InfoCard(bundle: bundle, user: _user),
                     ],
                     const SizedBox(height: 12),
                     _actions(bundle),
@@ -405,19 +417,24 @@ class _StatusHeader extends StatelessWidget {
   }
 }
 
-/// 凭据详情：学号、设备名、绑定时间、凭据 ID。
+/// 凭据详情：学号（有缓存资料时还有姓名、院系班级）、设备名、绑定时间、凭据 ID。
 class _InfoCard extends StatelessWidget {
-  const _InfoCard({required this.bundle});
+  const _InfoCard({required this.bundle, required this.user});
 
   final PasskeyBundle bundle;
+  final PortalUser? user;
 
   @override
   Widget build(BuildContext context) {
     final createdAt = bundle.createdAt;
+    final org = user?.orgLine ?? '';
     return _Card(
       child: Column(
         children: [
           _InfoRow(label: '学号', value: bundle.studentId ?? '未知'),
+          if (user != null && user!.name.isNotEmpty)
+            _InfoRow(label: '姓名', value: user!.name),
+          if (org.isNotEmpty) _InfoRow(label: '院系班级', value: org),
           _InfoRow(
             label: '设备名',
             value: bundle.deviceName.isEmpty ? '未记录' : bundle.deviceName,

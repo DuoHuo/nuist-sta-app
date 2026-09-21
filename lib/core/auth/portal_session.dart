@@ -33,6 +33,17 @@ abstract final class PortalServices {
   /// 信息门户 i.campus.invalid（学业数据等 cus 接口）。实测未登录访问会被
   /// 302 到 `authserver/login?service=https://i.campus.invalid/login`。
   static const iportal = 'https://i.campus.invalid/login';
+
+  /// 创新创业实践教育平台 cxcyjy（双创学分的上级平台）。不是裸域名：平台
+  /// 首页登录按钮直指这个回调，探测自 `/pt` 页面。CAS 落地后平台还要再由页面
+  /// JS 补一次 POST 才算登录完成，见 InnovationCreditApi。
+  static const cxcyjy =
+      'https://cxcyjy.campus.invalid/pt/HomePage/UnifiedAuthenticationLogin';
+
+  /// 劳动教育平台。未登录访问业务页会被 302 到站内 `/AuthServer/Login`，
+  /// 该页「统一认证」按钮经 `/UnifiedAuth/CASLogin` 再 302 到 CAS，service 即此。
+  /// host 里的大写 L 是服务端原样给的，CAS 精确匹配字符串，**不能改小写**。
+  static const labor = 'https://Labor.campus.invalid/UnifiedAuth/CASLogin';
 }
 
 /// 统一门户的全局会话，是壳和所有小程序取用登录态的唯一入口。
@@ -59,8 +70,9 @@ class PortalSession {
   /// 最近一次因凭据问题导致的失败；绑定状态页监听它来显示「已失效」。
   ///
   /// 只有确定不是网络问题时才会被置位（见 [PortalHttp.send] 的异常归类）。
-  final ValueNotifier<PortalCredentialError?> credentialError =
-      ValueNotifier(null);
+  final ValueNotifier<PortalCredentialError?> credentialError = ValueNotifier(
+    null,
+  );
 
   late final PersistCookieJar _jar;
   late final PortalHttp _http;
@@ -107,6 +119,16 @@ class PortalSession {
   /// 需要精细控制请求时用它；一般情况用 [request] 更省事。
   Future<PortalHttp> clientFor(String service, {bool force = false}) async {
     await ensureLoggedIn(service, force: force);
+    return _http;
+  }
+
+  /// 共享全局 Cookie 的裸客户端，**不保证任何登录态**。
+  ///
+  /// 给「先拿落盘的会话直接请求业务页，被拦回登录页再走 [clientFor] 强制重登」
+  /// 的子系统用（双创、劳动教育）：它们的会话独立于 CAS 票根，先登一遍 CAS
+  /// 再发现子系统会话其实还活着，等于白跑。常规接口请走 [request] / [clientFor]。
+  PortalHttp get http {
+    _ensureReady();
     return _http;
   }
 
@@ -194,7 +216,8 @@ class PortalSession {
     if (uri == null || !uri.hasAuthority) return const [];
     final cookies = await _jar.loadForRequest(uri);
     return [
-      for (final cookie in cookies) '${cookie.name}@${cookie.domain ?? uri.host}',
+      for (final cookie in cookies)
+        '${cookie.name}@${cookie.domain ?? uri.host}',
     ];
   }
 
