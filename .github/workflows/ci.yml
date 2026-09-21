@@ -6,11 +6,12 @@ on:
       - '**'
     paths-ignore:
       - '**/*.md'
-      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
   pull_request:
     paths-ignore:
       - '**/*.md'
-      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      
   workflow_dispatch:
 
 permissions:
@@ -22,6 +23,7 @@ concurrency:
 
 jobs:
   test-and-build:
+    if: "!startsWith(github.event.head_commit.message, 'chore(release)') && !startsWith(github.event.pull_request.title, 'chore(release)')"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
