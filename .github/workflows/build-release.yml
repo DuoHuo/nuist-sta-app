@@ -5,9 +5,14 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag, for example v0.0.3
+        required: true
+        type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -16,6 +21,57 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Generate Release Notes
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          PREVIOUS_TAG="$(git describe --tags --abbrev=0 "$RELEASE_SHA^" 2>/dev/null || true)"
+          if [ -n "$PREVIOUS_TAG" ]; then
+            RANGE="$PREVIOUS_TAG..$RELEASE_SHA"
+          else
+            RANGE="$RELEASE_SHA"
+          fi
+
+          {
+            printf '# %s\n\n' "$RELEASE_TAG"
+            if [ -n "$PREVIOUS_TAG" ]; then
+              printf '_Changes since %s._\n\n' "$PREVIOUS_TAG"
+            else
+              printf '_Initial release._\n\n'
+            fi
+
+            declare -A sections=(
+              [Features]=""
+              [Fixes]=""
+              [Documentation]=""
+              [Other Changes]=""
+            )
+
+            while IFS=$'\t' read -r subject short_sha author; do
+              [ -n "$subject" ] || continue
+              case "$subject" in
+                feat:*|feature:*) section="Features" ;;
+                fix:*|bugfix:*) section="Fixes" ;;
+                docs:*|doc:*) section="Documentation" ;;
+                *) section="Other Changes" ;;
+              esac
+              sections["$section"]+="- $subject (\`$short_sha\`, $author)"$'\n'
+            done < <(git log --pretty=format:'%s%x09%h%x09%an' "$RANGE")
+
+            for section in "Features" "Fixes" "Documentation" "Other Changes"; do
+              if [ -n "${sections[$section]}" ]; then
+                printf '## %s\n\n%s\n' "$section" "${sections[$section]}"
+              fi
+            done
+          } > release-notes.md
+
+          printf 'RELEASE_TAG=%s\n' "$RELEASE_TAG" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
@@ -65,3 +121,11 @@ jobs:
         with:
           name: release-apk
           path: build/app/outputs/flutter-apk/*.apk
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          body_path: release-notes.md
+          files: build/app/outputs/flutter-apk/*.apk
