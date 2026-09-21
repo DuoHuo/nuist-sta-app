@@ -1,5 +1,6 @@
 import 'campus_map/campus_map_manifest.dart';
 import 'electricity/electricity_manifest.dart';
+import 'free_classroom/free_classroom_manifest.dart';
 import '../core/app_manifest.dart';
 
 /// 全量小程序注册表：首页宫格按此渲染。
@@ -8,6 +9,7 @@ import '../core/app_manifest.dart';
 /// 然后在这里加一行。除此之外不需要改动壳的任何代码。
 final List<AppManifest> appRegistry = [
   electricityManifest,
+  freeClassroomManifest,
   campusMapManifest,
   // H5 小程序示例：给 url 即可，由通用 WebView 页承载。
   // AppManifest(id: 'demo-web', label: '网页示例', color: Color(0xFF8B5CF6),

@@ -24,6 +24,7 @@ void main() {
 
     expect(find.text('NUIST STA'), findsOneWidget);
     expect(find.text('校园地图'), findsOneWidget);
+    expect(find.text('空教室'), findsOneWidget);
     expect(find.text('首页'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);
   });
@@ -35,6 +36,20 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('建设中'), findsOneWidget);
+    expect(find.byType(BottomNavigationBar), findsNothing);
+  });
+
+  testWidgets('点击空教室进入查询页（全屏、无底部页签）', (WidgetTester tester) async {
+    await tester.pumpWidget(const NuistApp());
+
+    await tester.tap(find.text('空教室'));
+    await tester.pumpAndSettle();
+
+    // 测试环境下安全存储 / 文件读取永远不会完成，页面停在初始态即可；
+    // 这里只确认入口链路通、页面能布局出来。
+    expect(find.widgetWithText(AppBar, '空教室'), findsOneWidget);
+    expect(find.text('选择教学楼'), findsOneWidget);
+    expect(find.text('今天'), findsOneWidget);
     expect(find.byType(BottomNavigationBar), findsNothing);
   });
 
