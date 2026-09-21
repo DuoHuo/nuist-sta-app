@@ -13,6 +13,7 @@ android {
     val signingStorePassword = System.getenv("KEYSTORE_PASSWORD")
     val signingKeyAlias = System.getenv("KEY_ALIAS")
     val signingKeyPassword = System.getenv("KEY_PASSWORD")
+    val configuredApplicationIdSuffix = System.getenv("APP_ID_SUFFIX") ?: ".debug"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -35,7 +36,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = configuredApplicationIdSuffix
+        }
+
         release {
+            applicationIdSuffix = configuredApplicationIdSuffix
             signingConfig = if (listOf(
                     signingKeyPath,
                     signingStorePassword,
