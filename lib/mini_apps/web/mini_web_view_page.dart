@@ -51,7 +51,9 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
       });
       try {
         // 先确保有会话，再灌进 WebView —— 顺序反了就只会同步到一份空 Cookie。
-        await PortalSession.instance.ensureLoggedIn(url);
+        // WebView 里没法探测过期再重试，所以磁盘恢复的缓存不采信，让它走一次
+        // SSO 快路径确认。
+        await PortalSession.instance.ensureLoggedIn(url, trustRestored: false);
         await PortalSession.instance.syncToWebView([url]);
       } on PortalException catch (e) {
         if (mounted) {

@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'aia_trust.dart';
+import 'established_store.dart';
 import 'nuist_login.dart';
 import 'passkey_bundle.dart';
 import 'passkey_store.dart';
@@ -50,6 +51,7 @@ abstract final class PortalServices {
 ///
 /// 职责：
 /// - 持有全局 CookieJar（落盘到安全存储，重启 APP 后会话还能接着用）；
+/// - 记住每个 service 的落地 URL 并同样落盘，冷启动命中就一个请求都不发；
 /// - 按需登录，并让并发调用合流，不会因为三个小程序同时启动就登三次；
 /// - 复用 CAS 票根：第一个 service 走完整 WebAuthn 断言，之后换 service 由
 ///   服务端直接放行，省掉一次签名和两个来回；
@@ -67,6 +69,10 @@ class PortalSession {
 
   static final PortalSession instance = PortalSession._();
 
+  /// 落地 URL 缓存的信任期。超过后不再直接采信，重新走一次 SSO 快路径确认
+  /// （CAS 票根若还在，代价只是两个跳转）。
+  static const establishedTtl = Duration(hours: 12);
+
   /// 最近一次因凭据问题导致的失败；绑定状态页监听它来显示「已失效」。
   ///
   /// 只有确定不是网络问题时才会被置位（见 [PortalHttp.send] 的异常归类）。
@@ -79,8 +85,11 @@ class PortalSession {
   late final AiaTrust _trust;
   bool _ready = false;
 
-  /// 本进程内已建立会话的 service → 落地 URL。
-  final Map<String, String> _established = {};
+  /// 已建立会话的 service → 落地 URL，冷启动时从磁盘恢复。
+  final Map<String, EstablishedEntry> _established = {};
+
+  /// 磁盘上的 [_established] 读回来了没有；取缓存前必须等它。
+  late final Future<void> _restored;
 
   /// 同一个 service 的并发请求合并成一次登录。
   final Map<String, Future<String>> _pending = {};
@@ -92,22 +101,33 @@ class PortalSession {
 
   /// 确保 [service] 已登录，返回落地 URL。
   ///
-  /// [force] 为 true 时无视缓存重新登录，用于会话过期后的重试。
+  /// [force] 为 true 时无视缓存重新登录，用于会话过期后的重试；若此刻恰好有
+  /// 同一个 service 的登录在飞，直接等它——它产出的必然是新会话，再排一次
+  /// 纯属浪费。
+  ///
+  /// [trustRestored] 为 false 时不采信从磁盘恢复、本进程尚未验证过的缓存。
+  /// 给没有过期探测能力的调用方（如 WebView 承载页）用，其余接口都能从业务
+  /// 响应里发现过期并 force 重试，直接吃缓存就好。
   Future<String> ensureLoggedIn(
     String service, {
     bool force = false,
+    bool trustRestored = true,
     void Function(String stage)? onStage,
-  }) {
+  }) async {
+    _ensureReady();
+    await _restored;
     if (!force) {
-      final cached = _established[service];
-      if (cached != null) return Future.value(cached);
-      final pending = _pending[service];
-      if (pending != null) return pending;
+      final cached = _lookup(service, trustRestored: trustRestored);
+      if (cached != null) return cached;
+    }
+    final pending = _pending[service];
+    if (pending != null) return pending;
+    // 下面到登记 _pending 之间不能有 await，否则并发调用会漏过合流各登一次。
+    if (force && _established.remove(service) != null) {
+      unawaited(EstablishedStore.write(_established));
     }
     late final Future<String> future;
     future = _serialize(() => _performLogin(service, onStage)).whenComplete(() {
-      // 只清理属于自己的那条登记：force 会覆盖 _pending，若无条件 remove，
-      // 先完成的那次登录就会把后来者的登记一起删掉，导致重复登录。
       if (identical(_pending[service], future)) _pending.remove(service);
     });
     _pending[service] = future;
@@ -183,8 +203,10 @@ class PortalSession {
   /// 态，用户就不必再输一遍密码）。
   Future<void> clear({bool includeWebView = false}) async {
     _ensureReady();
+    await _restored;
     _established.clear();
     credentialError.value = null;
+    await EstablishedStore.write(_established);
     await _jar.deleteAll();
     if (includeWebView) {
       try {
@@ -202,6 +224,9 @@ class PortalSession {
     String service = PortalServices.jwxt,
     void Function(String stage)? onStage,
   }) async {
+    // 先等在飞的登录跑完：force 会合流到它，而它是在 clear 之前开始的，
+    // 验不出凭据。
+    await _queue;
     await clear();
     return ensureLoggedIn(service, force: true, onStage: onStage);
   }
@@ -252,7 +277,26 @@ class PortalSession {
       createHttpClient: trust.createHttpClient,
     );
     _http = PortalHttp(dio, trust: trust);
+    _restored = EstablishedStore.read().then((entries) {
+      // 只补本进程还没登过的：恢复是异步的，别把已经新鲜的条目覆盖成旧的。
+      for (final MapEntry(:key, :value) in entries.entries) {
+        _established.putIfAbsent(key, () => value);
+      }
+    });
     _ready = true;
+  }
+
+  /// 取 [service] 的缓存落地 URL；过期或不采信时返回 null。
+  String? _lookup(String service, {required bool trustRestored}) {
+    final entry = _established[service];
+    if (entry == null) return null;
+    if (entry.isExpired(establishedTtl)) {
+      portalLog('落地缓存超过信任期，重新确认 $service');
+      _established.remove(service);
+      return null;
+    }
+    if (entry.restored && !trustRestored) return null;
+    return entry.landing;
   }
 
   Future<String> _performLogin(
@@ -277,8 +321,12 @@ class PortalSession {
         },
       ).login(service);
       portalLog('登录成功，落地 $landing');
-      _established[service] = landing;
+      _established[service] = EstablishedEntry(
+        landing: landing,
+        at: DateTime.now(),
+      );
       credentialError.value = null;
+      await EstablishedStore.write(_established);
       return landing;
     } on PortalCredentialError catch (e) {
       // 凭据被服务端拒绝，记下来让绑定状态页显示「已失效」。
