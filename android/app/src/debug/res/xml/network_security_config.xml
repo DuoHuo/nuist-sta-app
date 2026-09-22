@@ -7,9 +7,8 @@
   为什么不用 <debug-overrides>：WebView 不认它，而我们要抓的恰恰是 WebView 的流量，
   所以只能写在 base-config 里、靠 debug 源集来保证不外泄。
 
-  刻意不加 cleartextTrafficPermitted="true"：门户会 302 到 http，明文一放开，
-  debug 下就走通了、release 下却被拦，行为分叉反而更难排障。
-  明文跳转由 PortalBindPage 的 _rewriteToHttps 统一改写成 https。
+  门户明文跳转仍由 PortalBindPage 的 _rewriteToHttps 统一改写成 https。
+  仅地图服务器与本机测试地址允许 HTTP，不改变其他域名的明文访问策略。
 -->
 <network-security-config>
     <base-config>
@@ -18,4 +17,11 @@
             <certificates src="user" />
         </trust-anchors>
     </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain>192.0.2.1</domain>
+        <domain>duohuo.org.cn</domain>
+        <domain>127.0.0.1</domain>
+        <domain>localhost</domain>
+        <domain>10.0.2.2</domain>
+    </domain-config>
 </network-security-config>
