@@ -1,0 +1,94 @@
+import 'campus_map_data.dart';
+
+class CampusMapSnapshot {
+  const CampusMapSnapshot({
+    this.places = const [],
+    this.buildingGeoJson,
+    this.streetCoverageGeoJson,
+    this.styleString,
+    this.attribution,
+    this.bounds,
+    this.warning,
+  });
+
+  final String? styleString;
+  final String? attribution;
+  final List<double>? bounds;
+  final String? warning;
+
+  final List<CampusPlace> places;
+  final Map<String, dynamic>? buildingGeoJson;
+  final Map<String, dynamic>? streetCoverageGeoJson;
+}
+
+class CampusFloorSnapshot {
+  const CampusFloorSnapshot({this.rooms = const [], this.geoJson});
+  final List<CampusRoom> rooms;
+  final Map<String, dynamic>? geoJson;
+}
+
+class CampusRouteRequest {
+  const CampusRouteRequest({
+    required this.originPlaceId,
+    required this.destinationPlaceId,
+    this.destinationFloorId,
+    this.destinationRoomId,
+    this.accessible = false,
+  });
+  final String originPlaceId;
+  final String destinationPlaceId;
+  final String? destinationFloorId;
+  final String? destinationRoomId;
+  final bool accessible;
+}
+
+class CampusRouteResult {
+  const CampusRouteResult({
+    required this.geoJson,
+    required this.instructions,
+    this.summary,
+  });
+  final Map<String, dynamic> geoJson;
+  final List<String> instructions;
+  final String? summary;
+}
+
+/// 实现方负责对接实际 API，并把返回数据转换为地图模块模型。
+abstract interface class CampusMapSource {
+  bool get isConfigured;
+  Future<CampusMapSnapshot> loadCampus();
+  Future<CampusFloorSnapshot> loadFloor(String buildingId, String floorId);
+  Future<CampusRouteResult?> planRoute(CampusRouteRequest request);
+}
+
+abstract interface class CampusMapRemoteSource {
+  Future<CampusPlace> loadPlace(CampusPlace place);
+  Future<List<CampusPlace>> searchPlaces(String query);
+  Future<Map<String, dynamic>> locateWifi(
+    List<Map<String, dynamic>> observations,
+  );
+  Future<Map<String, dynamic>> loadFingerprints({
+    String? buildingId,
+    String? floorId,
+  });
+  Future<Map<String, dynamic>> submitFingerprint(
+    Map<String, dynamic> sample, {
+    String? collectToken,
+  });
+}
+
+class UnconfiguredCampusMapSource implements CampusMapSource {
+  const UnconfiguredCampusMapSource();
+  @override
+  bool get isConfigured => false;
+  @override
+  Future<CampusMapSnapshot> loadCampus() async => const CampusMapSnapshot();
+  @override
+  Future<CampusFloorSnapshot> loadFloor(
+    String buildingId,
+    String floorId,
+  ) async => const CampusFloorSnapshot();
+  @override
+  Future<CampusRouteResult?> planRoute(CampusRouteRequest request) async =>
+      null;
+}

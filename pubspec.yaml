@@ -44,6 +44,8 @@ dependencies:
   asn1lib: ^1.6.5
   fl_chart: ^1.2.0
   path_provider: ^2.1.6
+  maplibre_gl: ^0.27.1
+  geolocator: ^14.0.3
 
 dev_dependencies:
   flutter_test:

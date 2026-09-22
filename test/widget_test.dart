@@ -35,7 +35,8 @@ void main() {
     await tester.tap(find.text('校园地图'));
     await tester.pumpAndSettle();
 
-    expect(find.text('建设中'), findsOneWidget);
+    expect(find.byType(TextField), findsOneWidget);
+    expect(find.byTooltip('地图图层'), findsOneWidget);
     expect(find.byType(BottomNavigationBar), findsNothing);
   });
 
