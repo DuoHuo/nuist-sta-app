@@ -50,20 +50,19 @@ jobs:
               [Features]=""
               [Fixes]=""
               [Documentation]=""
-              [Other Changes]=""
+              ["Other Changes"]=""
             )
 
             while IFS=$'\t' read -r subject short_sha author; do
               [ -n "$subject" ] || continue
               case "$subject" in
-                feat:*|feat\([^)]*\):*|feature:*|feature\([^)]*\):*) section="Features" ;;
-                fix:*|fix\([^)]*\):*|bugfix:*|bugfix\([^)]*\):*) section="Fixes" ;;
-                docs:*|docs\([^)]*\):*|doc:*|doc\([^)]*\):*) section="Documentation" ;;
-                refactor:*|refactor\([^)]*\):*|perf:*|perf\([^)]*\):*) section="Other Changes" ;;
+                feat:*|feat\(*|feature:*|feature\(*) section="Features" ;;
+                fix:*|fix\(*|bugfix:*|bugfix\(*) section="Fixes" ;;
+                docs:*|docs\(*|doc:*|doc\(*) section="Documentation" ;;
                 *) section="Other Changes" ;;
               esac
               sections["$section"]+="- $subject (\`$short_sha\`, @$author)"$'\n'
-            done < <(git log --pretty=format:'%s%x09%h%x09%an' "$RANGE")
+            done < <(git log --format='%s%x09%h%x09%an' "$RANGE")
 
             for section in "Features" "Fixes" "Documentation" "Other Changes"; do
               if [ -n "${sections[$section]}" ]; then
