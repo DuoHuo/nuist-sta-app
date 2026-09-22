@@ -17,7 +17,7 @@
 | `privateKeyPkcs8Pem` | **P-256 私钥**（PKCS#8 PEM） |
 | `userId` | 学号的 Base64URL 形式 |
 | `anonbiometricsd` | 服务端下发的匿名生物识别标识 |
-| `deviceName` | 绑定设备名，形如 `NUIST STA (Android)` |
+| `deviceName` | 绑定设备名，形如 `NUIST++ (Android)` |
 | `createdAt` | 绑定时间 |
 
 序列化格式是 JSON，**前五个字段与 Python 参考实现的 `passkey.local.json` 逐字一致**，
