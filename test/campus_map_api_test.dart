@@ -264,8 +264,9 @@ void main() {
             'bounds': [118.6, 32.1, 118.8, 32.3],
           });
         }
-        if (request.uri.path.endsWith('/buildings'))
+        if (request.uri.path.endsWith('/buildings')) {
           return ok({'buildings': []});
+        }
         return ok({'pois': []});
       }, baseUrl: 'http://duohuo.org.cn:12345');
       final snapshot = await api.loadCampus();
