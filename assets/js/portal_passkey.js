@@ -313,7 +313,7 @@
     (state.blockPageStartRegister && isPageStartRegisterUrl(url)) ||
     (state.blockPageFinishRegister && isPageFinishRegisterUrl(url));
   const blockedRequest = () =>
-    Promise.reject(new DOMException("blocked by nuist-sta-app", "NotAllowedError"));
+    Promise.reject(new DOMException("blocked by NUIST++", "NotAllowedError"));
 
   // fetch 的第一个参数可能是字符串、Request，也可能是 URL 对象（URL 没有 .url，只有 .href）。
   const requestUrl = (input) => {
