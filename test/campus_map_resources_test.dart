@@ -174,8 +174,9 @@ void main() {
   test('injects blue building names and rewrites labels to Chinese', () async {
     final dio = Dio()
       ..httpClientAdapter = FakeAdapter((r) {
-        if (r.uri.path.startsWith('/martin/fonts/'))
+        if (r.uri.path.startsWith('/martin/fonts/')) {
           return response({'stub': true});
+        }
         if (r.uri.path == '/martin/styles/campus') {
           return response({
             'version': 8,
