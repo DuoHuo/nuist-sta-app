@@ -19,10 +19,11 @@ const double _kNameMinWidth = 112;
 /// 空教室查询页。
 ///
 /// 整页是一个 CustomScrollView：
-/// - 筛选卡（教学楼 → 日期 → 楼层 → 类型 / 座位）随内容一起滚走；
+/// - 筛选卡（教学楼 → 日期 → 分区 / 楼层 → 类型 / 座位）随内容一起滚走；
 /// - 时段表头钉在顶部：五个格子既是「查哪几节」的开关，也是下面每行五个
 ///   状态格的列标题；
-/// - 教室列表：所选时段全部空闲的在前、部分空闲的在后，点一行看逐节详情。
+/// - 教室列表分三段：所选时段全部空闲、部分空闲、全部占用，每段都能折叠，
+///   全部占用的默认收着放在最底下；点一行看逐节详情。
 class FreeClassroomPage extends StatefulWidget {
   const FreeClassroomPage({super.key});
 
@@ -30,8 +31,20 @@ class FreeClassroomPage extends StatefulWidget {
   State<FreeClassroomPage> createState() => _FreeClassroomPageState();
 }
 
+/// 教室列表的三段。
+enum _Section { free, partial, busy }
+
 class _FreeClassroomPageState extends State<FreeClassroomPage> {
   final _controller = FreeClassroomController.instance;
+
+  /// 收起的段。全占用的教室对找空教室的人没用，默认收着。
+  final _collapsed = <_Section>{_Section.busy};
+
+  void _toggleSection(_Section section) {
+    setState(() {
+      if (!_collapsed.remove(section)) _collapsed.add(section);
+    });
+  }
 
   @override
   void initState() {
@@ -141,6 +154,7 @@ class _FreeClassroomPageState extends State<FreeClassroomPage> {
   Widget _buildBody(BuildContext context, FreeClassroomController c) {
     final day = c.result;
     final matches = c.matches();
+    final available = matches.where((m) => !m.fullyBusy).length;
     // 表头和每行的状态格宽度：屏幕越宽格子越大，但教室名那列至少留够。
     final rowWidth = MediaQuery.sizeOf(context).width - 32 - 24;
     final n = day?.groups.length ?? 5;
@@ -174,7 +188,7 @@ class _FreeClassroomPageState extends State<FreeClassroomPage> {
               delegate: _PeriodHeaderDelegate(
                 controller: c,
                 day: day,
-                matched: matches.length,
+                matched: available,
                 cellWidth: cellWidth,
               ),
             ),
@@ -186,6 +200,8 @@ class _FreeClassroomPageState extends State<FreeClassroomPage> {
                 day: day,
                 matches: matches,
                 cellWidth: cellWidth,
+                collapsed: _collapsed,
+                onToggleSection: _toggleSection,
                 onRoomTap: (room) => _showRoomDetail(room, day),
               ),
             const SliverToBoxAdapter(child: _Footer()),
@@ -217,6 +233,7 @@ class _FilterCard extends StatelessWidget {
     final c = controller;
     final day = c.result;
     final floors = day?.floors ?? const <int>[];
+    final zones = day?.zones ?? const <String>[];
     return ClassroomCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -227,6 +244,24 @@ class _FilterCard extends StatelessWidget {
           if (day != null) ...[
             const _CardDivider(),
             const SizedBox(height: 4),
+            // 分区只有一个（或名字里根本没有）时这一行没意义，不占地方。
+            if (zones.length > 1)
+              _ChipRow(
+                label: '区域',
+                children: [
+                  ClassroomChip(
+                    label: '全部',
+                    selected: c.zone == null,
+                    onTap: () => c.setZone(null),
+                  ),
+                  for (final z in zones)
+                    ClassroomChip(
+                      label: '$z 区',
+                      selected: c.zone == z,
+                      onTap: () => c.setZone(z),
+                    ),
+                ],
+              ),
             if (floors.length > 1)
               _ChipRow(
                 label: '楼层',
@@ -552,6 +587,8 @@ class _PeriodHeaderDelegate extends SliverPersistentHeaderDelegate {
 }
 
 /// 五个时段格子：点一下切换是否纳入查询；它们同时是列表每行状态格的列标题。
+/// 左边「N 间可用」下面一行小字写的是**当前**的时段范围（全天 / 现在起），
+/// 点一下切到另一个范围。
 class _PeriodHeader extends StatelessWidget {
   const _PeriodHeader({
     required this.controller,
@@ -577,13 +614,16 @@ class _PeriodHeader extends StatelessWidget {
     final over = c.overGroups(day);
     final allSelected = selected.length == groups.length;
 
+    // 文案写的是现在的状态，点击才切到另一边：没全选 → 显示「现在起」，点了
+    // 全选；全选了 → 显示「全天」，点了只留还没结束的。今天的课要么全没
+    // 开始要么全结束时「现在起」等于「全天」，不给切换。
     final String? quickLabel;
     final VoidCallback? onQuick;
     if (!allSelected) {
-      quickLabel = '全天';
+      quickLabel = '现在起';
       onQuick = c.selectAllGroups;
     } else if (over.isNotEmpty && over.length < groups.length) {
-      quickLabel = '现在起';
+      quickLabel = '全天';
       onQuick = c.selectUpcomingGroups;
     } else {
       quickLabel = null;
@@ -710,8 +750,9 @@ class _ColumnToggle extends StatelessWidget {
       child: SizedBox(
         width: width,
         child: Center(
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
+          // 选中态直接切换、不做过渡：点「全天 / 现在起」时五个格子一起变色，
+          // 渐变看起来像按压动效。
+          child: Container(
             width: width,
             height: 40,
             decoration: BoxDecoration(
@@ -759,11 +800,11 @@ sealed class _Entry {
 }
 
 class _SectionEntry extends _Entry {
-  const _SectionEntry(this.title, this.count, this.color);
+  const _SectionEntry(this.section, this.count, this.collapsed);
 
-  final String title;
+  final _Section section;
   final int count;
-  final Color color;
+  final bool collapsed;
 }
 
 class _RoomEntry extends _Entry {
@@ -772,12 +813,20 @@ class _RoomEntry extends _Entry {
   final RoomMatch match;
 }
 
+/// 筛选出的教室一间都不空时，列表顶部先放一条「没有空教室」的提示，
+/// 全占用那一段仍折叠着跟在后面。
+class _NoticeEntry extends _Entry {
+  const _NoticeEntry();
+}
+
 class _RoomList extends StatelessWidget {
   const _RoomList({
     required this.controller,
     required this.day,
     required this.matches,
     required this.cellWidth,
+    required this.collapsed,
+    required this.onToggleSection,
     required this.onRoomTap,
   });
 
@@ -785,27 +834,33 @@ class _RoomList extends StatelessWidget {
   final ClassroomDay day;
   final List<RoomMatch> matches;
   final double cellWidth;
+  final Set<_Section> collapsed;
+  final ValueChanged<_Section> onToggleSection;
   final ValueChanged<Classroom> onRoomTap;
+
+  static _Section _sectionOf(RoomMatch m) => m.fullyFree
+      ? _Section.free
+      : m.fullyBusy
+      ? _Section.busy
+      : _Section.partial;
 
   @override
   Widget build(BuildContext context) {
-    final full = [
-      for (final m in matches)
-        if (m.fullyFree) m,
-    ];
-    final partial = [
-      for (final m in matches)
-        if (!m.fullyFree) m,
-    ];
+    // matches 已经按全空 → 部分 → 全占用排好，这里只按段切开。
+    final bySection = <_Section, List<RoomMatch>>{};
+    for (final m in matches) {
+      bySection.putIfAbsent(_sectionOf(m), () => []).add(m);
+    }
     final entries = <_Entry>[
-      if (full.isNotEmpty) ...[
-        _SectionEntry('所选时段全部空闲', full.length, AppColors.success),
-        for (final m in full) _RoomEntry(m),
-      ],
-      if (partial.isNotEmpty) ...[
-        _SectionEntry('部分时段空闲', partial.length, AppColors.warning),
-        for (final m in partial) _RoomEntry(m),
-      ],
+      if (!bySection.containsKey(_Section.free) &&
+          !bySection.containsKey(_Section.partial))
+        const _NoticeEntry(),
+      for (final section in _Section.values)
+        if (bySection[section] case final rooms?) ...[
+          _SectionEntry(section, rooms.length, collapsed.contains(section)),
+          if (!collapsed.contains(section))
+            for (final m in rooms) _RoomEntry(m),
+        ],
     ];
     final selected = controller.selectedGroups;
     final over = controller.overGroups(day);
@@ -818,10 +873,12 @@ class _RoomList extends StatelessWidget {
         return _ListShell(
           isLast: isLast,
           child: switch (entry) {
+            _NoticeEntry() => _EmptyBody(day: day),
             _SectionEntry e => _SectionLabel(
-              title: e.title,
+              section: e.section,
               count: e.count,
-              color: e.color,
+              collapsed: e.collapsed,
+              onTap: () => onToggleSection(e.section),
             ),
             _RoomEntry e => _RoomRow(
               match: e.match,
@@ -862,46 +919,74 @@ class _ListShell extends StatelessWidget {
   }
 }
 
+/// 段标题：整行可点，收起 / 展开这一段；右侧箭头指示当前状态。
+/// 用 GestureDetector 而不是 InkWell：这一行只是个开关，按下去不要水波纹和
+/// 灰色按压层，和旁边的教室行区分开。
 class _SectionLabel extends StatelessWidget {
   const _SectionLabel({
-    required this.title,
+    required this.section,
     required this.count,
-    required this.color,
+    required this.collapsed,
+    required this.onTap,
   });
 
-  final String title;
+  final _Section section;
   final int count;
-  final Color color;
+  final bool collapsed;
+  final VoidCallback onTap;
+
+  static String titleOf(_Section section) => switch (section) {
+    _Section.free => '所选时段全部空闲',
+    _Section.partial => '部分时段空闲',
+    _Section.busy => '所选时段全部占用',
+  };
+
+  static Color colorOf(_Section section) => switch (section) {
+    _Section.free => AppColors.success,
+    _Section.partial => AppColors.warning,
+    _Section.busy => AppColors.hint,
+  };
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-      child: Row(
-        children: [
-          Container(
-            width: 3,
-            height: 12,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(2),
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        // 收起时下面没有行了，多留点底边，别贴着卡片边缘。
+        padding: EdgeInsets.fromLTRB(12, 10, 8, collapsed ? 10 : 2),
+        child: Row(
+          children: [
+            Container(
+              width: 3,
+              height: 12,
+              decoration: BoxDecoration(
+                color: colorOf(section),
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: AppColors.titleText,
+            const SizedBox(width: 8),
+            Text(
+              titleOf(section),
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.titleText,
+              ),
             ),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            '$count 间',
-            style: const TextStyle(fontSize: 12, color: AppColors.hint),
-          ),
-        ],
+            const SizedBox(width: 6),
+            Text(
+              '$count 间',
+              style: const TextStyle(fontSize: 12, color: AppColors.hint),
+            ),
+            const Spacer(),
+            Icon(
+              collapsed ? Icons.expand_more : Icons.expand_less,
+              size: 20,
+              color: const Color(0xFFC9CDD4),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -998,8 +1083,9 @@ class _RoomRow extends StatelessWidget {
   }
 }
 
-/// 一个时段的状态格：绿 = 该时段全空，橙 = 空一部分（标出空闲节数），
-/// 灰 = 都有课。没勾选的时段画淡，今天已过的更淡。
+/// 一个时段的状态格：绿 = 该时段全空（纯色块，不加勾），橙 = 空一部分
+/// （标出空闲节数），灰 = 都有课。勾选的时段永远画实；没勾选的画淡，其中
+/// 今天已过的更淡。
 class _StatusCell extends StatelessWidget {
   const _StatusCell({
     required this.group,
@@ -1023,7 +1109,7 @@ class _StatusCell extends StatelessWidget {
     final Widget? mark;
     if (free == total) {
       bg = AppColors.success.withValues(alpha: 0.18);
-      mark = const Icon(Icons.check, size: 13, color: AppColors.success);
+      mark = null;
     } else if (free > 0) {
       bg = AppColors.warning.withValues(alpha: 0.18);
       mark = _FitText(
@@ -1040,7 +1126,8 @@ class _StatusCell extends StatelessWidget {
       mark = null;
     }
     return Opacity(
-      opacity: over ? 0.3 : (dimmed ? 0.4 : 1),
+      // 用户特意把已过的时段勾回来，这一列就得和其他选中列一样清楚。
+      opacity: !dimmed ? 1 : (over ? 0.3 : 0.4),
       child: Container(
         width: width,
         height: 26,
@@ -1054,6 +1141,7 @@ class _StatusCell extends StatelessWidget {
   }
 }
 
+/// 筛选后一间教室都没有（连全占用的都没有）时整块占位。
 class _EmptyResult extends StatelessWidget {
   const _EmptyResult({required this.day});
 
@@ -1061,32 +1149,41 @@ class _EmptyResult extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return _ListShell(isLast: true, child: _EmptyBody(day: day));
+  }
+}
+
+/// 「没有空教室」的提示正文；单独占位和列表顶部的提示条共用。
+class _EmptyBody extends StatelessWidget {
+  const _EmptyBody({required this.day});
+
+  final ClassroomDay day;
+
+  @override
+  Widget build(BuildContext context) {
     final noRooms = day.rooms.isEmpty;
-    return _ListShell(
-      isLast: true,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
-        child: Column(
-          children: [
-            Icon(
-              Icons.event_busy_outlined,
-              size: 32,
-              color: AppColors.hint.withValues(alpha: 0.7),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
+      child: Column(
+        children: [
+          Icon(
+            Icons.event_busy_outlined,
+            size: 32,
+            color: AppColors.hint.withValues(alpha: 0.7),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            noRooms ? '教务没有返回这栋楼的教室' : '所选条件下没有空教室',
+            style: const TextStyle(fontSize: 14, color: AppColors.labelText),
+          ),
+          if (!noRooms) ...[
+            const SizedBox(height: 4),
+            const Text(
+              '试试换个时段、楼层或放宽筛选',
+              style: TextStyle(fontSize: 12, color: AppColors.hint),
             ),
-            const SizedBox(height: 10),
-            Text(
-              noRooms ? '教务没有返回这栋楼的教室' : '所选条件下没有空教室',
-              style: const TextStyle(fontSize: 14, color: AppColors.labelText),
-            ),
-            if (!noRooms) ...[
-              const SizedBox(height: 4),
-              const Text(
-                '试试换个时段、楼层或放宽筛选',
-                style: TextStyle(fontSize: 12, color: AppColors.hint),
-              ),
-            ],
           ],
-        ),
+        ],
       ),
     );
   }

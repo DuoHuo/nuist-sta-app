@@ -6,8 +6,8 @@ import 'free_classroom_api.dart';
 import 'free_classroom_models.dart';
 import 'free_classroom_store.dart';
 
-/// 空教室查询的页面状态：日期 + 教学楼决定去教务拉哪份数据，时段 + 楼层是
-/// 纯本地筛选，改动不发请求。
+/// 空教室查询的页面状态：日期 + 教学楼决定去教务拉哪份数据，时段 / 楼层 /
+/// 分区 / 类型 / 座位是纯本地筛选，改动不发请求。
 ///
 /// 结果按「日期|楼」在内存里缓存，校历按日期缓存，所以来回切楼、切日期基本
 /// 是秒开；只有点刷新才无视缓存重拉。
@@ -37,6 +37,9 @@ class FreeClassroomController extends ChangeNotifier {
   Set<int> _selectedGroups = {};
   String? _selectionDate;
   int? _floor;
+
+  /// 楼内分区（N / C / S 之类）筛选；null = 全部。
+  String? _zone;
 
   /// 房间类型筛选；null = 全部（但不含办公室之类的非教室）。
   String? _type;
@@ -68,6 +71,7 @@ class FreeClassroomController extends ChangeNotifier {
 
   Set<int> get selectedGroups => _selectedGroups;
   int? get floor => _floor;
+  String? get zone => _zone;
   String? get type => _type;
   int get minSeats => _minSeats;
 
@@ -84,9 +88,9 @@ class FreeClassroomController extends ChangeNotifier {
     };
   }
 
-  /// 按当前时段 + 楼层 + 类型 + 座位筛选后的教室，先「所选时段全空」再
-  /// 「部分空闲」，组内按空闲节数多 → 普通教室优先 → 楼层低 → 名称排。
-  /// 所选时段一节都不空的教室不返回。
+  /// 按当前楼层 + 分区 + 类型 + 座位筛选后的教室，先「所选时段全空」再
+  /// 「部分空闲」，最后是「一节都不空」的，组内按空闲节数多 → 普通教室优先
+  /// → 楼层低 → 名称排。全占用的也返回，页面折叠着放在最底下。
   List<RoomMatch> matches() {
     final day = _result;
     if (day == null) return const [];
@@ -100,10 +104,10 @@ class FreeClassroomController extends ChangeNotifier {
     final list = <RoomMatch>[];
     for (final room in day.rooms) {
       if (_floor != null && room.floor != _floor) continue;
+      if (_zone != null && room.zone != _zone) continue;
       if (_type != null ? room.type != _type : room.isNonClassroom) continue;
       if (_minSeats > 0 && (room.seats ?? 0) < _minSeats) continue;
       final free = selected.fold<int>(0, (n, g) => n + room.freeCountIn(g));
-      if (free == 0) continue;
       list.add(RoomMatch(room: room, freeCount: free, totalCount: total));
     }
     list.sort((a, b) {
@@ -247,6 +251,12 @@ class FreeClassroomController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setZone(String? zone) {
+    if (zone == _zone) return;
+    _zone = zone;
+    notifyListeners();
+  }
+
   void setType(String? type) {
     if (type == _type) return;
     _type = type;
@@ -347,6 +357,7 @@ class FreeClassroomController extends ChangeNotifier {
       _selectedGroups = valid;
     }
     if (_floor != null && !day.floors.contains(_floor)) _floor = null;
+    if (_zone != null && !day.zones.contains(_zone)) _zone = null;
     if (_type != null && !day.types.any((t) => t.key == _type)) _type = null;
   }
 

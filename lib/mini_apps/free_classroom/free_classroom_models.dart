@@ -22,6 +22,10 @@ const List<String> kNonClassroomTypeKeywords = ['办公室', '休息室'];
 
 const List<String> kWeekdayNames = ['一', '二', '三', '四', '五', '六', '日'];
 
+/// 分区筛选的排列顺序：文德 / 明德这类楼按北 → 中 → 南叫 N / C / S，
+/// 照方位排比按字母排顺眼；表里没有的字母排在后面按字母序。
+const List<String> kZoneOrder = ['N', 'C', 'S'];
+
 String _two(int n) => n.toString().padLeft(2, '0');
 
 /// `yyyy-MM-dd`，接口参数与缓存键都用它。
@@ -154,6 +158,7 @@ class Classroom {
     required this.seats,
     required this.floor,
     required this.occupancy,
+    this.zone,
   });
 
   /// JASMC，如「文德N101A」。
@@ -167,6 +172,10 @@ class Classroom {
 
   /// 楼层，接口 LC 优先，缺失时从名称里的首个数字推断；推断不出为 0。
   final int floor;
+
+  /// 楼内分区：教室名里紧贴房间号前面的字母，如「文德N101A」→ `N`、
+  /// 「明德S402」→ `S`；名字里没有（如「室外教室-雷丁」）为 null。
+  final String? zone;
 
   /// 第 n 小节（下标 n-1）的占用类型代码，空列表即空闲。
   final List<List<String>> occupancy;
@@ -199,6 +208,7 @@ class Classroom {
       type: (row['JASLXDM_DISPLAY'] ?? '').toString().trim(),
       seats: _toInt(row['SKZWS']),
       floor: _toInt(row['LC']) ?? _floorFromName(name),
+      zone: _zoneFromName(name),
       occupancy: [
         for (var jc = 1; jc <= maxPeriod; jc++) parseOccupation(row['JC$jc']),
       ],
@@ -227,6 +237,11 @@ class Classroom {
     final m = RegExp(r'\d').firstMatch(name);
     return m == null ? 0 : int.parse(m.group(0)!);
   }
+
+  static String? _zoneFromName(String name) {
+    final m = RegExp(r'([A-Za-z])\d').firstMatch(name);
+    return m?.group(1)!.toUpperCase();
+  }
 }
 
 /// 一次查询的完整结果：某天某楼所有教室。
@@ -252,6 +267,23 @@ class ClassroomDay {
     final list = {for (final r in rooms) r.floor}.toList()..sort();
     if (list.remove(0)) list.add(0);
     return list;
+  }
+
+  /// 本楼出现过的分区字母，按 [kZoneOrder] 排；名字里没有分区的不计。
+  List<String> get zones {
+    final set = <String>{
+      for (final r in rooms)
+        if (r.zone != null) r.zone!,
+    };
+    int rank(String z) {
+      final i = kZoneOrder.indexOf(z);
+      return i < 0 ? kZoneOrder.length : i;
+    }
+
+    return set.toList()..sort((a, b) {
+      final byRank = rank(a) - rank(b);
+      return byRank != 0 ? byRank : a.compareTo(b);
+    });
   }
 
   /// 本楼出现过的房间类型 → 间数，按间数降序；空类型不列。
@@ -287,4 +319,7 @@ class RoomMatch {
   final int totalCount;
 
   bool get fullyFree => totalCount > 0 && freeCount == totalCount;
+
+  /// 所选时段一节都不空。
+  bool get fullyBusy => freeCount == 0;
 }

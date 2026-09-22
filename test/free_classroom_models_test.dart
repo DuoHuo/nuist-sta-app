@@ -90,4 +90,40 @@ void main() {
     expect(office.isNonClassroom, isTrue);
     expect(office.seats, isNull);
   });
+
+  test('分区取房间号前面的字母，没有就是 null', () {
+    String? zoneOf(String name) => Classroom.fromRow({'JASMC': name}, 11).zone;
+    expect(zoneOf('文德N101A'), 'N');
+    expect(zoneOf('明德S402'), 'S');
+    expect(zoneOf('文德C104'), 'C');
+    expect(zoneOf('N305'), 'N');
+    expect(zoneOf('室外教室-雷丁'), isNull);
+    expect(zoneOf('藕舫楼101'), isNull);
+  });
+
+  test('ClassroomDay.zones 去重、按 N/C/S 方位排，忽略没有分区的教室', () {
+    final day = ClassroomDay(
+      date: DateTime(2026, 9, 22),
+      building: const Building(code: '1-120', name: '文德楼'),
+      calendar: const TermCalendar(
+        termCode: '2026-2027-1',
+        week: 4,
+        weekday: 2,
+        groups: PeriodGroup.defaults,
+      ),
+      rooms: [
+        for (final name in [
+          '文德S401',
+          '文德C104',
+          '文德A101',
+          '文德N101A',
+          '文德N102',
+          '室外教室-雷丁',
+        ])
+          Classroom.fromRow({'JASMC': name}, 11),
+      ],
+      fetchedAt: DateTime(2026, 9, 22, 8),
+    );
+    expect(day.zones, ['N', 'C', 'S', 'A']);
+  });
 }
