@@ -126,8 +126,21 @@ service → 落地 URL 表（`_established`）也经 `EstablishedStore` 落到�
 
 ## 安全边界
 
-- **私钥不离开设备**。签名在本地完成，出网的只有 `signature` + `credentialId` +
-  `authenticatorData` + `clientDataJSON`
+- **私钥默认不离开设备**。签名在本地完成，出网的只有 `signature` + `credentialId` +
+  `authenticatorData` + `clientDataJSON`。唯一的例外是用户在「统一门户」页主动
+  **导出通行密钥**（`PasskeyTransfer`，见下）。
+- **导出物的强度只取决于六位 PIN**。`passkey_transfer.dart` 把 APP 内置的 16 字节文本密钥
+  末六字节换成 PIN（ASCII），直接作为 AES-128-CFB 的密钥，IV 固定全零（不把 IV
+  额外塞进二维码）；但内置密钥
+  和 APK 打包在一起，拆包即得，只挡"顺手看一眼"。真正的门槛只有 10^6 的 PIN 空间，
+  没有任何拉伸，离线穷举瞬间可破——所以 UI 上反复提醒导出物
+  等同登录凭据，传完即删。格式：`nuistkey1:` + Base45(密文)；
+  明文是紧凑二进制（Base64URL / hex 字段解回原始字节，PKCS#8 只留 32 字节标量按
+  WebCrypto 模板重建——私钥不是这个模板就直接判定无法导出，不做降级存储），
+  设备名称按 UTF-8 变长字段保存。
+  二维码 / 剪贴板 / `.nuistkey` 文件三种渠道装的是同一个字符串；导出页画二维码时
+  把 Base45 主体放进 alphanumeric 段（`_exportQrCode`），比按 byte 模式编码少两个
+  版本（V6 41×41 而不是 V8 49×49）
 - 会话 Cookie 用 `FlutterSecureStorage` 存，**没有**用 `cookie_jar` 默认的明文文件存储 ——
   门户会话 Cookie 等同于登录态，值得和私钥享受同一层保护
 - **没有任何遥测 / 崩溃上报 / 上传**。网络出口只有学校自己的域名，外加补全证书链时
