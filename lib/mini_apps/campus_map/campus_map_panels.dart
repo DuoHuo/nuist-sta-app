@@ -257,6 +257,7 @@ class CampusPlacePanel extends StatelessWidget {
     required this.onRoom,
     required this.onCloseRoute,
     this.mediaEntry,
+    this.onDetail,
   });
   final CampusPlace place;
   final CampusFloor? floor;
@@ -269,6 +270,9 @@ class CampusPlacePanel extends StatelessWidget {
   final VoidCallback? onRoute, onIndoor;
   final ValueChanged<CampusRoom> onRoom;
   final Widget? mediaEntry;
+
+  /// 打开该地物的完整详情页；为空时不显示入口（例如房间预览）。
+  final VoidCallback? onDetail;
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -342,6 +346,17 @@ class CampusPlacePanel extends StatelessWidget {
         ],
       ),
       const SizedBox(height: 16),
+      if (onDetail != null) ...[
+        SizedBox(
+          width: double.infinity,
+          child: MapAction(
+            icon: Icons.article_outlined,
+            label: '查看详情',
+            onPressed: onDetail,
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
       if (mediaEntry != null) ...[mediaEntry!, const SizedBox(height: 16)],
       if (route != null) ...[
         MapSectionTitle(

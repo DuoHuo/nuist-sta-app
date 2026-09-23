@@ -182,12 +182,15 @@ class CampusMapApi
       _request('/map/config'),
       _request('/buildings'),
       _request('/pois', query: {'limit': 100}),
+      _request('/features'),
     ]);
     final config = results[0];
     final buildings = _objects(results[1]['buildings']);
+    final featureRows = _objects(results[3]['features']);
     final places = [
       for (final building in buildings) _building(building),
       for (final poi in _objects(results[2]['pois'])) _poi(poi),
+      for (final feature in featureRows) _feature(feature),
     ];
     final geometries = List<List<Map<String, dynamic>>?>.filled(
       buildings.length,
@@ -237,6 +240,21 @@ class CampusMapApi
       buildingGeoJson: _collection([
         for (final features in geometries) ...?features,
       ]),
+      featuresGeoJson: _collection([
+        for (final feature in featureRows)
+          _withProperties(
+            {
+              'type': 'Feature',
+              'geometry': feature['geometry'],
+              'properties': const <String, dynamic>{},
+            },
+            {
+              'feature_id': _integer(feature['feature_id']),
+              'kind': _text(feature['kind']) ?? '',
+              'name': _text(feature['name']) ?? '',
+            },
+          ),
+      ]),
       styleString: preparedStyle,
       attribution: attribution,
       bounds: bounds,
@@ -248,6 +266,8 @@ class CampusMapApi
   Future<CampusPlace> loadPlace(CampusPlace place) async {
     final poiId = place.poiId ?? _poiId(place.id);
     if (poiId != null) return _poi(await _request('/pois/$poiId'));
+    final featureId = place.featureId ?? _featureId(place.id);
+    if (featureId != null) return _feature(await _request('/features/$featureId'));
     final id = place.buildingId ?? place.id;
     return _building(await _detail(id));
   }
@@ -266,11 +286,13 @@ class CampusMapApi
     final results = await Future.wait([
       _request('/buildings', query: {'q': query.trim()}),
       _request('/pois', query: {'q': query.trim(), 'limit': 100}),
+      _request('/features', query: {'q': query.trim()}),
     ]);
     return [
       for (final building in _objects(results[0]['buildings']))
         _building(building),
       for (final poi in _objects(results[1]['pois'])) _poi(poi),
+      for (final feature in _objects(results[2]['features'])) _feature(feature),
     ];
   }
 
@@ -342,6 +364,40 @@ class CampusMapApi
     _places[place.id] = place;
     return place;
   }
+
+  /// 通用地物（道路/绿地/广场等）。与建筑、POI 并列的第三类地物：
+  /// 没有楼层与室内结构，但有稳定编号，因此同样可以点开自己的详情页。
+  CampusPlace _feature(Map<String, dynamic> data) {
+    final id = _requiredInt(data['feature_id']);
+    final kind = _text(data['kind']);
+    final place = CampusPlace(
+      id: 'feature:$id',
+      name: _text(data['name']) ?? '',
+      subtitle: featureKindLabel(kind),
+      category: _featureCategory(kind),
+      featureId: id,
+      kind: kind,
+      description: _text(data['description']) ?? '',
+      center: _point(data['centroid_lng'], data['centroid_lat']),
+    );
+    _places[place.id] = place;
+    return place;
+  }
+
+  /// 地物类别到 App 分类的映射：可归入四类筛选的归入，其余保持未分类
+  /// （与 POI 的处理一致，不按名字猜测）。
+  static PlaceCategory? _featureCategory(String? kind) => switch (kind) {
+    'study' => PlaceCategory.study,
+    'food' => PlaceCategory.food,
+    'sports' => PlaceCategory.sports,
+    'gate' ||
+    'bus_stop' ||
+    'parking' ||
+    'shop' ||
+    'service' ||
+    'facility' => PlaceCategory.services,
+    _ => null,
+  };
 
   @override
   Future<CampusFloorSnapshot> loadFloor(
@@ -624,6 +680,8 @@ class CampusMapApi
       _integer(value) ?? (throw const CampusMapApiException('地图服务返回的数据缺少有效编号'));
   static int? _poiId(String id) =>
       id.startsWith('poi:') ? int.tryParse(id.substring(4)) : null;
+  static int? _featureId(String id) =>
+      id.startsWith('feature:') ? int.tryParse(id.substring(8)) : null;
   static double? _number(dynamic value) {
     final number = value is num
         ? value.toDouble()

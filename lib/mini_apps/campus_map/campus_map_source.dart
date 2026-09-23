@@ -4,6 +4,7 @@ class CampusMapSnapshot {
   const CampusMapSnapshot({
     this.places = const [],
     this.buildingGeoJson,
+    this.featuresGeoJson,
     this.streetCoverageGeoJson,
     this.styleString,
     this.attribution,
@@ -18,6 +19,11 @@ class CampusMapSnapshot {
 
   final List<CampusPlace> places;
   final Map<String, dynamic>? buildingGeoJson;
+
+  /// 通用地物（道路/绿地/广场等）的轮廓，由 App 自建图层渲染。
+  /// 底图瓦片是派生产物，新提交的地物不会立刻进瓦片，因此业务地物必须自绘。
+  final Map<String, dynamic>? featuresGeoJson;
+
   final Map<String, dynamic>? streetCoverageGeoJson;
 }
 

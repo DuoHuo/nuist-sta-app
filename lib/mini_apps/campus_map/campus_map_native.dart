@@ -77,6 +77,7 @@ class _CampusMapNativeState extends State<CampusMapNative> {
   int _appliedZoom = 0;
   int _appliedReset = 0;
   int _appliedFocus = 0;
+  CampusMapLayer _appliedLayer = CampusMapLayer.standard;
   Timer? _loadTimeout;
   Future<void> _queue = Future.value();
   final _sources = <String>[];
@@ -106,8 +107,11 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         old.floor?.id != config.floor?.id ||
         old.resetToken != config.resetToken ||
         old.zoomDelta != config.zoomDelta ||
-        old.userPoint != config.userPoint ||
+        // 定位点只是图层数据，不应把用户正在浏览的相机（含 3D 倾角）拽回去；
+        // 回中定位走 focusToken。
         old.focusToken != config.focusToken ||
+        // 图层模式切换（如 3D 城市 ↔ 标准）需要调整相机倾角。
+        old.mapLayer != config.mapLayer ||
         // 面板高度变化时重新内缩，选中目标始终停在可视区中心。
         (config.selectedPlace != null &&
             old.viewportInsets != config.viewportInsets);
@@ -123,6 +127,8 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         old.category != config.category ||
         old.streetCoverage != config.streetCoverage ||
         old.showRoute != config.showRoute ||
+        // 3D 城市 / 公交地铁等图层模式会增删自绘图层。
+        old.mapLayer != config.mapLayer ||
         // 用户位置点由独立图层绘制，变化时必须重建图层（不只是移相机）。
         old.userPoint != config.userPoint;
     // 面板拖动只调整相机内缩，不必重建图层。
@@ -212,6 +218,115 @@ class _CampusMapNativeState extends State<CampusMapNative> {
       );
       _layers.add('campus-buildings-hit');
     }
+    // 3D 城市：建筑轮廓按楼层数拉伸成体块（无楼层数据时按 3 层估算）；
+    // 室内分层模式下不叠加，避免与就地分层模型重合。
+    if (value.mapLayer == CampusMapLayer.city3d &&
+        value.floor == null &&
+        buildings != null) {
+      final heights = <String, double>{
+        for (final place in value.places)
+          if (place.poiId == null)
+            place.id:
+                (place.floors.isEmpty ? 3 : place.floors.length) *
+                    kDisplayFloorHeightM,
+      };
+      final extruded = <String, dynamic>{
+        ...buildings,
+        'features': [
+          for (final feature in _features(buildings))
+            {
+              ...feature,
+              'properties': {
+                ..._properties(feature),
+                'height_m': heights[_properties(feature)['building_id']] ??
+                    3 * kDisplayFloorHeightM,
+              },
+            },
+        ],
+      };
+      await _source(c, 'campus-city3d', extruded);
+      await c.addFillExtrusionLayer(
+        'campus-city3d',
+        'campus-city3d-volume',
+        const FillExtrusionLayerProperties(
+          fillExtrusionColor: '#DCE4EE',
+          fillExtrusionOpacity: 0.85,
+          fillExtrusionHeight: ['get', 'height_m'],
+        ),
+        enableInteraction: false,
+      );
+      _layers.add('campus-city3d-volume');
+    }
+    // 公交地铁：高亮公交站类地物点位（按 kind 白名单匹配，不按名称猜测）。
+    if (value.mapLayer == CampusMapLayer.transit) {
+      const transitKinds = {'bus_stop', '公交站', '轨道交通'};
+      final stops = [
+        for (final place in value.places)
+          if (transitKinds.contains(place.kind) &&
+              place.center != null &&
+              place.center!.isValid)
+            {
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [
+                  place.center!.longitude,
+                  place.center!.latitude,
+                ],
+              },
+              'properties': {'name': place.name},
+            },
+      ];
+      if (stops.isNotEmpty) {
+        await _source(c, 'campus-transit', {
+          'type': 'FeatureCollection',
+          'features': stops,
+        });
+        await c.addCircleLayer(
+          'campus-transit',
+          'campus-transit-stops',
+          const CircleLayerProperties(
+            circleColor: '#E67E22',
+            circleRadius: 7,
+            circleStrokeColor: '#FFFFFF',
+            circleStrokeWidth: 2.5,
+          ),
+          enableInteraction: false,
+        );
+        _layers.add('campus-transit-stops');
+      }
+    }
+    // 通用地物：道路、绿地、广场等由管理台提交的地物。底图瓦片是派生产物，
+    // 新提交的地物不会立刻进瓦片，所以业务地物必须自绘；一个源挂三层即可，
+    // 面层只画面、线层画线与面的轮廓、圆层只画点，无需过滤器。
+    final features = value.featuresGeoJson;
+    final featureRows = features == null ? null : features['features'];
+    if (features != null && featureRows is List && featureRows.isNotEmpty) {
+      await _source(c, 'campus-features', features);
+      await c.addFillLayer(
+        'campus-features',
+        'campus-features-fill',
+        const FillLayerProperties(fillColor: '#0E7490', fillOpacity: 0.28),
+      );
+      _layers.add('campus-features-fill');
+      await c.addLineLayer(
+        'campus-features',
+        'campus-features-line',
+        const LineLayerProperties(lineColor: '#0E7490', lineWidth: 1.8),
+      );
+      _layers.add('campus-features-line');
+      await c.addCircleLayer(
+        'campus-features',
+        'campus-features-point',
+        const CircleLayerProperties(
+          circleColor: '#0E7490',
+          circleRadius: 5,
+          circleStrokeColor: '#FFFFFF',
+          circleStrokeWidth: 2,
+        ),
+      );
+      _layers.add('campus-features-point');
+    }
     final user = value.userPoint;
     if (user != null && user.isValid) {
       await _source(c, 'campus-user', {
@@ -300,7 +415,10 @@ class _CampusMapNativeState extends State<CampusMapNative> {
             '#D6E6FB',
           ],
           fillExtrusionOpacity: 1,
-          fillExtrusionHeight: kFloorSlabThicknessM,
+          // MapLibre 的 base/height 是棱柱的两个绝对高度端点（不是厚度），
+          // height < base 时墙面会在两者之间倒挂拉伸，必须把顶面算成绝对值。
+          fillExtrusionHeight: _floorBase(value, value.floor?.id) +
+              kFloorSlabThicknessM,
           fillExtrusionBase: _floorBase(value, value.floor?.id),
         ),
         filter: [
@@ -320,7 +438,17 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         'campus-floor-walls',
         FillExtrusionLayerProperties(
           fillExtrusionColor: '#B9C4D0',
-          fillExtrusionHeight: ['get', 'height_m'],
+          // 顶面 = 楼层底面 + 墙基座 + 墙高（绝对高度，见上楼板注释）。
+          fillExtrusionHeight: [
+            '+',
+            _floorBase(value, value.floor?.id),
+            [
+              'coalesce',
+              ['get', 'base_m'],
+              0,
+            ],
+            ['get', 'height_m'],
+          ],
           fillExtrusionBase: [
             '+',
             _floorBase(value, value.floor?.id),
@@ -417,7 +545,8 @@ class _CampusMapNativeState extends State<CampusMapNative> {
   }
 
   /// 楼层叠放：每个楼层按自身海拔铺一块楼板，一层层叠起来；
-  /// 当前层实色着色，其余层按与当前层的距离递减透明度，保证当前层始终可读。
+  /// 当前层实色着色，下方楼层按距离递减透明度托底；
+  /// 当前层上方的楼层不显示，避免遮挡当前层。
   Future<void> _syncStackedFloors(
     MapLibreMapController c,
     CampusMapCanvas value,
@@ -429,6 +558,8 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         value.selectedPlace?.buildingId ?? value.selectedPlace?.id ?? '';
     for (final floor in floors) {
       if (floor.id == current.id) continue;
+      // 高于当前层的幽灵层会压在当前层上面，直接跳过。
+      if (floor.number > current.number) continue;
       final raw = value.ghostFloorsGeoJson[floor.id];
       if (raw == null) continue;
       final subset = _subset(
@@ -446,7 +577,9 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         FillExtrusionLayerProperties(
           fillExtrusionColor: '#E3E9F0',
           fillExtrusionOpacity: opacity,
-          fillExtrusionHeight: kFloorSlabThicknessM * 0.4,
+          // 顶面同样要是绝对高度，否则每层楼板会倒挂成通高立柱（重影根因）。
+          fillExtrusionHeight:
+              floorBaseElevation(floor) + kFloorSlabThicknessM * 0.4,
           fillExtrusionBase: floorBaseElevation(floor),
         ),
         filter: [
@@ -498,6 +631,23 @@ class _CampusMapNativeState extends State<CampusMapNative> {
             if (place.poiId == null &&
                 place.id == id &&
                 place.name.trim().isNotEmpty) {
+              config.onPlaceSelected(place);
+              return;
+            }
+          }
+        }
+      }
+      if (_layers.contains('campus-features-fill')) {
+        final hits = await hitsOn(const [
+          'campus-features-fill',
+          'campus-features-line',
+          'campus-features-point',
+        ]);
+        for (final raw in hits) {
+          final id = propertiesOf(raw)['feature_id'];
+          if (id is! num) continue;
+          for (final place in config.places) {
+            if (place.featureId == id.toInt()) {
               config.onPlaceSelected(place);
               return;
             }
@@ -569,11 +719,27 @@ class _CampusMapNativeState extends State<CampusMapNative> {
       }
     } else if (config.resetToken != _appliedReset ||
         config.selectedPlace == null) {
-      camera = _overviewCamera;
+      final overview = _overviewCamera;
+      if (overview != null) {
+        final resetRequested = config.resetToken != _appliedReset;
+        final city3d =
+            config.mapLayer == CampusMapLayer.city3d && config.floor == null;
+        camera = CameraPosition(
+          target: overview.target,
+          zoom: overview.zoom,
+          bearing: overview.bearing,
+          // 3D 城市下倾角由用户手势自由控制；仅显式重置时回到引导角 45°。
+          tilt: city3d ? (resetRequested ? 45 : (current?.tilt ?? 45)) : 0.0,
+        );
+      }
       _appliedReset = config.resetToken;
     } else {
       final point =
           config.selectedPlace?.center ?? config.selectedPlace?.entrance;
+      final city3d =
+          config.mapLayer == CampusMapLayer.city3d && config.floor == null;
+      // 户外默认倾角：3D 城市保留用户当前手势角度，标准地图俯视。
+      final outdoorTilt = city3d ? (current?.tilt ?? 45) : 0.0;
       if (point != null && point.isValid) {
         camera = _insetAware(
           CameraPosition(
@@ -581,7 +747,7 @@ class _CampusMapNativeState extends State<CampusMapNative> {
             zoom: config.floor == null ? 17 : 18.7,
             // 室内用倾斜视角看分层楼板；方位角沿用当前值，便于左右环绕查看。
             bearing: current?.bearing ?? 0,
-            tilt: config.floor == null ? 0 : 48,
+            tilt: config.floor == null ? outdoorTilt : 48,
           ),
         );
       } else if (current != null) {
@@ -589,9 +755,24 @@ class _CampusMapNativeState extends State<CampusMapNative> {
           target: current.target,
           zoom: current.zoom,
           bearing: current.bearing,
-          tilt: config.floor == null ? 0 : 45,
+          tilt: config.floor == null ? outdoorTilt : 45,
         );
       }
+    }
+    // 图层模式切换：进入 3D 城市给一次 45° 引导角（已在倾斜状态则保留用户角度），
+    // 切回其余模式回到俯视；室内分层保持 48° 不动。
+    if (config.mapLayer != _appliedLayer && current != null) {
+      camera = CameraPosition(
+        target: camera?.target ?? current.target,
+        zoom: camera?.zoom ?? current.zoom,
+        bearing: camera?.bearing ?? current.bearing,
+        tilt: config.floor != null
+            ? 48
+            : (config.mapLayer == CampusMapLayer.city3d
+                ? (current.tilt > 1 ? current.tilt : 45)
+                : 0),
+      );
+      _appliedLayer = config.mapLayer;
     }
     if (config.zoomDelta != _appliedZoom && current != null) {
       camera = CameraPosition(

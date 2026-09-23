@@ -12,6 +12,7 @@ import 'campus_map_location.dart';
 import 'campus_map_panels.dart';
 import 'campus_map_source.dart';
 import 'campus_map_widgets.dart';
+import 'campus_place_detail_page.dart';
 import 'campus_street_view_page.dart';
 
 class CampusMapPage extends StatefulWidget {
@@ -44,7 +45,8 @@ class _CampusMapPageState extends State<CampusMapPage> {
   CampusRouteResult? _route;
   bool _loading = false;
   bool _floorLoading = false;
-  bool _coverage = false;
+  // 底图图层模式（街景覆盖是其中一档，不再是独立开关）。
+  CampusMapLayer _layer = CampusMapLayer.standard;
   bool _routing = false;
   String? _error;
   String? _floorError;
@@ -252,8 +254,11 @@ class _CampusMapPageState extends State<CampusMapPage> {
       });
       return;
     }
-    // 分层视图需要整栋楼的各层几何（当前层上色，其余层半透明叠放）。
-    unawaited(_loadBuildingFloors(buildingId, place.floors, revision));
+    // 分层视图需要当前层及以下各层的几何（当前层上色，下方楼层半透明托底；
+    // 上方楼层不渲染，也就不必拉取）。
+    final floorsBelow =
+        place.floors.where((f) => f.number <= floor.number).toList();
+    unawaited(_loadBuildingFloors(buildingId, floorsBelow, revision));
   }
 
   Future<void> _loadBuildingFloors(
@@ -307,6 +312,18 @@ class _CampusMapPageState extends State<CampusMapPage> {
             ? Duration.zero
             : const Duration(milliseconds: 280),
         curve: Curves.easeOutCubic,
+      ),
+    );
+  }
+
+  /// 打开地物详情页：建筑、POI、通用地物走同一个页面，按编号取数。
+  /// 复用当前数据源，因此不会重复建连接；地址与深链路由 `/place/:placeId`
+  /// 使用同一套编号。
+  void _openDetail(CampusPlace place) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            CampusPlaceDetailPage(placeId: place.id, source: widget.source),
       ),
     );
   }
@@ -453,12 +470,15 @@ class _CampusMapPageState extends State<CampusMapPage> {
                               selectedRoom: _room,
                               rooms: _floorData.rooms,
                               buildingGeoJson: _campus.buildingGeoJson,
+                              featuresGeoJson: _campus.featuresGeoJson,
                               floorGeoJson: _floorData.geoJson,
                               ghostFloorsGeoJson: _ghostFloors,
                               streetCoverageGeoJson:
                                   _campus.streetCoverageGeoJson,
                               routeGeoJson: _route?.geoJson,
-                              streetCoverage: _coverage,
+                              streetCoverage:
+                                  _layer == CampusMapLayer.streetView,
+                              mapLayer: _layer,
                               showRoute: _route != null,
                               category: _category,
                               resetToken: _resetToken,
@@ -531,7 +551,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
                           ),
                         ),
                       ),
-                    if (_coverage)
+                    if (_layer == CampusMapLayer.streetView)
                       Positioned(
                         top: safe.top + 94,
                         left: wide ? 392 : 16,
@@ -721,6 +741,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
               ),
             CampusPlacePanel(
               place: _place!,
+              onDetail: _place!.hasDetail && _room == null
+                  ? () => _openDetail(_place!)
+                  : null,
               mediaEntry:
                   _place!.poiId == null && !_place!.id.startsWith('poi:')
                   ? CampusBuildingPhotosEntry(
@@ -778,7 +801,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
         child: MapIconButton(
           icon: Icons.layers_outlined,
           label: '地图图层',
-          active: _coverage,
+          active: _layer != CampusMapLayer.standard,
           onPressed: _showLayers,
         ),
       ),
@@ -923,13 +946,80 @@ class _CampusMapPageState extends State<CampusMapPage> {
     );
   }
 
+  bool _hasTransitStops() => _campus.places.any(
+    (p) => const {'bus_stop', '公交站', '轨道交通'}.contains(p.kind),
+  );
+
   Future<void> _showLayers() async {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: MapPalette.surface,
       showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: SingleChildScrollView(
+      builder: (context) {
+        // 图层卡片：缩略图 + 名称；选中项蓝色描边，卫星图为预留入口（灰置）。
+        Widget layerCard(
+          CampusMapLayer layer,
+          IconData icon,
+          String label, {
+          bool reserved = false,
+        }) {
+          final selected = _layer == layer && !reserved;
+          final fg = reserved
+              ? MapPalette.secondary
+              : (selected ? MapPalette.blue : MapPalette.ink);
+          return GestureDetector(
+            onTap: () {
+              if (reserved) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('卫星图暂未接入，接口已预留')),
+                );
+                return;
+              }
+              if (layer == CampusMapLayer.transit && !_hasTransitStops()) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('校园暂无公交地铁覆盖数据')),
+                );
+              }
+              setState(() => _layer = layer);
+              Navigator.pop(context);
+            },
+            child: Opacity(
+              opacity: reserved ? 0.5 : 1,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    width: 58,
+                    height: 58,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: selected ? MapPalette.blue : MapPalette.line,
+                        width: selected ? 2 : 1,
+                      ),
+                    ),
+                    child: Icon(icon, size: 30, color: fg),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: selected
+                          ? FontWeight.w700
+                          : FontWeight.w500,
+                      color: fg,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
             child: Column(
@@ -940,7 +1030,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
                   children: [
                     const Expanded(
                       child: Text(
-                        '地图显示',
+                        '图层',
                         style: TextStyle(
                           fontSize: 23,
                           fontWeight: FontWeight.w700,
@@ -955,35 +1045,45 @@ class _CampusMapPageState extends State<CampusMapPage> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                const ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.map_outlined, color: MapPalette.blue),
-                  title: Text('标准地图'),
-                  subtitle: Text('校园总览 2D · 室内分层 2.5D'),
-                  trailing: Icon(
-                    Icons.check_circle_rounded,
-                    color: MapPalette.blue,
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      layerCard(
+                        CampusMapLayer.standard,
+                        Icons.map_outlined,
+                        '标准地图',
+                      ),
+                      const SizedBox(width: 14),
+                      layerCard(
+                        CampusMapLayer.city3d,
+                        Icons.location_city_rounded,
+                        '3D城市',
+                      ),
+                      const SizedBox(width: 14),
+                      layerCard(
+                        CampusMapLayer.satellite,
+                        Icons.satellite_alt_outlined,
+                        '卫星图',
+                        reserved: true,
+                      ),
+                      const SizedBox(width: 14),
+                      layerCard(
+                        CampusMapLayer.transit,
+                        Icons.directions_subway_outlined,
+                        '公交地铁',
+                      ),
+                      const SizedBox(width: 14),
+                      layerCard(
+                        CampusMapLayer.streetView,
+                        Icons.streetview_rounded,
+                        '街景地图',
+                      ),
+                    ],
                   ),
                 ),
+                const SizedBox(height: 8),
                 const Divider(),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  secondary: const Icon(
-                    Icons.streetview_rounded,
-                    color: MapPalette.blue,
-                  ),
-                  title: const Text('街景覆盖'),
-                  subtitle: Text(
-                    _campus.streetCoverageGeoJson == null
-                        ? '暂无街景覆盖数据'
-                        : '显示可进入街景的地点',
-                  ),
-                  value: _coverage,
-                  onChanged: (value) {
-                    setState(() => _coverage = value);
-                    Navigator.pop(context);
-                  },
-                ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(
@@ -1001,8 +1101,8 @@ class _CampusMapPageState extends State<CampusMapPage> {
               ],
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
