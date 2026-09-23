@@ -6,7 +6,10 @@
         </trust-anchors>
     </base-config>
     <domain-config cleartextTrafficPermitted="true">
-        <domain>192.0.2.1</domain>
-        <domain>duohuo.org.cn</domain>
+        <!-- includeSubdomains 必须显式声明（lint 的 NetworkSecurityConfig 检查
+             会因缺失而判为致命错误，直接拦下 release 构建）。这里保持 false，
+             明文放行范围与原先完全一致：只放这两个域本身，不含子域。 -->
+        <domain includeSubdomains="false">192.0.2.1</domain>
+        <domain includeSubdomains="false">duohuo.org.cn</domain>
     </domain-config>
 </network-security-config>
