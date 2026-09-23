@@ -70,6 +70,8 @@ flutter:
   uses-material-design: true
 
   assets:
+    # 图层弹层的缩略图（百度地图风格，脚本绘制，无外部版权素材）。
+    - assets/map_layers/
     - assets/js/portal_passkey.js
     # 端上调试控制台，只在 debug 构建注入页面（见 PortalBindPage._injectVConsole）。
     - assets/js/vconsole.min.js

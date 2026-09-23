@@ -801,7 +801,8 @@ class _CampusMapPageState extends State<CampusMapPage> {
         child: MapIconButton(
           icon: Icons.layers_outlined,
           label: '地图图层',
-          active: _layer != CampusMapLayer.standard,
+          // 图层入口仅作导航，永远不高亮（当前图层在弹层里体现）。
+          active: false,
           onPressed: _showLayers,
         ),
       ),
@@ -956,10 +957,10 @@ class _CampusMapPageState extends State<CampusMapPage> {
       backgroundColor: MapPalette.surface,
       showDragHandle: true,
       builder: (context) {
-        // 图层卡片：缩略图 + 名称；选中项蓝色描边，卫星图为预留入口（灰置）。
+        // 图层卡片：百度地图式缩略图 + 名称；选中项蓝色描边，卫星图预留（灰置）。
         Widget layerCard(
           CampusMapLayer layer,
-          IconData icon,
+          String thumbnail,
           String label, {
           bool reserved = false,
         }) {
@@ -977,7 +978,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
               }
               if (layer == CampusMapLayer.transit && !_hasTransitStops()) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('校园暂无公交地铁覆盖数据')),
+                  const SnackBar(content: Text('校园暂无公共交通覆盖数据')),
                 );
               }
               setState(() => _layer = layer);
@@ -993,14 +994,23 @@ class _CampusMapPageState extends State<CampusMapPage> {
                     width: 58,
                     height: 58,
                     decoration: BoxDecoration(
-                      color: Colors.white,
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
                         color: selected ? MapPalette.blue : MapPalette.line,
                         width: selected ? 2 : 1,
                       ),
                     ),
-                    child: Icon(icon, size: 30, color: fg),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(
+                        selected ? 14 : 15,
+                      ),
+                      child: Image.asset(
+                        thumbnail,
+                        width: 58,
+                        height: 58,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 6),
                   Text(
@@ -1051,32 +1061,32 @@ class _CampusMapPageState extends State<CampusMapPage> {
                     children: [
                       layerCard(
                         CampusMapLayer.standard,
-                        Icons.map_outlined,
+                        'assets/map_layers/layer_standard.png',
                         '标准地图',
                       ),
                       const SizedBox(width: 14),
                       layerCard(
                         CampusMapLayer.city3d,
-                        Icons.location_city_rounded,
-                        '3D城市',
+                        'assets/map_layers/layer_3d.png',
+                        '3D地图',
                       ),
                       const SizedBox(width: 14),
                       layerCard(
                         CampusMapLayer.satellite,
-                        Icons.satellite_alt_outlined,
+                        'assets/map_layers/layer_satellite.png',
                         '卫星图',
                         reserved: true,
                       ),
                       const SizedBox(width: 14),
                       layerCard(
                         CampusMapLayer.transit,
-                        Icons.directions_subway_outlined,
-                        '公交地铁',
+                        'assets/map_layers/layer_transit.png',
+                        '公共交通',
                       ),
                       const SizedBox(width: 14),
                       layerCard(
                         CampusMapLayer.streetView,
-                        Icons.streetview_rounded,
+                        'assets/map_layers/layer_street.png',
                         '街景地图',
                       ),
                     ],

@@ -296,9 +296,12 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         _layers.add('campus-transit-stops');
       }
     }
-    // 通用地物：道路、绿地、广场等由管理台提交的地物。底图瓦片是派生产物，
-    // 新提交的地物不会立刻进瓦片，所以业务地物必须自绘；一个源挂三层即可，
-    // 面层只画面、线层画线与面的轮廓、圆层只画点，无需过滤器。
+    // 通用地物：道路、绿地、广场等由管理台提交的地物。视觉由底图瓦片负责，
+    // 这里只挂三层不可见的命中体（与 campus-buildings-hit 同一套做法），供点击命中。
+    // 用近零不透明度而不是 0：完全透明的图层会被命中查询跳过，0.01 肉眼不可见
+    // 但仍能被 queryRenderedFeatures 命中。
+    // 几何分工：面层只画面、线层画线与面的轮廓；圆层必须显式过滤 Point ——
+    // 否则圆层会把面/线的每个顶点都画成一个圆点（跑道 118 个顶点那种）。
     final features = value.featuresGeoJson;
     final featureRows = features == null ? null : features['features'];
     if (features != null && featureRows is List && featureRows.isNotEmpty) {
@@ -306,24 +309,36 @@ class _CampusMapNativeState extends State<CampusMapNative> {
       await c.addFillLayer(
         'campus-features',
         'campus-features-fill',
-        const FillLayerProperties(fillColor: '#0E7490', fillOpacity: 0.28),
+        const FillLayerProperties(
+          fillColor: '#000000',
+          fillOpacity: 0.01,
+          fillOutlineColor: 'rgba(0,0,0,0)',
+        ),
       );
       _layers.add('campus-features-fill');
       await c.addLineLayer(
         'campus-features',
         'campus-features-line',
-        const LineLayerProperties(lineColor: '#0E7490', lineWidth: 1.8),
+        const LineLayerProperties(
+          lineColor: '#000000',
+          lineOpacity: 0.01,
+          lineWidth: 1.8,
+        ),
       );
       _layers.add('campus-features-line');
       await c.addCircleLayer(
         'campus-features',
         'campus-features-point',
         const CircleLayerProperties(
-          circleColor: '#0E7490',
+          circleColor: '#000000',
+          circleOpacity: 0.01,
           circleRadius: 5,
-          circleStrokeColor: '#FFFFFF',
-          circleStrokeWidth: 2,
         ),
+        filter: [
+          '==',
+          ['geometry-type'],
+          'Point',
+        ],
       );
       _layers.add('campus-features-point');
     }
@@ -472,6 +487,42 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         enableInteraction: false,
       );
       _layers.add('campus-floor-walls');
+      // 门牌标注：2.5D 倾斜视角下房间号直接标在房间中心，选中房间蓝色强调。
+      await c.addSymbolLayer(
+        'campus-floor',
+        'campus-floor-room-labels',
+        SymbolLayerProperties(
+          textField: [
+            'coalesce',
+            ['get', 'room_code'],
+            ['get', 'name'],
+          ],
+          textFont: const ['Noto Sans Regular'],
+          textSize: 11,
+          textColor: [
+            'case',
+            [
+              '==',
+              ['get', 'room_id'],
+              value.selectedRoom?.id ?? '',
+            ],
+            '#1475F5',
+            '#37415C',
+          ],
+          textHaloColor: 'rgba(255,255,255,0.92)',
+          textHaloWidth: 1.2,
+        ),
+        filter: [
+          'in',
+          ['get', 'kind'],
+          [
+            'literal',
+            ['room', 'facility'],
+          ],
+        ],
+        enableInteraction: false,
+      );
+      _layers.add('campus-floor-room-labels');
     }
     final route = value.showRoute
         ? _subset(
