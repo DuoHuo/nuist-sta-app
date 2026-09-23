@@ -78,41 +78,12 @@ class CampusExplorePanel extends StatelessWidget {
             children: [
               for (final item in PlaceCategory.values)
                 Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: FilterChip(
-                    label: Text(categoryName(item)),
-                    avatar: Icon(
-                      categoryIcon(item),
-                      size: 18,
-                      color: category == item
-                          ? MapPalette.blue
-                          : categoryColor(item),
-                    ),
+                  padding: const EdgeInsets.only(right: 18),
+                  child: _CategoryBadge(
+                    category: item,
                     selected: category == item,
-                    showCheckmark: false,
-                    onSelected: (selected) =>
-                        onCategory(selected ? item : null),
-                    backgroundColor: Colors.white,
-                    selectedColor: MapPalette.blue.withValues(alpha: .08),
-                    side: BorderSide(
-                      color: category == item
-                          ? MapPalette.blue.withValues(alpha: .35)
-                          : MapPalette.line,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    labelStyle: TextStyle(
-                      fontSize: 13,
-                      color: category == item
-                          ? MapPalette.blue
-                          : MapPalette.ink,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 5,
-                      vertical: 8,
-                    ),
+                    onTap: () =>
+                        onCategory(category == item ? null : item),
                   ),
                 ),
             ],
@@ -759,15 +730,66 @@ String categoryName(PlaceCategory? category) => switch (category) {
 };
 IconData categoryIcon(PlaceCategory? category) => switch (category) {
   null => Icons.location_city_outlined,
-  PlaceCategory.study => Icons.school_outlined,
+  PlaceCategory.study => Icons.school_rounded,
   PlaceCategory.food => Icons.restaurant_rounded,
-  PlaceCategory.sports => Icons.sports_basketball_outlined,
-  PlaceCategory.services => Icons.local_convenience_store_outlined,
+  PlaceCategory.sports => Icons.sports_basketball,
+  PlaceCategory.services => Icons.storefront_rounded,
 };
 Color categoryColor(PlaceCategory? category) => switch (category) {
   null => MapPalette.secondary,
-  PlaceCategory.study => const Color(0xFF5972BA),
-  PlaceCategory.food => const Color(0xFFAE661B),
-  PlaceCategory.sports => const Color(0xFF34856C),
-  PlaceCategory.services => const Color(0xFF8664B4),
+  PlaceCategory.study => const Color(0xFF4C8BF5),
+  PlaceCategory.food => const Color(0xFFF2994A),
+  PlaceCategory.sports => const Color(0xFF35B26F),
+  PlaceCategory.services => const Color(0xFF9B6BF3),
 };
+
+/// 搜索栏下方的分类入口：彩色圆角图标徽章 + 名称，选中时实心反白。
+class _CategoryBadge extends StatelessWidget {
+  const _CategoryBadge({
+    required this.category,
+    required this.selected,
+    required this.onTap,
+  });
+  final PlaceCategory category;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = categoryColor(category);
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: selected ? color : color.withValues(alpha: .14),
+              borderRadius: BorderRadius.circular(16),
+              border: selected
+                  ? Border.all(color: color.withValues(alpha: .45), width: 1.5)
+                  : null,
+            ),
+            child: Icon(
+              categoryIcon(category),
+              size: 22,
+              color: selected ? Colors.white : color,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            categoryName(category),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              color: selected ? color : MapPalette.ink,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

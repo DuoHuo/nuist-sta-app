@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -58,6 +59,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
   int _searchRevision = 0;
   int _placeRevision = 0;
   List<CampusPlace>? _searchResults;
+  // 「探索校园」的随机样本（每次加载校园后抽 10 个）。
+  List<CampusPlace> _explore = const [];
+  final _random = Random();
   bool _searchLoading = false;
   bool _placeLoading = false;
   String? _searchError;
@@ -158,6 +162,12 @@ class _CampusMapPageState extends State<CampusMapPage> {
       setState(() {
         _campus = data;
         _loading = false;
+        // 「探索校园」每次加载后随机抽 10 个地点，不再平铺全部建筑；
+        // 刷新按钮同时起到「换一批」的作用。
+        _explore =
+            (List<CampusPlace>.of(data.places)..shuffle(_random))
+                .take(10)
+                .toList();
       });
     } catch (error) {
       if (!mounted || revision != _campusRevision) return;
@@ -714,7 +724,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
       ? CampusExplorePanel(
           search: _search,
           category: _category,
-          places: _searchResults ?? _campus.places,
+          // 未搜索且未选分类时只展示随机抽样的 10 个地点。
+          places: _searchResults ??
+              (_category == null ? _explore : _campus.places),
           loading: _loading || _searchLoading,
           error: _searchError ?? _error,
           onSearchFocus: () => _expandSheet(.88),
