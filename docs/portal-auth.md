@@ -37,7 +37,7 @@
 
 | 成员 | 语义 |
 |---|---|
-| `ensureLoggedIn(service, {force, onStage})` | 确保 `service` 已登录，返回**落地 URL**。`force: true` 无视缓存重登 |
+| `ensureLoggedIn(service, {force, trustRestored, onStage})` | 确保 `service` 已登录，返回**落地 URL**。`force: true` 无视缓存重登（有同 service 登录在飞则直接合流）；`trustRestored: false` 不采信磁盘恢复、本进程未验证的缓存 |
 | `clientFor(service, {force})` | 先 `ensureLoggedIn` 再返回带会话 Cookie 的客户端，适合精细控制请求 |
 | `request(service, send)` | 高层封装：带会话发请求 + 失效自动重登重放。**最常用** |
 | `http` | 共享全局 Cookie 的裸客户端，**不保证任何登录态** |
@@ -61,11 +61,15 @@ ignoreExpires: true,    // 忽略过期时间
 
 CASTGC 和 JSESSIONID 都是**没有 `expires` 的会话 Cookie**，不开等于什么都没存。
 
+service → 落地 URL 表（`_established`）也经 `EstablishedStore` 落到同一安全存储，
+冷启动读回。落地 URL 里有 icard 的 JWT，不落盘的话电费每次启动都得重新过 CAS。
+条目信任期 12 小时（`establishedTtl`），超过后当作未命中，重新走一次 SSO 快路径确认。
+
 ### CAS 票根快路径
 
 换 service 时通常不需要重新签名：
 
-1. **进程内缓存**：`_established[service]` 命中就直接返回，一次网络都不发
+1. **落地缓存**：`_established[service]` 命中（含磁盘恢复且未过信任期的）就直接返回，一次网络都不发
 2. **服务端 SSO**：没命中时打开 `authserver/login?service=…`，如果最终落地的 URL
    **不含** `/authserver/login`，说明 CASTGC 票根仍有效、服务端直接放行了，于是跳过签名
 3. **串行化保证快路径生效**：所有登录排在一个全局队列里，让后来者等前一个把票根建起来

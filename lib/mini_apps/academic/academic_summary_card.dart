@@ -76,17 +76,13 @@ class _AcademicSummaryCardState extends State<AcademicSummaryCard> {
                   ),
                   const Spacer(),
                   if (c.portalBound) ...[
+                    // 刷新失败不单独报错：有缓存就照常显示它的时间，用户看
+                    // 时间就知道数据有多旧。
                     Text(
-                      error != null && summary != null
-                          ? '更新失败'
-                          : summary == null
-                          ? ''
-                          : formatShortTime(summary.fetchedAt),
-                      style: TextStyle(
+                      summary == null ? '' : formatShortTime(summary.fetchedAt),
+                      style: const TextStyle(
                         fontSize: 11,
-                        color: error != null && summary != null
-                            ? Theme.of(context).colorScheme.error
-                            : AppColors.hint,
+                        color: AppColors.hint,
                       ),
                     ),
                     _RefreshButton(loading: c.loading, onPressed: c.refresh),

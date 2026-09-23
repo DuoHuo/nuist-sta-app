@@ -134,13 +134,19 @@ Future<void> _pumpPage(WidgetTester tester, {double width = 360}) async {
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   final day = _fakeDay();
-  FreeClassroomController.instance.debugSetResult(
+  final c = FreeClassroomController.instance;
+  c.debugSetResult(
     day,
     buildings: [
       day.building,
       const Building(code: '1-202', name: '明德楼'),
     ],
   );
+  // 控制器是单例，上一个用例点过的筛选会留到下一个用例，先清掉。
+  c.setZone(null);
+  c.setFloor(null);
+  c.setType(null);
+  c.setMinSeats(0);
   await tester.pumpWidget(const MaterialApp(home: FreeClassroomPage()));
   await tester.pumpAndSettle();
 }
@@ -181,5 +187,60 @@ void main() {
     await tester.drag(find.byType(CustomScrollView), const Offset(0, -500));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('全占用的教室默认折叠在最底部，点段标题可展开', (tester) async {
+    await _pumpPage(tester);
+    // 文德N203 整天有课：不算「可用」，但要出现在折叠段里。
+    final list = find.byType(CustomScrollView);
+    await tester.drag(list, const Offset(0, -2000));
+    await tester.pumpAndSettle();
+    final busyHeader = find.text('所选时段全部占用');
+    expect(busyHeader, findsOneWidget);
+    expect(find.text('文德N203'), findsNothing);
+
+    await tester.tap(busyHeader);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.drag(list, const Offset(0, -2000));
+    await tester.pumpAndSettle();
+    expect(find.text('文德N203'), findsOneWidget);
+
+    // 折叠对三段统一：全空那段也能收起。
+    await tester.drag(list, const Offset(0, 4000));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('所选时段全部空闲'));
+    await tester.pumpAndSettle();
+    expect(find.text('文德N201'), findsNothing);
+  });
+
+  testWidgets('分区筛选只留下对应区的教室', (tester) async {
+    await _pumpPage(tester);
+    expect(find.text('N 区'), findsOneWidget);
+    expect(find.text('C 区'), findsOneWidget);
+    expect(find.text('S 区'), findsOneWidget);
+
+    await tester.tap(find.text('C 区'));
+    await tester.pumpAndSettle();
+    expect(find.text('文德C104'), findsOneWidget);
+    expect(find.text('文德N201'), findsNothing);
+    expect(find.text('文德N101A'), findsNothing);
+  });
+
+  testWidgets('选中的时段列不会因为已经过去而画淡', (tester) async {
+    await _pumpPage(tester);
+    // 五个时段全选上后，每一行五个状态格都必须是实色，哪怕其中有些时段
+    // 在今天已经结束。表头那行小字是否出现取决于跑测试的时刻，直接调控制器。
+    FreeClassroomController.instance.selectAllGroups();
+    await tester.pumpAndSettle();
+    final row = find.ancestor(
+      of: find.text('文德N201'),
+      matching: find.byType(InkWell),
+    );
+    final cells = tester.widgetList<Opacity>(
+      find.descendant(of: row, matching: find.byType(Opacity)),
+    );
+    expect(cells.length, 5);
+    expect(cells.map((o) => o.opacity), everyElement(1.0));
   });
 }

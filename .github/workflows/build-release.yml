@@ -50,20 +50,24 @@ jobs:
               [Features]=""
               [Fixes]=""
               [Documentation]=""
-              [Other Changes]=""
+              ["Other Changes"]=""
             )
 
-            while IFS=$'\t' read -r subject short_sha author; do
+            while IFS=$'\t' read -r commit_sha subject short_sha; do
               [ -n "$subject" ] || continue
               case "$subject" in
-                feat:*|feat\([^)]*\):*|feature:*|feature\([^)]*\):*) section="Features" ;;
-                fix:*|fix\([^)]*\):*|bugfix:*|bugfix\([^)]*\):*) section="Fixes" ;;
-                docs:*|docs\([^)]*\):*|doc:*|doc\([^)]*\):*) section="Documentation" ;;
-                refactor:*|refactor\([^)]*\):*|perf:*|perf\([^)]*\):*) section="Other Changes" ;;
+                feat:*|feat\(*|feature:*|feature\(*) section="Features" ;;
+                fix:*|fix\(*|bugfix:*|bugfix\(*) section="Fixes" ;;
+                docs:*|docs\(*|doc:*|doc\(*) section="Documentation" ;;
                 *) section="Other Changes" ;;
               esac
-              sections["$section"]+="- $subject (\`$short_sha\`, @$author)"$'\n'
-            done < <(git log --pretty=format:'%s%x09%h%x09%an' "$RANGE")
+              username="$(gh api "repos/$GITHUB_REPOSITORY/commits/$commit_sha" --jq '.author.login // empty' 2>/dev/null || true)"
+              author_suffix=""
+              if [ -n "$username" ]; then
+                author_suffix=" (@$username)"
+              fi
+              sections["$section"]+="- $subject (\`$short_sha\`)$author_suffix"$'\n'
+            done < <(git log --format='%H%x09%s%x09%h' "$RANGE")
 
             for section in "Features" "Fixes" "Documentation" "Other Changes"; do
               if [ -n "${sections[$section]}" ]; then
@@ -74,11 +78,11 @@ jobs:
 
           printf 'RELEASE_TAG=%s\n' "$RELEASE_TAG" >> "$GITHUB_ENV"
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
           cache: 'gradle'
 
       - name: Set up Flutter

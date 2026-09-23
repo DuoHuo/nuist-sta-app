@@ -22,8 +22,7 @@ class PortalStatusPage extends StatefulWidget {
 class _PortalStatusPageState extends State<PortalStatusPage> {
   PasskeyBundle? _bundle;
 
-  /// 信息门户给的登录人资料（学习页拉取并缓存的），用来在学号旁边把姓名、
-  /// 学院班级也摆出来，「绑的是不是我」一眼就能看出来。
+  // 此处展示账号信息
   PortalUser? _user;
   bool _loading = true;
 
@@ -417,7 +416,7 @@ class _StatusHeader extends StatelessWidget {
   }
 }
 
-/// 凭据详情：学号（有缓存资料时还有姓名、院系班级）、设备名、绑定时间、凭据 ID。
+/// 展示凭据详情
 class _InfoCard extends StatelessWidget {
   const _InfoCard({required this.bundle, required this.user});
 
@@ -436,7 +435,7 @@ class _InfoCard extends StatelessWidget {
             _InfoRow(label: '姓名', value: user!.name),
           if (org.isNotEmpty) _InfoRow(label: '院系班级', value: org),
           _InfoRow(
-            label: '设备名',
+            label: '凭据名称',
             value: bundle.deviceName.isEmpty ? '未记录' : bundle.deviceName,
           ),
           _InfoRow(
@@ -444,14 +443,7 @@ class _InfoCard extends StatelessWidget {
             value: createdAt.millisecondsSinceEpoch == 0
                 ? '未记录'
                 : _formatDateTime(createdAt),
-          ),
-          _InfoRow(
-            label: '凭据 ID',
-            value: bundle.credentialId.length > 12
-                ? '${bundle.credentialId.substring(0, 12)}…'
-                : bundle.credentialId,
-            showDivider: false,
-          ),
+          )
         ],
       ),
     );

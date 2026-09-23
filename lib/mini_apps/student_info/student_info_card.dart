@@ -93,14 +93,15 @@ class _StudentInfoCardState extends State<StudentInfoCard> {
                     const Spacer(),
                   ],
                   if (c.portalBound) ...[
-                    if (error != null && info != null)
-                      Text(
-                        '更新失败',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Theme.of(context).colorScheme.error,
-                        ),
+                    // 刷新失败不单独报错：有缓存就照常显示它的时间，和其他
+                    // 三张卡一致。
+                    Text(
+                      info == null ? '' : formatShortTime(info.fetchedAt),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.hint,
                       ),
+                    ),
                     _RefreshButton(loading: c.loading, onPressed: c.refresh),
                   ] else
                     const SizedBox(height: 32),
