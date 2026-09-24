@@ -78,6 +78,8 @@ class _CampusMapNativeState extends State<CampusMapNative> {
   int _appliedReset = 0;
   int _appliedFocus = 0;
   CampusMapLayer _appliedLayer = CampusMapLayer.standard;
+  CameraPosition? _camera;
+  double? _appliedLabelOffsetEm;
   Timer? _loadTimeout;
   Future<void> _queue = Future.value();
   final _sources = <String>[];
@@ -487,31 +489,14 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         enableInteraction: false,
       );
       _layers.add('campus-floor-walls');
-      // 门牌标注：2.5D 倾斜视角下房间号直接标在房间中心，选中房间蓝色强调。
+      // 门牌标注：贴在当前层楼板顶面上。MapLibre Native 尚不支持
+      // symbol-z-elevate，用 textOffset 按「楼层高度 × sin(倾角)」手动抬升，
+      // 相机变化时动态校正（见 _syncLabelOffset）。
+      final labelOffset = _labelOffsetEm(c);
       await c.addSymbolLayer(
         'campus-floor',
         'campus-floor-room-labels',
-        SymbolLayerProperties(
-          textField: [
-            'coalesce',
-            ['get', 'room_code'],
-            ['get', 'name'],
-          ],
-          textFont: const ['Noto Sans Regular'],
-          textSize: 11,
-          textColor: [
-            'case',
-            [
-              '==',
-              ['get', 'room_id'],
-              value.selectedRoom?.id ?? '',
-            ],
-            '#1475F5',
-            '#37415C',
-          ],
-          textHaloColor: 'rgba(255,255,255,0.92)',
-          textHaloWidth: 1.2,
-        ),
+        _roomLabelProps(labelOffset),
         filter: [
           'in',
           ['get', 'kind'],
@@ -523,6 +508,7 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         enableInteraction: false,
       );
       _layers.add('campus-floor-room-labels');
+      _appliedLabelOffsetEm = labelOffset;
     }
     final route = value.showRoute
         ? _subset(
@@ -586,6 +572,62 @@ class _CampusMapNativeState extends State<CampusMapNative> {
 
   /// 楼板厚度（米）。楼板是显示用的薄片，让每层在同一坐标系里可见。
   static const double kFloorSlabThicknessM = 0.8;
+
+  /// 门牌标注的完整属性（setLayerProperties 会重置未列字段，必须全量下发）。
+  SymbolLayerProperties _roomLabelProps(double offsetEm) =>
+      SymbolLayerProperties(
+        textField: [
+          'coalesce',
+          ['get', 'room_code'],
+          ['get', 'name'],
+        ],
+        textFont: const ['Noto Sans Regular'],
+        textSize: 11,
+        textColor: [
+          'case',
+          [
+            '==',
+            ['get', 'room_id'],
+            config.selectedRoom?.id ?? '',
+          ],
+          '#1475F5',
+          '#37415C',
+        ],
+        textHaloColor: 'rgba(255,255,255,0.92)',
+        textHaloWidth: 1.2,
+        textOffset: [0, -offsetEm],
+      );
+
+  /// 门牌抬升量（em）：楼层顶面相对地面的屏幕上移 = 高度 × sin(倾角) / 地面分辨率。
+  double _labelOffsetEm(MapLibreMapController c) {
+    final cam = _camera ?? c.cameraPosition;
+    final floorId = config.floor?.id;
+    if (cam == null || floorId == null) return 0;
+    final elevationM = _floorBase(config, floorId) + kFloorSlabThicknessM;
+    final metersPerPixel =
+        _equatorCircumferenceM *
+        cos(cam.target.latitude * pi / 180) /
+        (512 * pow(2, cam.zoom));
+    if (!metersPerPixel.isFinite || metersPerPixel <= 0) return 0;
+    final shiftPx =
+        elevationM *
+        sin(cam.tilt.clamp(0, 85) * pi / 180) /
+        metersPerPixel;
+    return shiftPx / 11; // 1em ≈ textSize（11px）
+  }
+
+  /// 相机倾角/缩放变化时校正门牌抬升量，变化不足 0.08em（约 1px）不打扰原生端。
+  void _syncLabelOffset() {
+    final c = _controller;
+    if (c == null || !_layers.contains('campus-floor-room-labels')) return;
+    final em = _labelOffsetEm(c);
+    if (_appliedLabelOffsetEm != null &&
+        (em - _appliedLabelOffsetEm!).abs() < 0.08) {
+      return;
+    }
+    _appliedLabelOffsetEm = em;
+    unawaited(c.setLayerProperties('campus-floor-room-labels', _roomLabelProps(em)));
+  }
 
   /// 某层的底面高度：优先后端 elevation_m，缺失时按层号推算。
   double _floorBase(CampusMapCanvas value, String? floorId) {
@@ -892,6 +934,10 @@ class _CampusMapNativeState extends State<CampusMapNative> {
           // 在点到建筑/房间时仍走统一命中逻辑。
           featureTapsTriggersMapClick: true,
           trackCameraPosition: true,
+          onCameraMove: (position) {
+            _camera = position;
+            _syncLabelOffset();
+          },
           compassEnabled: false,
           logoEnabled: false,
           attributionButtonPosition: AttributionButtonPosition.topRight,

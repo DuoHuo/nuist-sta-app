@@ -474,6 +474,14 @@ class CampusMapApi
     var place = _places[id];
     final poiId = place?.poiId ?? _poiId(id);
     if (poiId != null && roomId == null) return {'poi_id': poiId};
+    // 通用地物（道路/广场/绿地等）没有「入口」概念，直接导航到其中心点。
+    if (place?.featureId != null && roomId == null) {
+      final center = place!.center;
+      if (center != null && center.isValid) {
+        return {'lng': center.longitude, 'lat': center.latitude};
+      }
+      throw const CampusMapApiException('该地物缺少位置信息，暂时无法规划路线');
+    }
     final buildingId = place?.buildingId ?? id;
     if (roomId != null) {
       if (floorId == null) {
@@ -514,10 +522,13 @@ class CampusMapApi
 
   @override
   Future<CampusRouteResult?> planRoute(CampusRouteRequest request) async {
-    final origin = await _placeRef(
-      request.originPlaceId,
-      accessible: request.accessible,
-    );
+    final originPoint = request.originPoint;
+    final origin = originPoint != null
+        ? {'lng': originPoint.longitude, 'lat': originPoint.latitude}
+        : await _placeRef(
+            request.originPlaceId!,
+            accessible: request.accessible,
+          );
     final destination = await _placeRef(
       request.destinationPlaceId,
       floorId: request.destinationFloorId,

@@ -35,13 +35,22 @@ class CampusFloorSnapshot {
 
 class CampusRouteRequest {
   const CampusRouteRequest({
-    required this.originPlaceId,
+    this.originPlaceId,
+    this.originPoint,
     required this.destinationPlaceId,
     this.destinationFloorId,
     this.destinationRoomId,
     this.accessible = false,
-  });
-  final String originPlaceId;
+  }) : assert(
+         originPlaceId != null || originPoint != null,
+         '起点必须是地点或坐标之一',
+       );
+
+  /// 起点地点编号；以「我的位置」为起点时为 null，由 [originPoint] 提供坐标。
+  final String? originPlaceId;
+
+  /// 起点坐标（如我的位置）；与 originPlaceId 二选一。
+  final GeoPoint? originPoint;
   final String destinationPlaceId;
   final String? destinationFloorId;
   final String? destinationRoomId;
