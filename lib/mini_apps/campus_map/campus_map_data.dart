@@ -44,6 +44,13 @@ class GeoPoint {
   final double longitude;
   final double latitude;
 
+  Map<String, dynamic> toJson() => {'lng': longitude, 'lat': latitude};
+
+  factory GeoPoint.fromJson(Map<String, dynamic> json) => GeoPoint(
+    longitude: (json['lng'] as num).toDouble(),
+    latitude: (json['lat'] as num).toDouble(),
+  );
+
   bool get isValid =>
       longitude.isFinite &&
       latitude.isFinite &&
@@ -101,6 +108,56 @@ class CampusPlace {
 
   /// 是否有可打开的详情页（三类地物都有稳定编号，因此都有）。
   bool get hasDetail => buildingId != null || poiId != null || featureId != null;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'subtitle': subtitle,
+    'category': category?.name,
+    'center': center?.toJson(),
+    'building_id': buildingId,
+    'poi_id': poiId,
+    'feature_id': featureId,
+    'kind': kind,
+    'description': description,
+    'floor_id': floorId,
+    'nav_node_id': navNodeId,
+    'has_indoor': hasIndoor,
+    'floors': [for (final floor in floors) floor.toJson()],
+    'scene_id': sceneId,
+    'entrance': entrance?.toJson(),
+  };
+
+  factory CampusPlace.fromJson(Map<String, dynamic> json) {
+    final categoryName = json['category'];
+    return CampusPlace(
+      id: json['id'] as String,
+      name: json['name'] as String? ?? '',
+      subtitle: json['subtitle'] as String? ?? '',
+      category: categoryName is String
+          ? PlaceCategory.values.asNameMap()[categoryName]
+          : null,
+      center: json['center'] is Map
+          ? GeoPoint.fromJson(Map<String, dynamic>.from(json['center'] as Map))
+          : null,
+      buildingId: json['building_id'] as String?,
+      poiId: (json['poi_id'] as num?)?.toInt(),
+      featureId: (json['feature_id'] as num?)?.toInt(),
+      kind: json['kind'] as String?,
+      description: json['description'] as String? ?? '',
+      floorId: json['floor_id'] as String?,
+      navNodeId: (json['nav_node_id'] as num?)?.toInt(),
+      hasIndoor: json['has_indoor'] == true,
+      floors: [
+        for (final floor in (json['floors'] as List? ?? const []))
+          CampusFloor.fromJson(Map<String, dynamic>.from(floor as Map)),
+      ],
+      sceneId: json['scene_id'] as String?,
+      entrance: json['entrance'] is Map
+          ? GeoPoint.fromJson(Map<String, dynamic>.from(json['entrance'] as Map))
+          : null,
+    );
+  }
 }
 
 class CampusFloor {
@@ -122,6 +179,24 @@ class CampusFloor {
   final String label;
   final String description;
   final int number;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'label': label,
+    'description': description,
+    'number': number,
+    'level_index': levelIndex,
+    'elevation_m': elevationM,
+  };
+
+  factory CampusFloor.fromJson(Map<String, dynamic> json) => CampusFloor(
+    id: json['id'] as String,
+    label: json['label'] as String? ?? '',
+    description: json['description'] as String? ?? '',
+    number: (json['number'] as num).toInt(),
+    levelIndex: (json['level_index'] as num?)?.toInt(),
+    elevationM: (json['elevation_m'] as num?)?.toDouble(),
+  );
 }
 
 /// 展示层高（米）。仅在后端未提供 elevation_m 时用于把楼层叠起来显示，

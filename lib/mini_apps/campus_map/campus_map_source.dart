@@ -20,6 +20,39 @@ class CampusMapSnapshot {
   final List<CampusPlace> places;
   final Map<String, dynamic>? buildingGeoJson;
 
+  /// 本地缓存序列化（校园快照整进整出）。
+  Map<String, dynamic> toJson() => {
+    'places': [for (final place in places) place.toJson()],
+    'buildingGeoJson': buildingGeoJson,
+    'featuresGeoJson': featuresGeoJson,
+    'streetCoverageGeoJson': streetCoverageGeoJson,
+    'styleString': styleString,
+    'attribution': attribution,
+    'bounds': bounds,
+    'warning': warning,
+  };
+
+  factory CampusMapSnapshot.fromJson(Map<String, dynamic> json) {
+    Map<String, dynamic>? map(dynamic value) =>
+        value is Map ? Map<String, dynamic>.from(value) : null;
+    return CampusMapSnapshot(
+      places: [
+        for (final place in (json['places'] as List? ?? const []))
+          CampusPlace.fromJson(Map<String, dynamic>.from(place as Map)),
+      ],
+      buildingGeoJson: map(json['buildingGeoJson']),
+      featuresGeoJson: map(json['featuresGeoJson']),
+      streetCoverageGeoJson: map(json['streetCoverageGeoJson']),
+      styleString: json['styleString'] as String?,
+      attribution: json['attribution'] as String?,
+      bounds: (json['bounds'] as List?)
+          ?.whereType<num>()
+          .map((v) => v.toDouble())
+          .toList(),
+      warning: json['warning'] as String?,
+    );
+  }
+
   /// 通用地物（道路/绿地/广场等）的轮廓，由 App 自建图层渲染。
   /// 底图瓦片是派生产物，新提交的地物不会立刻进瓦片，因此业务地物必须自绘。
   final Map<String, dynamic>? featuresGeoJson;

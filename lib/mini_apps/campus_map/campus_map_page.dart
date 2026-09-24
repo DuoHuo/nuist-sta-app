@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'campus_map_photos.dart';
 import 'campus_photo_gallery_page.dart';
 import 'campus_map_api.dart';
+import 'campus_map_cache.dart';
 import 'campus_map_canvas.dart';
 import 'campus_map_data.dart';
 import 'campus_map_location.dart';
@@ -56,6 +57,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
   int _floorRevision = 0;
   int _campusRevision = 0;
   int _routeRevision = 0;
+  final CampusMapCache _cache = CampusMapCache();
   int _resetToken = 0;
   Timer? _searchTimer;
   int _searchRevision = 0;
@@ -152,8 +154,29 @@ class _CampusMapPageState extends State<CampusMapPage> {
     super.dispose();
   }
 
+  /// 应用一份校园快照并抽取「探索校园」随机样本。
+  void _applyCampus(CampusMapSnapshot data, {bool loading = false}) {
+    setState(() {
+      _campus = data;
+      _loading = loading;
+      // 「探索校园」每次加载后随机抽 10 个地点，不再平铺全部建筑；
+      // 刷新按钮同时起到「换一批」的作用。
+      _explore = (List<CampusPlace>.of(data.places)..shuffle(
+        _random,
+      )).take(10).toList();
+    });
+  }
+
   Future<void> _loadCampus() async {
     final revision = ++_campusRevision;
+    // 先读本地缓存秒开，再联网刷新落盘（stale-while-revalidate）。
+    if (_campus.places.isEmpty) {
+      final cached = await _cache.read('default');
+      if (!mounted || revision != _campusRevision) return;
+      if (cached != null && cached.places.isNotEmpty) {
+        _applyCampus(cached, loading: true);
+      }
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -161,22 +184,17 @@ class _CampusMapPageState extends State<CampusMapPage> {
     try {
       final data = await widget.source.loadCampus();
       if (!mounted || revision != _campusRevision) return;
-      setState(() {
-        _campus = data;
-        _loading = false;
-        // 「探索校园」每次加载后随机抽 10 个地点，不再平铺全部建筑；
-        // 刷新按钮同时起到「换一批」的作用。
-        _explore =
-            (List<CampusPlace>.of(data.places)..shuffle(_random))
-                .take(10)
-                .toList();
-      });
+      _applyCampus(data);
+      unawaited(_cache.write('default', data));
     } catch (error) {
       if (!mounted || revision != _campusRevision) return;
+      // 已有缓存内容时保留数据，仅提示刷新失败。
+      final hasCache = _campus.places.isNotEmpty;
       setState(() {
         _loading = false;
-        _error = _errorMessage(error, '地点暂时加载失败');
+        if (!hasCache) _error = _errorMessage(error, '地点暂时加载失败');
       });
+      if (hasCache) _message('刷新失败，当前显示上次缓存的地图');
     }
   }
 
