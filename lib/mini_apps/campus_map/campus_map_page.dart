@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,12 +7,14 @@ import 'package:flutter/services.dart';
 import 'campus_map_photos.dart';
 import 'campus_photo_gallery_page.dart';
 import 'campus_map_api.dart';
+import 'campus_map_cache.dart';
 import 'campus_map_canvas.dart';
 import 'campus_map_data.dart';
 import 'campus_map_location.dart';
 import 'campus_map_panels.dart';
 import 'campus_map_source.dart';
 import 'campus_map_widgets.dart';
+import 'campus_place_detail_page.dart';
 import 'campus_street_view_page.dart';
 
 class CampusMapPage extends StatefulWidget {
@@ -42,20 +45,27 @@ class _CampusMapPageState extends State<CampusMapPage> {
   CampusRoom? _room;
   PlaceCategory? _category;
   CampusRouteResult? _route;
+  // 导航结果页：起点名（坐标起点时显示「我的位置」）。
+  String _routeOriginLabel = '我的位置';
   bool _loading = false;
   bool _floorLoading = false;
-  bool _coverage = false;
+  // 底图图层模式（街景覆盖是其中一档，不再是独立开关）。
+  CampusMapLayer _layer = CampusMapLayer.standard;
   bool _routing = false;
   String? _error;
   String? _floorError;
   int _floorRevision = 0;
   int _campusRevision = 0;
   int _routeRevision = 0;
+  final CampusMapCache _cache = CampusMapCache();
   int _resetToken = 0;
   Timer? _searchTimer;
   int _searchRevision = 0;
   int _placeRevision = 0;
   List<CampusPlace>? _searchResults;
+  // 「探索校园」的随机样本（每次加载校园后抽 10 个）。
+  List<CampusPlace> _explore = const [];
+  final _random = Random();
   bool _searchLoading = false;
   bool _placeLoading = false;
   String? _searchError;
@@ -144,25 +154,54 @@ class _CampusMapPageState extends State<CampusMapPage> {
     super.dispose();
   }
 
+  /// 应用一份校园快照并抽取「探索校园」随机样本。
+  void _applyCampus(CampusMapSnapshot data, {bool loading = false}) {
+    setState(() {
+      _campus = data;
+      _loading = loading;
+      // 「探索校园」每次加载后随机抽 10 个地点，不再平铺全部建筑；
+      // 刷新按钮同时起到「换一批」的作用。
+      _explore = (List<CampusPlace>.of(data.places)..shuffle(
+        _random,
+      )).take(10).toList();
+    });
+  }
+
   Future<void> _loadCampus() async {
     final revision = ++_campusRevision;
     setState(() {
       _loading = true;
       _error = null;
     });
+    // 缓存与网络并行：缓存先到就先渲染（秒开），网络返回后覆盖并落盘
+    // （stale-while-revalidate）。缓存读不能挡在加载路径上——存储或插件异常时
+    // 它会一直挂着（widget 测试里 path_provider 没有实现，读盘永不返回），
+    // 那样整页数据都加载不出来。
+    if (_campus.places.isEmpty) {
+      unawaited(
+        _cache.read('default').then((cached) {
+          if (!mounted || revision != _campusRevision) return;
+          if (!_loading) return; // 网络已先到，别再用缓存覆盖
+          if (cached != null && cached.places.isNotEmpty) {
+            _applyCampus(cached, loading: true);
+          }
+        }),
+      );
+    }
     try {
       final data = await widget.source.loadCampus();
       if (!mounted || revision != _campusRevision) return;
-      setState(() {
-        _campus = data;
-        _loading = false;
-      });
+      _applyCampus(data);
+      unawaited(_cache.write('default', data));
     } catch (error) {
       if (!mounted || revision != _campusRevision) return;
+      // 已有缓存内容时保留数据，仅提示刷新失败。
+      final hasCache = _campus.places.isNotEmpty;
       setState(() {
         _loading = false;
-        _error = _errorMessage(error, '地点暂时加载失败');
+        if (!hasCache) _error = _errorMessage(error, '地点暂时加载失败');
       });
+      if (hasCache) _message('您已离线');
     }
   }
 
@@ -252,8 +291,11 @@ class _CampusMapPageState extends State<CampusMapPage> {
       });
       return;
     }
-    // 分层视图需要整栋楼的各层几何（当前层上色，其余层半透明叠放）。
-    unawaited(_loadBuildingFloors(buildingId, place.floors, revision));
+    // 分层视图需要当前层及以下各层的几何（当前层上色，下方楼层半透明托底；
+    // 上方楼层不渲染，也就不必拉取）。
+    final floorsBelow =
+        place.floors.where((f) => f.number <= floor.number).toList();
+    unawaited(_loadBuildingFloors(buildingId, floorsBelow, revision));
   }
 
   Future<void> _loadBuildingFloors(
@@ -311,6 +353,18 @@ class _CampusMapPageState extends State<CampusMapPage> {
     );
   }
 
+  /// 打开地物详情页：建筑、POI、通用地物走同一个页面，按编号取数。
+  /// 复用当前数据源，因此不会重复建连接；地址与深链路由 `/place/:placeId`
+  /// 使用同一套编号。
+  void _openDetail(CampusPlace place) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            CampusPlaceDetailPage(placeId: place.id, source: widget.source),
+      ),
+    );
+  }
+
   void _openStreet(CampusPlace place) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -355,29 +409,48 @@ class _CampusMapPageState extends State<CampusMapPage> {
   Future<void> _showRoutePlanner() async {
     final destination = _place;
     if (destination == null || _routing) return;
-    final request = await showModalBottomSheet<CampusRouteRequest>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: MapPalette.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (_) => CampusRoutePlanner(
-        places: _campus.places,
-        destination: destination,
-        floor: _floor,
-        room: _room,
-      ),
-    );
-    if (request == null || !mounted) return;
+    // 起点默认「我的位置」：已有定位就直接规划进入导航页；
+    // 没有定位立即弹起点搜索，不做任何等待。
+    final user = _userPoint;
+    CampusRouteRequest? request;
+    if (user != null && user.isValid) {
+      request = CampusRouteRequest(
+        originPoint: user,
+        destinationPlaceId: destination.id,
+        destinationFloorId: _floor?.id,
+        destinationRoomId: _room?.id,
+      );
+    } else {
+      request = await showModalBottomSheet<CampusRouteRequest>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: MapPalette.surface,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        builder: (_) => CampusRoutePlanner(
+          places: _campus.places,
+          destination: destination,
+          floor: _floor,
+          room: _room,
+          userPoint: _userPoint,
+        ),
+      );
+    }
+    // 提升为非空局部变量：闭包内使用可空变量会失去类型提升。
+    final routeRequest = request;
+    if (routeRequest == null || !mounted) return;
     final revision = ++_routeRevision;
     setState(() => _routing = true);
     try {
-      final result = await widget.source.planRoute(request);
+      final result = await widget.source.planRoute(routeRequest);
       if (!mounted || revision != _routeRevision) return;
       setState(() {
         _routing = false;
         _route = result;
+        _routeOriginLabel = routeRequest.originPoint != null
+            ? '我的位置'
+            : _placeName(routeRequest.originPlaceId) ?? '起点';
       });
       if (result == null) {
         _message('暂无可用路线，请稍后再试');
@@ -453,12 +526,15 @@ class _CampusMapPageState extends State<CampusMapPage> {
                               selectedRoom: _room,
                               rooms: _floorData.rooms,
                               buildingGeoJson: _campus.buildingGeoJson,
+                              featuresGeoJson: _campus.featuresGeoJson,
                               floorGeoJson: _floorData.geoJson,
                               ghostFloorsGeoJson: _ghostFloors,
                               streetCoverageGeoJson:
                                   _campus.streetCoverageGeoJson,
                               routeGeoJson: _route?.geoJson,
-                              streetCoverage: _coverage,
+                              streetCoverage:
+                                  _layer == CampusMapLayer.streetView,
+                              mapLayer: _layer,
                               showRoute: _route != null,
                               category: _category,
                               resetToken: _resetToken,
@@ -531,7 +607,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
                           ),
                         ),
                       ),
-                    if (_coverage)
+                    if (_layer == CampusMapLayer.streetView)
                       Positioned(
                         top: safe.top + 94,
                         left: wide ? 392 : 16,
@@ -680,6 +756,80 @@ class _CampusMapPageState extends State<CampusMapPage> {
                           );
                         },
                       ),
+                      // 导航中/预览时的顶部起终点条（仿百度导航页顶栏）。
+                      if (_route != null)
+                        Positioned(
+                          top: safe.top + 12,
+                          left: wide ? 384 : 16,
+                          right: 16,
+                          child: MapSurface(
+                            radius: 18,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 10,
+                            ),
+                            child: Row(
+                              children: [
+                                MapIconButton(
+                                  icon: Icons.arrow_back_rounded,
+                                  label: '结束路线',
+                                  onPressed: _endRoute,
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.circle,
+                                            size: 10,
+                                            color: Color(0xFF34A853),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              _routeOriginLabel,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 13,
+                                                color: MapPalette.secondary,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.place_rounded,
+                                            size: 14,
+                                            color: Color(0xFFE15A4E),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Expanded(
+                                            child: Text(
+                                              _room?.name ??
+                                                  _place?.name ??
+                                                  '目的地',
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                   ],
                 );
               },
@@ -690,11 +840,56 @@ class _CampusMapPageState extends State<CampusMapPage> {
     );
   }
 
-  Widget _panel() => _place == null
+  String? _placeName(String? id) {
+    for (final place in _campus.places) {
+      if (place.id == id) return place.name;
+    }
+    return null;
+  }
+
+  /// 开始导航：收起面板，地图全屏呈现路线与顶部起终点条（仿百度导航页）。
+  void _startNavigation() {
+    if (_sheet.isAttached) {
+      unawaited(
+        _sheet.animateTo(
+          0,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        ),
+      );
+    }
+  }
+
+  /// 结束路线：清除路线并恢复地点面板。
+  void _endRoute() {
+    _routeRevision++;
+    setState(() {
+      _route = null;
+      _routing = false;
+    });
+    _expandSheet(_place == null ? .33 : .43);
+  }
+
+  Widget _panel() {
+    final route = _route;
+    if (route != null) {
+      return CampusRoutePreview(
+        route: route,
+        destinationLabel: _room?.name ?? _place?.name ?? '目的地',
+        destinationSubtitle: _floor != null
+            ? '${_place?.name ?? ''} · ${_floor!.label}'
+            : null,
+        onStart: _startNavigation,
+        onClose: _endRoute,
+      );
+    }
+    return _place == null
       ? CampusExplorePanel(
           search: _search,
           category: _category,
-          places: _searchResults ?? _campus.places,
+          // 未搜索且未选分类时只展示随机抽样的 10 个地点。
+          places: _searchResults ??
+              (_category == null ? _explore : _campus.places),
           loading: _loading || _searchLoading,
           error: _searchError ?? _error,
           onSearchFocus: () => _expandSheet(.88),
@@ -721,6 +916,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
               ),
             CampusPlacePanel(
               place: _place!,
+              onDetail: _place!.hasDetail && _room == null
+                  ? () => _openDetail(_place!)
+                  : null,
               mediaEntry:
                   _place!.poiId == null && !_place!.id.startsWith('poi:')
                   ? CampusBuildingPhotosEntry(
@@ -770,6 +968,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
             ),
           ],
         );
+  }
 
   Widget _tools(bool wide) => Column(
     children: [
@@ -778,7 +977,8 @@ class _CampusMapPageState extends State<CampusMapPage> {
         child: MapIconButton(
           icon: Icons.layers_outlined,
           label: '地图图层',
-          active: _coverage,
+          // 图层入口仅作导航，永远不高亮（当前图层在弹层里体现）。
+          active: false,
           onPressed: _showLayers,
         ),
       ),
@@ -923,13 +1123,89 @@ class _CampusMapPageState extends State<CampusMapPage> {
     );
   }
 
+  bool _hasTransitStops() => _campus.places.any(
+    (p) => const {'bus_stop', '公交站', '轨道交通'}.contains(p.kind),
+  );
+
   Future<void> _showLayers() async {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: MapPalette.surface,
       showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: SingleChildScrollView(
+      builder: (context) {
+        // 图层卡片：百度地图式缩略图 + 名称；选中项蓝色描边，卫星图预留（灰置）。
+        Widget layerCard(
+          CampusMapLayer layer,
+          String thumbnail,
+          String label, {
+          bool reserved = false,
+        }) {
+          final selected = _layer == layer && !reserved;
+          final fg = reserved
+              ? MapPalette.secondary
+              : (selected ? MapPalette.blue : MapPalette.ink);
+          return GestureDetector(
+            onTap: () {
+              if (reserved) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('卫星图暂未接入，接口已预留')),
+                );
+                return;
+              }
+              if (layer == CampusMapLayer.transit && !_hasTransitStops()) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('校园暂无公共交通覆盖数据')),
+                );
+              }
+              setState(() => _layer = layer);
+              Navigator.pop(context);
+            },
+            child: Opacity(
+              opacity: reserved ? 0.5 : 1,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    width: 58,
+                    height: 58,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: selected ? MapPalette.blue : MapPalette.line,
+                        width: selected ? 2 : 1,
+                      ),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(
+                        selected ? 14 : 15,
+                      ),
+                      child: Image.asset(
+                        thumbnail,
+                        width: 58,
+                        height: 58,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: selected
+                          ? FontWeight.w700
+                          : FontWeight.w500,
+                      color: fg,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
             child: Column(
@@ -940,7 +1216,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
                   children: [
                     const Expanded(
                       child: Text(
-                        '地图显示',
+                        '图层',
                         style: TextStyle(
                           fontSize: 23,
                           fontWeight: FontWeight.w700,
@@ -955,35 +1231,45 @@ class _CampusMapPageState extends State<CampusMapPage> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                const ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.map_outlined, color: MapPalette.blue),
-                  title: Text('标准地图'),
-                  subtitle: Text('校园总览 2D · 室内分层 2.5D'),
-                  trailing: Icon(
-                    Icons.check_circle_rounded,
-                    color: MapPalette.blue,
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      layerCard(
+                        CampusMapLayer.standard,
+                        'assets/map_layers/layer_standard.png',
+                        '标准地图',
+                      ),
+                      const SizedBox(width: 14),
+                      layerCard(
+                        CampusMapLayer.city3d,
+                        'assets/map_layers/layer_3d.png',
+                        '3D地图',
+                      ),
+                      const SizedBox(width: 14),
+                      layerCard(
+                        CampusMapLayer.satellite,
+                        'assets/map_layers/layer_satellite.png',
+                        '卫星图',
+                        reserved: true,
+                      ),
+                      const SizedBox(width: 14),
+                      layerCard(
+                        CampusMapLayer.transit,
+                        'assets/map_layers/layer_transit.png',
+                        '公共交通',
+                      ),
+                      const SizedBox(width: 14),
+                      layerCard(
+                        CampusMapLayer.streetView,
+                        'assets/map_layers/layer_street.png',
+                        '街景地图',
+                      ),
+                    ],
                   ),
                 ),
+                const SizedBox(height: 8),
                 const Divider(),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  secondary: const Icon(
-                    Icons.streetview_rounded,
-                    color: MapPalette.blue,
-                  ),
-                  title: const Text('街景覆盖'),
-                  subtitle: Text(
-                    _campus.streetCoverageGeoJson == null
-                        ? '暂无街景覆盖数据'
-                        : '显示可进入街景的地点',
-                  ),
-                  value: _coverage,
-                  onChanged: (value) {
-                    setState(() => _coverage = value);
-                    Navigator.pop(context);
-                  },
-                ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(
@@ -1001,8 +1287,8 @@ class _CampusMapPageState extends State<CampusMapPage> {
               ],
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

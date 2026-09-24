@@ -129,8 +129,8 @@ void main() {
     await tester.tap(find.byTooltip('地图图层'));
     await tester.pumpAndSettle();
     expect(find.text('标准地图'), findsOneWidget);
-    expect(find.text('暂无街景覆盖数据'), findsOneWidget);
-    await tester.tap(find.byType(Switch)); // 图层面板里的街景开关
+    // 街景现在是图层模式里的一张缩略图卡片，不再是独立开关
+    await tester.tap(find.text('街景地图'));
     await tester.pumpAndSettle();
     expect(find.text('街景暂未开放'), findsOneWidget);
     await capture(tester, 'map-layers');
@@ -181,8 +181,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('路线'));
     await tester.pumpAndSettle();
-    expect(find.text('选择起点'), findsOneWidget);
-    expect(find.text('路线规划'), findsOneWidget);
+    expect(find.text('搜索起点'), findsOneWidget); // 起终点卡片里的起点栏
+    expect(find.text('导航'), findsOneWidget); // 面板标题
     expect(tester.takeException(), isNull);
   });
 

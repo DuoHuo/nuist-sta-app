@@ -91,6 +91,28 @@ Map<String, dynamic> poi(int id, {String category = 'study'}) => {
   'lat': 32.21,
   'nav_node_id': 90 + id,
 };
+/// 通用地物：/features 的响应结构（与后端 mapdata.MapFeature 一致）。
+/// point 为 true 时给点几何，否则复用 [feature] 的面几何。
+Map<String, dynamic> featureRow(
+  int id,
+  String kind,
+  String name, {
+  String description = '',
+  bool point = false,
+}) => {
+  'feature_id': id,
+  'kind': kind,
+  'name': name,
+  'description': description,
+  'geometry': point
+      ? {
+          'type': 'Point',
+          'coordinates': [118.7, 32.2],
+        }
+      : feature(const {})['geometry'],
+  'centroid_lng': 118.7,
+  'centroid_lat': 32.2,
+};
 Map<String, dynamic> route() => {
   'total_length_m': 12.5,
   'segments': [
@@ -298,7 +320,7 @@ void main() {
         );
       }
       initialPaths.add(path);
-      if (initialPaths.length == 3) ready.complete();
+      if (initialPaths.length == 4) ready.complete();
       await ready.future;
       if (path.endsWith('/map/config')) {
         return ok({
@@ -325,19 +347,43 @@ void main() {
           'pois': [poi(8), poi(18, category: 'unknown')],
         });
       }
+      if (path.endsWith('/features')) {
+        return ok({
+          'features': [
+            featureRow(1, 'green', '南门绿地'),
+            featureRow(2, 'gate', '北门', point: true),
+          ],
+        });
+      }
       fail('Unexpected request: $path');
     });
     final snapshot = await api.loadCampus().timeout(const Duration(seconds: 5));
     expect(maximum, 6);
-    expect(snapshot.places, hasLength(21));
+    expect(snapshot.places, hasLength(23));
     expect(snapshot.places.first.category, isNull);
     expect(snapshot.places.first.center!.longitude, 118.7);
     expect(snapshot.places.first.entrance, isNull);
     expect(snapshot.places.first.floors, isEmpty);
     expect(snapshot.places[19].id, 'poi:8');
     expect(snapshot.places[19].category, PlaceCategory.study);
-    expect(snapshot.places.last.category, isNull);
+    // 分类未知的 POI 保持未分类（不按名字猜），它与地物各自独立。
+    expect(snapshot.places[20].category, isNull);
     expect(snapshot.streetCoverageGeoJson, isNull);
+    // 通用地物：与建筑、POI 并列的第三类地物，带自己的编号、类别与说明。
+    expect(snapshot.places[21].id, 'feature:1');
+    expect(snapshot.places[21].featureId, 1);
+    expect(snapshot.places[21].kind, 'green');
+    expect(snapshot.places[21].subtitle, '绿地');
+    expect(snapshot.places[21].category, isNull);
+    expect(snapshot.places[21].hasDetail, isTrue);
+    expect(snapshot.places.last.id, 'feature:2');
+    expect(snapshot.places.last.category, PlaceCategory.services);
+    final featureRows = snapshot.featuresGeoJson!['features'] as List;
+    expect(featureRows, hasLength(2));
+    expect(featureRows.first['properties']['feature_id'], 1);
+    expect(featureRows.first['properties']['kind'], 'green');
+    expect(featureRows.first['properties']['name'], '南门绿地');
+    expect(featureRows.last['geometry']['type'], 'Point');
     final features = snapshot.buildingGeoJson!['features'] as List;
     expect(features, hasLength(19));
     expect(features.first['properties']['height_m'], 17);
@@ -357,7 +403,7 @@ void main() {
       isFalse,
     );
     expect(snapshot.warning, isNull);
-    expect(adapter.requests, hasLength(22));
+    expect(adapter.requests, hasLength(23));
   });
 
   test(
