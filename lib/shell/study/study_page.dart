@@ -6,6 +6,8 @@ import '../../mini_apps/innovation_credit/innovation_credit_card.dart';
 import '../../mini_apps/innovation_credit/innovation_credit_controller.dart';
 import '../../mini_apps/labor_score/labor_score_card.dart';
 import '../../mini_apps/labor_score/labor_score_controller.dart';
+import '../../mini_apps/score/score_card.dart';
+import '../../mini_apps/score/score_controller.dart';
 import '../../mini_apps/student_info/student_info_card.dart';
 import '../../mini_apps/student_info/student_info_controller.dart';
 
@@ -19,6 +21,7 @@ class StudyPage extends StatelessWidget {
     AcademicController.instance.refresh(),
     InnovationCreditController.instance.refresh(),
     LaborScoreController.instance.refresh(),
+    ScoreController.instance.refresh(),
   ]);
 
   @override
@@ -34,6 +37,8 @@ class StudyPage extends StatelessWidget {
             StudentInfoCard(),
             SizedBox(height: 12),
             AcademicSummaryCard(),
+            SizedBox(height: 12),
+            ScoreCard(),
             SizedBox(height: 12),
             InnovationCreditCard(),
             SizedBox(height: 12),
