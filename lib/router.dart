@@ -6,6 +6,7 @@ import 'mini_apps/campus_map/campus_place_detail_page.dart';
 import 'mini_apps/innovation_credit/innovation_credit_page.dart';
 import 'mini_apps/labor_score/labor_score_page.dart';
 import 'mini_apps/registry.dart';
+import 'mini_apps/score/score_page.dart';
 import 'mini_apps/web/mini_web_view_page.dart';
 import 'shell/home/home_page.dart';
 import 'shell/profile/portal_bind/portal_bind_page.dart';
@@ -97,6 +98,7 @@ GoRouter buildRouter() => GoRouter(
       builder: (_, _) => const InnovationCreditPage(),
     ),
     GoRoute(path: '/labor-score', builder: (_, _) => const LaborScorePage()),
+    GoRoute(path: '/scores', builder: (_, _) => const ScorePage()),
   ],
 );
 
