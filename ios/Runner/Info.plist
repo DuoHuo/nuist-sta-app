@@ -26,6 +26,8 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>用于在校园地图上显示你的位置并居中地图</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于扫描另一台设备上显示的通行密钥二维码</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>

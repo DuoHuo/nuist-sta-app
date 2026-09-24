@@ -9,9 +9,11 @@ import '../../../core/auth/portal_session.dart';
 import '../../../core/colors.dart';
 import '../../../mini_apps/student_info/student_info_models.dart';
 import '../../../mini_apps/student_info/student_info_store.dart';
+import 'portal_bind_widgets.dart';
 
 /// 「绑定统一门户」的状态页：展示当前绑定的学号与凭据信息，并提供重新绑定、
-/// 解除绑定入口。debug 构建下多一个「测试登录」按钮，用真实流程验证凭据。
+/// 解除绑定、导出 / 导入通行密钥入口。debug 构建下多一个「测试登录」按钮，
+/// 用真实流程验证凭据。
 class PortalStatusPage extends StatefulWidget {
   const PortalStatusPage({super.key});
 
@@ -75,6 +77,29 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
       confirmText: '继续',
     );
     if (confirmed) await _openRegister();
+  }
+
+  /// 导出前先把话说重：导出物就是登录凭据本身，六位 PIN 是唯一的保护。
+  Future<void> _openExport() async {
+    final confirmed = await _confirm(
+      title: '导出通行密钥',
+      message:
+          '导出内容包含本机私钥，任何拿到它并猜中六位 PIN 的人都能以你的身份'
+          '登录统一门户。\n\n'
+          '请只通过可信渠道传到自己的另一台设备，不要发到群聊、云盘或公共场所；'
+          '传完就删除。',
+      confirmText: '我知道了',
+    );
+    if (confirmed && mounted) await context.push('/portal-bind/export');
+  }
+
+  /// 与 [_openRegister] 同一套收尾：导入的凭据可能属于别的学号，旧会话必须作废。
+  Future<void> _openImport() async {
+    final done = await context.push<bool>('/portal-bind/import');
+    if (done == true) {
+      await PortalSession.instance.clear();
+    }
+    if (mounted) _load();
   }
 
   Future<void> _unbind() async {
@@ -237,30 +262,56 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
 
   Widget _actions(PasskeyBundle? bundle) {
     if (bundle == null) {
-      return _Card(
+      return PortalCard(
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: _openRegister,
-              child: const Text('立即绑定'),
-            ),
+          child: Column(
+            children: [
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: _openRegister,
+                  child: const Text('立即绑定'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: _openImport,
+                  child: const Text('从其他设备导入'),
+                ),
+              ),
+            ],
           ),
         ),
       );
     }
-    return _Card(
+    return PortalCard(
       child: Column(
         children: [
-          _ActionRow(
+          PortalActionRow(
             icon: Icons.refresh,
             label: '重新绑定',
             hint: '注册新的通行密钥',
             onTap: _rebind,
             showDivider: true,
           ),
-          _ActionRow(
+          PortalActionRow(
+            icon: Icons.ios_share,
+            label: '导出通行密钥',
+            hint: '加密后传到另一台设备',
+            onTap: _openExport,
+            showDivider: true,
+          ),
+          PortalActionRow(
+            icon: Icons.download_outlined,
+            label: '导入通行密钥',
+            hint: '用其他设备导出的数据替换本机凭据',
+            onTap: _openImport,
+            showDivider: true,
+          ),
+          PortalActionRow(
             icon: Icons.link_off,
             label: '解除绑定',
             hint: '删除本机凭据',
@@ -275,7 +326,7 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
 
   Widget _debugSection(PasskeyBundle? bundle) {
     final result = _testResult;
-    return _Card(
+    return PortalCard(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
         child: Column(
@@ -369,7 +420,7 @@ class _StatusHeader extends StatelessWidget {
       ),
     };
 
-    return _Card(
+    return PortalCard(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
@@ -427,7 +478,7 @@ class _InfoCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final createdAt = bundle.createdAt;
     final org = user?.orgLine ?? '';
-    return _Card(
+    return PortalCard(
       child: Column(
         children: [
           _InfoRow(label: '学号', value: bundle.studentId ?? '未知'),
@@ -458,7 +509,10 @@ class _InfoCard extends StatelessWidget {
 }
 
 class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.label, required this.value});
+  const _InfoRow({
+    required this.label,
+    required this.value,
+  });
 
   final String label;
   final String value;
@@ -504,79 +558,6 @@ class _InfoRow extends StatelessWidget {
           child: Divider(height: 1, color: AppColors.rowDivider),
         ),
       ],
-    );
-  }
-}
-
-class _ActionRow extends StatelessWidget {
-  const _ActionRow({
-    required this.icon,
-    required this.label,
-    required this.hint,
-    required this.onTap,
-    required this.showDivider,
-    this.destructive = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final String hint;
-  final VoidCallback onTap;
-  final bool showDivider;
-  final bool destructive;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = destructive
-        ? Theme.of(context).colorScheme.error
-        : AppColors.labelText;
-    return InkWell(
-      onTap: onTap,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: SizedBox(
-              height: 56,
-              child: Row(
-                children: [
-                  Icon(icon, size: 20, color: color),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        label,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: destructive ? color : AppColors.titleText,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        hint,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.hint,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
-                  const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
-                ],
-              ),
-            ),
-          ),
-          if (showDivider)
-            const Padding(
-              padding: EdgeInsets.only(left: 16),
-              child: Divider(height: 1, color: AppColors.rowDivider),
-            ),
-        ],
-      ),
     );
   }
 }
@@ -647,25 +628,6 @@ class _TestResultView extends StatelessWidget {
           ],
         ],
       ),
-    );
-  }
-}
-
-/// 「我的」页那套白色圆角卡片。
-class _Card extends StatelessWidget {
-  const _Card({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: child,
     );
   }
 }
