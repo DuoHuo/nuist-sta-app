@@ -194,7 +194,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
         _loading = false;
         if (!hasCache) _error = _errorMessage(error, '地点暂时加载失败');
       });
-      if (hasCache) _message('刷新失败，当前显示上次缓存的地图');
+      if (hasCache) _message('您已离线');
     }
   }
 
@@ -402,21 +402,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
   Future<void> _showRoutePlanner() async {
     final destination = _place;
     if (destination == null || _routing) return;
-    // 百度流程：起点默认「我的位置」，直接规划进入导航页；
-    // 拿不到定位才退回起点选择弹层。
-    var user = _userPoint;
-    if (user == null || !user.isValid) {
-      // 静默取一次定位（不移动相机），取不到再走手动选起点。
-      try {
-        final point = await widget.location.current();
-        if (!mounted) return;
-        if (point.isValid) setState(() => _userPoint = point);
-        user = point;
-      } catch (_) {
-        user = null;
-      }
-    }
-    if (!mounted) return;
+    // 起点默认「我的位置」：已有定位就直接规划进入导航页；
+    // 没有定位立即弹起点搜索，不做任何等待。
+    final user = _userPoint;
     CampusRouteRequest? request;
     if (user != null && user.isValid) {
       request = CampusRouteRequest(
