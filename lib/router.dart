@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/app_manifest.dart';
+import 'mini_apps/campus_map/campus_place_detail_page.dart';
 import 'mini_apps/innovation_credit/innovation_credit_page.dart';
 import 'mini_apps/labor_score/labor_score_page.dart';
 import 'mini_apps/registry.dart';
@@ -31,6 +32,8 @@ import 'shell/study/study_page.dart';
 ///   都与壳平级，全屏展示。
 /// - `/innovation-credit`、`/labor-score`：学习页两张卡片的详情页，同样与壳
 ///   平级全屏展示，返回键退回学习页。
+/// - `/place/:placeId`：校园地图的地物详情页（建筑 / POI / 通用地物共用）。
+///   与壳平级，可深链与分享；页面按编号自行取数，不依赖地图页是否打开。
 GoRouter buildRouter() => GoRouter(
   routes: [
     StatefulShellRoute.indexedStack(
@@ -67,6 +70,12 @@ GoRouter buildRouter() => GoRouter(
             ? MiniWebViewPage(manifest: manifest)
             : manifest.entry!(context);
       },
+    ),
+    GoRoute(
+      path: '/place/:placeId',
+      builder: (context, state) => CampusPlaceDetailPage(
+        placeId: state.pathParameters['placeId']!,
+      ),
     ),
     GoRoute(
       path: '/portal-bind',

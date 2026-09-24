@@ -72,51 +72,19 @@ class CampusExplorePanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              for (final item in PlaceCategory.values)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: FilterChip(
-                    label: Text(categoryName(item)),
-                    avatar: Icon(
-                      categoryIcon(item),
-                      size: 18,
-                      color: category == item
-                          ? MapPalette.blue
-                          : categoryColor(item),
-                    ),
-                    selected: category == item,
-                    showCheckmark: false,
-                    onSelected: (selected) =>
-                        onCategory(selected ? item : null),
-                    backgroundColor: Colors.white,
-                    selectedColor: MapPalette.blue.withValues(alpha: .08),
-                    side: BorderSide(
-                      color: category == item
-                          ? MapPalette.blue.withValues(alpha: .35)
-                          : MapPalette.line,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    labelStyle: TextStyle(
-                      fontSize: 13,
-                      color: category == item
-                          ? MapPalette.blue
-                          : MapPalette.ink,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 5,
-                      vertical: 8,
-                    ),
-                  ),
+        // 四个分类入口等宽铺满整行、内容居中（各占 1/4）。
+        // 原先靠左排 + 固定右间距，右侧会留出空白，看着像没对齐。
+        Row(
+          children: [
+            for (final item in PlaceCategory.values)
+              Expanded(
+                child: _CategoryBadge(
+                  category: item,
+                  selected: category == item,
+                  onTap: () => onCategory(category == item ? null : item),
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
         const SizedBox(height: 20),
         MapSectionTitle(
@@ -257,6 +225,7 @@ class CampusPlacePanel extends StatelessWidget {
     required this.onRoom,
     required this.onCloseRoute,
     this.mediaEntry,
+    this.onDetail,
   });
   final CampusPlace place;
   final CampusFloor? floor;
@@ -269,6 +238,9 @@ class CampusPlacePanel extends StatelessWidget {
   final VoidCallback? onRoute, onIndoor;
   final ValueChanged<CampusRoom> onRoom;
   final Widget? mediaEntry;
+
+  /// 打开该地物的完整详情页；为空时不显示入口（例如房间预览）。
+  final VoidCallback? onDetail;
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -342,6 +314,17 @@ class CampusPlacePanel extends StatelessWidget {
         ],
       ),
       const SizedBox(height: 16),
+      if (onDetail != null) ...[
+        SizedBox(
+          width: double.infinity,
+          child: MapAction(
+            icon: Icons.article_outlined,
+            label: '查看详情',
+            onPressed: onDetail,
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
       if (mediaEntry != null) ...[mediaEntry!, const SizedBox(height: 16)],
       if (route != null) ...[
         MapSectionTitle(
@@ -634,104 +617,381 @@ class CampusRoutePlanner extends StatefulWidget {
     required this.destination,
     this.floor,
     this.room,
+    this.userPoint,
   });
   final List<CampusPlace> places;
   final CampusPlace destination;
   final CampusFloor? floor;
   final CampusRoom? room;
+
+  /// 用户当前定位；有效时起点默认取「我的位置」。
+  final GeoPoint? userPoint;
   @override
   State<CampusRoutePlanner> createState() => _CampusRoutePlannerState();
 }
 
 class _CampusRoutePlannerState extends State<CampusRoutePlanner> {
+  /// 起点哨兵值：表示「我的位置」。
+  static const _kMyLocation = '__my_location__';
+  final _originSearch = TextEditingController();
   String? _originId;
   bool _accessible = false;
+  bool _editingOrigin = false;
+
+  bool get _hasLocation => widget.userPoint?.isValid == true;
+
   @override
-  Widget build(BuildContext context) => SafeArea(
-    child: SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(
-        24,
-        16,
-        24,
-        MediaQuery.viewInsetsOf(context).bottom + 24,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  '路线规划',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
-                ),
-              ),
-              MapIconButton(
-                icon: Icons.close_rounded,
-                label: '关闭路线规划',
-                onPressed: () => Navigator.pop(context),
-              ),
-            ],
+  void initState() {
+    super.initState();
+    // 有定位时默认从我的位置出发，免去手动选起点。
+    if (_hasLocation) _originId = _kMyLocation;
+    _originSearch.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _originSearch.dispose();
+    super.dispose();
+  }
+
+  String get _originLabel {
+    if (_originId == _kMyLocation) return '我的位置';
+    for (final place in widget.places) {
+      if (place.id == _originId) return place.name;
+    }
+    return '';
+  }
+
+  void _chooseOrigin(String id) {
+    setState(() {
+      _originId = id;
+      _editingOrigin = false;
+      _originSearch.clear();
+    });
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  /// 起点搜索结果：本地按名称/副标题过滤，「我的位置」常驻置顶。
+  List<Widget> _originResults() {
+    final query = _originSearch.text.trim().toLowerCase();
+    final matches = widget.places.where(
+      (p) =>
+          query.isEmpty ||
+          '${p.name} ${p.subtitle}'.toLowerCase().contains(query),
+    );
+    return [
+      if (_hasLocation)
+        ListTile(
+          dense: true,
+          leading: const Icon(
+            Icons.my_location_rounded,
+            color: MapPalette.blue,
           ),
-          const SizedBox(height: 20),
-          DropdownButtonFormField<String>(
-            initialValue: _originId,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: '选择起点',
-              prefixIcon: Icon(Icons.trip_origin_rounded),
-              border: OutlineInputBorder(),
+          title: const Text('我的位置'),
+          onTap: () => _chooseOrigin(_kMyLocation),
+        ),
+      for (final place in matches.take(8))
+        ListTile(
+          dense: true,
+          leading: Icon(
+            categoryIcon(place.category),
+            color: categoryColor(place.category),
+          ),
+          title: Text(place.name, overflow: TextOverflow.ellipsis),
+          onTap: () => _chooseOrigin(place.id),
+        ),
+      if (matches.isEmpty && query.isNotEmpty)
+        const Padding(
+          padding: EdgeInsets.all(16),
+          child: Text(
+            '没有匹配的地点',
+            style: TextStyle(fontSize: 13, color: MapPalette.secondary),
+          ),
+        ),
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final subtitle = widget.floor != null
+        ? '${widget.destination.name} · ${widget.floor!.label}'
+        : widget.destination.poiId == null &&
+              widget.destination.featureId != null
+        ? featureKindLabel(widget.destination.kind)
+        : null;
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+          24,
+          16,
+          24,
+          MediaQuery.viewInsetsOf(context).bottom + 24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '导航',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                MapIconButton(
+                  icon: Icons.close_rounded,
+                  label: '关闭导航',
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
             ),
-            items: [
-              for (final place in widget.places)
-                DropdownMenuItem(
-                  value: place.id,
-                  child: Text(place.name, overflow: TextOverflow.ellipsis),
-                ),
-            ],
-            onChanged: (value) => setState(() => _originId = value),
-          ),
-          const SizedBox(height: 16),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.place_rounded, color: MapPalette.blue),
-            title: Text(widget.room?.name ?? widget.destination.name),
-            subtitle: widget.floor == null
-                ? null
-                : Text('${widget.destination.name} · ${widget.floor!.label}'),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            secondary: const Icon(Icons.accessible_rounded),
-            title: const Text('无障碍优先'),
-            value: _accessible,
-            onChanged: (value) => setState(() => _accessible = value),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: MapAction(
-              icon: Icons.alt_route_rounded,
-              label: '规划路线',
-              primary: true,
-              onPressed: _originId == null
-                  ? null
-                  : () => Navigator.pop(
-                      context,
-                      CampusRouteRequest(
-                        originPlaceId: _originId!,
-                        destinationPlaceId: widget.destination.id,
-                        destinationFloorId: widget.floor?.id,
-                        destinationRoomId: widget.room?.id,
-                        accessible: _accessible,
+            const SizedBox(height: 20),
+            // 起终点卡片：起点是搜索栏（百度式），终点固定。
+            // 卡片用 Material 而不是 Container：里面的 ListTile 需要 Material 祖先，
+            // 否则 debug 下断言「背景与水波被 DecoratedBox 盖住」，这块面板根本渲染不出来。
+            Material(
+              color: Colors.white,
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+                side: BorderSide(color: MapPalette.line),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (!_editingOrigin)
+                    ListTile(
+                      leading: const Icon(
+                        Icons.trip_origin_rounded,
+                        color: MapPalette.blue,
+                      ),
+                      title: Text(
+                        _originLabel.isEmpty ? '搜索起点' : _originLabel,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: _originLabel.isEmpty
+                              ? MapPalette.secondary
+                              : MapPalette.ink,
+                        ),
+                      ),
+                      subtitle: const Text('起点'),
+                      trailing: const Icon(
+                        Icons.search_rounded,
+                        color: MapPalette.secondary,
+                      ),
+                      onTap: () => setState(() => _editingOrigin = true),
+                    )
+                  else ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 4, 0),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.trip_origin_rounded,
+                            color: MapPalette.blue,
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: TextField(
+                              controller: _originSearch,
+                              autofocus: true,
+                              decoration: const InputDecoration(
+                                hintText: '搜索起点',
+                                border: InputBorder.none,
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '取消',
+                            icon: const Icon(Icons.close_rounded, size: 20),
+                            onPressed: () => setState(() {
+                              _editingOrigin = false;
+                              _originSearch.clear();
+                            }),
+                          ),
+                        ],
                       ),
                     ),
+                    ..._originResults(),
+                  ],
+                  const Divider(height: 1, indent: 56),
+                  ListTile(
+                    leading: const Icon(
+                      Icons.place_rounded,
+                      color: Color(0xFFE15A4E),
+                    ),
+                    title: Text(
+                      widget.room?.name ?? widget.destination.name,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: subtitle == null
+                        ? const Text('终点')
+                        : Text('终点 · $subtitle'),
+                  ),
+                ],
+              ),
             ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              secondary: const Icon(Icons.accessible_rounded),
+              title: const Text('无障碍优先'),
+              value: _accessible,
+              onChanged: (value) => setState(() => _accessible = value),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: MapAction(
+                icon: Icons.navigation_rounded,
+                label: '开始导航',
+                primary: true,
+                onPressed: _originId == null
+                    ? null
+                    : () => Navigator.pop(
+                        context,
+                        CampusRouteRequest(
+                          originPlaceId: _originId == _kMyLocation
+                              ? null
+                              : _originId,
+                          originPoint: _originId == _kMyLocation
+                              ? widget.userPoint
+                              : null,
+                          destinationPlaceId: widget.destination.id,
+                          destinationFloorId: widget.floor?.id,
+                          destinationRoomId: widget.room?.id,
+                          accessible: _accessible,
+                        ),
+                      ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 导航结果页（百度风格）：目的地标题 + 摘要卡 + 开始导航 + 路线详情。
+class CampusRoutePreview extends StatelessWidget {
+  const CampusRoutePreview({
+    super.key,
+    required this.route,
+    required this.destinationLabel,
+    required this.onStart,
+    required this.onClose,
+    this.destinationSubtitle,
+  });
+  final CampusRouteResult route;
+  final String destinationLabel;
+  final String? destinationSubtitle;
+  final VoidCallback onStart, onClose;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  destinationLabel,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (destinationSubtitle != null)
+                  Text(
+                    destinationSubtitle!,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: MapPalette.secondary,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          MapIconButton(
+            icon: Icons.close_rounded,
+            label: '结束路线',
+            onPressed: onClose,
           ),
         ],
       ),
-    ),
+      const SizedBox(height: 16),
+      // 摘要卡：大号距离 + 段数（仿百度「2小时19分 / 23.9公里」摘要区）。
+      MapSurface(
+        radius: 18,
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.directions_walk_rounded,
+              color: MapPalette.blue,
+              size: 34,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    route.summary ?? '路线已规划',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '步行 · ${route.instructions.length} 段指引',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: MapPalette.secondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 14),
+      SizedBox(
+        width: double.infinity,
+        child: MapAction(
+          icon: Icons.navigation_rounded,
+          label: '开始导航',
+          primary: true,
+          onPressed: onStart,
+        ),
+      ),
+      const SizedBox(height: 16),
+      const MapSectionTitle('路线详情'),
+      MapSurface(
+        radius: 18,
+        child: Column(
+          children: [
+            for (final instruction in route.instructions)
+              ListTile(
+                leading: const Icon(
+                  Icons.turn_right_rounded,
+                  color: MapPalette.blue,
+                ),
+                title: Text(instruction, style: const TextStyle(fontSize: 14)),
+              ),
+          ],
+        ),
+      ),
+    ],
   );
 }
 
@@ -744,15 +1004,75 @@ String categoryName(PlaceCategory? category) => switch (category) {
 };
 IconData categoryIcon(PlaceCategory? category) => switch (category) {
   null => Icons.location_city_outlined,
-  PlaceCategory.study => Icons.school_outlined,
+  PlaceCategory.study => Icons.school_rounded,
   PlaceCategory.food => Icons.restaurant_rounded,
-  PlaceCategory.sports => Icons.sports_basketball_outlined,
-  PlaceCategory.services => Icons.local_convenience_store_outlined,
+  PlaceCategory.sports => Icons.sports_basketball,
+  PlaceCategory.services => Icons.storefront_rounded,
 };
 Color categoryColor(PlaceCategory? category) => switch (category) {
   null => MapPalette.secondary,
-  PlaceCategory.study => const Color(0xFF5972BA),
-  PlaceCategory.food => const Color(0xFFAE661B),
-  PlaceCategory.sports => const Color(0xFF34856C),
-  PlaceCategory.services => const Color(0xFF8664B4),
+  PlaceCategory.study => const Color(0xFF4C8BF5),
+  PlaceCategory.food => const Color(0xFFF2994A),
+  PlaceCategory.sports => const Color(0xFF35B26F),
+  PlaceCategory.services => const Color(0xFF9B6BF3),
 };
+
+/// 搜索栏下方的分类入口：实心彩色圆角徽章 + 名称，选中加描边投影。
+class _CategoryBadge extends StatelessWidget {
+  const _CategoryBadge({
+    required this.category,
+    required this.selected,
+    required this.onTap,
+  });
+  final PlaceCategory category;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = categoryColor(category);
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(14),
+              border: selected
+                  ? Border.all(
+                      color: MapPalette.ink.withValues(alpha: .5),
+                      width: 2,
+                    )
+                  : null,
+              boxShadow: selected
+                  ? [
+                      BoxShadow(
+                        color: color.withValues(alpha: .35),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ]
+                  : null,
+            ),
+            alignment: Alignment.center,
+            child: Icon(categoryIcon(category), size: 28, color: Colors.white),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            categoryName(category),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              color: selected ? color : MapPalette.ink,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

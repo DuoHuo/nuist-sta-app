@@ -1,6 +1,6 @@
 # 校园地图前端
 
-Flutter + MapLibre 原生子程序。首页入口已注入 `CampusMapApi`，默认连接 `http://202.195.237.186:12345`。顶部标题悬浮框已删除。
+Flutter + MapLibre 原生子程序。首页入口已注入 `CampusMapApi`，默认连接 `http://202.195.237.186:12345`。
 
 ## 服务器连接
 
@@ -31,6 +31,7 @@ flutter run --dart-define=CAMPUS_API_BASE_URL=http://127.0.0.1:8080
 | 建筑轮廓 | `GET /api/v1/buildings/:id/geometry` |
 | 室内要素 | `GET /api/v1/floors/:floorId/features` |
 | 地点搜索、详情 | `GET /api/v1/pois`、`GET /api/v1/pois/:id` |
+| 通用地物列表、详情 | `GET /api/v1/features`、`GET /api/v1/features/:id` |
 | 路线 | `POST /api/v1/route` |
 | Wi-Fi 定位适配 | `POST /api/v1/locate/wifi` |
 | 指纹查询、采集适配 | `GET/POST /api/v1/fingerprints`，写入支持 `X-Collect-Token` |
@@ -39,7 +40,13 @@ flutter run --dart-define=CAMPUS_API_BASE_URL=http://127.0.0.1:8080
 
 ## 数据和显示边界
 
-- 户外**只渲染底图**：道路、水系、建筑、绿地与标注全部来自 Martin 样式；程序不再叠加业务建筑填充或 POI 圆点。
+- 户外底图（道路、水系、建筑、绿地与标注）来自 Martin 样式，程序不叠加业务建筑填充或 POI 圆点；
+  **通用地物是例外**：管理台提交的道路/绿地/广场等由 App 自绘（`campus-features-*` 图层：面填充、线描边、点圆）。
+  底图瓦片是派生产物，新提交的地物不会立刻进瓦片，而提交随时在发生——自绘让「提交后 App 立刻可见」，不必等重新切片。
+- 三类地物各有稳定编号：建筑 `building_id`、地点 `poi_id`、通用地物 `feature_id`；点击命中顺序为
+  「房间 → 建筑 → 通用地物 → 街景」，命中后先开面板，面板上的「查看详情」进入统一详情页。
+  详情路由 `/place/:placeId` 可深链可分享，页面按编号自行取数，不依赖地图页是否打开。
+  注意：只存在于 OSM 瓦片、没有业务编号的底图要素仍然点不开——要让某类地物有详情页，得先在管理台把它提交进库。
 - 底图标签与管理台保持一致：中文优先取 `name:nonlatin` → `name` → `name:latin`；楼名用业务库中的命名建筑注入蓝色标注层（`#16307A`，minzoom 15.5，随缩放放大），并排除底图 POI 中重名的文字，避免同楼两份名字。
 - 楼宇轮廓以近乎全透明图层（`fillOpacity 0.01`）挂载，**只作点击命中区域**，不改变地图外观；点击命中后按业务 `building_id` 打开该楼详情面板。
 - `featureTapsTriggersMapClick` 必须为 true：插件默认在点击落到可交互图层时不回调 `onMapClick`，否则点楼无响应。命中选择按图层分别查询（房间 → 建筑 → 街景），因为插件返回的 Feature 不携带图层 id。

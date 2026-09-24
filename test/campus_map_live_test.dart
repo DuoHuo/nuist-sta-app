@@ -83,7 +83,10 @@ void main() {
 
       final campus = await api.loadCampus();
       expect(campus.places, isNotEmpty);
-      final buildings = campus.places.where((p) => p.poiId == null).toList();
+      // 三类地物各有编号字段：建筑 = 既不是 POI 也不是通用地物。
+      final buildings = campus.places
+          .where((p) => p.poiId == null && p.featureId == null)
+          .toList();
       final pois = campus.places.where((p) => p.poiId != null).toList();
       expect(buildings, isNotEmpty);
       expect(pois, isNotEmpty);
@@ -102,6 +105,40 @@ void main() {
           .map((f) => f['properties']['building_id'])
           .toSet();
       expect(geometryIds, unorderedEquals(buildingIds));
+
+      // 通用地物：管理台提交的道路/绿地/广场等。线上可以一个都没有（没人提交时），
+      // 有则每个都必须带编号、类别与可渲染几何，并且能按编号打开自己的详情。
+      final featurePlaces = campus.places
+          .where((p) => p.featureId != null)
+          .toList();
+      final featureRows = campus.featuresGeoJson!['features'] as List;
+      expect(featureRows, hasLength(featurePlaces.length));
+      for (final row in featureRows) {
+        final feature = row as Map;
+        final geometry = feature['geometry'] as Map;
+        expect(
+          const [
+            'Point',
+            'MultiPoint',
+            'LineString',
+            'MultiLineString',
+            'Polygon',
+            'MultiPolygon',
+          ],
+          contains(geometry['type']),
+        );
+        _expectCoordinates(geometry['coordinates']);
+        final properties = feature['properties'] as Map;
+        expect(properties['feature_id'], isA<num>());
+        expect(properties['kind'], isA<String>());
+      }
+      for (final place in featurePlaces) {
+        expect(place.hasDetail, isTrue);
+        expect(place.name.trim(), isNotEmpty);
+        final detail = await api.loadPlace(place);
+        expect(detail.id, place.id);
+        expect(detail.featureId, place.featureId);
+      }
 
       expect(campus.bounds, hasLength(4));
       final bounds = campus.bounds!;
@@ -137,11 +174,29 @@ void main() {
       expect(style['sources'], isNotEmpty);
       expect(style['layers'], isA<List>());
       expect(style['layers'], isNotEmpty);
-      final tileSource = style['sources']['campus'] as Map;
-      expect(tileSource['maxzoom'], 14);
+      // 样式由服务端下发（当前是 OSM Bright 血统，源名 openmaptiles），不绑定
+      // 具体源名：取第一个矢量源，再按它的 TileJSON 找瓦片地址。
+      final vectorSources = (style['sources'] as Map).values
+          .whereType<Map>()
+          .where((s) => s['type'] == 'vector')
+          .toList();
+      expect(vectorSources, isNotEmpty);
+      var tileSource = vectorSources.first;
+      if (tileSource['url'] is String) {
+        final tileJsonResponse = await dio.get<dynamic>(
+          tileSource['url'] as String,
+          options: Options(receiveTimeout: const Duration(seconds: 10)),
+        );
+        final tileJson = tileJsonResponse.data;
+        tileSource = tileJson is String
+            ? jsonDecode(tileJson) as Map
+            : tileJson as Map;
+      }
+      expect(tileSource['tiles'], isA<List>());
       final template = (tileSource['tiles'] as List).first as String;
-      expect(Uri.parse(template).port, 30000);
+      // 真机可达的地址必须走 api 同源代理（Martin 独立端口 30000 会被防火墙重置）。
       expect(template, isNot(contains('localhost')));
+      expect(Uri.parse(template).port, isNot(30000));
       final tileResponse = await dio.get<List<int>>(
         template
             .replaceAll('{z}', '14')
@@ -155,7 +210,7 @@ void main() {
       expect(tileResponse.statusCode, 200);
       expect(tileResponse.data!.length, greaterThan(100));
       debugPrint(
-        'Live vector tile bytes=${tileResponse.data!.length}, maxzoom=${tileSource['maxzoom']}',
+        'Live vector tile bytes=${tileResponse.data!.length}, template=$template',
       );
       debugPrint(
         'Loaded buildings=${buildings.length}, POIs=${pois.length}, '
