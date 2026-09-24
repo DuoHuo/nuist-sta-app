@@ -169,18 +169,25 @@ class _CampusMapPageState extends State<CampusMapPage> {
 
   Future<void> _loadCampus() async {
     final revision = ++_campusRevision;
-    // 先读本地缓存秒开，再联网刷新落盘（stale-while-revalidate）。
-    if (_campus.places.isEmpty) {
-      final cached = await _cache.read('default');
-      if (!mounted || revision != _campusRevision) return;
-      if (cached != null && cached.places.isNotEmpty) {
-        _applyCampus(cached, loading: true);
-      }
-    }
     setState(() {
       _loading = true;
       _error = null;
     });
+    // 缓存与网络并行：缓存先到就先渲染（秒开），网络返回后覆盖并落盘
+    // （stale-while-revalidate）。缓存读不能挡在加载路径上——存储或插件异常时
+    // 它会一直挂着（widget 测试里 path_provider 没有实现，读盘永不返回），
+    // 那样整页数据都加载不出来。
+    if (_campus.places.isEmpty) {
+      unawaited(
+        _cache.read('default').then((cached) {
+          if (!mounted || revision != _campusRevision) return;
+          if (!_loading) return; // 网络已先到，别再用缓存覆盖
+          if (cached != null && cached.places.isNotEmpty) {
+            _applyCampus(cached, loading: true);
+          }
+        }),
+      );
+    }
     try {
       final data = await widget.source.loadCampus();
       if (!mounted || revision != _campusRevision) return;

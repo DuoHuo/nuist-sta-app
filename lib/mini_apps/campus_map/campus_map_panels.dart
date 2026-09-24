@@ -748,11 +748,14 @@ class _CampusRoutePlannerState extends State<CampusRoutePlanner> {
             ),
             const SizedBox(height: 20),
             // 起终点卡片：起点是搜索栏（百度式），终点固定。
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
+            // 卡片用 Material 而不是 Container：里面的 ListTile 需要 Material 祖先，
+            // 否则 debug 下断言「背景与水波被 DecoratedBox 盖住」，这块面板根本渲染不出来。
+            Material(
+              color: Colors.white,
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: MapPalette.line),
+                side: BorderSide(color: MapPalette.line),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,

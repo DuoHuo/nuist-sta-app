@@ -458,15 +458,10 @@ class _InfoCard extends StatelessWidget {
 }
 
 class _InfoRow extends StatelessWidget {
-  const _InfoRow({
-    required this.label,
-    required this.value,
-    this.showDivider = true,
-  });
+  const _InfoRow({required this.label, required this.value});
 
   final String label;
   final String value;
-  final bool showDivider;
 
   @override
   Widget build(BuildContext context) {
@@ -504,11 +499,10 @@ class _InfoRow extends StatelessWidget {
             ),
           ),
         ),
-        if (showDivider)
-          const Padding(
-            padding: EdgeInsets.only(left: 16),
-            child: Divider(height: 1, color: AppColors.rowDivider),
-          ),
+        const Padding(
+          padding: EdgeInsets.only(left: 16),
+          child: Divider(height: 1, color: AppColors.rowDivider),
+        ),
       ],
     );
   }
