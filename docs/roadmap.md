@@ -23,8 +23,6 @@
 
 > 考虑参考早期开源项目 [WakeUp 课程表](https://github.com/YZune/WakeupSchedule_Kotlin)
 
-- [ ] 成绩查询与通知
-
 - [ ] 小公交位置实时显示
 
 - [ ] 南信大邮箱
