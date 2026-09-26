@@ -1,0 +1,78 @@
+name: Commit Lint
+
+# 与 ci.yml 分开：ci.yml 忽略纯 .md 改动，而文档提交同样要检查。
+# PR 检查分支上所有不在 main 里的提交；直推 main 时检查本次推送的提交。
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  commit-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit messages and identities
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          LC_ALL: C.UTF-8
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = pull_request ]; then
+            commits=$(git rev-list --no-merges "$HEAD_SHA" --not "origin/$BASE_REF")
+          elif [[ "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            commits=$(git rev-list --no-merges -1 "$AFTER")
+          else
+            commits=$(git rev-list --no-merges "$BEFORE..$AFTER")
+          fi
+
+          # 规范见 CONTRIBUTING.md「Commit 规范」「AI 辅助开发」
+          type_re='^(feat|fix|docs|refactor|perf|test|build|ci|style|chore|revert)(\([a-z0-9]+(-[a-z0-9]+)*\))?: [^ ]'
+          ident_re='^(codex|claude|copilot|cursor|gemini|devin)( agent| code)? <|<[^>]*(anthropic\.com|openai\.com|@local>|cursor\.com|copilot)'
+          trailer_re='^(co-authored-by|claude-session):.*(codex|claude|anthropic|openai|copilot|cursor|gemini|devin)|generated (with|by) .*(claude|codex|copilot|cursor|gemini|chatgpt)'
+
+          fail=0
+          for sha in $commits; do
+            subject=$(git log -1 --format=%s "$sha")
+            problems=()
+
+            if [[ $subject == 'Revert "'* ]]; then
+              :
+            elif ! [[ $subject =~ $type_re ]]; then
+              problems+=("格式应为 <type>(<scope>): <中文摘要>，scope 用 kebab-case")
+            elif [[ $subject != chore\(release\):* ]] && ! grep -qP '\p{Han}' <<<"$subject"; then
+              problems+=("摘要需用中文")
+            fi
+            if [[ $subject =~ [.。]$ ]]; then
+              problems+=("摘要末尾不加句号")
+            fi
+            if git log -1 --format='%an <%ae>%n%cn <%ce>' "$sha" | grep -qiE "$ident_re"; then
+              problems+=("提交身份疑似 AI 代理，请用自己的 git 身份提交")
+            fi
+            if git log -1 --format=%b "$sha" | grep -qiE "$trailer_re"; then
+              problems+=("包含 AI 署名（Co-Authored-By / Generated with 等）")
+            fi
+
+            for p in "${problems[@]}"; do
+              echo "::error title=Commit 规范::${sha:0:7} ${subject} —— ${p}"
+              fail=1
+            done
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            echo "规范见 CONTRIBUTING.md 的「Commit 规范」与「AI 辅助开发」两节。"
+          fi
+          exit "$fail"
