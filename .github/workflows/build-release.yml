@@ -67,7 +67,7 @@ jobs:
                 author_suffix=" (@$username)"
               fi
               sections["$section"]+="- $subject (\`$short_sha\`)$author_suffix"$'\n'
-            done < <(git log --format='%H%x09%s%x09%h' "$RANGE")
+            done < <(git log --no-merges --format='%H%x09%s%x09%h' "$RANGE")
 
             for section in "Features" "Fixes" "Documentation" "Other Changes"; do
               if [ -n "${sections[$section]}" ]; then
