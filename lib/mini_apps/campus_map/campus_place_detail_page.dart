@@ -85,7 +85,9 @@ class _CampusPlaceDetailPageState extends State<CampusPlaceDetailPage> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = error is CampusMapApiException ? error.message : '地物详情加载失败，请稍后重试';
+        _error = error is CampusMapApiException
+            ? error.message
+            : '地物详情加载失败，请稍后重试';
       });
     }
   }
@@ -275,7 +277,11 @@ class _ErrorView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.error_outline, size: 40, color: MapPalette.secondary),
+          const Icon(
+            Icons.error_outline,
+            size: 40,
+            color: MapPalette.secondary,
+          ),
           const SizedBox(height: 12),
           Text(
             message,

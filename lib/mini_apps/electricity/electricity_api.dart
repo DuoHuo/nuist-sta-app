@@ -95,9 +95,10 @@ class ElectricityApi {
     );
     final token = _tokenFromLanding(landing);
     final http = await PortalSession.instance.clientFor(PortalServices.icard);
-    final body = {'feeitemid': _feeItemId, ...fields}.entries
-        .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
-        .join('&');
+    final body = {
+      'feeitemid': _feeItemId,
+      ...fields,
+    }.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&');
     final response = await http.post(
       _api,
       data: body,

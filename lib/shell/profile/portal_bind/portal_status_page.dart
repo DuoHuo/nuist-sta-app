@@ -123,9 +123,8 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
       _user = null;
       _testResult = null;
     });
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('已解除绑定')));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('已解除绑定')));
   }
 
   Future<bool> _confirm({
@@ -138,7 +137,10 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(title),
-        content: Text(message, style: const TextStyle(fontSize: 14, height: 1.5)),
+        content: Text(
+          message,
+          style: const TextStyle(fontSize: 14, height: 1.5),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -195,8 +197,10 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
         _testResult = _TestResult(
           ok: false,
           title: switch (e) {
-            PortalNetworkError() => '网络不可用（${stopwatch.elapsedMilliseconds} ms）',
-            PortalCredentialError() => '凭据已失效（${stopwatch.elapsedMilliseconds} ms）',
+            PortalNetworkError() =>
+              '网络不可用（${stopwatch.elapsedMilliseconds} ms）',
+            PortalCredentialError() =>
+              '凭据已失效（${stopwatch.elapsedMilliseconds} ms）',
             PortalLoginError() => '登录失败（${stopwatch.elapsedMilliseconds} ms）',
           },
           details: [e.message],
@@ -334,7 +338,11 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
           children: [
             Row(
               children: [
-                const Icon(Icons.bug_report_outlined, size: 18, color: AppColors.hint),
+                const Icon(
+                  Icons.bug_report_outlined,
+                  size: 18,
+                  color: AppColors.hint,
+                ),
                 const SizedBox(width: 6),
                 const Text(
                   '调试',
@@ -354,7 +362,11 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
             const SizedBox(height: 4),
             const Text(
               '用真实的 Passkey 流程登录教务系统，验证本机凭据是否还能用。',
-              style: TextStyle(fontSize: 12, color: AppColors.hint, height: 1.4),
+              style: TextStyle(
+                fontSize: 12,
+                color: AppColors.hint,
+                height: 1.4,
+              ),
             ),
             const SizedBox(height: 12),
             SizedBox(
@@ -494,7 +506,7 @@ class _InfoCard extends StatelessWidget {
             value: createdAt.millisecondsSinceEpoch == 0
                 ? '未记录'
                 : _formatDateTime(createdAt),
-          )
+          ),
         ],
       ),
     );
@@ -509,10 +521,7 @@ class _InfoCard extends StatelessWidget {
 }
 
 class _InfoRow extends StatelessWidget {
-  const _InfoRow({
-    required this.label,
-    required this.value,
-  });
+  const _InfoRow({required this.label, required this.value});
 
   final String label;
   final String value;

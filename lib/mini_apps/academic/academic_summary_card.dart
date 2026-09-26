@@ -109,7 +109,8 @@ class _SummaryBody extends StatelessWidget {
     final s = summary;
     final earned = double.tryParse(s.earnedCredits);
     final required = double.tryParse(s.requiredCredits);
-    final progress = _parsePercent(s.creditProgress) ??
+    final progress =
+        _parsePercent(s.creditProgress) ??
         (earned != null && required != null && required > 0
             ? earned / required
             : null);
@@ -120,9 +121,15 @@ class _SummaryBody extends StatelessWidget {
         const SizedBox(height: 8),
         Row(
           children: [
-            Expanded(child: _Metric(label: '平均绩点', value: s.averageGradePoint)),
-            Expanded(child: _Metric(label: 'GPA', value: s.gpa)),
-            Expanded(child: _Metric(label: '平均分', value: s.averageScore)),
+            Expanded(
+              child: _Metric(label: '平均绩点', value: s.averageGradePoint),
+            ),
+            Expanded(
+              child: _Metric(label: 'GPA', value: s.gpa),
+            ),
+            Expanded(
+              child: _Metric(label: '平均分', value: s.averageScore),
+            ),
           ],
         ),
         const SizedBox(height: 16),
@@ -155,14 +162,20 @@ class _SummaryBody extends StatelessWidget {
         const SizedBox(height: 10),
         Row(
           children: [
-            Expanded(child: _Stat(label: '班级排名', value: s.classRank)),
-            Expanded(child: _Stat(label: '专业排名', value: s.majorRank)),
+            Expanded(
+              child: _Stat(label: '班级排名', value: s.classRank),
+            ),
+            Expanded(
+              child: _Stat(label: '专业排名', value: s.majorRank),
+            ),
           ],
         ),
         const SizedBox(height: 10),
         Row(
           children: [
-            Expanded(child: _Stat(label: '课程通过率', value: s.passRateText)),
+            Expanded(
+              child: _Stat(label: '课程通过率', value: s.passRateText),
+            ),
             Expanded(
               child: _Stat(label: '学分加权平均分', value: s.weightedAverageScore),
             ),

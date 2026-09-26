@@ -112,8 +112,10 @@ String base64UrlNoPad(List<int> bytes) =>
 /// Base64URL 解码，自动补回 `=` 填充。
 Uint8List base64UrlDecode(String value) {
   final normalized = value.replaceAll('-', '+').replaceAll('_', '/');
-  return base64.decode(normalized.padRight(
-    normalized.length + (4 - normalized.length % 4) % 4,
-    '=',
-  ));
+  return base64.decode(
+    normalized.padRight(
+      normalized.length + (4 - normalized.length % 4) % 4,
+      '=',
+    ),
+  );
 }

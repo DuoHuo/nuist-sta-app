@@ -60,8 +60,10 @@ class _PortalScanPageState extends State<PortalScanPage> {
                 padding: const EdgeInsets.all(24),
                 child: Text(
                   switch (error.errorCode) {
-                    MobileScannerErrorCode.permissionDenied => '没有相机权限，请到系统设置里允许 NUIST++ 使用相机',
-                    _ => '相机启动失败：${error.errorDetails?.message ?? error.errorCode.name}',
+                    MobileScannerErrorCode.permissionDenied =>
+                      '没有相机权限，请到系统设置里允许 NUIST++ 使用相机',
+                    _ =>
+                      '相机启动失败：${error.errorDetails?.message ?? error.errorCode.name}',
                   },
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: Colors.white70, height: 1.5),

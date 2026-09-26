@@ -100,9 +100,7 @@ class ScoreApi {
 
   /// EMAP 一般把结果放在 `datas.xscjcx.rows`，部分版本会给模块名加
   /// 前缀。找不到固定键时，退化为寻找第一个带 rows 的数据段。
-  static Map<String, dynamic>? _findRowsSection(
-    Map<String, dynamic> datas,
-  ) {
+  static Map<String, dynamic>? _findRowsSection(Map<String, dynamic> datas) {
     for (final value in datas.values) {
       if (value is Map<String, dynamic> && value['rows'] is List) {
         return value;
@@ -116,7 +114,10 @@ class ScoreApi {
     final http = await session.clientFor(PortalServices.jwxt, force: force);
     if (_appReady && !force) return http;
     final response = await http.followRedirects(
-      await http.get(_indexUrl, headers: {'Accept': 'text/html,application/xhtml+xml'}),
+      await http.get(
+        _indexUrl,
+        headers: {'Accept': 'text/html,application/xhtml+xml'},
+      ),
     );
     if (_looksLikeLoginPage(response)) {
       _appReady = false;

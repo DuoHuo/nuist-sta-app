@@ -26,12 +26,11 @@ class RootPage extends StatelessWidget {
           selectedFontSize: 10,
           unselectedFontSize: 10,
           currentIndex: navigationShell.currentIndex,
-          onTap:
-              (i) => navigationShell.goBranch(
-                i,
-                // 重复点击当前页签回到该页签首页。
-                initialLocation: i == navigationShell.currentIndex,
-              ),
+          onTap: (i) => navigationShell.goBranch(
+            i,
+            // 重复点击当前页签回到该页签首页。
+            initialLocation: i == navigationShell.currentIndex,
+          ),
           items: const [
             BottomNavigationBarItem(
               icon: Icon(Icons.home_outlined),

@@ -42,7 +42,8 @@ class _PortalBindPageState extends State<PortalBindPage> {
   int _progress = 0;
   bool _finished = false;
 
-  String _hint = '请登录统一门户\n\n无需点击信任此设备，正常登录后，会再次验证密码。\n\n软件通过通行密钥实现自动登录，不保存统一门户密码、不受密码更改影响。\n若后续不使用了，可在「统一门户-账户安全-生物识别」页面彻底删除。';
+  String _hint =
+      '请登录统一门户\n\n无需点击信任此设备，正常登录后，会再次验证密码。\n\n软件通过通行密钥实现自动登录，不保存统一门户密码、不受密码更改影响。\n若后续不使用了，可在「统一门户-账户安全-生物识别」页面彻底删除。';
   String? _error;
 
   @override
@@ -146,14 +147,14 @@ class _PortalBindPageState extends State<PortalBindPage> {
       TargetPlatform.iOS => 'iOS',
       final other => other.name,
     };
-    
+
     const letters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
     final random = Random.secure();
     final randomChar = List.generate(
       4,
       (_) => letters[random.nextInt(letters.length)],
     ).join();
-    
+
     return '$kAppName($platform)_$randomChar';
   }
 

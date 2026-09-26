@@ -161,9 +161,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
       _loading = loading;
       // 「探索校园」每次加载后随机抽 10 个地点，不再平铺全部建筑；
       // 刷新按钮同时起到「换一批」的作用。
-      _explore = (List<CampusPlace>.of(data.places)..shuffle(
-        _random,
-      )).take(10).toList();
+      _explore = (List<CampusPlace>.of(
+        data.places,
+      )..shuffle(_random)).take(10).toList();
     });
   }
 
@@ -293,8 +293,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
     }
     // 分层视图需要当前层及以下各层的几何（当前层上色，下方楼层半透明托底；
     // 上方楼层不渲染，也就不必拉取）。
-    final floorsBelow =
-        place.floors.where((f) => f.number <= floor.number).toList();
+    final floorsBelow = place.floors
+        .where((f) => f.number <= floor.number)
+        .toList();
     unawaited(_loadBuildingFloors(buildingId, floorsBelow, revision));
   }
 
@@ -756,80 +757,80 @@ class _CampusMapPageState extends State<CampusMapPage> {
                           );
                         },
                       ),
-                      // 导航中/预览时的顶部起终点条（仿百度导航页顶栏）。
-                      if (_route != null)
-                        Positioned(
-                          top: safe.top + 12,
-                          left: wide ? 384 : 16,
-                          right: 16,
-                          child: MapSurface(
-                            radius: 18,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 10,
-                            ),
-                            child: Row(
-                              children: [
-                                MapIconButton(
-                                  icon: Icons.arrow_back_rounded,
-                                  label: '结束路线',
-                                  onPressed: _endRoute,
-                                ),
-                                const SizedBox(width: 4),
-                                Expanded(
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          const Icon(
-                                            Icons.circle,
-                                            size: 10,
-                                            color: Color(0xFF34A853),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: Text(
-                                              _routeOriginLabel,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                fontSize: 13,
-                                                color: MapPalette.secondary,
-                                              ),
+                    // 导航中/预览时的顶部起终点条（仿百度导航页顶栏）。
+                    if (_route != null)
+                      Positioned(
+                        top: safe.top + 12,
+                        left: wide ? 384 : 16,
+                        right: 16,
+                        child: MapSurface(
+                          radius: 18,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 10,
+                          ),
+                          child: Row(
+                            children: [
+                              MapIconButton(
+                                icon: Icons.arrow_back_rounded,
+                                label: '结束路线',
+                                onPressed: _endRoute,
+                              ),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.circle,
+                                          size: 10,
+                                          color: Color(0xFF34A853),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            _routeOriginLabel,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              color: MapPalette.secondary,
                                             ),
                                           ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Row(
-                                        children: [
-                                          const Icon(
-                                            Icons.place_rounded,
-                                            size: 14,
-                                            color: Color(0xFFE15A4E),
-                                          ),
-                                          const SizedBox(width: 6),
-                                          Expanded(
-                                            child: Text(
-                                              _room?.name ??
-                                                  _place?.name ??
-                                                  '目的地',
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w600,
-                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.place_rounded,
+                                          size: 14,
+                                          color: Color(0xFFE15A4E),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            _room?.name ??
+                                                _place?.name ??
+                                                '目的地',
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
                                             ),
                                           ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
+                      ),
                   ],
                 );
               },
@@ -884,90 +885,91 @@ class _CampusMapPageState extends State<CampusMapPage> {
       );
     }
     return _place == null
-      ? CampusExplorePanel(
-          search: _search,
-          category: _category,
-          // 未搜索且未选分类时只展示随机抽样的 10 个地点。
-          places: _searchResults ??
-              (_category == null ? _explore : _campus.places),
-          loading: _loading || _searchLoading,
-          error: _searchError ?? _error,
-          onSearchFocus: () => _expandSheet(.88),
-          onCategory: (value) {
-            setState(() => _category = value);
-            _expandSheet(.55);
-          },
-          onRefresh: _loadCampus,
-          onSelect: _selectPlace,
-        )
-      : Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (_placeLoading) const LinearProgressIndicator(minHeight: 2),
-            if (_placeError != null)
-              MapEmptyState(
-                icon: Icons.cloud_off_outlined,
-                title: _placeError!,
-                description: '可重试加载地点详情',
-                action: TextButton(
-                  onPressed: () => _selectPlace(_place!),
-                  child: const Text('重试'),
+        ? CampusExplorePanel(
+            search: _search,
+            category: _category,
+            // 未搜索且未选分类时只展示随机抽样的 10 个地点。
+            places:
+                _searchResults ??
+                (_category == null ? _explore : _campus.places),
+            loading: _loading || _searchLoading,
+            error: _searchError ?? _error,
+            onSearchFocus: () => _expandSheet(.88),
+            onCategory: (value) {
+              setState(() => _category = value);
+              _expandSheet(.55);
+            },
+            onRefresh: _loadCampus,
+            onSelect: _selectPlace,
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (_placeLoading) const LinearProgressIndicator(minHeight: 2),
+              if (_placeError != null)
+                MapEmptyState(
+                  icon: Icons.cloud_off_outlined,
+                  title: _placeError!,
+                  description: '可重试加载地点详情',
+                  action: TextButton(
+                    onPressed: () => _selectPlace(_place!),
+                    child: const Text('重试'),
+                  ),
                 ),
+              CampusPlacePanel(
+                place: _place!,
+                onDetail: _place!.hasDetail && _room == null
+                    ? () => _openDetail(_place!)
+                    : null,
+                mediaEntry:
+                    _place!.poiId == null && !_place!.id.startsWith('poi:')
+                    ? CampusBuildingPhotosEntry(
+                        source: widget.source is CampusBuildingPhotosSource
+                            ? widget.source as CampusBuildingPhotosSource
+                            : null,
+                        buildingId: _place!.buildingId ?? _place!.id,
+                        buildingName: _place!.name,
+                      )
+                    : null,
+                floor: _floor,
+                room: _room,
+                floorData: _floorData,
+                floorLoading: _floorLoading,
+                floorError: _floorError,
+                route: _route,
+                routing: _routing,
+                onClose: () {
+                  if (_room != null) {
+                    setState(() => _room = null);
+                  } else {
+                    _clearSelection();
+                  }
+                },
+                onRoute:
+                    widget.source.isConfigured &&
+                        !_placeLoading &&
+                        _placeError == null
+                    ? _showRoutePlanner
+                    : null,
+                onIndoor: _floor != null
+                    ? _leaveIndoor
+                    : _place!.hasIndoor && _place!.floors.isNotEmpty
+                    ? () => _selectFloor(_place!.floors.first)
+                    : null,
+                onStreet: () => _openStreet(_place!),
+                onRetryFloor: () => _selectFloor(_floor!),
+                onRoom: (room) {
+                  _routeRevision++;
+                  setState(() {
+                    _room = room;
+                    _route = null;
+                    _routing = false;
+                  });
+                },
+                onCloseRoute: () => setState(() => _route = null),
               ),
-            CampusPlacePanel(
-              place: _place!,
-              onDetail: _place!.hasDetail && _room == null
-                  ? () => _openDetail(_place!)
-                  : null,
-              mediaEntry:
-                  _place!.poiId == null && !_place!.id.startsWith('poi:')
-                  ? CampusBuildingPhotosEntry(
-                      source: widget.source is CampusBuildingPhotosSource
-                          ? widget.source as CampusBuildingPhotosSource
-                          : null,
-                      buildingId: _place!.buildingId ?? _place!.id,
-                      buildingName: _place!.name,
-                    )
-                  : null,
-              floor: _floor,
-              room: _room,
-              floorData: _floorData,
-              floorLoading: _floorLoading,
-              floorError: _floorError,
-              route: _route,
-              routing: _routing,
-              onClose: () {
-                if (_room != null) {
-                  setState(() => _room = null);
-                } else {
-                  _clearSelection();
-                }
-              },
-              onRoute:
-                  widget.source.isConfigured &&
-                      !_placeLoading &&
-                      _placeError == null
-                  ? _showRoutePlanner
-                  : null,
-              onIndoor: _floor != null
-                  ? _leaveIndoor
-                  : _place!.hasIndoor && _place!.floors.isNotEmpty
-                  ? () => _selectFloor(_place!.floors.first)
-                  : null,
-              onStreet: () => _openStreet(_place!),
-              onRetryFloor: () => _selectFloor(_floor!),
-              onRoom: (room) {
-                _routeRevision++;
-                setState(() {
-                  _room = room;
-                  _route = null;
-                  _routing = false;
-                });
-              },
-              onCloseRoute: () => setState(() => _route = null),
-            ),
-          ],
-        );
+            ],
+          );
   }
 
   Widget _tools(bool wide) => Column(
@@ -1147,15 +1149,15 @@ class _CampusMapPageState extends State<CampusMapPage> {
           return GestureDetector(
             onTap: () {
               if (reserved) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('卫星图暂未接入，接口已预留')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('卫星图暂未接入，接口已预留')));
                 return;
               }
               if (layer == CampusMapLayer.transit && !_hasTransitStops()) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('校园暂无公共交通覆盖数据')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('校园暂无公共交通覆盖数据')));
               }
               setState(() => _layer = layer);
               Navigator.pop(context);
@@ -1177,9 +1179,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
                       ),
                     ),
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(
-                        selected ? 14 : 15,
-                      ),
+                      borderRadius: BorderRadius.circular(selected ? 14 : 15),
                       child: Image.asset(
                         thumbnail,
                         width: 58,
@@ -1193,9 +1193,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
                     label,
                     style: TextStyle(
                       fontSize: 12,
-                      fontWeight: selected
-                          ? FontWeight.w700
-                          : FontWeight.w500,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                       color: fg,
                     ),
                   ),

@@ -30,7 +30,9 @@ class AcademicStore {
     try {
       final decoded = jsonDecode(await file.readAsString());
       if (decoded is! Map<String, dynamic>) return null;
-      final fetchedAt = DateTime.tryParse(decoded['fetchedAt']?.toString() ?? '');
+      final fetchedAt = DateTime.tryParse(
+        decoded['fetchedAt']?.toString() ?? '',
+      );
       if (fetchedAt == null) return null;
       return AcademicSummary.fromJson(decoded, fetchedAt: fetchedAt);
     } catch (_) {

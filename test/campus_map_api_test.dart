@@ -91,6 +91,7 @@ Map<String, dynamic> poi(int id, {String category = 'study'}) => {
   'lat': 32.21,
   'nav_node_id': 90 + id,
 };
+
 /// 通用地物：/features 的响应结构（与后端 mapdata.MapFeature 一致）。
 /// point 为 true 时给点几何，否则复用 [feature] 的面几何。
 Map<String, dynamic> featureRow(

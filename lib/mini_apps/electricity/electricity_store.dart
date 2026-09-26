@@ -34,7 +34,9 @@ class ElectricityStore {
 
   static Future<File?> _file(String name) async {
     final dir = await _dir();
-    return dir == null ? null : File('${dir.path}${Platform.pathSeparator}$name');
+    return dir == null
+        ? null
+        : File('${dir.path}${Platform.pathSeparator}$name');
   }
 
   static Future<Map<String, dynamic>> _readJson(String name) async {
@@ -68,7 +70,8 @@ class ElectricityStore {
     }
   }
 
-  static Future<void> saveRoom(ElecRoom room) => _writeJson(_roomFile, room.toJson());
+  static Future<void> saveRoom(ElecRoom room) =>
+      _writeJson(_roomFile, room.toJson());
 
   // ==================== 历史 ====================
 

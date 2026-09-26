@@ -82,7 +82,10 @@ class _ElectricityPageState extends State<ElectricityPage> {
                         children: [
                           const Padding(
                             padding: EdgeInsets.only(left: 16),
-                            child: Divider(height: 1, color: AppColors.rowDivider),
+                            child: Divider(
+                              height: 1,
+                              color: AppColors.rowDivider,
+                            ),
                           ),
                           RoomPickerPanel(
                             // 换 key 让每次展开都重新拉列表、重新预选。
@@ -194,7 +197,11 @@ class _StatusHeader extends StatelessWidget {
                 color: ElecColors.warning.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.bolt, color: ElecColors.warning, size: 22),
+              child: const Icon(
+                Icons.bolt,
+                color: ElecColors.warning,
+                size: 22,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -217,7 +224,10 @@ class _StatusHeader extends StatelessWidget {
                       const SizedBox(width: 4),
                       const Text(
                         '度',
-                        style: TextStyle(fontSize: 13, color: AppColors.labelText),
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: AppColors.labelText,
+                        ),
                       ),
                     ],
                   ),
@@ -402,7 +412,10 @@ class _ActionRow extends StatelessWidget {
                 turns: expanded ? 0.25 : 0,
                 duration: const Duration(milliseconds: 250),
                 curve: Curves.easeOutCubic,
-                child: const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+                child: const Icon(
+                  Icons.chevron_right,
+                  color: Color(0xFFC9CDD4),
+                ),
               ),
             ],
           ),
@@ -455,7 +468,9 @@ class _RangeSelector extends StatelessWidget {
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: [for (final d in const [7, 30]) _segment(d)],
+        children: [
+          for (final d in const [7, 30]) _segment(d),
+        ],
       ),
     );
   }

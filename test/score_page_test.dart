@@ -32,11 +32,7 @@ void main() {
       find.byWidgetPredicate(
         (widget) =>
             widget is Text &&
-            const {
-              '未绑定统一门户',
-              '暂无成绩数据',
-              '正在获取成绩…',
-            }.contains(widget.data),
+            const {'未绑定统一门户', '暂无成绩数据', '正在获取成绩…'}.contains(widget.data),
       ),
       findsOneWidget,
     );

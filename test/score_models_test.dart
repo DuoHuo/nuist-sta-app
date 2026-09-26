@@ -55,10 +55,7 @@ void main() {
   });
 
   test('优良中及格等等级成绩也能判断通过', () {
-    final record = ScoreRecord.fromRow({
-      'KCM': '体育',
-      'ZCJ_DISPLAY': '优秀',
-    });
+    final record = ScoreRecord.fromRow({'KCM': '体育', 'ZCJ_DISPLAY': '优秀'});
     expect(record.passed, isTrue);
     expect(record.numericScore, 95);
   });

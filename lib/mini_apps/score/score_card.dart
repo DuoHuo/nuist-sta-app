@@ -136,7 +136,9 @@ class _ScoreBody extends StatelessWidget {
         const SizedBox(height: 12),
         Row(
           children: [
-            Expanded(child: _Metric(label: '平均分', value: _average(summary))),
+            Expanded(
+              child: _Metric(label: '平均分', value: _average(summary)),
+            ),
             Expanded(
               child: _Metric(label: '通过', value: '${summary.passed} 门'),
             ),

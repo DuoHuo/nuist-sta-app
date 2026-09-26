@@ -38,14 +38,11 @@ import 'shell/study/study_page.dart';
 GoRouter buildRouter() => GoRouter(
   routes: [
     StatefulShellRoute.indexedStack(
-      builder:
-          (context, state, navigationShell) =>
-              RootPage(navigationShell: navigationShell),
+      builder: (context, state, navigationShell) =>
+          RootPage(navigationShell: navigationShell),
       branches: [
         StatefulShellBranch(
-          routes: [
-            GoRoute(path: '/', builder: (_, _) => const HomePage()),
-          ],
+          routes: [GoRoute(path: '/', builder: (_, _) => const HomePage())],
         ),
         StatefulShellBranch(
           routes: [
@@ -74,9 +71,8 @@ GoRouter buildRouter() => GoRouter(
     ),
     GoRoute(
       path: '/place/:placeId',
-      builder: (context, state) => CampusPlaceDetailPage(
-        placeId: state.pathParameters['placeId']!,
-      ),
+      builder: (context, state) =>
+          CampusPlaceDetailPage(placeId: state.pathParameters['placeId']!),
     ),
     GoRoute(
       path: '/portal-bind',
