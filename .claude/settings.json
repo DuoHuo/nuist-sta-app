@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
+  "permissions": {
+    "deny": [
+      "Bash(git push *--force*)",
+      "Bash(git push -f *)",
+      "Bash(git push * -f)",
+      "Bash(git push * -f *)",
+      "Bash(git push * +*)",
+      "Bash(git config *user.name *)",
+      "Bash(git config *user.email *)",
+      "Bash(git config *commit.gpgsign *)",
+      "Bash(git -c user.*)",
+      "Bash(git -c commit.gpgsign*)",
+      "Bash(git commit *--author*)",
+      "Bash(git *--no-verify*)",
+      "Bash(git *--no-gpg-sign*)",
+      "PowerShell(git push *--force*)",
+      "PowerShell(git push -f *)",
+      "PowerShell(git push * -f)",
+      "PowerShell(git push * -f *)",
+      "PowerShell(git push * +*)",
+      "PowerShell(git config *user.name *)",
+      "PowerShell(git config *user.email *)",
+      "PowerShell(git config *commit.gpgsign *)",
+      "PowerShell(git -c user.*)",
+      "PowerShell(git -c commit.gpgsign*)",
+      "PowerShell(git commit *--author*)",
+      "PowerShell(git *--no-verify*)",
+      "PowerShell(git *--no-gpg-sign*)"
+    ],
+    "ask": [
+      "Bash(git commit *--amend*)",
+      "Bash(git rebase *)",
+      "Bash(git reset *--hard*)",
+      "Bash(git clean *)",
+      "Bash(git checkout -- *)",
+      "Bash(git checkout .)",
+      "Bash(git restore *)",
+      "Bash(git branch -D *)",
+      "Bash(git branch * -D *)",
+      "Bash(git stash drop*)",
+      "Bash(git stash clear*)",
+      "PowerShell(git commit *--amend*)",
+      "PowerShell(git rebase *)",
+      "PowerShell(git reset *--hard*)",
+      "PowerShell(git clean *)",
+      "PowerShell(git checkout -- *)",
+      "PowerShell(git checkout .)",
+      "PowerShell(git restore *)",
+      "PowerShell(git branch -D *)",
+      "PowerShell(git branch * -D *)",
+      "PowerShell(git stash drop*)",
+      "PowerShell(git stash clear*)"
+    ]
+  }
+}
