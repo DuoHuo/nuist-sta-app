@@ -29,6 +29,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # mini_apps/<app>/ 只能 import lib/core/ 和第三方包，见 CONTRIBUTING.md「依赖方向」
+      - name: Check dependency direction
+        run: |
+          fail=0
+          while IFS= read -r file; do
+            app=$(cut -d/ -f3 <<<"$file")
+            dir=$(dirname "$file")
+            while IFS= read -r uri; do
+              case "$uri" in
+                dart:*) continue ;;
+                package:nuist_sta_app/*) target="lib/${uri#package:nuist_sta_app/}" ;;
+                package:*) continue ;;
+                *) target=$(realpath -m --relative-to=. "$dir/$uri") ;;
+              esac
+              case "$target" in
+                lib/core/*|"lib/mini_apps/$app/"*) ;;
+                *)
+                  echo "::error file=$file::小程序 $app 不能依赖 $target（只能 import lib/core/ 和第三方包）"
+                  fail=1
+                  ;;
+              esac
+            done < <(sed -nE "s/^[[:space:]]*(import|export|part)[[:space:]]+['\"]([^'\"]+)['\"].*/\2/p" "$file")
+          done < <(find lib/mini_apps -mindepth 2 -name '*.dart')
+          exit "$fail"
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -46,6 +71,9 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+
       - name: Analyze Dart code
         run: flutter analyze
 
@@ -54,3 +82,11 @@ jobs:
 
       - name: Build debug APK
         run: flutter build apk --debug --target-platform android-arm64
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 14
+          if-no-files-found: error
