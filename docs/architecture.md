@@ -100,8 +100,8 @@ lib/
 
   真正「只认注册表」的壳页面只有 `shell/home/home_page.dart`。
 
-**这些规则没有任何工具强制**（`analysis_options.yaml` 里 `linter.rules` 是空的，
-也没有自定义 lint），纯靠人工 review。
+**只有第一条有工具强制**：CI 的「Check dependency direction」步骤会检查 `mini_apps/*` 的 import；
+其余两条仍靠人工 review（`analysis_options.yaml` 里 `linter.rules` 是空的，也没有自定义 lint）。
 
 ## 状态管理
 
@@ -149,7 +149,7 @@ UI 侧用 `ListenableBuilder(listenable: controller, builder: …)` 订阅。跨
 
 1. **学习页卡片没有注册表化**。新增学习页卡片必须改壳的两个地方（卡片列表 + `_refreshAll`），
    与「小程序独立增删」的设计目标相悖。
-2. **依赖方向没有工具强制**。约定的三条规则零 lint 覆盖，全靠 review 把关。
+2. **依赖方向只有部分工具强制**。CI 只检查了 `mini_apps/*` 一侧；`shell/*` 的约定和 `core/` 的准入仍靠 review 把关。
 3. **`_RefreshButton` 在四个卡片文件里各写了一份私有同名类**（`academic` / `student_info` /
    `innovation_credit` / `labor_score`），没有上收到 `core/`。
 4. **主题没有抽成函数**，导致测试里单独渲染页面会丢主题。
@@ -165,7 +165,7 @@ UI 侧用 `ListenableBuilder(listenable: controller, builder: …)` 订阅。跨
 另外它还用 `findsOneWidget` 断言了若干界面文案。**副作用：新增小程序的 `label` 不能与
 现有重名**，否则这些断言会挂。
 
-CI 只要求 `flutter analyze` 零警告 + `flutter test` 全绿，没有覆盖率门槛。
+CI 要求 `dart format` 无差异、依赖方向检查通过、`flutter analyze` 零警告、`flutter test` 全绿，没有覆盖率门槛。
 
 ## 相关文档
 

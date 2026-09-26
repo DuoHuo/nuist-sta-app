@@ -1,6 +1,6 @@
 ---
-name: Bug report
-about: Create a report to help us improve
+name: Bug 反馈
+about: 报告一个问题，帮助我们改进
 title: "[bug] "
 labels: bug
 assignees: ''
@@ -8,26 +8,24 @@ type: Bug
 
 ---
 
-**Describe the bug and How to Reproduce**
-A clear and concise description of what the bug is.
+**问题描述与复现步骤**
+简要说明出了什么问题。
 
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+复现步骤：
+1. 打开「…」
+2. 点击「…」
+3. 出现错误
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+**期望行为**
+你原本期望发生什么。
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+**截图 / 录屏**
+如有请附上。**涉及学号、姓名、Cookie 等敏感信息请先打码。**
 
-**Device (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+**环境**
+- App 版本：[例如 v0.1.0，可在 Releases 页面或安装包文件名里看到]
+- 手机型号：[例如 小米 14]
+- Android 版本：[例如 Android 15 / HyperOS 2]
 
-**Additional context**
-Add any other context about the problem here.
+**补充信息**
+其他有助于定位问题的信息。
