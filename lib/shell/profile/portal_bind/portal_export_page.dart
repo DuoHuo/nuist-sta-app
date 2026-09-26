@@ -154,7 +154,11 @@ class _PortalExportPageState extends State<PortalExportPage> {
                 '生成的内容会用你设置的六位 PIN 加密。在另一台设备上打开 NUIST++，'
                 '进入「我的 → 绑定统一门户 → 导入通行密钥」，扫码、粘贴或选择文件，'
                 '再输入同一个 PIN 即可。',
-                style: TextStyle(fontSize: 13, color: AppColors.labelText, height: 1.6),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppColors.labelText,
+                  height: 1.6,
+                ),
               ),
               const SizedBox(height: 16),
               SizedBox(

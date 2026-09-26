@@ -230,7 +230,7 @@ class _CampusMapNativeState extends State<CampusMapNative> {
           if (place.poiId == null)
             place.id:
                 (place.floors.isEmpty ? 3 : place.floors.length) *
-                    kDisplayFloorHeightM,
+                kDisplayFloorHeightM,
       };
       final extruded = <String, dynamic>{
         ...buildings,
@@ -240,7 +240,8 @@ class _CampusMapNativeState extends State<CampusMapNative> {
               ...feature,
               'properties': {
                 ..._properties(feature),
-                'height_m': heights[_properties(feature)['building_id']] ??
+                'height_m':
+                    heights[_properties(feature)['building_id']] ??
                     3 * kDisplayFloorHeightM,
               },
             },
@@ -434,8 +435,8 @@ class _CampusMapNativeState extends State<CampusMapNative> {
           fillExtrusionOpacity: 1,
           // MapLibre 的 base/height 是棱柱的两个绝对高度端点（不是厚度），
           // height < base 时墙面会在两者之间倒挂拉伸，必须把顶面算成绝对值。
-          fillExtrusionHeight: _floorBase(value, value.floor?.id) +
-              kFloorSlabThicknessM,
+          fillExtrusionHeight:
+              _floorBase(value, value.floor?.id) + kFloorSlabThicknessM,
           fillExtrusionBase: _floorBase(value, value.floor?.id),
         ),
         filter: [
@@ -610,9 +611,7 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         (512 * pow(2, cam.zoom));
     if (!metersPerPixel.isFinite || metersPerPixel <= 0) return 0;
     final shiftPx =
-        elevationM *
-        sin(cam.tilt.clamp(0, 85) * pi / 180) /
-        metersPerPixel;
+        elevationM * sin(cam.tilt.clamp(0, 85) * pi / 180) / metersPerPixel;
     return shiftPx / 11; // 1em ≈ textSize（11px）
   }
 
@@ -626,7 +625,9 @@ class _CampusMapNativeState extends State<CampusMapNative> {
       return;
     }
     _appliedLabelOffsetEm = em;
-    unawaited(c.setLayerProperties('campus-floor-room-labels', _roomLabelProps(em)));
+    unawaited(
+      c.setLayerProperties('campus-floor-room-labels', _roomLabelProps(em)),
+    );
   }
 
   /// 某层的底面高度：优先后端 elevation_m，缺失时按层号推算。
@@ -862,8 +863,8 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         tilt: config.floor != null
             ? 48
             : (config.mapLayer == CampusMapLayer.city3d
-                ? (current.tilt > 1 ? current.tilt : 45)
-                : 0),
+                  ? (current.tilt > 1 ? current.tilt : 45)
+                  : 0),
       );
       _appliedLayer = config.mapLayer;
     }

@@ -107,7 +107,8 @@ class CampusPlace {
   final GeoPoint? entrance;
 
   /// 是否有可打开的详情页（三类地物都有稳定编号，因此都有）。
-  bool get hasDetail => buildingId != null || poiId != null || featureId != null;
+  bool get hasDetail =>
+      buildingId != null || poiId != null || featureId != null;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -154,7 +155,9 @@ class CampusPlace {
       ],
       sceneId: json['scene_id'] as String?,
       entrance: json['entrance'] is Map
-          ? GeoPoint.fromJson(Map<String, dynamic>.from(json['entrance'] as Map))
+          ? GeoPoint.fromJson(
+              Map<String, dynamic>.from(json['entrance'] as Map),
+            )
           : null,
     );
   }

@@ -76,8 +76,7 @@ class _ScorePageState extends State<ScorePage> {
                   _TermPicker(
                     terms: terms,
                     selected: term,
-                    onChanged: (value) =>
-                        setState(() => _selectedTerm = value),
+                    onChanged: (value) => setState(() => _selectedTerm = value),
                   ),
                 ],
                 const SizedBox(height: 12),
@@ -166,9 +165,15 @@ class _OverviewCard extends StatelessWidget {
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: _Metric(label: '课程', value: '${summary.total} 门')),
-                Expanded(child: _Metric(label: '平均分', value: _average(summary))),
-                Expanded(child: _Metric(label: '通过', value: '${summary.passed} 门')),
+                Expanded(
+                  child: _Metric(label: '课程', value: '${summary.total} 门'),
+                ),
+                Expanded(
+                  child: _Metric(label: '平均分', value: _average(summary)),
+                ),
+                Expanded(
+                  child: _Metric(label: '通过', value: '${summary.passed} 门'),
+                ),
                 Expanded(
                   child: _Metric(label: '学分', value: summary.creditsText),
                 ),
@@ -217,10 +222,7 @@ class _TermPicker extends StatelessWidget {
             value: selected,
             isExpanded: true,
             icon: const Icon(Icons.expand_more),
-            style: const TextStyle(
-              fontSize: 14,
-              color: AppColors.titleText,
-            ),
+            style: const TextStyle(fontSize: 14, color: AppColors.titleText),
             items: [
               for (final term in terms)
                 DropdownMenuItem(value: term, child: Text(term)),

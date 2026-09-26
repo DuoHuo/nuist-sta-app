@@ -51,7 +51,9 @@ class _FakeSource implements CampusMapSource, CampusMapRemoteSource {
 
 Future<void> _pump(WidgetTester tester, CampusMapSource source) async {
   await tester.pumpWidget(
-    MaterialApp(home: CampusPlaceDetailPage(placeId: 'feature:7', source: source)),
+    MaterialApp(
+      home: CampusPlaceDetailPage(placeId: 'feature:7', source: source),
+    ),
   );
   await tester.pumpAndSettle();
 }

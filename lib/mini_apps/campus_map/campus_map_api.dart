@@ -267,7 +267,9 @@ class CampusMapApi
     final poiId = place.poiId ?? _poiId(place.id);
     if (poiId != null) return _poi(await _request('/pois/$poiId'));
     final featureId = place.featureId ?? _featureId(place.id);
-    if (featureId != null) return _feature(await _request('/features/$featureId'));
+    if (featureId != null) {
+      return _feature(await _request('/features/$featureId'));
+    }
     final id = place.buildingId ?? place.id;
     return _building(await _detail(id));
   }

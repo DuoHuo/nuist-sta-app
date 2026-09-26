@@ -299,7 +299,9 @@ class _Payload {
     Uint8List der,
     ECDomainParameters domain,
   ) {
-    const invalid = PasskeyTransferError('本机私钥不是 WebCrypto 导出的 P-256 PKCS#8，无法导出');
+    const invalid = PasskeyTransferError(
+      '本机私钥不是 WebCrypto 导出的 P-256 PKCS#8，无法导出',
+    );
     final prefix = PasskeyTransfer._hexToBytes(_derPrefixHex);
     if (der.length != prefix.length + 32 + 5 + 65) throw invalid;
     for (var i = 0; i < prefix.length; i++) {

@@ -268,7 +268,10 @@ class _Dropdown extends StatelessWidget {
                       : '请选择',
                   style: const TextStyle(fontSize: 14, color: AppColors.hint),
                 ),
-                style: const TextStyle(fontSize: 14, color: AppColors.titleText),
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: AppColors.titleText,
+                ),
                 icon: loading
                     ? const SizedBox(
                         width: 16,

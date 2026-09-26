@@ -116,17 +116,14 @@ void main() {
       for (final row in featureRows) {
         final feature = row as Map;
         final geometry = feature['geometry'] as Map;
-        expect(
-          const [
-            'Point',
-            'MultiPoint',
-            'LineString',
-            'MultiLineString',
-            'Polygon',
-            'MultiPolygon',
-          ],
-          contains(geometry['type']),
-        );
+        expect(const [
+          'Point',
+          'MultiPoint',
+          'LineString',
+          'MultiLineString',
+          'Polygon',
+          'MultiPolygon',
+        ], contains(geometry['type']));
         _expectCoordinates(geometry['coordinates']);
         final properties = feature['properties'] as Map;
         expect(properties['feature_id'], isA<num>());

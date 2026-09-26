@@ -130,8 +130,10 @@ class NuistLogin {
 
     final body = _asMap(response.data);
     if (body == null) {
-      portalLog('startAssertion 非 JSON 响应: HTTP ${response.statusCode} '
-          '${_preview(response.data)}');
+      portalLog(
+        'startAssertion 非 JSON 响应: HTTP ${response.statusCode} '
+        '${_preview(response.data)}',
+      );
       throw const PortalLoginError('startAssertion 返回的不是 JSON 对象');
     }
     portalLog('startAssertion 响应: ${_preview(body)}');
@@ -153,7 +155,9 @@ class NuistLogin {
       if (message is String && message.isNotEmpty) {
         throw PortalCredentialError('$message，通行密钥可能已被删除或吊销');
       }
-      throw PortalLoginError('startAssertion 响应中没有有效的 request：${_preview(body)}');
+      throw PortalLoginError(
+        'startAssertion 响应中没有有效的 request：${_preview(body)}',
+      );
     }
     return request;
   }
@@ -189,11 +193,17 @@ class NuistLogin {
     final authenticatorData = Uint8List.fromList([
       ...sha256Bytes(utf8.encode(rpId)),
       0x05,
-      0, 0, 0, 0,
+      0,
+      0,
+      0,
+      0,
     ]);
 
     final signature = Es256Key.fromPkcs8Pem(bundle.privateKeyPkcs8Pem).sign(
-      Uint8List.fromList([...authenticatorData, ...sha256Bytes(clientDataJson)]),
+      Uint8List.fromList([
+        ...authenticatorData,
+        ...sha256Bytes(clientDataJson),
+      ]),
     );
 
     return {
@@ -250,9 +260,9 @@ class NuistLogin {
     if (service.isEmpty) return '$base$loginPath';
     // 复刻 Python 的 quote(service, safe=':/')：CAS 用字符串精确匹配校验
     // service，编码形式变了可能导致 ticket 验证失败。
-    final encoded = Uri.encodeComponent(
-      service,
-    ).replaceAll('%3A', ':').replaceAll('%2F', '/');
+    final encoded = Uri.encodeComponent(service)
+        .replaceAll('%3A', ':')
+        .replaceAll('%2F', '/');
     return '$base$loginPath?service=$encoded';
   }
 

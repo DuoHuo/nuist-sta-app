@@ -145,7 +145,11 @@ class _PortalImportPageState extends State<PortalImportPage> {
               const SizedBox(height: 6),
               const Text(
                 '本机已有一份通行密钥，导入后会被替换。',
-                style: TextStyle(fontSize: 13, color: AppColors.hint, height: 1.5),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppColors.hint,
+                  height: 1.5,
+                ),
               ),
             ],
           ],
@@ -195,7 +199,11 @@ class _PortalImportPageState extends State<PortalImportPage> {
                 padding: EdgeInsets.fromLTRB(4, 0, 4, 12),
                 child: Text(
                   '在另一台设备的「导出通行密钥」页生成内容后，选择一种方式读入。',
-                  style: TextStyle(fontSize: 13, color: AppColors.labelText, height: 1.5),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.labelText,
+                    height: 1.5,
+                  ),
                 ),
               ),
               PortalCard(

@@ -74,10 +74,7 @@ class CampusRouteRequest {
     this.destinationFloorId,
     this.destinationRoomId,
     this.accessible = false,
-  }) : assert(
-         originPlaceId != null || originPoint != null,
-         '起点必须是地点或坐标之一',
-       );
+  }) : assert(originPlaceId != null || originPoint != null, '起点必须是地点或坐标之一');
 
   /// 起点地点编号；以「我的位置」为起点时为 null，由 [originPoint] 提供坐标。
   final String? originPlaceId;

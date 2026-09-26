@@ -31,9 +31,8 @@ class AiaTrust {
   final Future<Directory?> Function()? resolveCacheDir;
   Future<Directory?>? _cacheDir;
 
-  Future<Directory?> _dir() =>
-      _cacheDir ??= (resolveCacheDir?.call() ?? Future.value(null))
-          .catchError((_) => null);
+  Future<Directory?> _dir() => _cacheDir ??=
+      (resolveCacheDir?.call() ?? Future.value(null)).catchError((_) => null);
 
   /// 最近一次握手失败时各主机收到的叶子证书。
   final Map<String, Uint8List> _badLeaf = {};
@@ -80,9 +79,8 @@ class AiaTrust {
     try {
       if (!await dir.exists()) await dir.create(recursive: true);
       final name = _fingerprint(der);
-      await File(
-        '${dir.path}${Platform.pathSeparator}$name.der',
-      ).writeAsBytes(der, flush: true);
+      await File('${dir.path}${Platform.pathSeparator}$name.der')
+          .writeAsBytes(der, flush: true);
     } catch (e) {
       portalLog('AIA 缓存写入失败: $e');
     }
@@ -138,9 +136,18 @@ class AiaTrust {
   // ==================== 证书解析 ====================
 
   /// OID 1.3.6.1.5.5.7.48.2（caIssuers）的 DER 编码，后面紧跟 [6] URI。
-  static final _caIssuersOid = Uint8List.fromList(
-    const [0x06, 0x08, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x02],
-  );
+  static final _caIssuersOid = Uint8List.fromList(const [
+    0x06,
+    0x08,
+    0x2B,
+    0x06,
+    0x01,
+    0x05,
+    0x05,
+    0x07,
+    0x30,
+    0x02,
+  ]);
 
   /// AIA 的结构固定（AccessDescription = SEQUENCE { OID, GeneralName }），
   /// 直接按字节找 OID 后面的 [6] IA5String 比完整走一遍扩展解析更省事、也更稳。
@@ -239,7 +246,10 @@ class AiaTrust {
         final attr = (rdn as ASN1Set).elements.first as ASN1Sequence;
         final oid = attr.elements.first as ASN1ObjectIdentifier;
         if (oid.identifier == '2.5.4.3') {
-          return utf8.decode(attr.elements[1].valueBytes(), allowMalformed: true);
+          return utf8.decode(
+            attr.elements[1].valueBytes(),
+            allowMalformed: true,
+          );
         }
       }
     } catch (_) {}
