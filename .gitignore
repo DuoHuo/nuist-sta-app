@@ -65,3 +65,15 @@ app.*.map.json
 # 本地环境
 .env
 .env.*
+
+# 调试与自检的临时产物
+test/failures/
+.tmp*/
+
+# 导出的通行密钥与调试凭据（等同登录凭据，绝不入库）
+*.nuistkey
+passkey*.json
+
+# AI 代理的个人本地配置
+.claude/settings.local.json
+CLAUDE.local.md

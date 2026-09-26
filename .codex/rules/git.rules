@@ -1,0 +1,98 @@
+# 本仓库给 Codex 的 git 命令规则，对应 AGENTS.md 第 3、4 节。
+#
+# - 需要在 Codex 里把本项目标为「信任」才会加载
+# - 按命令参数的前缀精确匹配：`git push --force` 拦得住，`git push origin main --force` 拦不住。
+#   这只是第一道防线，兜底靠 CI 的 commit-lint
+# - 语法见 https://developers.openai.com/codex/exec-policy
+#
+# 自测：codex execpolicy check --pretty --rules .codex/rules/git.rules -- git push --force
+
+# ---------- 禁止 ----------
+
+prefix_rule(
+    pattern = ["git", "push", ["--force", "-f", "--force-with-lease"]],
+    decision = "forbidden",
+    justification = "本仓库禁止代理强推（AGENTS.md 第 4 节），确有需要请用户亲自执行",
+    match = [
+        "git push --force",
+        "git push -f origin feat/demo",
+        "git push --force-with-lease origin feat/demo",
+    ],
+    not_match = ["git push", "git push origin main"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", ["origin", "upstream"], ["--force", "-f", "--force-with-lease"]],
+    decision = "forbidden",
+    justification = "本仓库禁止代理强推（AGENTS.md 第 4 节），确有需要请用户亲自执行",
+    match = ["git push origin --force main"],
+    not_match = ["git push origin main"],
+)
+
+prefix_rule(
+    pattern = ["git", "commit", ["--no-verify", "-n", "--no-gpg-sign"]],
+    decision = "forbidden",
+    justification = "禁止跳过钩子或签名（AGENTS.md 第 3 节），失败时停下报告用户",
+    match = ["git commit --no-verify -m demo", "git commit --no-gpg-sign -m demo"],
+    not_match = ["git commit -m demo"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", "--no-verify"],
+    decision = "forbidden",
+    justification = "禁止跳过钩子（AGENTS.md 第 3 节），失败时停下报告用户",
+)
+
+# ---------- 需要用户确认（AGENTS.md 第 4 节：未经用户明确同意禁止） ----------
+
+prefix_rule(
+    pattern = ["git", "commit", "--amend"],
+    decision = "prompt",
+    justification = "改写提交需要用户明确同意，已推送的提交不得改写",
+)
+
+prefix_rule(
+    pattern = ["git", "rebase"],
+    decision = "prompt",
+    justification = "改写提交需要用户明确同意，已推送的提交不得改写",
+)
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "prompt",
+    justification = "会丢弃工作区改动，需要用户明确同意",
+)
+
+prefix_rule(
+    pattern = ["git", "clean"],
+    decision = "prompt",
+    justification = "会删除未跟踪文件，需要用户明确同意",
+)
+
+prefix_rule(
+    pattern = ["git", "checkout", ["--", "."]],
+    decision = "prompt",
+    justification = "会丢弃工作区改动，需要用户明确同意",
+    match = ["git checkout -- .", "git checkout ."],
+    not_match = ["git checkout feat/demo"],
+)
+
+prefix_rule(
+    pattern = ["git", "restore"],
+    decision = "prompt",
+    justification = "可能丢弃工作区改动，需要用户明确同意",
+)
+
+prefix_rule(
+    pattern = ["git", "branch", "-D"],
+    decision = "prompt",
+    justification = "强制删除分支需要用户明确同意",
+    not_match = ["git branch -d feat/demo"],
+)
+
+prefix_rule(
+    pattern = ["git", "stash", ["drop", "clear"]],
+    decision = "prompt",
+    justification = "会永久丢弃暂存的改动，需要用户明确同意",
+    not_match = ["git stash", "git stash pop"],
+)
