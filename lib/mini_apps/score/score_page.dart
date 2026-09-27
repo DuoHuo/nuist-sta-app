@@ -349,7 +349,7 @@ class _CourseTile extends StatelessWidget {
 
   static String _details(ScoreRecord record) {
     final values = <String>[];
-    if (record.credit.isNotEmpty) values.add('${record.credit} 学分');
+    if (record.credit.isNotEmpty) values.add('${record.creditText} 学分');
     if (record.gradePoint.isNotEmpty) values.add('绩点 ${record.gradePoint}');
     if (record.courseCode.isNotEmpty) values.add(record.courseCode);
     if (record.examType.isNotEmpty) values.add(record.examType);
