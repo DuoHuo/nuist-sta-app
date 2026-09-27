@@ -21,6 +21,14 @@ void main() {
     expect(record.failed, isFalse);
   });
 
+  test('单科成绩学分不四舍五入', () {
+    final record = ScoreRecord.fromRow({'KCM': '程序设计', 'XF': '2.678'});
+    expect(record.creditText, '2.67');
+
+    final integerRecord = ScoreRecord.fromRow({'KCM': '高等数学', 'XF': '3.0'});
+    expect(integerRecord.creditText, '3');
+  });
+
   test('成绩报告按学期倒序，并计算学期概览', () {
     final report = ScoreReport(
       records: [
@@ -58,5 +66,37 @@ void main() {
     final record = ScoreRecord.fromRow({'KCM': '体育', 'ZCJ_DISPLAY': '优秀'});
     expect(record.passed, isTrue);
     expect(record.numericScore, 95);
+  });
+
+  test('credit formatting keeps integers and truncates decimals', () {
+    final summary = ScoreTermSummary(
+      term: '2025-2026-1',
+      total: 3,
+      passed: 3,
+      failed: 0,
+      credits: 6,
+      averageScore: 90,
+    );
+    expect(summary.creditsText, '6');
+
+    final decimalSummary = ScoreTermSummary(
+      term: '2025-2026-1',
+      total: 3,
+      passed: 3,
+      failed: 0,
+      credits: 2.678,
+      averageScore: 90,
+    );
+    expect(decimalSummary.creditsText, '2.67');
+
+    final shortDecimalSummary = ScoreTermSummary(
+      term: '2025-2026-1',
+      total: 3,
+      passed: 3,
+      failed: 0,
+      credits: 4.1,
+      averageScore: 90,
+    );
+    expect(shortDecimalSummary.creditsText, '4.10');
   });
 }
