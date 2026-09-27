@@ -1,3 +1,10 @@
+/// Formats a credit value without rounding.
+String formatCreditValue(double value) {
+  if (value == value.roundToDouble()) return value.toStringAsFixed(0);
+  final truncated = (value * 100 + 1e-9).truncateToDouble() / 100;
+  return truncated.toStringAsFixed(2);
+}
+
 /// 教务 EMAP「学生成绩」查询结果。
 ///
 /// 教务不同年份的字段名偶尔会有细微差别，所以模型在 [fromRow] 里兼容
@@ -31,6 +38,11 @@ class ScoreRecord {
   final String retakeType;
 
   String get displayCourseName => courseName.isEmpty ? '未命名课程' : courseName;
+
+  String get creditText {
+    final value = double.tryParse(credit);
+    return value == null ? credit : formatCreditValue(value);
+  }
 
   double? get numericScore {
     final value = double.tryParse(score.replaceAll('分', '').trim());
@@ -146,10 +158,7 @@ class ScoreTermSummary {
   final double credits;
   final double? averageScore;
 
-  String get creditsText {
-    if (credits == credits.roundToDouble()) return credits.toStringAsFixed(0);
-    return credits.toStringAsFixed(1);
-  }
+  String get creditsText => formatCreditValue(credits);
 }
 
 class ScoreReport {
