@@ -1,13 +1,15 @@
+import '../core/app_manifest.dart';
+import 'announcement/announcement_manifest.dart';
 import 'campus_map/campus_map_manifest.dart';
 import 'electricity/electricity_manifest.dart';
 import 'free_classroom/free_classroom_manifest.dart';
-import '../core/app_manifest.dart';
 
 /// 全量小程序注册表：首页宫格按此渲染。
 ///
 /// 新增小程序 = 建 `lib/mini_apps/<name>/` 目录（或直接给 H5 地址），
 /// 然后在这里加一行。除此之外不需要改动壳的任何代码。
 final List<AppManifest> appRegistry = [
+  announcementManifest,
   electricityManifest,
   freeClassroomManifest,
   campusMapManifest,

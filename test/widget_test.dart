@@ -23,6 +23,7 @@ void main() {
     await tester.pumpWidget(const NuistApp());
 
     expect(find.text('NUIST++'), findsOneWidget);
+    expect(find.text('信息公告'), findsNWidgets(2));
     expect(find.text('校园地图'), findsOneWidget);
     expect(find.text('空教室'), findsOneWidget);
     expect(find.text('首页'), findsOneWidget);
