@@ -14,6 +14,12 @@ android {
     val signingKeyAlias = System.getenv("KEY_ALIAS")
     val signingKeyPassword = System.getenv("KEY_PASSWORD")
     val configuredApplicationIdSuffix = System.getenv("APP_ID_SUFFIX") ?: ".debug"
+    val teamDebugSigningConfig = signingConfigs.create("teamDebug") {
+        storeFile = file("debug-team.keystore")
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -38,6 +44,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = configuredApplicationIdSuffix
+            signingConfig = teamDebugSigningConfig
         }
 
         release {
