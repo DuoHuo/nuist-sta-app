@@ -40,7 +40,7 @@ jobs:
           fi
 
           # 规范见 CONTRIBUTING.md「Commit 规范」「AI 辅助开发」
-          type_re='^(feat|fix|docs|refactor|perf|test|build|ci|style|chore|revert)(\([a-z0-9]+(-[a-z0-9]+)*\))?: [^ ]'
+          type_re='^(feat|fix|docs|refactor|perf|test|build|ci|style|chore|revert)(\([a-z0-9]+([-_][a-z0-9]+)*(, [a-z0-9]+([-_][a-z0-9]+)*)*\))?: [^ ]'
           ident_re='^(codex|claude|copilot|cursor|gemini|devin)( agent| code)? <|<[^>]*(anthropic\.com|openai\.com|@local>|cursor\.com|copilot)'
           trailer_re='^(co-authored-by|claude-session):.*(codex|claude|anthropic|openai|copilot|cursor|gemini|devin)|generated (with|by) .*(claude|codex|copilot|cursor|gemini|chatgpt)'
 
