@@ -1,106 +1,70 @@
 # NUIST++
 
-南信大校园服务 App。大 APP 壳 + 小程序注册表架构，由社团共建。
+面向南京信息工程大学学生的校园服务 App。
 
-> **非官方项目**，与南京信息工程大学无关。详见文末[免责声明](#免责声明)。
+把常用的校园信息放在一个入口里：查空教室、看成绩与学业进度、查宿舍电费，
+以及使用其他由社团持续共建的小程序。绑定一次统一门户后，后续可无感使用。
+
+> **非官方项目**：由社区开发与维护
 
 [![Flutter CI](https://github.com/DuoHuo/nuist-sta-app/actions/workflows/ci.yml/badge.svg)](https://github.com/DuoHuo/nuist-sta-app/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/DuoHuo/nuist-sta-app)](https://github.com/DuoHuo/nuist-sta-app/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/DuoHuo/nuist-sta-app/total)](https://github.com/DuoHuo/nuist-sta-app/releases)
 
-## 功能
+## 你可以用它做什么
 
-| 模块 | 说明 |
-|---|---|
-| **空教室查询** | 按教学楼 / 日期查教务占用，支持按时段、楼层、教室类型本地筛选，并给出逐节占用详情 |
-| **宿舍电费** | 实时余额 + 历史用量折线图，支持多校区多楼栋选宿舍 |
-| **学业概览** | GPA、已修学分、平均绩点、班级与专业排名 |
-| **本学期** | 当前学期、周次与学期进度 |
-| **双创学分** | 总分、成绩评定与已认定项目明细 |
-| **劳动积分** | 官方核算总分与四个分项，详情页可与各分项实时统计对照 |
+### 学习与成绩
 
-以上模块都通过**统一门户**取数：绑定一次，之后静默复用登录态，不用反复登录。
+- 查看当前学期、周次和学期进度
+- 查询 GPA、已修学分、平均绩点，以及班级和专业排名
+- 查看双创学分总分、评定结果和已认定项目
+- 查看劳动积分总分及各分项明细
 
-更多想法和排期见[路线图](docs/roadmap.md)。
+### 校园生活
 
-## 下载安装
+- 按教学楼和日期查找空教室
+- 按时段、楼层和教室类型筛选结果
+- 查看宿舍电费余额和历史用量
+- 支持按校区、楼栋选择宿舍
+
+功能以小程序形式持续增加。可用功能和数据范围会随着学校业务系统及项目进度变化。
+
+## 下载与安装
 
 前往 **[Releases](https://github.com/DuoHuo/nuist-sta-app/releases/latest)** 下载最新 APK。
 
-- **仅支持 Android arm64**（`arm64-v8a`）—— CI 只编译这一个 ABI
-- 安装时系统会提示「未知来源应用」，需要在设置里允许
-- 没有上架任何应用商店，Releases 是唯一的分发渠道
+- 当前仅提供 Android `arm64-v8a` 版本
+- 暂未上架应用商店，GitHub Releases 是当前主要分发渠道
+- 首次安装时，Android 可能要求允许安装来自未知来源的应用
 
-## 本地运行
+## 登录与隐私
 
-需要 **Flutter 3.47.4**（stable）、Android SDK/NDK 和通过 rustup 安装的 Rust。
-请将 `cargo`、`rustup` 加入 PATH；NDK 版本跟随 Flutter 的 `ndkVersion`。
-在 `native/vpn` 目录运行 `cargo --version`，rustup 会按 `rust-toolchain.toml`
-安装固定的 Rust 1.90.0 和 `aarch64-linux-android` target（首次需要联网）。
-Windows 本机运行 Rust 测试还需要 Visual Studio C++ Build Tools 和 Windows SDK。
+NUIST++ 使用学校统一门户获取需要登录的数据。登录和绑定在学校自己的页面完成，
+应用不会代收或上传你的密码。
 
-```bash
-flutter pub get
-flutter run            # 连接 Android arm64 设备
-flutter test           # 运行测试
-flutter build apk --target-platform android-arm64
-```
+- Passkey 私钥保存在设备本地安全存储中（Android Keystore / iOS Keychain）
+- 项目不提供云端账号，不上传学号、Cookie、私钥或业务数据
+- 除学校业务系统外，项目不新增其他网络出口
+- 使用校园 VPN 的功能需要先完成统一门户绑定
 
-Android 构建会用 NDK 从源码编译并打包校园 VPN 动态库；不支持 x86 模拟器。
-Rust 核心的本机测试和 Dart FFI 联调命令见[贡献指南](CONTRIBUTING.md)。
+## 反馈与共建
 
-> **⚠️ 路径坑**：有队友反馈 Dart 分析服务器对含中文或 OneDrive 同步目录的路径支持不佳，
-> `flutter analyze` 会直接崩溃。遇到的话把仓库挪到纯英文路径（如 `C:\dev\nuist-sta-app`）。
+遇到问题，请先确认应用版本、设备型号、系统版本和复现步骤，再在仓库的 Issue 区反馈。
+涉及学号、Cookie、私钥或成绩等敏感信息时，请务必脱敏打码，不要直接公开。
 
-开发时本地构建的包名会带 `.debug` 后缀（`dev.duohuo.nuist_sta_app.debug`），
-和正式包**可以共存**，不用先卸载。
+欢迎学生社团和个人贡献功能。不会 Flutter 也可以从 H5 小程序路线参与：
 
-## 项目结构
-
-整体是「**壳 + 注册表 + 小程序**」三层。壳（底部页签 + 宫格首页）固定不变；
-每个小程序是 `lib/mini_apps/` 下一个自包含目录，在注册表登记一行就上宫格。
-
-```
-lib/
-├── core/         # 壳与所有小程序共用（含 core/auth/ 统一门户登录）
-├── shell/        # 大 APP 的壳：首页 / 学习 / 我的
-├── mini_apps/    # 所有小程序，每个一个目录
-│   └── registry.dart    # ★ 全量注册表：新增小程序只改这里
-├── app.dart      # MaterialApp.router + 主题
-└── router.dart   # go_router 路由表
-```
-
-这样切分是为了让**小程序可以独立增删、并行开发、合并互不冲突**。
-
-细节见 [架构文档](docs/architecture.md)。
-
-## 参与贡献
-
-欢迎社团同学一起做，不会 Flutter 也能参与（H5 小程序路线）。
-
-- 先读 **[贡献指南](CONTRIBUTING.md)**（环境、commit 规范、代码约定）
-- 想加功能？看 **[新增一个小程序](docs/mini-app-guide.md)**
-- 想认领任务？看 **[路线图](docs/roadmap.md)**
-
-## 文档
-
-| 文档 | 内容 |
-|---|---|
-| [架构](docs/architecture.md) | 三层结构、路由、AppManifest、状态管理约定、已知架构债 |
-| [新增一个小程序](docs/mini-app-guide.md) | 原生 / H5 两条接入路径与检查清单 |
-| [统一门户登录](docs/portal-auth.md) | PortalSession 状态机、异常体系、安全边界 |
-| [路线图](docs/roadmap.md) | 待开发功能、已知缺口 |
+- [路线图](docs/roadmap.md)：查看计划中的功能和待认领事项
+- [新增一个小程序](docs/mini-app-guide.md)：了解原生和 H5 接入方式
+- [贡献指南](CONTRIBUTING.md)：配置开发环境、运行检查和提交代码
 
 ## 免责声明
 
-- 本项目是**学生自发开发的非官方工具**，与南京信息工程大学及其任何下属部门无关
-- 所有数据来自学校各业务系统的公开接口，**仅供学习交流**，请勿用于商业用途
-- 你的学号、密码等凭据**不会经过本项目**：绑定门户时登录在学校自己的页面完成，
-  只有 Passkey 私钥保存在本机安全存储里（Android Keystore / iOS Keychain），
-  项目**不含任何遥测或数据上传**
+- 本项目是学生自发开发的非官方工具，与南京信息工程大学及其任何下属部门无关
+- 数据来自学校各业务系统，仅供学习交流，请勿用于商业用途
+- 学校系统可能随时调整，项目不保证接口持续可用
 - 使用本软件产生的任何后果由使用者自行承担
-- 接口随时可能因学校系统调整而失效，恕不保证可用性
 
-## LICENSE
+## License
 
 To be determined.

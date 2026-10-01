@@ -78,7 +78,7 @@ git commit -m "<type>(<scope>): <中文摘要>"
 
 - **type**：`feat` `fix` `docs` `refactor` `perf` `test` `build` `ci` `style` `chore` `revert`。release notes 按前缀分组，只有 `feat`、`fix`、`docs` 会进入对应章节。
 - **scope**：kebab-case 模块名，如 `campus-map`、`free-classroom`、`portal-bind`、`auth`（完整清单见 CONTRIBUTING）。
-- **摘要**：中文，一行说清用户能感知的变化，不加句号。
+- **摘要**：中文，一行说清用户能感知的变化，不加句号。但如果有技术细节变动，不要一笔带过。
 - **保持简洁**：一行摘要能说清就不写正文；正文只写"为什么这么改"，几行以内，不罗列改了哪些文件。
 - 一个 commit 只做一件事：不用分号串多个前缀，不夹带无关的重构、格式化或依赖升级。
 - `chore(release)` 只用于发版。
