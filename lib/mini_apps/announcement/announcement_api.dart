@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/network/vpn_dio.dart';
 import 'announcement_detail_parser.dart';
 import 'announcement_models.dart';
 import 'announcement_tagger.dart';
@@ -16,8 +17,8 @@ class AnnouncementApi {
   AnnouncementApi({Dio? dio})
     : _dio =
           dio ??
-          Dio(
-            BaseOptions(
+          vpnDio(
+            options: BaseOptions(
               connectTimeout: const Duration(seconds: 12),
               receiveTimeout: const Duration(seconds: 18),
               headers: const {'Accept-Language': 'zh-CN,zh;q=0.9'},

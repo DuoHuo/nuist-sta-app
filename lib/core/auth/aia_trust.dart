@@ -89,16 +89,22 @@ class AiaTrust {
   /// 供 dio 的 IOHttpClientAdapter 使用：每次重建 HttpClient 都带上当前 context。
   HttpClient createHttpClient() {
     return HttpClient(context: context)
-      ..badCertificateCallback = (cert, host, port) {
-        _badLeaf[host] = Uint8List.fromList(cert.der);
-        return false;
-      };
+      ..badCertificateCallback = onBadCertificate;
+  }
+
+  /// 记录需要补链的证书，始终拒绝本次握手；也供 VPN 内层 TLS 使用。
+  bool onBadCertificate(X509Certificate cert, String host, int port) {
+    _badLeaf[host] = Uint8List.fromList(cert.der);
+    return false;
   }
 
   static bool isHandshakeFailure(Object? error) => error is HandshakeException;
 
   /// 为 [host] 补链。返回 true 表示往 [context] 里加了新证书，值得重试。
-  Future<bool> tryRepair(String host) async {
+  Future<bool> tryRepair(
+    String host, {
+    HttpClient Function()? createFetchClient,
+  }) async {
     if (!_attempted.add(host)) return false;
     final leaf = _badLeaf.remove(host);
     if (leaf == null) return false;
@@ -110,7 +116,7 @@ class AiaTrust {
       if (url == null) break;
       final Uint8List issuer;
       try {
-        issuer = await _fetch(url);
+        issuer = await _fetch(url, createFetchClient: createFetchClient);
       } catch (e) {
         portalLog('AIA 拉取失败 $url: $e');
         break;
@@ -273,8 +279,11 @@ class AiaTrust {
   }
 
   /// 拉取证书并统一成 DER（AIA 地址给的可能是 DER 也可能是 PEM）。
-  static Future<Uint8List> _fetch(String url) async {
-    final client = HttpClient()
+  static Future<Uint8List> _fetch(
+    String url, {
+    HttpClient Function()? createFetchClient,
+  }) async {
+    final client = (createFetchClient?.call() ?? HttpClient())
       ..connectionTimeout = _fetchTimeout
       ..maxConnectionsPerHost = 2;
     try {

@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 
+import '../network/vpn_http_adapter.dart';
 import 'aia_trust.dart';
 import 'portal_exceptions.dart';
 
@@ -95,11 +98,19 @@ class PortalHttp {
       );
       return response;
     } on DioException catch (e) {
+      if (e.error case final PortalException error) throw error;
       portalLog(
         '${e.requestOptions.method} ${_short(e.requestOptions.uri)} '
         '✗ ${e.type.name}: ${e.message ?? e.error}',
       );
       if (await _repairedChain(e)) return send(request);
+      // 自定义连接工厂的 TLS 异常可能被 Dio 归为 unknown，仍属于网络错误。
+      if (e.error is HandshakeException) {
+        throw const PortalNetworkError('门户证书或 TLS 握手失败，请检查网络环境');
+      }
+      if (e.error is SocketException) {
+        throw const PortalNetworkError('无法连接校园网络，请检查网络后重试');
+      }
       throw switch (e.type) {
         DioExceptionType.connectionTimeout ||
         DioExceptionType.sendTimeout ||
@@ -123,12 +134,26 @@ class PortalHttp {
     final trust = this.trust;
     if (trust == null || !AiaTrust.isHandshakeFailure(e.error)) return false;
     final host = e.requestOptions.uri.host;
-    if (!await trust.tryRepair(host)) return false;
+    final adapter = dio.httpClientAdapter;
+    if (!await trust.tryRepair(
+      host,
+      createFetchClient: adapter is VpnHttpClientAdapter
+          ? () => adapter.createRoutedClient(
+              useVpn: e.requestOptions.extra['vpnDio.usedVpn'] == true,
+            )
+          : null,
+    )) {
+      return false;
+    }
     // SecurityContext 变了，旧 HttpClient 的连接池还带着旧上下文，必须换新。
-    dio.httpClientAdapter.close(force: true);
-    dio.httpClientAdapter = IOHttpClientAdapter(
-      createHttpClient: trust.createHttpClient,
-    );
+    if (adapter is VpnHttpClientAdapter) {
+      adapter.resetClients();
+    } else {
+      adapter.close(force: true);
+      dio.httpClientAdapter = IOHttpClientAdapter(
+        createHttpClient: trust.createHttpClient,
+      );
+    }
     portalLog('已补全 $host 的证书链，重试');
     return true;
   }
