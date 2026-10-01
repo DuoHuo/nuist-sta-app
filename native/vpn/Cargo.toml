@@ -1,0 +1,23 @@
+[package]
+name = "nuist_vpn"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+smoltcp = { version = "0.12", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "socket-tcp", "socket-dns"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "1"
+serde_json = "1"
+
+[dev-dependencies]
+smoltcp = { version = "0.12", default-features = false, features = ["socket-udp"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"

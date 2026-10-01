@@ -71,6 +71,21 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # 在 crate 目录执行，让 rustup 按 rust-toolchain.toml 安装固定工具链和 Android target。
+      - name: Set up Rust
+        working-directory: native/vpn
+        run: |
+          rustup show
+          cargo --version
+
+      - name: Test Rust VPN core
+        working-directory: native/vpn
+        run: cargo test --locked --target-dir ../../build/rust-host
+
+      - name: Build host VPN library for FFI tests
+        working-directory: native/vpn
+        run: cargo build --locked --target-dir ../../build/rust-host
+
       - name: Check formatting
         run: dart format --output=none --set-exit-if-changed lib test
 
@@ -78,7 +93,7 @@ jobs:
         run: flutter analyze
 
       - name: Run tests
-        run: flutter test
+        run: flutter test --dart-define=VPN_NATIVE_LIBRARY=${{ github.workspace }}/build/rust-host/debug/libnuist_vpn.so
 
       - name: Build debug APK
         run: flutter build apk --debug --target-platform android-arm64
