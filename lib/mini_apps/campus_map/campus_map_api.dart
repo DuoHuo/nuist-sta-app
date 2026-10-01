@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
+import '../../core/network/vpn_dio.dart';
 import 'campus_building_model.dart';
 import 'campus_map_data.dart';
 import 'campus_map_photos.dart';
@@ -34,7 +35,10 @@ class CampusMapApi
     Dio? dio,
   }) : _baseUrl = baseUrl.replaceFirst(RegExp(r'/+$'), ''),
        _dio =
-           dio ?? Dio(BaseOptions(connectTimeout: const Duration(seconds: 10))),
+           dio ??
+           vpnDio(
+             options: BaseOptions(connectTimeout: const Duration(seconds: 10)),
+           ),
        _ownsDio = dio == null;
 
   final String _baseUrl;

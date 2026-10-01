@@ -3,12 +3,13 @@ import 'dart:io';
 
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../network/vpn_dio.dart';
+import '../network/vpn_gateway.dart';
 import 'aia_trust.dart';
 import 'established_store.dart';
 import 'nuist_login.dart';
@@ -208,6 +209,7 @@ class PortalSession {
     credentialError.value = null;
     await EstablishedStore.write(_established);
     await _jar.deleteAll();
+    await VpnGateway.instance.reset();
     if (includeWebView) {
       try {
         await WebViewCookieManager().clearCookies();
@@ -265,17 +267,16 @@ class PortalSession {
       },
     );
     _trust = trust;
-    final dio = Dio(
-      BaseOptions(
+    final dio = vpnDio(
+      options: BaseOptions(
         headers: {
           'User-Agent': NuistLogin.userAgent,
           'Accept-Language': 'zh-CN,en;q=0.9,en-US;q=0.8',
         },
       ),
+      securityContext: trust.context,
+      onBadCertificate: trust.onBadCertificate,
     )..interceptors.add(CookieManager(_jar));
-    dio.httpClientAdapter = IOHttpClientAdapter(
-      createHttpClient: trust.createHttpClient,
-    );
     _http = PortalHttp(dio, trust: trust);
     _restored = EstablishedStore.read().then((entries) {
       // 只补本进程还没登过的：恢复是异步的，别把已经新鲜的条目覆盖成旧的。
