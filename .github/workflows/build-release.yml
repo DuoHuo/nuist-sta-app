@@ -95,6 +95,17 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # 与普通 CI 一样，使用仓库固定的 Rust 工具链和 Android target。
+      - name: Set up Rust
+        working-directory: native/vpn
+        run: |
+          rustup show
+          cargo --version
+
+      - name: Test Rust VPN core
+        working-directory: native/vpn
+        run: cargo test --locked --target-dir ../../build/rust-host
+
       - name: Decode Keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.DH_SIGNING_KEY_BASE64 }}
