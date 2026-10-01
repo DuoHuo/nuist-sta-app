@@ -143,6 +143,59 @@ UI 侧用 `ListenableBuilder(listenable: controller, builder: …)` 订阅。跨
 主题内联在 `app.dart` 的 `build` 里，没有抽成独立函数 —— 这意味着单独 pump 某个页面时
 拿不到 `scaffoldBackgroundColor`。
 
+## 校园 VPN 网络请求
+
+需要访问校内网络接口时，使用 `lib/core/network/vpn_dio.dart` 提供的 `vpnDio()`，
+不要直接修改全局 Dio 或手动管理 VPN 隧道。它返回普通的 `Dio`，请求、JSON、表单和下载
+仍按 Dio 的方式调用：
+
+```dart
+import 'package:dio/dio.dart';
+import 'package:nuist_sta_app/core/network/vpn_dio.dart';
+
+final client = vpnDio(
+  options: BaseOptions(
+    connectTimeout: const Duration(seconds: 10),
+    receiveTimeout: const Duration(seconds: 20),
+  ),
+);
+
+try {
+  final response = await client.get<Map<String, dynamic>>(
+    'https://internal.example/api/data',
+  );
+  final data = response.data;
+} finally {
+  client.close(force: true);
+}
+```
+
+默认选路规则如下：
+
+- `forceVpn: false` 时，校园网检测结果为 `onCampus` 才直连；结果为 `offCampus` 或
+  `unknown` 时走 VPN。当前未配置全局校园网检测器，因此默认走 VPN。
+- 客户端需要始终走 VPN 时使用 `vpnDio(forceVpn: true)`。
+- 只强制某一次请求走 VPN 时，在 `Options.extra` 中设置导出的 `forceVpnKey`；这个字段
+  只在本地选路，不会发送给服务器：
+
+```dart
+final response = await client.get<String>(
+  url,
+  options: Options(
+    extra: <String, Object?>{forceVpnKey: true},
+  ),
+);
+```
+
+`vpnDio()` 创建的客户端分别维护直连和 VPN 的连接池。调用方创建了客户端就负责在不用时
+调用 `close()`；小程序 API 若接收外部注入的 `Dio`，只有自己创建的实例才应关闭，参考
+`CampusMapApi` 的 `_ownsDio` 写法。仅支持 `http` 和 `https` URL，VPN 连接失败不会自动
+降级为直连，也不会重放请求体。
+
+首次真正发起 VPN 请求时才会加载原生库并完成 VPN 认证，因此使用前必须已经绑定统一门户。
+未绑定或凭据失效会抛出 `PortalCredentialError`，登录流程失败会抛出 `PortalLoginError`，
+网络连接问题仍按 Dio / `PortalNetworkError` 处理；业务层不要把所有异常都当成需要重新绑定。
+
 ## 已知架构债
 
 如实列出，不是「规范」，是「将来要还的账」：
