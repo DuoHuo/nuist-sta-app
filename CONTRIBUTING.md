@@ -38,6 +38,28 @@ CI 查的就是这三条，另外还会：
 
 本地先跑一遍能省一轮等待。
 
+### 校园 VPN 原生核心
+
+Android 构建新增 Rust/NDK 前提，安装说明见 [README](README.md#本地运行)。
+在 `native/vpn` 下执行命令，以使用该目录 `rust-toolchain.toml` 固定的工具链：
+
+```bash
+cd native/vpn
+cargo test --locked --target-dir ../../build/rust-host
+cargo build --locked --target-dir ../../build/rust-host
+cd ../..
+```
+
+第二条命令生成本机动态库。用它启用默认跳过的真实 FFI 测试：
+
+- Linux：`flutter test --dart-define=VPN_NATIVE_LIBRARY=build/rust-host/debug/libnuist_vpn.so`
+- Windows：`flutter test --dart-define=VPN_NATIVE_LIBRARY=build/rust-host/debug/nuist_vpn.dll`
+- macOS：`flutter test --dart-define=VPN_NATIVE_LIBRARY=build/rust-host/debug/libnuist_vpn.dylib`
+
+普通 CI 会执行 Rust 测试、构建本机库并启用上述 FFI 测试；发布构建也会执行 Rust 测试。
+这些检查使用合成网关，不证明学校真实 VPN 可用。当前心跳为测试用的 10 秒间隔，
+首次握手后立即发送，30 秒收不到入站数据则断开；原客户端记录为 500ms，需实网验证较长间隔。
+
 ## Commit 规范
 
 **一个 Commit 只做一件事。**
