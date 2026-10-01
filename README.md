@@ -33,14 +33,21 @@
 
 ## 本地运行
 
+需要 **Flutter 3.47.4**（stable）、Android SDK/NDK 和通过 rustup 安装的 Rust。
+请将 `cargo`、`rustup` 加入 PATH；NDK 版本跟随 Flutter 的 `ndkVersion`。
+在 `native/vpn` 目录运行 `cargo --version`，rustup 会按 `rust-toolchain.toml`
+安装固定的 Rust 1.90.0 和 `aarch64-linux-android` target（首次需要联网）。
+Windows 本机运行 Rust 测试还需要 Visual Studio C++ Build Tools 和 Windows SDK。
+
 ```bash
 flutter pub get
-flutter run            # 连接设备或模拟器
+flutter run            # 连接 Android arm64 设备
 flutter test           # 运行测试
-flutter build apk      # 构建 APK
+flutter build apk --target-platform android-arm64
 ```
 
-需要 **Flutter 3.47.4**（stable），与 CI 一致。
+Android 构建会用 NDK 从源码编译并打包校园 VPN 动态库；不支持 x86 模拟器。
+Rust 核心的本机测试和 Dart FFI 联调命令见[贡献指南](CONTRIBUTING.md)。
 
 > **⚠️ 路径坑**：有队友反馈 Dart 分析服务器对含中文或 OneDrive 同步目录的路径支持不佳，
 > `flutter analyze` 会直接崩溃。遇到的话把仓库挪到纯英文路径（如 `C:\dev\nuist-sta-app`）。
