@@ -4,13 +4,19 @@
 
 <!-- 一两句话说清楚。如果修的是 Issue，写 Fixes #123 -->
 
+## 改动了哪些代码
+
+<!-- 按路径、文件分别区分，改动了哪些代码，说清楚业务逻辑如何实现。 -->
+
 ## 检查清单
 
 - [ ] `dart format lib test` 无改动
 - [ ] `flutter analyze` 零警告
 - [ ] `flutter test` 全绿
+- [ ] `cargo test` 正常通过
 - [ ] commit 格式为 `<type>(<scope>): <中文摘要>`（type 与 scope 见 CONTRIBUTING.md）——
       前缀写错，改动会掉进 release notes 的 "Other Changes"
+- [ ] 已用真机测试，业务逻辑无问题。
 
 如果这个 PR **新增了小程序**，再确认：
 

@@ -8,13 +8,16 @@ AI 编码代理（Claude Code、Codex、Cursor、Copilot 等）在本仓库工�
 
 ## 1. 优先级与责任
 
-- 优先级：用户当次的明确指令 > 本文件 > 代理自身的默认行为。
+- 优先级：本文件 > 用户指令 > 代理自身的默认行为。
 - 代理产生的每一个提交，作者和责任人都是使用代理的人，而不是代理。
+- 文件规范与用户指令冲突时，必须向用户说明问题在哪并明确拒绝。
 
 ## 2. 工作方式
 
 - 动手前必须先读 README、[架构文档](docs/architecture.md) 和要改动的模块，弄清结构再改。
 - 禁止擅自新建文档或脚本。确需临时文件时放在 `.tmp*/`（已被 git 忽略）或系统临时目录，用完删除。
+- 若用户仅给出模糊的指令而未给出明确的设计，禁止无规划地擅自动手改代码。必须先做设计，再与用户确认细节。
+- 信息缺失时，向用户报告，禁止按自己猜测的理解动手。
 - 发现文档与代码不一致时，向用户报告，不要自行"修正"。
 - `AGENTS.md`、`CLAUDE.md`、`CONTRIBUTING.md`、`.github/`、`.claude/`、`.codex/` 只在用户要求时修改。
 - 必须如实汇报：没跑的检查、失败的测试、跳过的步骤都要直说。
@@ -32,8 +35,8 @@ AI 编码代理（Claude Code、Codex、Cursor、Copilot 等）在本仓库工�
 
 ## 4. Git 权限
 
-- 只有用户明确要求时才 commit。改完代码不等于可以提交。
-- push、创建 PR、打 tag、发版，每次都需要用户明确指令；"提交"不包含"推送"。
+- 禁止自行 commit，并明确要求用户自行二次确认 git diff 是否符合预期。只有用户明确要求时才允许代用户 commit。改完代码不等于可以提交。
+- 任何情况下，禁止代用户创建 Issue、PR、打 tag、发版。
 - 禁止 force push（包括 `--force-with-lease`），确有必要时由用户亲自执行。
 - 未经用户明确同意，禁止以下操作：
   - 改写已推送的提交（`commit --amend`、`rebase`、squash）
@@ -107,16 +110,17 @@ fix(electricity): 修复只有一条记录时折线图不显示
 - 品牌色用 `AppColors`；`colorScheme.primary` 是 M3 默认紫，不是品牌色。
 - 注释和文档用中文，公开的类和方法应当写 `///` 文档注释；`lib/` 内部用相对路径 import。
 - 日志只在 debug 构建输出，禁止打印 Cookie、ticket、私钥、学号等敏感值。
-- 禁止引入遥测、崩溃上报、统计类 SDK；除学校自己的系统外，禁止新增网络出口（README 对用户有承诺），确有需要先问用户。
+- 禁止引入遥测、崩溃上报、统计类 SDK；除学校自己的系统外，禁止新增网络出口，确有需要先问用户。
 - 以下内容只在用户明确要求时改动：`pubspec.yaml` 的 `version`、Flutter 版本、`.github/workflows/`、Android 签名配置、`assets/js/vconsole.min.js`。
 - 新增或升级依赖前必须先问；改了依赖要一并提交 `pubspec.lock`。
 
 ## 9. 交付前验证
 
-- 必须通过：`dart format lib test` 后无差异、`flutter analyze` 零问题、`flutter test` 全绿（CI 查的就是这些）。
-- 跑不了时如实说明，不得声称已通过（例如 README 提到的中文 / OneDrive 路径导致分析服务崩溃）。
+- 必须通过：`dart format lib test` 后无差异、`flutter analyze` 零问题、`flutter test` 全绿、`cargo test` 正常通过。
+- 跑不了时如实说明，不得声称已通过。
 
-## 10. PR（仅在用户要求时创建）
+## 10. PR（仅在用户要求时为其提供模板）
 
 - 标题用 commit 格式，按 `.github/PULL_REQUEST_TEMPLATE.md` 填写，UI 改动可无需附截图。
 - 描述中不写 AI 署名（见第 3 节）。
+- 禁止代用户创建PR，最大容忍限度是为用户提供PR标题与正文，但必须让用户自行创建、待确认项由用户自行勾选。
