@@ -54,6 +54,49 @@ jobs:
           done < <(find lib/mini_apps -mindepth 2 -name '*.dart')
           exit "$fail"
 
+      # 敏感字面量守卫：正则刻意写成通用形式，避免守卫脚本自身泄露真实值。
+      - name: Check for sensitive literals
+        run: |
+          set -euo pipefail
+          fail=0
+          scan() {
+            local label="$1"
+            local pattern="$2"
+            local allow="${3:-}"
+            local hits
+            hits=$(grep -rInE "$pattern" lib test assets android ios native docs \
+              README.md AGENTS.md CONTRIBUTING.md 2>/dev/null || true)
+            if [ -n "$allow" ]; then
+              hits=$(printf '%s\n' "$hits" | grep -vE "$allow" || true)
+            fi
+            if [ -n "$hits" ]; then
+              echo "::error::$label"
+              printf '%s\n' "$hits"
+              fail=1
+            fi
+          }
+          # 校内域名（不得明文，统一 hex 编码在 campus_config.dart）
+          scan "发现 *.edu.cn 域名，应改用 CampusHosts + hex 配置" \
+            '\.[a-z0-9-]+\.edu\.cn'
+          # 校园网 IP（202.19x.y.z）
+          scan "发现 202.19x 校园网 IP，应改用 CampusHosts + hex 配置" \
+            '\b202\.1[0-9]{2}\.[0-9]'
+          # 私钥：BEGIN 行后面必须跟着 base64，passkey_transfer 里的 PEM 头模板不算
+          pem_hits=$(grep -rInA1 'BEGIN [A-Z ]*PRIVATE KEY' lib test assets android ios native docs \
+            README.md AGENTS.md CONTRIBUTING.md 2>/dev/null | grep -E '[A-Za-z0-9+/]{32}' || true)
+          if [ -n "$pem_hits" ]; then
+            echo "::error::发现明文私钥"
+            printf '%s\n' "$pem_hits"
+            fail=1
+          fi
+          # 硬编码的导出密钥
+          scan "发现硬编码的通行密钥导出密钥" \
+            "_appKey[[:space:]]*=[[:space:]]*'"
+          # 12 位学号（合成夹具白名单除外）
+          scan "发现疑似真实学号，测试数据必须脱敏" \
+            '\b[0-9]{12}\b' \
+            '202500000000'
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
