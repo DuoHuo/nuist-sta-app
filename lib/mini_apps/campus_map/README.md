@@ -1,12 +1,12 @@
 # 校园地图前端
 
-Flutter + MapLibre 原生子程序。首页入口已注入 `CampusMapApi`，默认连接 `http://192.0.2.1:12345`。
+Flutter + MapLibre 原生子程序。首页入口已注入 `CampusMapApi`，默认地址来自 `campus_config.dart` 的 hex 配置（未配置时地图页提示"未配置服务地址"）。
 
 ## 服务器连接
 
-API 使用 `http://192.0.2.1:12345/api/v1`。瓦片与样式统一走 API 同源代理 `/martin/*`（后端 `CAMPUS_MARTIN_UPSTREAM` 指向 martin 容器），因为真机网络普遍放行 API 端口、而 Martin 独立端口 30000 会被防火墙重置（真机浏览器实测 ERR_CONNECTION_RESET）。客户端把旧式 `localhost:3000`、独立 30000 端口以及遗漏代理前缀的地址统一归一到 `{API}/martin/*`，并保留 TileJSON 的 minzoom/maxzoom/bounds/attribution（maxzoom=14 时由 MapLibre 放大渲染第 14 级瓦片）。该方案依赖后端重新部署后的 `/martin` 代理；旧版线上服务没有该路由，样式加载会按设计降级为提示。
+API 使用 `{地图后端地址}/api/v1`（真实地址 hex 编码存放在 `campus_config.dart`，见 [校园地址与密钥](../../../docs/configuration.md)）。瓦片与样式统一走 API 同源代理 `/martin/*`（后端 `CAMPUS_MARTIN_UPSTREAM` 指向 martin 容器），因为真机网络普遍放行 API 端口、而 Martin 独立端口 30000 会被防火墙重置（真机浏览器实测 ERR_CONNECTION_RESET）。客户端把旧式 `localhost:3000`、独立 30000 端口以及遗漏代理前缀的地址统一归一到 `{API}/martin/*`，并保留 TileJSON 的 minzoom/maxzoom/bounds/attribution（maxzoom=14 时由 MapLibre 放大渲染第 14 级瓦片）。该方案依赖后端重新部署后的 `/martin` 代理；旧版线上服务没有该路由，样式加载会按设计降级为提示。
 
-MBTiles 已就绪。公网联调已下载并验证 23,751 字节的真实矢量瓦片。域名自定义端口仍受代理连通性影响，当前使用已验证可用的 IP。后端仓库 Compose 与样式 URL 已修复，但没有远程部署权限配置，运行中的服务器未被重启或修改；客户端兼容旧线上配置。
+MBTiles 已就绪。公网联调已下载并验证 23,751 字节的真实矢量瓦片。地图后端已从校园 IP 切到 `duohuo.org.cn` 的地图子域（HTTPS，走反代），不再依赖直连 IP 端口。后端仓库 Compose 与样式 URL 已修复，但没有远程部署权限配置，运行中的服务器未被重启或修改；客户端兼容旧线上配置。
 
 ## 本地测试连接
 
@@ -17,7 +17,7 @@ adb reverse tcp:3000 tcp:3000
 flutter run --dart-define=CAMPUS_API_BASE_URL=http://127.0.0.1:8080
 ```
 
-本地回归测试可显式覆盖 API 地址。Android debug 额外允许上述回环测试地址的 HTTP，release 仅允许服务器域名和指定服务器 IP。手机的回环地址指向手机自身，本地调试需要端口转发。地图配置中的瓦片、字形、精灵、样式地址同样必须可达。
+本地回归测试可显式覆盖 API 地址（`CAMPUS_API_BASE_URL` 只是联调覆盖，默认值仍来自 `campus_config.dart`）。Android 的明文放行清单由 `build.gradle.kts` 从 `campus_config.dart` 的 hex 解码生成：debug 额外允许回环测试地址，release 仅允许配置里的地图主机和 `duohuo.org.cn`。手机的回环地址指向手机自身，本地调试需要端口转发。地图配置中的瓦片、字形、精灵、样式地址同样必须可达。
 
 ## 实际接口
 
@@ -64,7 +64,7 @@ flutter run --dart-define=CAMPUS_API_BASE_URL=http://127.0.0.1:8080
 
 ```bash
 flutter test test/campus_map_api_test.dart test/campus_map_test.dart test/widget_test.dart
-flutter test --dart-define=CAMPUS_LIVE_TEST=true test/campus_map_live_test.dart
+flutter test --dart-define=CAMPUS_LIVE_TEST=true --dart-define=CAMPUS_API_BASE_URL=http://host:port test/campus_map_live_test.dart
 ```
 
 此前本地真实接口联调读取到 248 栋建筑、25 个 POI、248 个轮廓；搜索、详情成功，poi:8 至 poi:18 返回 989.2 米路线，指纹查询为空。Live 测试默认跳过，开启后仍不写后端。真实室内效果需实际数据，原生底图效果需 Martin 和移动设备验证。

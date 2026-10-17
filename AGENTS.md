@@ -97,6 +97,7 @@ fix(electricity): 修复只有一条记录时折线图不显示
 - 临时文件：`.tmp*/`、`test/failures/`、一次性调试脚本
 - 凭据：`*.jks`、`*.keystore`、`key.properties`、`passkey*.json`、`*.nuistkey`、Cookie、`.env`
 - 真实个人数据：学号、姓名、成绩等；测试夹具必须脱敏
+- 校内端点与密钥：`*.edu.cn` 域名、`20x` 开头IP、通行密钥导出密钥、VPN SPA 密钥等一律**hex 编码**集中存放在 `lib/core/config/campus_config.dart`（见 [校园地址与密钥](docs/configuration.md)），禁止明文硬编码；业务代码只引用 `CampusHosts`
 
 ## 8. 代码约定
 
@@ -109,6 +110,7 @@ fix(electricity): 修复只有一条记录时折线图不显示
 - 门户接口一律走 `PortalSession`，不要自己实现登录；区分 `PortalNetworkError` / `PortalCredentialError` / `PortalLoginError`；`request` 的回调可能执行两次，不能放有副作用的逻辑。
 - 品牌色用 `AppColors`；`colorScheme.primary` 是 M3 默认紫，不是品牌色。
 - 注释和文档用中文，公开的类和方法应当写 `///` 文档注释；`lib/` 内部用相对路径 import。
+- 校内主机名一律从 `lib/core/config/campus_config.dart` 的 `CampusHosts` 派生；只模板化 host，路径、大小写、尾斜杠保持服务端原样（CAS 精确匹配 service）。
 - 日志只在 debug 构建输出，禁止打印 Cookie、ticket、私钥、学号等敏感值。
 - 禁止引入遥测、崩溃上报、统计类 SDK；除学校自己的系统外，禁止新增网络出口，确有需要先问用户。
 - 以下内容只在用户明确要求时改动：`pubspec.yaml` 的 `version`、Flutter 版本、`.github/workflows/`、Android 签名配置、`assets/js/vconsole.min.js`。

@@ -16,6 +16,7 @@ lib/
 ├── router.dart         # go_router 路由表
 ├── core/               # 壳与所有小程序共用（尽量少放，别让它变成垃圾场）
 │   ├── auth/           # 统一门户登录 —— 见 portal-auth.md
+│   ├── config/         # 校园地址与密钥（hex 编码）—— 见 configuration.md
 │   ├── app_manifest.dart   # AppManifest：小程序描述
 │   ├── app_info.dart       # kAppName
 │   ├── colors.dart         # AppColors 设计稿色板
@@ -224,4 +225,5 @@ CI 要求 `dart format` 无差异、依赖方向检查通过、`flutter analyze`
 
 - [新增一个小程序](mini-app-guide.md)
 - [统一门户登录](portal-auth.md)
+- [校园地址与密钥](configuration.md)
 - [路线图与架构债排期](roadmap.md)

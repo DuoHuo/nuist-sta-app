@@ -130,9 +130,12 @@ AppManifest(
 ```dart
 final response = await PortalSession.instance.request(
   PortalServices.jwxt,                    // CAS 的 service 参数
-  (http) => http.get(Uri.parse('https://jwxt.campus.invalid/...')),
+  (http) => http.get(Uri.parse('https://${CampusHosts.jwxt}/...')),
 );
 ```
+
+> 校内主机名一律从 `lib/core/config/campus_config.dart` 的 `CampusHosts` 派生，
+> 不要硬编码域名；真实根域 hex 编码存放在 `campus_config.dart`，见 [校园地址与密钥](configuration.md)。
 
 > **⚠️ `request` 的 `send` 回调可能被调用两次** —— 会话失效时会自动重登并重放。
 > 别在回调里放有副作用的逻辑。

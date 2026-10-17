@@ -159,6 +159,7 @@ docs: 补充新增小程序指南
 - 发现安全漏洞不要公开 Issue，请先私下联系维护者
 - 签名密钥、`*.nuistkey`、Cookie、`.env` 和真实个人数据不得进入仓库
 - 测试夹具必须脱敏，涉及学号、姓名、成绩等内容时使用合成数据
+- 校内域名/IP/密钥禁止明文：hex 编码集中存放在 `lib/core/config/campus_config.dart`，业务代码统一从 `CampusHosts` 派生，见 [校园地址与密钥](docs/configuration.md)；CI 的敏感字面量守卫会拦截
 
 ## 发版
 

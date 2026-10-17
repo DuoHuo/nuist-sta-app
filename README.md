@@ -55,6 +55,7 @@ NUIST++ 使用学校统一门户获取需要登录的数据。登录和绑定在
 欢迎学生社团和个人贡献功能。不会 Flutter 也可以从 H5 小程序路线参与：
 
 - [路线图](docs/roadmap.md)：查看计划中的功能和待认领事项
+- [校园地址与密钥](docs/configuration.md)：hex 编码存储与解码约定
 - [新增一个小程序](docs/mini-app-guide.md)：了解原生和 H5 接入方式
 - [贡献指南](CONTRIBUTING.md)：配置开发环境、运行检查和提交代码
 

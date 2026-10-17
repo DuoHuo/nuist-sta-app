@@ -12,7 +12,7 @@
 
 | 字段 | 含义 |
 |---|---|
-| `rpId` | 依赖方标识，即 `authserver.campus.invalid` |
+| `rpId` | 依赖方标识，即门户 CAS 主机名（`authserver.<校园根域>`，根域 hex 编码存储在 `campus_config.dart`，见 [校园地址与密钥](configuration.md)） |
 | `credentialId` | 凭据 ID |
 | `privateKeyPkcs8Pem` | **P-256 私钥**（PKCS#8 PEM） |
 | `userId` | 学号的 Base64URL 形式 |
@@ -119,7 +119,9 @@ service → 落地 URL 表（`_established`）也经 `EstablishedStore` 落到�
 
 **CAS 服务端按字符串精确匹配校验 service，改一个字就登不上。** 所以：
 
-- 不要随手改写大小写或尾斜杠。例如 `labor` 的 URL 里 **`Labor` 的首字母大写是服务端原样给的**
+- 不要随手改写大小写或尾斜杠。`labor` 的主机名已统一小写并实测 CAS 校验通过；
+  校内主机名只能通过 `CampusHosts`（`lib/core/config/campus_config.dart`）派生，
+  真实根域 hex 编码存放在同一文件
 - 编码方式也是复刻 Python 的 `quote(service, safe=':/')`：协议和路径分隔符不转义，
   其余转义 —— 编码形式变了可能导致 ticket 验证失败
 - service 写错时最直接的可见症状是：登录后又跳回 `/authserver/login`
@@ -129,9 +131,9 @@ service → 落地 URL 表（`_established`）也经 `EstablishedStore` 落到�
 - **私钥默认不离开设备**。签名在本地完成，出网的只有 `signature` + `credentialId` +
   `authenticatorData` + `clientDataJSON`。唯一的例外是用户在「统一门户」页主动
   **导出通行密钥**（`PasskeyTransfer`，见下）。
-- **导出物的强度只取决于六位 PIN**。`passkey_transfer.dart` 把 APP 内置的 16 字节文本密钥
-  末六字节换成 PIN（ASCII），直接作为 AES-128-CFB 的密钥，IV 固定全零（不把 IV
-  额外塞进二维码）；但内置密钥
+- **导出物的强度只取决于六位 PIN**。`passkey_transfer.dart` 把 hex 编码存储的
+  16 字节文本密钥（`kPasskeyExportKey`）末六字节换成 PIN（ASCII），
+  直接作为 AES-128-CFB 的密钥，IV 固定全零（不把 IV 额外塞进二维码）；但内置密钥
   和 APK 打包在一起，拆包即得，只挡"顺手看一眼"。真正的门槛只有 10^6 的 PIN 空间，
   没有任何拉伸，离线穷举瞬间可破——所以 UI 上反复提醒导出物
   等同登录凭据，传完即删。格式：`nuistkey1:` + Base45(密文)；
