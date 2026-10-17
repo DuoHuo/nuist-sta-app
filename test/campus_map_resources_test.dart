@@ -39,7 +39,7 @@ void main() {
           expect(r.uri.path, '/martin/campus');
           // 服务器可能下发容器内部地址，或遗漏代理前缀的绝对地址，都要归一。
           return response({
-            'tiles': ['http://192.0.2.1:12345/campus/{z}/{x}/{y}'],
+            'tiles': ['http://map.test:12345/campus/{z}/{x}/{y}'],
             'minzoom': 0,
             'maxzoom': 14,
             'attribution': 'OSM',
@@ -48,27 +48,27 @@ void main() {
       addTearDown(dio.close);
       final resources = CampusMapResources(
         dio,
-        Uri.parse('http://192.0.2.1:12345/'),
+        Uri.parse('http://map.test:12345/'),
       );
       final style = jsonDecode(
         await resources.prepare(
-          'http://192.0.2.1:3000/styles/campus',
+          'http://map.test:3000/styles/campus',
           bounds: [118.6, 32.1, 118.8, 32.3],
         ),
       );
       expect(calls, [
-        'http://192.0.2.1:12345/martin/styles/campus',
-        'http://192.0.2.1:12345/martin/campus',
+        'http://map.test:12345/martin/styles/campus',
+        'http://map.test:12345/martin/campus',
       ]);
       final source = style['sources']['campus'];
       expect(source['url'], isNull);
       expect(source['maxzoom'], 14);
       expect(source['tiles'], [
-        'http://192.0.2.1:12345/martin/campus/{z}/{x}/{y}',
+        'http://map.test:12345/martin/campus/{z}/{x}/{y}',
       ]);
       expect(
         style['glyphs'],
-        'http://192.0.2.1:12345/martin/fonts/{fontstack}/{range}.pbf',
+        'http://map.test:12345/martin/fonts/{fontstack}/{range}.pbf',
       );
       expect(style['layers'], hasLength(1));
       expect(style['pitch'], 0);
@@ -79,36 +79,31 @@ void main() {
   test('keeps unrelated resources and already-proxied URLs intact', () {
     final dio = Dio();
     addTearDown(dio.close);
-    final remote = CampusMapResources(
-      dio,
-      Uri.parse('http://192.0.2.1:12345/'),
-    );
+    final remote = CampusMapResources(dio, Uri.parse('http://map.test:12345/'));
     expect(
       remote.resolve('https://cdn.example.net/style.json'),
       'https://cdn.example.net/style.json',
     );
     expect(
-      remote.resolve('http://192.0.2.1:12345/admin/vendor/sprite'),
-      'http://192.0.2.1:12345/admin/vendor/sprite',
+      remote.resolve('http://map.test:12345/admin/vendor/sprite'),
+      'http://map.test:12345/admin/vendor/sprite',
     );
     // 样式里的相对地址（osm-bright 用 ../../campus）按代理后的样式地址解析。
     expect(
       remote.resolve(
         '../../campus',
-        relativeTo: Uri.parse(
-          'http://192.0.2.1:12345/martin/styles/campus',
-        ),
+        relativeTo: Uri.parse('http://map.test:12345/martin/styles/campus'),
       ),
-      'http://192.0.2.1:12345/martin/campus',
+      'http://map.test:12345/martin/campus',
     );
     // Martin 拼出带「..」的绝对地址时同样要归一并补回代理前缀。
     expect(
       remote.resolve('http://127.0.0.1:8080/../../campus'),
-      'http://192.0.2.1:12345/martin/campus',
+      'http://map.test:12345/martin/campus',
     );
     expect(
-      remote.resolve('http://192.0.2.1:12345/martin/campus/{z}/{x}/{y}'),
-      'http://192.0.2.1:12345/martin/campus/{z}/{x}/{y}',
+      remote.resolve('http://map.test:12345/martin/campus/{z}/{x}/{y}'),
+      'http://map.test:12345/martin/campus/{z}/{x}/{y}',
     );
     // 本地开发的 API 同样提供 /martin 代理，回环 martin 地址也归一到代理。
     final local = CampusMapResources(dio, Uri.parse('http://127.0.0.1:8080/'));
@@ -128,15 +123,13 @@ void main() {
               'version': 8,
               'center': [0, 0],
               'zoom': 1,
-              'sprite': 'http://192.0.2.1:12345/admin/vendor/sprite',
+              'sprite': 'http://map.test:12345/admin/vendor/sprite',
               'glyphs':
                   'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
               'sources': {
                 'campus': {
                   'type': 'vector',
-                  'tiles': [
-                    'http://192.0.2.1:12345/martin/campus/{z}/{x}/{y}',
-                  ],
+                  'tiles': ['http://map.test:12345/martin/campus/{z}/{x}/{y}'],
                 },
               },
               'layers': [
@@ -150,7 +143,7 @@ void main() {
       addTearDown(dio.close);
       final resources = CampusMapResources(
         dio,
-        Uri.parse('http://192.0.2.1:12345/'),
+        Uri.parse('http://map.test:12345/'),
       );
       final style = jsonDecode(
         await resources.prepare(
@@ -183,9 +176,7 @@ void main() {
             'sources': {
               'openmaptiles': {
                 'type': 'vector',
-                'tiles': [
-                  'http://192.0.2.1:12345/martin/campus/{z}/{x}/{y}',
-                ],
+                'tiles': ['http://map.test:12345/martin/campus/{z}/{x}/{y}'],
               },
             },
             'layers': [
@@ -216,17 +207,17 @@ void main() {
           });
         }
         return response({
-          'tiles': ['http://192.0.2.1:12345/martin/campus/{z}/{x}/{y}'],
+          'tiles': ['http://map.test:12345/martin/campus/{z}/{x}/{y}'],
         });
       });
     addTearDown(dio.close);
     final resources = CampusMapResources(
       dio,
-      Uri.parse('http://192.0.2.1:12345/'),
+      Uri.parse('http://map.test:12345/'),
     );
     final style = jsonDecode(
       await resources.prepare(
-        'http://192.0.2.1:12345/martin/styles/campus',
+        'http://map.test:12345/martin/styles/campus',
         bounds: [118.6, 32.1, 118.8, 32.3],
         places: const [
           CampusPlace(

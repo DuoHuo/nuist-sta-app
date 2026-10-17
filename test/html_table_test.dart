@@ -1,5 +1,6 @@
-// core/html_table.dart 的解析测试：样例取自双创学分与劳动教育平台的真实页面
-// （精简），覆盖自定义元素 td-data、隐藏列、空表三个已知的坑。
+// core/html_table.dart 的解析测试：样例参照双创学分与劳动教育平台的页面结构
+// （已脱敏，学号/姓名/课程信息均为合成数据），覆盖自定义元素 td-data、隐藏列、
+// 空表三个已知的坑。
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -143,7 +144,7 @@ const _studentResult = '''
 2026-06-30 16:25:27
       </td>
       <td class="c--actions">
-        <a class="btn" title="查看变动记录" href="https://Labor.campus.invalid/x?UserID=1"><i class="fa fa-info-circle"></i></a>
+        <a class="btn" title="查看变动记录" href="https://labor.campus.invalid/x?UserID=1"><i class="fa fa-info-circle"></i></a>
       </td>
     </tr>
   </tbody>

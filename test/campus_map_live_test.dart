@@ -3,14 +3,12 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/config/campus_config.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_api.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_source.dart';
 
 const _live = bool.fromEnvironment('CAMPUS_LIVE_TEST');
-const _baseUrl = String.fromEnvironment(
-  'CAMPUS_API_BASE_URL',
-  defaultValue: 'http://192.0.2.1:12345',
-);
+const _baseUrl = String.fromEnvironment('CAMPUS_API_BASE_URL');
 
 // Check actual coordinates, not just the presence of a GeoJSON envelope.
 void _expectCoordinates(dynamic coordinates) {
@@ -75,7 +73,10 @@ void main() {
           },
         ),
       );
-      final api = CampusMapApi(baseUrl: _baseUrl, dio: dio);
+      final api = CampusMapApi(
+        baseUrl: _baseUrl.isEmpty ? kCampusMapBaseUrl : _baseUrl,
+        dio: dio,
+      );
       addTearDown(() {
         api.close();
         dio.close(force: true);
