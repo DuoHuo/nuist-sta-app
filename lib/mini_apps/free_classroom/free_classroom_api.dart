@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
+import '../../core/config/campus_config.dart';
 import 'free_classroom_models.dart';
 
 /// 教务系统 EMAP「空闲教室」应用（kxjas）的接口，移植自 qqbot/jwxt/jscx.py。
@@ -19,7 +20,7 @@ import 'free_classroom_models.dart';
 class FreeClassroomApi {
   FreeClassroomApi._();
 
-  static const _base = 'https://jwxt.campus.invalid';
+  static final _base = 'https://${CampusHosts.jwxt}';
 
   /// 校区代码，教务只开放了本部一个校区，写死。
   static const _campusCode = '01';

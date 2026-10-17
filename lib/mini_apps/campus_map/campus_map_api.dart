@@ -2,12 +2,19 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
+import '../../core/config/campus_config.dart';
 import '../../core/network/vpn_dio.dart';
 import 'campus_building_model.dart';
 import 'campus_map_data.dart';
 import 'campus_map_photos.dart';
 import 'campus_map_resources.dart';
 import 'campus_map_source.dart';
+
+/// 本地联调用的地址覆盖；不设置时用 `campus_config.dart` 里的默认值。
+const String _runtimeBaseUrl = String.fromEnvironment('CAMPUS_API_BASE_URL');
+final String _defaultBaseUrl = _runtimeBaseUrl.isEmpty
+    ? kCampusMapBaseUrl
+    : _runtimeBaseUrl;
 
 class CampusMapApiException implements Exception {
   const CampusMapApiException(this.message, {this.code, this.statusCode});
@@ -27,19 +34,14 @@ class CampusMapApi
         CampusMapRemoteSource,
         CampusBuildingModelSource,
         CampusBuildingPhotosSource {
-  CampusMapApi({
-    String baseUrl = const String.fromEnvironment(
-      'CAMPUS_API_BASE_URL',
-      defaultValue: 'http://192.0.2.1:12345',
-    ),
-    Dio? dio,
-  }) : _baseUrl = baseUrl.replaceFirst(RegExp(r'/+$'), ''),
-       _dio =
-           dio ??
-           vpnDio(
-             options: BaseOptions(connectTimeout: const Duration(seconds: 10)),
-           ),
-       _ownsDio = dio == null;
+  CampusMapApi({String? baseUrl, Dio? dio})
+    : _baseUrl = (baseUrl ?? _defaultBaseUrl).replaceFirst(RegExp(r'/+$'), ''),
+      _dio =
+          dio ??
+          vpnDio(
+            options: BaseOptions(connectTimeout: const Duration(seconds: 10)),
+          ),
+      _ownsDio = dio == null;
 
   final String _baseUrl;
   final Dio _dio;

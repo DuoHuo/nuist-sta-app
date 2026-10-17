@@ -10,6 +10,7 @@ import '../auth/nuist_login.dart';
 import '../auth/passkey_store.dart';
 import '../auth/portal_exceptions.dart';
 import '../auth/portal_http.dart';
+import '../config/campus_config.dart';
 import 'vpn_spa.dart';
 import 'vpn_log.dart';
 
@@ -30,8 +31,8 @@ class VpnCredentials {
 
 /// VPN 的独立认证会话；复用 NuistLogin，使用直连引导客户端避免循环依赖。
 class VpnAuth {
-  static const controller = 'https://client.vpn.campus.invalid';
-  static const service = '$controller/enlink/api/client/callback/cas';
+  static final controller = 'https://${CampusHosts.vpnController}';
+  static final service = '$controller/enlink/api/client/callback/cas';
   final CookieJar _jar = CookieJar();
   PortalHttp? _client;
   int _generation = 0;

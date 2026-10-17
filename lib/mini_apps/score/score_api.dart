@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
+import '../../core/config/campus_config.dart';
 import 'score_models.dart';
 
 /// 教务 EMAP「学生成绩」应用（cjcx）的接口。
@@ -15,7 +16,7 @@ import 'score_models.dart';
 class ScoreApi {
   ScoreApi._();
 
-  static const _base = 'https://jwxt.campus.invalid';
+  static final _base = 'https://${CampusHosts.jwxt}';
   static final Uri _indexUrl = Uri.parse(
     '$_base/jwapp/sys/cjcx/*default/index.do?EMAP_LANG=zh',
   );

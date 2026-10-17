@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
+import '../config/campus_config.dart';
 import 'passkey_bundle.dart';
 import 'portal_exceptions.dart';
 import 'portal_http.dart';
@@ -23,13 +24,13 @@ class NuistLogin {
   /// 阶段回调，用于给「测试登录」这类界面显示进度；不含任何凭据信息。
   final void Function(String stage)? onStage;
 
-  static const authserverNormal = 'https://authserver.campus.invalid';
+  static final authserverNormal = 'https://${CampusHosts.authserver}';
   static const loginPath = '/authserver/login';
   static const startAssertionPath = '/authserver/startAssertion';
 
   /// clientDataJSON 里的 origin 必须固定为真实 authserver：即使将来经 webvpn
   /// 代理，填代理域名也会被服务端以 401 拒绝。
-  static const webauthnOrigin = authserverNormal;
+  static final webauthnOrigin = authserverNormal;
 
   static const userAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) '
@@ -40,8 +41,9 @@ class NuistLogin {
   /// [base] 是留给 VPN 模式的扩展位：webvpn 的代理前缀可以直接顶替 authserver
   /// 根地址，流程本身一个字都不用改（Python 版正是这么做的）。真要启用 VPN
   /// 还需补上 VPN Cookie 的获取与失效重试，那部分暂未移植。
-  Future<String> login(String service, {String base = authserverNormal}) async {
-    final loginUrl = _loginUrl(base, service);
+  Future<String> login(String service, {String? base}) async {
+    final resolvedBase = base ?? authserverNormal;
+    final loginUrl = _loginUrl(resolvedBase, service);
 
     onStage?.call('opening');
     final (execution, landing) = await _openLoginPage(loginUrl);
@@ -52,12 +54,12 @@ class NuistLogin {
     }
 
     onStage?.call('asserting');
-    final request = await _startAssertion(base, loginUrl);
+    final request = await _startAssertion(resolvedBase, loginUrl);
     final credential = _makeAssertion(request);
 
     onStage?.call('submitting');
     final response = await _submitLogin(
-      base,
+      resolvedBase,
       loginUrl,
       request,
       credential,

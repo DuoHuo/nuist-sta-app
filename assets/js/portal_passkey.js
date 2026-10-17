@@ -46,7 +46,8 @@
   globalThis.__nuistPasskeyStarted = true;
 
   const CONFIG = Object.freeze({
-    allowedOrigin: "https://authserver.campus.invalid",
+    // 由 Dart 侧注入前替换为构建时的门户 origin，脚本里不写真实域名。
+    allowedOrigin: __PORTAL_ALLOWED_ORIGIN__,
     apiBase: "/personalInfo",
     isUserRecheckNecessaryPath: "/common/isUserRecheckNecessary",
     // 「判断当前设备是否已绑定」的探测请求：URL 用不区分大小写的正则匹配，

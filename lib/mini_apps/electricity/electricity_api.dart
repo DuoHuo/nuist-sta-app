@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
+import '../../core/config/campus_config.dart';
 import 'electricity_models.dart';
 
 /// 一卡通电费接口（对应 notifier/icard/elec_query.py）。
@@ -14,7 +15,7 @@ class ElectricityApi {
   ElectricityApi._();
 
   static final Uri _api = Uri.parse(
-    'https://icard.campus.invalid/charge/feeitem/getThirdData',
+    'https://${CampusHosts.icard}/charge/feeitem/getThirdData',
   );
   static const _feeItemId = '448';
 

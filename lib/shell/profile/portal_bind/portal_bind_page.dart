@@ -9,6 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../core/app_info.dart';
 import '../../../core/auth/passkey_bundle.dart';
+import '../../../core/config/campus_config.dart';
 import '../../../core/auth/passkey_store.dart';
 import '../../../core/colors.dart';
 
@@ -21,8 +22,8 @@ class PortalBindPage extends StatefulWidget {
   // 门户根地址会 302 到 http://…/authserver/login，Android WebView 禁止明文流量，
   // 所以直接从登录页进；后续任何 http 跳转也一律改写成 https（见 _rewriteToHttps）。
   // 登录后落到个人中心，脚本自己把 SPA 路由到 #/accountsecurity。
-  static const portalHost = 'authserver.campus.invalid';
-  static const portalUrl = 'https://$portalHost/authserver/login';
+  static final portalHost = CampusHosts.authserver;
+  static final portalUrl = 'https://$portalHost/authserver/login';
 
   @override
   State<PortalBindPage> createState() => _PortalBindPageState();
@@ -161,7 +162,12 @@ class _PortalBindPageState extends State<PortalBindPage> {
   Future<void> _inject() async {
     if (_finished) return;
     final script = (await rootBundle.loadString(_scriptAsset))
-        .replaceFirst('__DEVICE_NAME__', jsonEncode(_deviceName));
+        .replaceFirst('__DEVICE_NAME__', jsonEncode(_deviceName))
+        // 门户 origin 来自 campus_config，脚本里不写明文域名。
+        .replaceFirst(
+          '__PORTAL_ALLOWED_ORIGIN__',
+          jsonEncode('https://${CampusHosts.authserver}'),
+        );
     if (!mounted || _finished) return;
     await _controller.runJavaScript(script);
   }

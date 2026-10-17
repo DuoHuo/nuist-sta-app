@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../config/campus_config.dart';
 import '../network/vpn_dio.dart';
 import '../network/vpn_gateway.dart';
 import 'aia_trust.dart';
@@ -23,29 +24,29 @@ import 'secure_cookie_storage.dart';
 ///
 /// CAS 拿它做字符串精确匹配来校验 ticket，**不要随手改写大小写或尾斜杠**。
 abstract final class PortalServices {
-  static const jwxt =
-      'https://jwxt.campus.invalid/jwapp/sys/emaphome/portal/index.do';
+  static final jwxt =
+      'https://${CampusHosts.jwxt}/jwapp/sys/emaphome/portal/index.do';
 
   /// 校园一卡通（电费）。登录落地 URL 的 query 里带 `synjones-auth`，这才是
   /// icard 接口真正认的凭据，Cookie 在那边没用。
-  static const icard =
-      'https://icard.campus.invalid/berserker-auth/cas/login/wisedu'
-      '?targetUrl=https://icard.campus.invalid/plat-pc/?name=loginTransit';
+  static final icard =
+      'https://${CampusHosts.icard}/berserker-auth/cas/login/wisedu'
+      '?targetUrl=https://${CampusHosts.icard}/plat-pc/?name=loginTransit';
 
-  /// 信息门户 i.campus.invalid（学业数据等 cus 接口）。实测未登录访问会被
-  /// 302 到 `authserver/login?service=https://i.campus.invalid/login`。
-  static const iportal = 'https://i.campus.invalid/login';
+  /// 信息门户（学业数据等 cus 接口）。实测未登录访问会被 302 到
+  /// `authserver/login?service=https://i.<校园根域>/login`。
+  static final iportal = 'https://${CampusHosts.iportal}/login';
 
   /// 创新创业实践教育平台 cxcyjy（双创学分的上级平台）。不是裸域名：平台
   /// 首页登录按钮直指这个回调，探测自 `/pt` 页面。CAS 落地后平台还要再由页面
   /// JS 补一次 POST 才算登录完成，见 InnovationCreditApi。
-  static const cxcyjy =
-      'https://cxcyjy.campus.invalid/pt/HomePage/UnifiedAuthenticationLogin';
+  static final cxcyjy =
+      'https://${CampusHosts.cxcyjy}/pt/HomePage/UnifiedAuthenticationLogin';
 
   /// 劳动教育平台。未登录访问业务页会被 302 到站内 `/AuthServer/Login`，
   /// 该页「统一认证」按钮经 `/UnifiedAuth/CASLogin` 再 302 到 CAS，service 即此。
-  /// host 里的大写 L 是服务端原样给的，CAS 精确匹配字符串，**不能改小写**。
-  static const labor = 'https://Labor.campus.invalid/UnifiedAuth/CASLogin';
+  /// 主机名统一小写后已实测 CAS 校验通过。
+  static final labor = 'https://${CampusHosts.labor}/UnifiedAuth/CASLogin';
 }
 
 /// 统一门户的全局会话，是壳和所有小程序取用登录态的唯一入口。
@@ -62,7 +63,7 @@ abstract final class PortalServices {
 /// ```dart
 /// final response = await PortalSession.instance.request(
 ///   PortalServices.jwxt,
-///   (http) => http.get(Uri.parse('https://jwxt.campus.invalid/...')),
+///   (http) => http.get(Uri.parse('https://jwxt.<校园根域>/...')),
 /// );
 /// ```
 class PortalSession {
@@ -223,14 +224,15 @@ class PortalSession {
   /// Passkey，那样验不出凭据有没有被吊销，所以这里先把会话清掉，逼它走一遍
   /// 完整的 WebAuthn 断言。
   Future<String> verifyCredential({
-    String service = PortalServices.jwxt,
+    String? service,
     void Function(String stage)? onStage,
   }) async {
+    final target = service ?? PortalServices.jwxt;
     // 先等在飞的登录跑完：force 会合流到它，而它是在 clear 之前开始的，
     // 验不出凭据。
     await _queue;
     await clear();
-    return ensureLoggedIn(service, force: true, onStage: onStage);
+    return ensureLoggedIn(target, force: true, onStage: onStage);
   }
 
   /// 仅供调试界面使用：列出访问 [url] 时会带上的 Cookie 名称与域。

@@ -79,6 +79,105 @@ flutter {
     source = "../.."
 }
 
+// ===== 校内服务地址：与 Dart 侧共用 lib/core/config/campus_config.dart =====
+// 该文件里是 hex 编码；Android 资源 XML 不能执行 Dart，所以这里把 hex 解出来
+// 生成 network_security_config.xml（生成物在 build/ 里，不入库）。
+val campusConfigFile = rootProject.file("../lib/core/config/campus_config.dart")
+val campusMapBaseUrl: String = run {
+    if (!campusConfigFile.isFile) return@run ""
+    val hex = Regex("_mapBaseUrlHex\\s*=\\s*'([0-9a-fA-F]+)'")
+        .find(campusConfigFile.readText())
+        ?.groupValues
+        ?.get(1)
+        .orEmpty()
+    hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
+}
+val campusMapHost: String = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://([^/:]+)")
+    .find(campusMapBaseUrl)
+    ?.groupValues
+    ?.get(1)
+    .orEmpty()
+
+abstract class GenerateNetworkSecurityConfig : DefaultTask() {
+    @get:Input
+    abstract val mapHost: Property<String>
+
+    @get:Input
+    abstract val debugConfig: Property<Boolean>
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+        val host = mapHost.get()
+        val debug = debugConfig.get()
+        val mapDomain = when {
+            host.isEmpty() -> ""
+            debug -> "        <domain>$host</domain>"
+            else -> "        <domain includeSubdomains=\"false\">$host</domain>"
+        }
+        val text = if (debug) {
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <!-- 由 build.gradle.kts 生成，不要手改。仅 debug 源集：信任用户安装的
+                 CA 证书，让 mitmproxy / Charles 能解开 App（含 WebView）的流量。 -->
+            <network-security-config>
+                <base-config>
+                    <trust-anchors>
+                        <certificates src="system" />
+                        <certificates src="user" />
+                    </trust-anchors>
+                </base-config>
+                <domain-config cleartextTrafficPermitted="true">
+            $mapDomain
+                    <domain>duohuo.org.cn</domain>
+                    <domain>127.0.0.1</domain>
+                    <domain>localhost</domain>
+                    <domain>10.0.2.2</domain>
+                </domain-config>
+            </network-security-config>
+            """.trimIndent()
+        } else {
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <!-- 由 build.gradle.kts 生成，不要手改。includeSubdomains 必须显式声明
+                 （lint 的 NetworkSecurityConfig 检查会因缺失而判为致命错误）。 -->
+            <network-security-config>
+                <base-config cleartextTrafficPermitted="false">
+                    <trust-anchors>
+                        <certificates src="system" />
+                    </trust-anchors>
+                </base-config>
+                <domain-config cleartextTrafficPermitted="true">
+            $mapDomain
+                    <domain includeSubdomains="false">duohuo.org.cn</domain>
+                </domain-config>
+            </network-security-config>
+            """.trimIndent()
+        }
+        val dir = outputDirectory.get().asFile.resolve("xml")
+        dir.mkdirs()
+        dir.resolve("network_security_config.xml").writeText(text)
+    }
+}
+
+androidComponents.onVariants { variant ->
+    val debug = variant.buildType == "debug"
+    val task = tasks.register<GenerateNetworkSecurityConfig>(
+        "generate${variant.name.replaceFirstChar { it.uppercase() }}NetworkSecurityConfig",
+    ) {
+        inputs.file(campusConfigFile)
+        mapHost.set(campusMapHost)
+        debugConfig.set(debug)
+        outputDirectory.set(layout.buildDirectory.dir("generated/nsc/${variant.name}"))
+    }
+    variant.sources.res?.addGeneratedSourceDirectory(
+        task,
+        GenerateNetworkSecurityConfig::outputDirectory,
+    )
+}
+
 // Rust 核心随 APK 从源码构建，不提交预编译的 .so，也不需要额外 Flutter 插件。
 val vpnRustRoot = rootProject.file("../native/vpn")
 val vpnRustTarget = rootProject.layout.buildDirectory.dir("rust-vpn")

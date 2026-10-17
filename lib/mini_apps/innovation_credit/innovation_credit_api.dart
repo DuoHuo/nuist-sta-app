@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
+import '../../core/config/campus_config.dart';
 import '../../core/html_table.dart';
 import 'innovation_credit_models.dart';
 
@@ -23,7 +24,7 @@ import 'innovation_credit_models.dart';
 class InnovationCreditApi {
   InnovationCreditApi._();
 
-  static const _platform = 'https://cxcyjy.campus.invalid/pt';
+  static final _platform = 'https://${CampusHosts.cxcyjy}/pt';
   static final Uri _completeLogin = Uri.parse(
     '$_platform/HomePage/UnifiedAuthenticationLogin',
   );
@@ -33,10 +34,10 @@ class InnovationCreditApi {
   );
 
   static final Uri _summaryPage = Uri.parse(
-    'https://cxxf.campus.invalid/XueFen/SummaryQuery/Index',
+    'https://${CampusHosts.cxxf}/XueFen/SummaryQuery/Index',
   );
   static final Uri _detailPage = Uri.parse(
-    'https://cxxf.campus.invalid/XueFen/Summary/Index?PageSize=200',
+    'https://${CampusHosts.cxxf}/XueFen/Summary/Index?PageSize=200',
   );
   static const _summaryTable = 'c_app_page_index_SummaryQuery_table';
   static const _detailTable = 'c_app_page_index_Summary_table';
@@ -119,7 +120,7 @@ class InnovationCreditApi {
 
     // 第三步：经 AccessSubsystem 换 cxxf 会话。第一跳要带 Referer，所以不能
     // 直接交给 followRedirects。
-    const referer = {'Referer': '$_platform/'};
+    final referer = {'Referer': '$_platform/'};
     final hop = await http.get(_accessSubsystem, headers: referer);
     final location = hop.headers.value('location');
     if (!PortalHttp.isRedirect(hop.statusCode) ||

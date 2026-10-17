@@ -10,6 +10,9 @@ import 'package:pointycastle/digests/md5.dart';
 import 'package:pointycastle/digests/sha256.dart';
 import 'package:pointycastle/macs/hmac.dart';
 
+import '../config/campus_config.dart';
+import 'vpn_log.dart';
+
 /// 复用现有密码库构造 Enlink SPA 敲门包，不自行实现密码算法。
 class VpnSpa {
   VpnSpa._();
@@ -30,9 +33,10 @@ class VpnSpa {
     if (salt.length != 8) throw ArgumentError('SPA 盐必须是 8 字节');
     randomValue ??= List.generate(16, (_) => random.nextInt(10)).join();
     timestamp ??= DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    // 产品公开的默认 SPA 密钥；用户身份仍由 CAS 和隧道 token 校验。
+    // SPA 密钥来自 campus_config（hex 存储）；用户身份仍由 CAS 和隧道 token 校验。
+    assert(kVpnSpaKey.isNotEmpty, 'VPN_SPA_KEY 未注入');
     final key = MD5Digest().process(
-      Uint8List.fromList(utf8.encode('PLACEHOLDER_SPA_KEY')),
+      Uint8List.fromList(utf8.encode(kVpnSpaKey)),
     );
     final material = BytesBuilder();
     var previous = Uint8List(0);
@@ -73,6 +77,10 @@ class VpnSpa {
 
   /// 仅在控制器声明启用 SPA 时发送，使用操作系统现有网络出口。
   static Future<void> knock(String host, int port, String user) async {
+    if (kVpnSpaKey.isEmpty) {
+      vpnLog('未配置 SPA 密钥，跳过敲门');
+      return;
+    }
     final addresses = await InternetAddress.lookup(
       host,
       type: InternetAddressType.IPv4,

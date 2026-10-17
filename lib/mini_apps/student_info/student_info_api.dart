@@ -4,6 +4,7 @@ import 'dart:math';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
+import '../../core/config/campus_config.dart';
 import 'student_info_models.dart';
 
 /// 信息门户的两个接口：
@@ -16,7 +17,7 @@ import 'student_info_models.dart';
 class StudentInfoApi {
   StudentInfoApi._();
 
-  static const _base = 'https://i.campus.invalid';
+  static final _base = 'https://${CampusHosts.iportal}';
   static final Uri _templateApi = Uri.parse('$_base/execTemplateMethod');
 
   static Future<StudentInfo> fetch() async {

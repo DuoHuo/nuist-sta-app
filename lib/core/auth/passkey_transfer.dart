@@ -9,6 +9,7 @@ import 'package:pointycastle/block/modes/cfb.dart';
 import 'package:pointycastle/ecc/api.dart';
 import 'package:pointycastle/ecc/curves/secp256r1.dart';
 
+import '../config/campus_config.dart';
 import 'passkey_bundle.dart';
 import 'webauthn_signer.dart';
 
@@ -39,8 +40,8 @@ class PasskeyTransfer {
   static const prefix = 'nuistkey1:';
 
   /// APP 内置密钥（16 个 ASCII 字符 = 128 位），末六字节换成 PIN 后才是
-  /// 真正的 AES 密钥。
-  static const _appKey = 'PLACEHOLDER_0000';
+  /// 真正的 AES 密钥。真实值在 [kPasskeyExportKey]（hex 编码存储）。
+  static final _appKey = kPasskeyExportKey;
 
   static const _blockLength = 16;
   static final _iv = Uint8List(_blockLength);
@@ -166,7 +167,7 @@ class PasskeyTransfer {
 class _Payload {
   _Payload._();
 
-  static const defaultRpId = 'authserver.campus.invalid';
+  static final defaultRpId = CampusHosts.authserver;
 
   static const _flagRpId = 1 << 0;
 

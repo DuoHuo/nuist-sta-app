@@ -1,6 +1,7 @@
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
+import '../../core/config/campus_config.dart';
 import '../../core/html_table.dart';
 import 'labor_score_models.dart';
 
@@ -16,7 +17,7 @@ import 'labor_score_models.dart';
 class LaborScoreApi {
   LaborScoreApi._();
 
-  static const _base = 'https://labor.campus.invalid';
+  static final _base = 'https://${CampusHosts.labor}';
   static final Uri _resultPage = Uri.parse('$_base/ResultManage/StudentResult');
   static final Uri _lifePage = Uri.parse(
     '$_base/Activity/StudentJiFen/Index?pc=生活',

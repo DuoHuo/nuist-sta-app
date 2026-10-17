@@ -1,3 +1,5 @@
+import '../../core/config/campus_config.dart';
+
 /// 用户可以订阅的公告主题。
 enum AnnouncementTopic {
   academicCompetition,
@@ -57,7 +59,7 @@ class AnnouncementCategory {
   final String path;
 
   /// 分类页对应的官网地址。
-  Uri get uri => Uri.parse('https://bulletin.campus.invalid/$path');
+  Uri get uri => Uri.parse('https://${CampusHosts.bulletin}/$path');
 
   /// 公告栏支持的全部官方分类。
   static const all = [

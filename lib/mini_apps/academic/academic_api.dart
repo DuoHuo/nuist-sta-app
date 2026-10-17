@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
+import '../../core/config/campus_config.dart';
 import 'academic_models.dart';
 
 /// 信息门户学业概览接口：GET `/cus/jxmh/czjl?xh=`，学号留空即查自己。
@@ -13,7 +14,9 @@ import 'academic_models.dart';
 class AcademicApi {
   AcademicApi._();
 
-  static final Uri _api = Uri.parse('https://i.campus.invalid/cus/jxmh/czjl?xh=');
+  static final Uri _api = Uri.parse(
+    'https://${CampusHosts.iportal}/cus/jxmh/czjl?xh=',
+  );
 
   static Future<AcademicSummary> fetchSummary() async {
     var json = await _send(force: false);

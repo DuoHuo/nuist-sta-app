@@ -3,13 +3,14 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/config/campus_config.dart';
 import '../../core/network/vpn_dio.dart';
 import 'announcement_detail_parser.dart';
 import 'announcement_models.dart';
 import 'announcement_tagger.dart';
 
-/// 信息公告栏官网首页地址。
-const announcementHomeUri = 'https://bulletin.campus.invalid/';
+/// 信息公告栏官网首页地址（主机名由 `campus_config.dart` 的校园根域派生）。
+final announcementHomeUri = 'https://${CampusHosts.bulletin}/';
 
 /// 从学校官网读取公告列表。
 class AnnouncementApi {
