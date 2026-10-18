@@ -233,6 +233,8 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
                     InkResponse(
                       key: Key('manual_course_color_$i'),
                       onTap: () => Navigator.pop(ctx, i),
+                      // 默认半径 35 会溢出到相邻色块，收到色块自身大小。
+                      radius: 20,
                       child: Container(
                         width: 40,
                         height: 40,

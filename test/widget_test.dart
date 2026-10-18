@@ -69,9 +69,12 @@ void main() {
     await tester.tap(find.text('我的'));
     await tester.pumpAndSettle();
 
-    expect(find.text('点击登录'), findsOneWidget);
-    expect(find.text('登录后同步我的社团与活动'), findsOneWidget);
-    for (final label in ['绑定统一门户', '我的社团', '我的活动', '设置', '关于']) {
+    // 测试环境读不到安全存储，表头停在加载态。
+    expect(find.text('统一门户'), findsOneWidget);
+    expect(find.text('点击登录'), findsNothing);
+    expect(find.text('我的社团'), findsNothing);
+    expect(find.text('我的活动'), findsNothing);
+    for (final label in ['设置', '关于']) {
       expect(find.text(label), findsOneWidget);
     }
   });

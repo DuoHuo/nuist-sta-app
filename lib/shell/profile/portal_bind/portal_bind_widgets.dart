@@ -13,11 +13,11 @@ class PortalCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-      ),
+    // 用 Material 画底色：里面行的 InkWell 水波纹画在它上面才看得见，
+    // 并随圆角裁剪。
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
       child: child,
     );
@@ -58,31 +58,39 @@ class PortalActionRow extends StatelessWidget {
               height: 56,
               child: Row(
                 children: [
-                  Icon(icon, size: 20, color: color),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        label,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: destructive ? color : AppColors.titleText,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        hint,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.hint,
-                        ),
-                      ),
-                    ],
+                  SizedBox.square(
+                    dimension: 24,
+                    child: Center(child: Icon(icon, size: 20, color: color)),
                   ),
-                  const Spacer(),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: destructive ? color : AppColors.titleText,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          hint,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.hint,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                   const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
                 ],
               ),

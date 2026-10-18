@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_session.dart';
+import '../../core/auth/student_id_mask.dart';
 import '../../core/wip.dart';
 import 'profile_list_tile.dart';
 import 'user_card.dart';
@@ -18,14 +19,14 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   static const _wipTiles = <ProfileTile>[
-    ProfileTile(icon: Icons.groups, label: '我的社团'),
-    ProfileTile(icon: Icons.event, label: '我的活动'),
     ProfileTile(icon: Icons.settings_outlined, label: '设置'),
-    ProfileTile(icon: Icons.info_outline, label: '关于'),
   ];
+  static const _aboutTile = ProfileTile(icon: Icons.info_outline, label: '关于');
 
   // null = 还没读到安全存储的结果。
   bool? _portalBound;
+  // 只存脱敏后的学号，原文不留在状态里，也绝不打印。
+  String? _maskedStudentId;
 
   @override
   void initState() {
@@ -35,7 +36,13 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<void> _loadPortalBound() async {
     final bundle = await PasskeyStore.read();
-    if (mounted) setState(() => _portalBound = bundle != null);
+    final id = bundle?.studentId;
+    if (mounted) {
+      setState(() {
+        _portalBound = bundle != null;
+        _maskedStudentId = id == null ? null : maskStudentId(id);
+      });
+    }
   }
 
   Future<void> _openPortalBind() async {
@@ -50,40 +57,35 @@ class _ProfilePageState extends State<ProfilePage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         children: [
-          // 用户卡片：登录前展示占位态，接好账号体系后替换成真实资料。
-          UserCard(onTap: () => showWipSnackBar(context, '登录')),
-          const SizedBox(height: 10),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
+          // 凭据被门户拒绝过的话，表头要能看出来，否则用户只会觉得
+          // 「明明绑了，功能却用不了」。
+          ValueListenableBuilder<PortalCredentialError?>(
+            valueListenable: PortalSession.instance.credentialError,
+            builder: (context, credentialError, _) => PortalStatusCard(
+              bound: _portalBound,
+              maskedStudentId: _maskedStudentId,
+              revoked: credentialError != null,
+              onTap: _openPortalBind,
             ),
+          ),
+          const SizedBox(height: 10),
+          Material(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            clipBehavior: Clip.antiAlias,
             child: Column(
               children: [
-                // 凭据被门户拒绝过的话，这一行要能看出来，否则用户只会觉得
-                // 「明明绑了，功能却用不了」。
-                ValueListenableBuilder<PortalCredentialError?>(
-                  valueListenable: PortalSession.instance.credentialError,
-                  builder: (context, credentialError, _) => ProfileListTile(
-                    tile: ProfileTile(
-                      icon: Icons.verified_user_outlined,
-                      label: '绑定统一门户',
-                      trailing: switch (_portalBound) {
-                        null => null,
-                        true => credentialError == null ? '已绑定' : '已失效',
-                        false => '未绑定',
-                      },
-                    ),
-                    showDivider: true,
-                    onTap: _openPortalBind,
-                  ),
-                ),
                 for (final tile in _wipTiles)
                   ProfileListTile(
                     tile: tile,
-                    showDivider: tile != _wipTiles.last,
+                    showDivider: true,
                     onTap: () => showWipSnackBar(context, tile.label),
                   ),
+                ProfileListTile(
+                  tile: _aboutTile,
+                  showDivider: false,
+                  onTap: () => context.push('/about'),
+                ),
               ],
             ),
           ),

@@ -13,7 +13,7 @@ class ProfileTile {
   final String? trailing;
 }
 
-/// 「我的」页的功能入口行。
+/// 「我的」页的功能入口行。外层卡片需用 Material 画底色，水波纹才可见。
 class ProfileListTile extends StatelessWidget {
   const ProfileListTile({
     super.key,
@@ -32,34 +32,52 @@ class ProfileListTile extends StatelessWidget {
       onTap: onTap,
       child: Column(
         children: [
-          SizedBox(
-            height: 52,
-            child: Row(
-              children: [
-                Icon(tile.icon, color: AppColors.labelText, size: 20),
-                const SizedBox(width: 12),
-                Text(
-                  tile.label,
-                  style: const TextStyle(
-                    color: Color(0xFF1F2329),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: SizedBox(
+              height: 52,
+              child: Row(
+                children: [
+                  SizedBox.square(
+                    dimension: 24,
+                    child: Center(
+                      child: Icon(
+                        tile.icon,
+                        color: AppColors.labelText,
+                        size: 20,
+                      ),
+                    ),
                   ),
-                ),
-                const Spacer(),
-                if (tile.trailing != null) ...[
-                  Text(
-                    tile.trailing!,
-                    style: const TextStyle(color: AppColors.hint, fontSize: 13),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      tile.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF1F2329),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ),
-                  const SizedBox(width: 4),
+                  if (tile.trailing != null) ...[
+                    Text(
+                      tile.trailing!,
+                      style: const TextStyle(
+                        color: AppColors.hint,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
                 ],
-                const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
-              ],
+              ),
             ),
           ),
           if (showDivider)
-            const Divider(height: 1, color: AppColors.rowDivider),
+            const Divider(height: 1, indent: 52, color: AppColors.rowDivider),
         ],
       ),
     );

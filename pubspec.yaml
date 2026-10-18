@@ -52,6 +52,7 @@ dependencies:
   mobile_scanner: ^7.4.2
   # 课表：网络恢复后补同步。7.3.2 起依赖 dbus ^0.8，与 geolocator_linux 0.2.6 冲突。
   connectivity_plus: ^7.3.1
+  package_info_plus: ^10.2.2
 
 dev_dependencies:
   flutter_test:
@@ -81,6 +82,8 @@ flutter:
     - assets/js/portal_passkey.js
     # 端上调试控制台，只在 debug 构建注入页面（见 PortalBindPage._injectVConsole）。
     - assets/js/vconsole.min.js
+    # 关于页展示的应用图标（复制自 Android launcher 图标）。
+    - assets/images/app_icon.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

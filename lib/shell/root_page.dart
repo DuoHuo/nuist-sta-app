@@ -10,43 +10,88 @@ class RootPage extends StatelessWidget {
 
   final StatefulNavigationShell navigationShell;
 
+  static const _items = <_TabItem>[
+    _TabItem(Icons.home_outlined, Icons.home, '首页'),
+    _TabItem(Icons.school_outlined, Icons.school, '学习'),
+    _TabItem(Icons.person_outline, Icons.person, '我的'),
+  ];
+
   @override
   Widget build(BuildContext context) {
+    final current = navigationShell.currentIndex;
     return Scaffold(
       body: navigationShell,
-      bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: AppColors.divider)),
-        ),
-        child: BottomNavigationBar(
-          type: BottomNavigationBarType.fixed,
-          backgroundColor: Colors.white,
-          selectedItemColor: AppColors.accent,
-          unselectedItemColor: AppColors.tabInactive,
-          selectedFontSize: 10,
-          unselectedFontSize: 10,
-          currentIndex: navigationShell.currentIndex,
-          onTap: (i) => navigationShell.goBranch(
-            i,
-            // 重复点击当前页签回到该页签首页。
-            initialLocation: i == navigationShell.currentIndex,
+      // 不用 BottomNavigationBar：它的水波纹以整条栏为画布铺开。
+      // 每个条目各自一块 Material + InkWell，涟漪只落在被按的格子里。
+      bottomNavigationBar: Material(
+        color: Colors.white,
+        child: Container(
+          decoration: const BoxDecoration(
+            border: Border(top: BorderSide(color: AppColors.divider)),
           ),
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.home_outlined),
-              activeIcon: Icon(Icons.home),
-              label: '首页',
+          child: SafeArea(
+            top: false,
+            child: SizedBox(
+              height: 56,
+              child: Row(
+                children: [
+                  for (var i = 0; i < _items.length; i++)
+                    Expanded(
+                      child: _TabButton(
+                        item: _items[i],
+                        selected: i == current,
+                        onTap: () => navigationShell.goBranch(
+                          i,
+                          // 重复点击当前页签回到该页签首页。
+                          initialLocation: i == current,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.school_outlined),
-              activeIcon: Icon(Icons.school),
-              label: '学习',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.person_outline),
-              activeIcon: Icon(Icons.person),
-              label: '我的',
-            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TabItem {
+  const _TabItem(this.icon, this.activeIcon, this.label);
+
+  final IconData icon;
+  final IconData activeIcon;
+  final String label;
+}
+
+class _TabButton extends StatelessWidget {
+  const _TabButton({
+    required this.item,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _TabItem item;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? AppColors.accent : AppColors.tabInactive;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: item.label,
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(selected ? item.activeIcon : item.icon, color: color),
+            const SizedBox(height: 2),
+            Text(item.label, style: TextStyle(color: color, fontSize: 10)),
           ],
         ),
       ),

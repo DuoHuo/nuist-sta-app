@@ -9,6 +9,7 @@ import 'mini_apps/registry.dart';
 import 'mini_apps/score/score_page.dart';
 import 'mini_apps/web/mini_web_view_page.dart';
 import 'shell/home/home_page.dart';
+import 'shell/profile/about/about_page.dart';
 import 'shell/profile/portal_bind/portal_bind_page.dart';
 import 'shell/profile/portal_bind/portal_export_page.dart';
 import 'shell/profile/portal_bind/portal_import_page.dart';
@@ -35,6 +36,7 @@ import 'shell/study/study_page.dart';
 ///   平级全屏展示，返回键退回学习页。
 /// - `/place/:placeId`：校园地图的地物详情页（建筑 / POI / 通用地物共用）。
 ///   与壳平级，可深链与分享；页面按编号自行取数，不依赖地图页是否打开。
+/// - `/about`：关于页（应用图标、版本号、贡献者名单），与壳平级。
 GoRouter buildRouter() => GoRouter(
   routes: [
     StatefulShellRoute.indexedStack(
@@ -95,6 +97,7 @@ GoRouter buildRouter() => GoRouter(
     ),
     GoRoute(path: '/labor-score', builder: (_, _) => const LaborScorePage()),
     GoRoute(path: '/scores', builder: (_, _) => const ScorePage()),
+    GoRoute(path: '/about', builder: (_, _) => const AboutPage()),
   ],
 );
 
