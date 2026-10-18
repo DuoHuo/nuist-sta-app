@@ -8,6 +8,7 @@ import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/html_table.dart';
 import 'innovation_credit_models.dart';
+import '../../core/auth/safe_message.dart';
 
 /// 双创学分：数据在学分认定子系统 cxxf 的两个 HTML 页面里，没有 JSON 接口。
 ///
@@ -46,7 +47,7 @@ class InnovationCreditApi {
     final session = PortalSession.instance;
     var summary = await _table(session.http, _summaryPage, _summaryTable);
     if (summary == null) {
-      portalLog('双创学分子系统会话失效，重新登录');
+      portalLog(() => '双创学分子系统会话失效，重新登录');
       await _login(session);
       summary = await _table(session.http, _summaryPage, _summaryTable);
       if (summary == null) {
@@ -94,7 +95,8 @@ class InnovationCreditApi {
       r'name="__RequestVerificationToken"[^>]*value="([^"]+)"',
     ).firstMatch('${page.data}')?.group(1);
     if (token == null) {
-      throw PortalLoginError('创新创业平台落地页缺少防伪 token：$landing');
+      portalLog(() => '创新创业平台落地页缺少防伪 token：$landing');
+      throw const PortalLoginError('创新创业平台登录失败，请稍后重试');
     }
     final done = await http.post(
       _completeLogin,
@@ -107,8 +109,13 @@ class InnovationCreditApi {
     );
     final result = _decode(done.data);
     if (result == null || result['Success'] != true) {
+      portalLog(() => '创新创业平台统一认证未完成：${result ?? done.data}');
       throw PortalLoginError(
-        '创新创业平台统一认证未完成：${result?['Message'] ?? done.data}',
+        prefixedServerMessage(
+          '创新创业平台统一认证未完成：',
+          result?['Message'],
+          fallback: '创新创业平台登录失败，请稍后重试',
+        ),
       );
     }
     // 页面 JS 会跳到 Data.RedirectUrl（相对平台根，如 /System/User/LoginRole），

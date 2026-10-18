@@ -1,0 +1,57 @@
+{
+  "datas": {
+    "cxxsksap": {
+      "extParams": { "code": "1", "msg": "查询成功" },
+      "pageSize": "10",
+      "pageNumber": "1",
+      "totalSize": "-1",
+      "rows": [
+        {
+          "KCH": "00000001", "KCM": "示例课程甲",
+          "KSMC": "(期)2026-2027-1学期 期末考试（集中）",
+          "KSRQ": "2027-01-05", "KSKSSJ": "09:00", "KSJSSJ": "11:00",
+          "KSSJMS": "2027-01-05 09:00-11:00(星期二)",
+          "JASMC": "示例楼A101", "JASDM": "0-000-A101", "JXLMC": "示例楼", "JXLDM": "0-000",
+          "XXXQMC": "示例校区", "XXXQDM": "01", "ZWH": "12",
+          "ZJJSXM": "张老师", "BZ": "请携带学生证",
+          "XH": "202500000000", "XSBH": "202500000000",
+          "XNXQDM": "2026-2027-1", "XNXQDM_DISPLAY": "2026-2027-1学期",
+          "SFAPSJ": "1", "SFAPSJ_DISPLAY": "是", "KSRWZT": "1",
+          "KSDM": "synthetic-ksdm-0001", "KSRWID": "synthetic-ksrwid-0001",
+          "SFXYAPKS": "1", "SFXYAPKS_DISPLAY": "是", "BYBZ": "0",
+          "TSYYDM": null, "TSYYDM_DISPLAY": "", "SFFBSJ": null
+        },
+        {
+          "KCH": "00000002", "KCM": "示例课程乙",
+          "KSMC": "(期)2026-2027-1学期 期末考试（集中）",
+          "KSRQ": "2027-01-05", "KSKSSJ": "14:00", "KSJSSJ": "16:00",
+          "KSSJMS": "2027-01-05 14:00-16:00(星期二)",
+          "JASMC": "示例楼B202", "JASDM": "0-000-B202", "JXLMC": "示例楼", "JXLDM": "0-000",
+          "XXXQMC": "示例校区", "XXXQDM": "01", "ZWH": null,
+          "ZJJSXM": "李老师", "BZ": null,
+          "XH": "202500000000", "XSBH": "202500000000",
+          "XNXQDM": "2026-2027-1", "XNXQDM_DISPLAY": "2026-2027-1学期",
+          "SFAPSJ": "1", "SFAPSJ_DISPLAY": "是", "KSRWZT": "1",
+          "KSDM": "synthetic-ksdm-0001", "KSRWID": "synthetic-ksrwid-0002",
+          "SFXYAPKS": "1", "SFXYAPKS_DISPLAY": "是", "BYBZ": "0",
+          "TSYYDM": null, "TSYYDM_DISPLAY": "", "SFFBSJ": null
+        },
+        {
+          "KCH": "00000003", "KCM": "示例课程丙（未排时间）",
+          "KSMC": "(期)2026-2027-1学期 期末考试（集中）",
+          "KSRQ": null, "KSKSSJ": null, "KSJSSJ": null, "KSSJMS": null,
+          "JASMC": null, "JASDM": null, "JXLMC": null, "JXLDM": null,
+          "XXXQMC": null, "XXXQDM": null, "ZWH": null,
+          "ZJJSXM": "王老师", "BZ": null,
+          "XH": "202500000000", "XSBH": "202500000000",
+          "XNXQDM": "2026-2027-1", "XNXQDM_DISPLAY": "2026-2027-1学期",
+          "SFAPSJ": "0", "SFAPSJ_DISPLAY": "否", "KSRWZT": "0",
+          "KSDM": "synthetic-ksdm-0001", "KSRWID": "synthetic-ksrwid-0003",
+          "SFXYAPKS": "1", "SFXYAPKS_DISPLAY": "是", "BYBZ": "0",
+          "TSYYDM": null, "TSYYDM_DISPLAY": "", "SFFBSJ": null
+        }
+      ]
+    }
+  },
+  "code": "0"
+}

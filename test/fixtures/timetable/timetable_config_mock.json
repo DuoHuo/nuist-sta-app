@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "configVersion": "2026-10-10.2",
+  "terms": [
+    {
+      "code": "2026-2027-1",
+      "startDate": "2026-08-31",
+      "weeks": 20
+    }
+  ],
+  "defaults": {
+    "nodesPerDay": 11,
+    "maxNodesPerDay": 20,
+    "maxWeeks": 20,
+    "showWeekend": true,
+    "showNonCurrentWeek": false
+  },
+  "timetables": [
+    {
+      "id": "placeholder",
+      "validFrom": "2026-09-01",
+      "nodes": [
+        {
+          "n": 1,
+          "start": "08:00",
+          "end": "08:45"
+        },
+        {
+          "n": 2,
+          "start": "08:55",
+          "end": "09:40"
+        },
+        {
+          "n": 3,
+          "start": "10:10",
+          "end": "10:55"
+        },
+        {
+          "n": 4,
+          "start": "11:05",
+          "end": "11:50"
+        },
+        {
+          "n": 5,
+          "start": "13:45",
+          "end": "14:30"
+        },
+        {
+          "n": 6,
+          "start": "14:40",
+          "end": "15:25"
+        },
+        {
+          "n": 7,
+          "start": "15:55",
+          "end": "16:40"
+        },
+        {
+          "n": 8,
+          "start": "16:50",
+          "end": "17:35"
+        },
+        {
+          "n": 9,
+          "start": "18:45",
+          "end": "19:30"
+        },
+        {
+          "n": 10,
+          "start": "19:40",
+          "end": "20:25"
+        },
+        {
+          "n": 11,
+          "start": "20:35",
+          "end": "21:20"
+        }
+      ]
+    }
+  ],
+  "holidays": []
+}

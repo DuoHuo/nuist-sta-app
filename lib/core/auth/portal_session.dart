@@ -166,7 +166,7 @@ class PortalSession {
     if (!_looksLikeLoginPage(response)) return response;
 
     // 被门户弹回了登录页，说明落盘的会话已经过期，重登一次再放行。
-    portalLog('会话已过期，重新登录 $service');
+    portalLog(() => '会话已过期，重新登录 $service');
     http = await clientFor(service, force: true);
     response = await http.followRedirects(await send(http));
     if (_looksLikeLoginPage(response)) {
@@ -294,7 +294,7 @@ class PortalSession {
     final entry = _established[service];
     if (entry == null) return null;
     if (entry.isExpired(establishedTtl)) {
-      portalLog('落地缓存超过信任期，重新确认 $service');
+      portalLog(() => '落地缓存超过信任期，重新确认 $service');
       _established.remove(service);
       return null;
     }
@@ -314,16 +314,16 @@ class PortalSession {
       throw const PortalCredentialError('尚未绑定统一门户，请先完成绑定');
     }
     try {
-      portalLog('开始登录 service=$service');
+      portalLog(() => '开始登录 service=$service');
       final landing = await NuistLogin(
         http: _http,
         bundle: bundle,
         onStage: (stage) {
-          portalLog('阶段: $stage');
+          portalLog(() => '阶段: $stage');
           onStage?.call(stage);
         },
       ).login(service);
-      portalLog('登录成功，落地 $landing');
+      portalLog(() => '登录成功，落地 $landing');
       _established[service] = EstablishedEntry(
         landing: landing,
         at: DateTime.now(),
@@ -333,11 +333,11 @@ class PortalSession {
       return landing;
     } on PortalCredentialError catch (e) {
       // 凭据被服务端拒绝，记下来让绑定状态页显示「已失效」。
-      portalLog('凭据失效: ${e.message}');
+      portalLog(() => '凭据失效: ${e.message}');
       credentialError.value = e;
       rethrow;
     } on PortalException catch (e) {
-      portalLog('登录失败(${e.runtimeType}): ${e.message}');
+      portalLog(() => '登录失败(${e.runtimeType}): ${e.message}');
       rethrow;
     }
   }

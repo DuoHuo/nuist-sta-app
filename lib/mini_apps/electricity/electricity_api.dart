@@ -5,6 +5,7 @@ import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import 'electricity_models.dart';
+import '../../core/auth/safe_message.dart';
 
 /// 一卡通电费接口（对应 notifier/icard/elec_query.py）。
 ///
@@ -58,7 +59,8 @@ class ElectricityApi {
     final map = data['map'];
     final kwh = _extractSurplus(map);
     if (kwh == null) {
-      throw PortalLoginError('电费接口未返回剩余电量：${jsonEncode(map)}');
+      portalLog(() => '电费接口未返回剩余电量：${jsonEncode(map)}');
+      throw const PortalLoginError('电费接口未返回剩余电量，请稍后重试');
     }
     return kwh;
   }
@@ -77,11 +79,18 @@ class ElectricityApi {
   static Future<Map<String, dynamic>> _post(Map<String, String> fields) async {
     var result = await _send(fields, force: false);
     if (_looksUnauthorized(result)) {
-      portalLog('icard token 失效，重新登录');
+      portalLog(() => 'icard token 失效，重新登录');
       result = await _send(fields, force: true);
     }
     if (result['code'] != 200) {
-      throw PortalLoginError('电费接口返回错误：${result['msg'] ?? '未知错误'}');
+      portalLog(() => '电费接口返回错误：$result');
+      throw PortalLoginError(
+        prefixedServerMessage(
+          '电费接口返回错误：',
+          result['msg'],
+          fallback: '电费接口返回错误，请稍后重试',
+        ),
+      );
     }
     return result;
   }
@@ -122,7 +131,8 @@ class ElectricityApi {
   static String _tokenFromLanding(String landing) {
     final token = Uri.tryParse(landing)?.queryParameters['synjones-auth'];
     if (token == null || token.isEmpty) {
-      throw PortalLoginError('未能从一卡通落地页取得 synjones-auth：$landing');
+      portalLog(() => '未能从一卡通落地页取得 synjones-auth：$landing');
+      throw const PortalLoginError('一卡通登录失败，请稍后重试');
     }
     return 'bearer $token';
   }

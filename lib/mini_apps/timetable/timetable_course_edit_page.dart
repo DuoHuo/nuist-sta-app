@@ -1,0 +1,403 @@
+import 'package:flutter/material.dart';
+
+import 'timetable_controller.dart';
+import 'timetable_models.dart';
+import 'timetable_theme.dart';
+import 'timetable_week_format.dart';
+
+const _weekdayCn = ['一', '二', '三', '四', '五', '六', '日'];
+
+/// 删除教务课的二次确认文案（spec §13.15，逐字）。
+const String kJwxtCourseDeleteMessage = '删除这门课？同步后也不会恢复，可在设置里一键恢复。';
+
+/// 打开教务课编辑页（spec §13.15）。保存成功返回 true。
+Future<bool?> showJwxtCourseEditPage(
+  BuildContext context, {
+  required TimetableController controller,
+  required GridCell cell,
+}) {
+  return Navigator.of(context).push<bool>(
+    MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => JwxtCourseEditPage(controller: controller, cell: cell),
+    ),
+  );
+}
+
+/// 教务课编辑页：课名、老师、地点、备注可改；时间（星期/节次）与周次只读，
+/// 下方灰字「拖动课程可调整时间」。保存调用 [TimetableController.editJwxtCourse]
+/// （只传改过的字段，未改的传 null 保持原样）。改课名/老师不重新配色（由 controller 保证）。
+class JwxtCourseEditPage extends StatefulWidget {
+  const JwxtCourseEditPage({
+    super.key,
+    required this.controller,
+    required this.cell,
+  });
+
+  final TimetableController controller;
+
+  /// 详情页里的这一格（已套用编辑/调课的生效课程与时段）。
+  final GridCell cell;
+
+  @override
+  State<JwxtCourseEditPage> createState() => _JwxtCourseEditPageState();
+}
+
+class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
+  final _formKey = GlobalKey<FormState>();
+  late final String _initName;
+  late final String _initTeacher;
+  late final String _initLocation;
+  late final String _initNote;
+  late final TextEditingController _name;
+  late final TextEditingController _teacher;
+  late final TextEditingController _location;
+  late final TextEditingController _note;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final course = widget.cell.course;
+    final slot = widget.cell.slot;
+    final edit = widget.controller.courseEditOf(course.id);
+    _initName = edit?.name ?? course.name;
+    _initTeacher = edit?.teacher ?? slot.teacher;
+    _initLocation = edit?.location ?? slot.location;
+    _initNote = edit?.note ?? slot.note;
+    _name = TextEditingController(text: _initName)..addListener(_changed);
+    _teacher = TextEditingController(text: _initTeacher);
+    _location = TextEditingController(text: _initLocation);
+    _note = TextEditingController(text: _initNote);
+  }
+
+  void _changed() => setState(() {});
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _teacher.dispose();
+    _location.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  String? _ifChanged(TextEditingController c, String initial) {
+    final v = c.text.trim();
+    return v == initial.trim() ? null : v;
+  }
+
+  Future<void> _save() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final name = _ifChanged(_name, _initName);
+    final teacher = _ifChanged(_teacher, _initTeacher);
+    final location = _ifChanged(_location, _initLocation);
+    final note = _ifChanged(_note, _initNote);
+    final navigator = Navigator.of(context);
+    if (name == null && teacher == null && location == null && note == null) {
+      navigator.pop(false);
+      return;
+    }
+    setState(() => _saving = true);
+    final ok = await widget.controller.editJwxtCourse(
+      widget.cell.course.id,
+      name: name,
+      teacher: teacher,
+      location: location,
+      note: note,
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    navigator.pop(ok);
+  }
+
+  String get _timeText {
+    final slot = widget.cell.slot;
+    final c = widget.controller;
+    final wd = _weekdayCn[(slot.day - 1).clamp(0, 6)];
+    final range = slot.startNode == slot.endNode
+        ? '第 ${slot.startNode} 节'
+        : '第 ${slot.startNode}–${slot.endNode} 节';
+    final s = c.periodStart(slot.startNode);
+    final e = c.periodEnd(slot.endNode);
+    final clock = (s == null || e == null) ? '' : ' $s–$e';
+    return '周$wd $range$clock';
+  }
+
+  String get _weeksText {
+    final slot = widget.cell.slot;
+    final t = formatWeekBits(slot.weeks);
+    return t.isNotEmpty ? t : slot.weeksLabel;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canSave = !_saving && _name.text.trim().isNotEmpty;
+    return Scaffold(
+      backgroundColor: TimetableTheme.pageBg,
+      appBar: AppBar(
+        title: const Text('编辑课程'),
+        backgroundColor: TimetableTheme.surface,
+        surfaceTintColor: Colors.transparent,
+        actions: [
+          TextButton(
+            key: const Key('jwxt_edit_save'),
+            onPressed: canSave ? _save : null,
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(TimetableTheme.pagePaddingH),
+          children: [
+            TextFormField(
+              key: const Key('jwxt_edit_name'),
+              controller: _name,
+              decoration: const InputDecoration(labelText: '课程名称'),
+              autovalidateMode: AutovalidateMode.onUserInteraction,
+              validator: (v) =>
+                  (v == null || v.trim().isEmpty) ? '请填写课程名称' : null,
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              key: const Key('jwxt_edit_teacher'),
+              controller: _teacher,
+              decoration: const InputDecoration(labelText: '老师'),
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              key: const Key('jwxt_edit_location'),
+              controller: _location,
+              decoration: const InputDecoration(labelText: '地点'),
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              key: const Key('jwxt_edit_note'),
+              controller: _note,
+              minLines: 1,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: '备注',
+                hintText: '选填',
+              ),
+            ),
+            const SizedBox(height: 16),
+            // 只读：不可点、不弹键盘或选择器（JE22）。
+            _ReadOnlyRow(
+              key: const Key('jwxt_edit_time'),
+              icon: Icons.access_time,
+              label: '时间',
+              value: _timeText,
+            ),
+            if (_weeksText.isNotEmpty)
+              _ReadOnlyRow(
+                key: const Key('jwxt_edit_weeks'),
+                icon: Icons.calendar_today_outlined,
+                label: '周次',
+                value: _weeksText,
+              ),
+            Padding(
+              padding: const EdgeInsets.only(left: 36, top: 2),
+              child: Text(
+                '拖动课程可调整时间',
+                key: const Key('jwxt_edit_time_hint'),
+                style: TimetableTheme.captionStyle(color: TimetableTheme.hint),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReadOnlyRow extends StatelessWidget {
+  const _ReadOnlyRow({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 44),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: TimetableTheme.hint),
+          const SizedBox(width: 16),
+          Text(
+            label,
+            style: TimetableTheme.bodyStyle(color: TimetableTheme.hint),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: TimetableTheme.bodyStyle(color: TimetableTheme.hint),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 教务课详情弹层底部（spec §13.15）：改过时「已修改」+「恢复原课程」；
+/// 「编辑」「删除」。由 B 的 CourseDetailSheet 在教务课时挂上。
+class JwxtCourseDetailActions extends StatefulWidget {
+  const JwxtCourseDetailActions({
+    super.key,
+    required this.controller,
+    required this.cell,
+  });
+
+  final TimetableController controller;
+  final GridCell cell;
+
+  @override
+  State<JwxtCourseDetailActions> createState() =>
+      _JwxtCourseDetailActionsState();
+}
+
+class _JwxtCourseDetailActionsState extends State<JwxtCourseDetailActions> {
+  bool _busy = false;
+
+  String get _id => widget.cell.course.id;
+
+  void _closeWith(String text) {
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (navigator.canPop()) navigator.pop();
+    messenger?.showSnackBar(
+      SnackBar(behavior: SnackBarBehavior.floating, content: Text(text)),
+    );
+  }
+
+  Future<void> _edit() async {
+    final saved = await showJwxtCourseEditPage(
+      context,
+      controller: widget.controller,
+      cell: widget.cell,
+    );
+    if (saved != true || !mounted) return;
+    _closeWith('已保存');
+  }
+
+  Future<void> _delete() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        content: const Text(
+          kJwxtCourseDeleteMessage,
+          key: Key('jwxt_delete_message'),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('jwxt_delete_cancel'),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            key: const Key('jwxt_delete_confirm'),
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red.shade600),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _busy = true);
+    await widget.controller.deleteJwxtCourse(_id);
+    if (!mounted) return;
+    _closeWith('已删除');
+  }
+
+  Future<void> _restore() async {
+    setState(() => _busy = true);
+    final ok = await widget.controller.restoreJwxtCourse(_id);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    _closeWith(ok ? '已恢复原课程' : '恢复失败');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final overridden = widget.controller.isJwxtOverridden(courseId: _id);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (overridden)
+          Padding(
+            key: const Key('course_detail_modified'),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.edit_outlined,
+                  size: 20,
+                  color: TimetableTheme.hint,
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Text('已修改', style: TimetableTheme.bodyStyle())),
+                TextButton(
+                  key: const Key('course_detail_restore_course'),
+                  onPressed: _busy ? null : _restore,
+                  style: TextButton.styleFrom(
+                    foregroundColor: TimetableTheme.accent,
+                  ),
+                  child: const Text('恢复原课程'),
+                ),
+              ],
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 44,
+                  child: FilledButton(
+                    key: const Key('course_detail_jwxt_edit'),
+                    onPressed: _busy ? null : _edit,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFF0F1F3),
+                      foregroundColor: TimetableTheme.titleText,
+                      elevation: 0,
+                      shape: const StadiumBorder(),
+                    ),
+                    child: const Text('编辑'),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                height: 44,
+                child: OutlinedButton.icon(
+                  key: const Key('course_detail_jwxt_delete'),
+                  onPressed: _busy ? null : _delete,
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  label: const Text('删除'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red.shade600,
+                    shape: const StadiumBorder(),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}

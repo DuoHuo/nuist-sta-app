@@ -1,0 +1,38 @@
+{
+  "datas": {
+    "dqzc": {
+      "totalSize": 1,
+      "pageSize": 10,
+      "rows": [
+        {
+          "BY6": null,
+          "BY5": null,
+          "BY4": null,
+          "XQ": "1",
+          "BY3": null,
+          "WID": "ZCWID0001",
+          "BY2": null,
+          "BY1": null,
+          "RQ": "2026-09-23",
+          "XQJ": 3,
+          "RZLBDM": null,
+          "ORDERFILTER": null,
+          "XN": "2026-2027",
+          "ZC": 4,
+          "XXXQ": null,
+          "BY7": null,
+          "BY8": null,
+          "BY9": null,
+          "XSLBDM": null,
+          "BY10": null
+        }
+      ],
+      "extParams": {
+        "logId": "mock-log-0001",
+        "code": 1,
+        "totalPage": 1
+      }
+    }
+  },
+  "code": "0"
+}

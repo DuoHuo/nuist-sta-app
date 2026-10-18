@@ -2,10 +2,12 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
+import 'package:flutter/foundation.dart';
 
 import '../network/vpn_http_adapter.dart';
 import 'aia_trust.dart';
 import 'portal_exceptions.dart';
+import 'safe_message.dart';
 
 /// 门户登录相关的日志出口，由 [PortalSession] 在 debug 构建下接到 debugPrint。
 ///
@@ -14,7 +16,11 @@ import 'portal_exceptions.dart';
 /// 调用方负责不把凭据、Cookie 值、私钥传进来；这里不做脱敏。
 void Function(String message)? portalLogger;
 
-void portalLog(String message) => portalLogger?.call('[portal] $message');
+/// 只在 debug 构建中求值 [message]，release 下整段日志代码可被 tree-shake。
+void portalLog(String Function() message) {
+  if (!kDebugMode) return;
+  portalLogger?.call('[portal] ${message()}');
+}
 
 /// 门户请求的公共 HTTP 行为：超时、状态码放行、异常归类、手动跟随重定向。
 ///
@@ -92,16 +98,18 @@ class PortalHttp {
       final response = await request();
       final location = response.headers.value('location');
       portalLog(
-        '${response.requestOptions.method} ${_short(response.realUri)} '
-        '→ HTTP ${response.statusCode}'
-        '${location == null ? '' : ' → ${_short(Uri.parse(location))}'}',
+        () =>
+            '${response.requestOptions.method} ${_short(response.realUri)} '
+            '→ HTTP ${response.statusCode}'
+            '${location == null ? '' : ' → ${_short(Uri.parse(location))}'}',
       );
       return response;
     } on DioException catch (e) {
       if (e.error case final PortalException error) throw error;
       portalLog(
-        '${e.requestOptions.method} ${_short(e.requestOptions.uri)} '
-        '✗ ${e.type.name}: ${e.message ?? e.error}',
+        () =>
+            '${e.requestOptions.method} ${_short(e.requestOptions.uri)} '
+            '✗ ${e.type.name}: ${e.message ?? e.error}',
       );
       if (await _repairedChain(e)) return send(request);
       // 自定义连接工厂的 TLS 异常可能被 Dio 归为 unknown，仍属于网络错误。
@@ -118,12 +126,12 @@ class PortalHttp {
           '连接门户超时，请检查网络后重试',
         ),
         DioExceptionType.connectionError => PortalNetworkError(
-          '无法连接门户：${e.message ?? '网络不可用'}',
+          '无法连接门户，请检查网络后重试',
         ),
         DioExceptionType.badCertificate => const PortalNetworkError(
           '门户证书校验失败，请检查网络环境',
         ),
-        _ => PortalLoginError('请求失败：${e.message ?? e.error ?? e.type.name}'),
+        _ => const PortalLoginError(kLoginFailedText),
       };
     }
   }
@@ -154,7 +162,7 @@ class PortalHttp {
         createHttpClient: trust.createHttpClient,
       );
     }
-    portalLog('已补全 $host 的证书链，重试');
+    portalLog(() => '已补全 $host 的证书链，重试');
     return true;
   }
 

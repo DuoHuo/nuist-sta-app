@@ -1,12 +1,13 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import '../config/campus_config.dart';
 import 'passkey_bundle.dart';
 import 'portal_exceptions.dart';
 import 'portal_http.dart';
+import 'safe_message.dart';
 import 'webauthn_signer.dart';
 
 /// 统一身份认证的 CAS + WebAuthn 登录流程（由 NuistLogin.py 移植）。
@@ -130,19 +131,34 @@ class NuistLogin {
       responseType: ResponseType.json,
     );
 
-    final body = _asMap(response.data);
+    return parseStartAssertion(response.data, statusCode: response.statusCode);
+  }
+
+  /// 解析 startAssertion 响应，返回 request；失败抛 [PortalException]。
+  ///
+  /// 异常文案会展示给用户，绝不包含原始响应：服务端 message 只有在短小纯文本
+  /// 时才采用（见 safe_message.dart），原文仅在 debug 下进 portalLog。
+  @visibleForTesting
+  static Map<String, dynamic> parseStartAssertion(
+    Object? data, {
+    int? statusCode,
+  }) {
+    final body = _asMap(data);
     if (body == null) {
-      portalLog(
-        'startAssertion 非 JSON 响应: HTTP ${response.statusCode} '
-        '${_preview(response.data)}',
-      );
-      throw const PortalLoginError('startAssertion 返回的不是 JSON 对象');
+      if (kDebugMode) {
+        portalLog(
+          () =>
+              'startAssertion 非 JSON 响应: HTTP $statusCode '
+              '${_preview(data)}',
+        );
+      }
+      throw const PortalLoginError(kLoginFailedText);
     }
-    portalLog('startAssertion 响应: ${_preview(body)}');
+    if (kDebugMode) {
+      portalLog(() => 'startAssertion 响应: ${_preview(body)}');
+    }
     if (body['success'] == false) {
-      throw PortalCredentialError(
-        'startAssertion 被拒绝：${body['message'] ?? body}',
-      );
+      throw PortalCredentialError(safeServerMessage(body['message']));
     }
 
     // 响应结构在不同版本里出现过 result 和 datas 两种外壳，都试一遍。
@@ -155,11 +171,16 @@ class NuistLogin {
       // 必须归到凭据错误，UI 才能提示重新绑定而不是让用户干等重试。
       final message = body['message'];
       if (message is String && message.isNotEmpty) {
-        throw PortalCredentialError('$message，通行密钥可能已被删除或吊销');
+        const suffix = '，通行密钥可能已被删除或吊销';
+        if (isSafeUserMessage(
+          message,
+          maxLength: kMaxUserMessageLength - suffix.length,
+        )) {
+          throw PortalCredentialError('${message.trim()}$suffix');
+        }
+        throw const PortalCredentialError(kLoginFailedText);
       }
-      throw PortalLoginError(
-        'startAssertion 响应中没有有效的 request：${_preview(body)}',
-      );
+      throw const PortalLoginError(kLoginFailedText);
     }
     return request;
   }

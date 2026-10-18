@@ -50,6 +50,8 @@ dependencies:
   file_picker: ^13.1.0
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.4.2
+  # 课表：网络恢复后补同步。7.3.2 起依赖 dbus ^0.8，与 geolocator_linux 0.2.6 冲突。
+  connectivity_plus: ^7.3.1
 
 dev_dependencies:
   flutter_test:

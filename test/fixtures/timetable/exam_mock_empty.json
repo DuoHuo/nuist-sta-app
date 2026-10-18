@@ -1,0 +1,12 @@
+{
+  "datas": {
+    "cxxsksap": {
+      "extParams": { "code": "1", "msg": "查询成功" },
+      "pageSize": "10",
+      "pageNumber": "1",
+      "totalSize": "0",
+      "rows": []
+    }
+  },
+  "code": "0"
+}

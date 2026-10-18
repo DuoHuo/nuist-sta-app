@@ -7,6 +7,7 @@ import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import 'score_models.dart';
+import '../../core/auth/safe_message.dart';
 
 /// 教务 EMAP「学生成绩」应用（cjcx）的接口。
 ///
@@ -29,7 +30,7 @@ class ScoreApi {
   static Future<ScoreReport> fetch() async {
     var rows = await _send(force: false);
     if (rows == null) {
-      portalLog('教务 cjcx 会话失效，重新登录');
+      portalLog(() => '教务 cjcx 会话失效，重新登录');
       rows = await _send(force: true);
     }
     if (rows == null) {
@@ -81,7 +82,14 @@ class ScoreApi {
       }
       final code = '${decoded['code'] ?? ''}';
       if (code.isNotEmpty && code != '0') {
-        throw PortalLoginError('教务成绩接口返回错误：${decoded['msg'] ?? code}');
+        portalLog(() => '教务成绩接口返回错误：$decoded');
+        throw PortalLoginError(
+          prefixedServerMessage(
+            '教务成绩接口返回错误：',
+            decoded['msg'],
+            fallback: '教务成绩接口返回错误，请稍后重试',
+          ),
+        );
       }
       final datas = decoded['datas'];
       final section = datas is Map<String, dynamic>

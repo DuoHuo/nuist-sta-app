@@ -38,7 +38,7 @@ class LaborScoreApi {
     var http = session.http;
     var result = await _table(http, _resultPage, _resultTable);
     if (result == null) {
-      portalLog('劳动教育平台会话失效，重新登录');
+      portalLog(() => '劳动教育平台会话失效，重新登录');
       http = await session.clientFor(PortalServices.labor, force: true);
       result = await _table(http, _resultPage, _resultTable);
       if (result == null) {
