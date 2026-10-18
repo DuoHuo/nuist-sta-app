@@ -63,13 +63,13 @@ class AiaTrust {
         }
         try {
           context.setTrustedCertificatesBytes(_toPem(der));
-          portalLog('AIA 缓存预热: ${_subjectCn(der) ?? entry.path}');
+          portalLog(() => 'AIA 缓存预热: ${_subjectCn(der) ?? entry.path}');
         } catch (_) {
           await entry.delete();
         }
       }
     } catch (e) {
-      portalLog('AIA 缓存读取失败: $e');
+      portalLog(() => 'AIA 缓存读取失败: $e');
     }
   }
 
@@ -82,7 +82,7 @@ class AiaTrust {
       await File('${dir.path}${Platform.pathSeparator}$name.der')
           .writeAsBytes(der, flush: true);
     } catch (e) {
-      portalLog('AIA 缓存写入失败: $e');
+      portalLog(() => 'AIA 缓存写入失败: $e');
     }
   }
 
@@ -118,7 +118,7 @@ class AiaTrust {
       try {
         issuer = await _fetch(url, createFetchClient: createFetchClient);
       } catch (e) {
-        portalLog('AIA 拉取失败 $url: $e');
+        portalLog(() => 'AIA 拉取失败 $url: $e');
         break;
       }
       if (_isSelfSigned(issuer)) {
@@ -128,9 +128,9 @@ class AiaTrust {
       try {
         context.setTrustedCertificatesBytes(_toPem(issuer));
         added++;
-        portalLog('AIA 补链: 已加入 ${_subjectCn(issuer) ?? url}');
+        portalLog(() => 'AIA 补链: 已加入 ${_subjectCn(issuer) ?? url}');
       } catch (e) {
-        portalLog('AIA 证书无法加入信任库: $e');
+        portalLog(() => 'AIA 证书无法加入信任库: $e');
         break;
       }
       await _cache(issuer);

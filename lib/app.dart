@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import 'core/app_info.dart';
 import 'core/colors.dart';
+import 'mini_apps/timetable/timetable_lifecycle.dart';
 import 'router.dart';
 
 class NuistApp extends StatefulWidget {
@@ -35,6 +36,9 @@ class _NuistAppState extends State<NuistApp> {
         ),
       ),
       routerConfig: _router,
+      // 课表同步时机：冷启动 / 回前台 / 网络恢复。
+      builder: (context, child) =>
+          TimetableLifecycleScope(child: child ?? const SizedBox.shrink()),
     );
   }
 }

@@ -77,3 +77,14 @@ passkey*.json
 # AI 代理的个人本地配置
 .claude/settings.local.json
 CLAUDE.local.md
+
+# 真实教务数据样本（含学生班级/专业等）不入库；本地打包产物
+test/fixtures/timetable/*_real_sample.json
+*.tgz
+
+# 抓包文件与真实样例（任意目录）不入库
+*.har
+**/*_real_sample.json
+
+# 本地内部文档（不入库）
+.local-docs/

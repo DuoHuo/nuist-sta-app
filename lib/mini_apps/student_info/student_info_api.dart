@@ -23,7 +23,7 @@ class StudentInfoApi {
   static Future<StudentInfo> fetch() async {
     var info = await _send(force: false);
     if (info == null) {
-      portalLog('信息门户会话失效，重新登录');
+      portalLog(() => '信息门户会话失效，重新登录');
       info = await _send(force: true);
     }
     if (info == null) {

@@ -24,6 +24,8 @@ void main() {
 
     expect(find.text('NUIST++'), findsOneWidget);
     expect(find.text('信息公告'), findsNWidgets(2));
+    expect(find.text('今日课表'), findsOneWidget);
+    expect(find.text('课表'), findsOneWidget);
     expect(find.text('校园地图'), findsOneWidget);
     expect(find.text('空教室'), findsOneWidget);
     expect(find.text('首页'), findsOneWidget);
@@ -33,7 +35,10 @@ void main() {
   testWidgets('点击校园地图进入小程序页（全屏、无底部页签）', (WidgetTester tester) async {
     await tester.pumpWidget(const NuistApp());
 
-    await tester.tap(find.text('校园地图'));
+    final map = find.text('校园地图');
+    await tester.ensureVisible(map);
+    await tester.pumpAndSettle();
+    await tester.tap(map);
     await tester.pumpAndSettle();
 
     expect(find.byType(TextField), findsOneWidget);
@@ -44,7 +49,10 @@ void main() {
   testWidgets('点击空教室进入查询页（全屏、无底部页签）', (WidgetTester tester) async {
     await tester.pumpWidget(const NuistApp());
 
-    await tester.tap(find.text('空教室'));
+    final free = find.text('空教室');
+    await tester.ensureVisible(free);
+    await tester.pumpAndSettle();
+    await tester.tap(free);
     await tester.pumpAndSettle();
 
     // 测试环境下安全存储 / 文件读取永远不会完成，页面停在初始态即可；

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +11,7 @@ import '../../../core/auth/portal_session.dart';
 import '../../../core/colors.dart';
 import '../../../mini_apps/student_info/student_info_models.dart';
 import '../../../mini_apps/student_info/student_info_store.dart';
+import '../../../mini_apps/timetable/timetable_controller.dart';
 import 'portal_bind_widgets.dart';
 
 /// 「绑定统一门户」的状态页：展示当前绑定的学号与凭据信息，并提供重新绑定、
@@ -63,6 +66,8 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
     if (done == true) {
       // 新凭据对应的可能是另一个学号，旧会话必须作废。
       await PortalSession.instance.clear();
+      // 登录（绑定 / 导入）成功后立即同步课表，不受自动同步节流限制。
+      unawaited(TimetableController.instance.onLoginSucceeded());
     }
     if (mounted) _load();
   }
@@ -98,6 +103,8 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
     final done = await context.push<bool>('/portal-bind/import');
     if (done == true) {
       await PortalSession.instance.clear();
+      // 登录（绑定 / 导入）成功后立即同步课表，不受自动同步节流限制。
+      unawaited(TimetableController.instance.onLoginSucceeded());
     }
     if (mounted) _load();
   }
@@ -108,7 +115,8 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
       message:
           '将删除本机保存的通行密钥与登录状态，APP 内需要门户身份的功能会停止工作。\n\n'
           '注意：这只会删除本机凭据。门户上那条通行密钥记录依然存在，'
-          '如需彻底移除，请到门户的「账户安全 → 通行密钥」页面删除。',
+          '如需彻底移除，请到门户的「账户安全 → 通行密钥」页面删除。\n\n'
+          '将清除从教务同步的课表，你手动添加的课程会保留。',
       confirmText: '解除绑定',
       destructive: true,
     );
@@ -117,6 +125,7 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
     await PasskeyStore.delete();
     // 解绑是用户主动断开，WebView 里的登录态也一并清掉，免得看起来还登着。
     await PortalSession.instance.clear(includeWebView: true);
+    await clearTimetableOnUnbind();
     if (!mounted) return;
     setState(() {
       _bundle = null;
@@ -640,3 +649,9 @@ class _TestResultView extends StatelessWidget {
     );
   }
 }
+
+/// 解绑后清理课表：清掉教务课、磁盘缓存与学期元数据，手动课保留。
+/// 第二阶段改为 core 里的统一退出钩子。
+@visibleForTesting
+Future<void> clearTimetableOnUnbind() =>
+    TimetableController.instance.handleLogout(clearJwxt: true);

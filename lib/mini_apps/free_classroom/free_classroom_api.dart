@@ -7,6 +7,7 @@ import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import 'free_classroom_models.dart';
+import '../../core/auth/safe_message.dart';
 
 /// 教务系统 EMAP「空闲教室」应用（kxjas）的接口，移植自 qqbot/jwxt/jscx.py。
 ///
@@ -157,14 +158,21 @@ class FreeClassroomApi {
   ) async {
     var body = await _send(name, fields, force: false);
     if (body == null) {
-      portalLog('教务 kxjas 会话失效，重新登录');
+      portalLog(() => '教务 kxjas 会话失效，重新登录');
       body = await _send(name, fields, force: true);
     }
     if (body == null) {
       throw const PortalLoginError('重新登录后教务仍未返回数据，请稍后再试');
     }
     if ('${body['code']}' != '0') {
-      throw PortalLoginError('教务接口返回错误：${body['msg'] ?? body['code']}');
+      portalLog(() => '教务接口返回错误：$body');
+      throw PortalLoginError(
+        prefixedServerMessage(
+          '教务接口返回错误：',
+          body['msg'],
+          fallback: '教务接口返回错误，请稍后重试',
+        ),
+      );
     }
     final datas = body['datas'];
     final section = datas is Map<String, dynamic> ? datas[name] : null;

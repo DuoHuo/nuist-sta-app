@@ -21,7 +21,7 @@ class AcademicApi {
   static Future<AcademicSummary> fetchSummary() async {
     var json = await _send(force: false);
     if (json == null) {
-      portalLog('信息门户会话失效，重新登录');
+      portalLog(() => '信息门户会话失效，重新登录');
       json = await _send(force: true);
     }
     if (json == null) {
