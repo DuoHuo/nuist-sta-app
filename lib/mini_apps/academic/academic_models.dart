@@ -58,7 +58,12 @@ class AcademicSummary {
     Map<String, dynamic> json, {
     required DateTime fetchedAt,
   }) {
-    String s(String key) => (json[key] ?? '').toString().trim();
+    // 新生的字段可能是 JSON null 或字符串 "null"，统一归为空串，展示层显示 `--`。
+    String s(String key) {
+      final v = (json[key] ?? '').toString().trim();
+      return v.toLowerCase() == 'null' ? '' : v;
+    }
+
     return AcademicSummary(
       studentId: s('XH'),
       requiredCredits: s('YXZXF'),
@@ -95,7 +100,35 @@ class AcademicSummary {
   String get passRateText {
     final ratio = double.tryParse(passRate);
     if (ratio == null) return passRate.isEmpty ? '--' : passRate;
+    if (!ratio.isFinite) return '--';
     final pct = (ratio * 100).toStringAsFixed(1);
     return '${pct.replaceFirst(RegExp(r'\.0$'), '')}%';
+  }
+
+  /// 学分进度条用的 0~1 比例，永远是有限值。
+  ///
+  /// 优先解析 XFJD：带 `%` 按百分数；不带 `%` 时 `>1` 视为百分数、`0~1`
+  /// 视为比例。XFJD 解析不了再用「已获 / 应修」推算。都不行（如大一新生
+  /// 字段全空或全为 `"0"`）返回 0，避免进度条拿到 null 变成无限转圈。
+  double get creditProgressRatio {
+    final fromText = _parseProgress(creditProgress);
+    if (fromText != null) return fromText.clamp(0.0, 1.0);
+    final earned = double.tryParse(earnedCredits);
+    final required = double.tryParse(requiredCredits);
+    if (earned != null && required != null && required > 0) {
+      final r = earned / required;
+      if (r.isFinite) return r.clamp(0.0, 1.0);
+    }
+    return 0;
+  }
+
+  /// 「32.9%」/「32.9」→ 0.329，「0.5」→ 0.5；非数字或非有限值返回 null。
+  static double? _parseProgress(String text) {
+    var t = text.trim();
+    final hasPercent = t.endsWith('%');
+    if (hasPercent) t = t.substring(0, t.length - 1).trim();
+    final n = double.tryParse(t);
+    if (n == null || !n.isFinite) return null;
+    return hasPercent || n > 1 ? n / 100 : n;
   }
 }

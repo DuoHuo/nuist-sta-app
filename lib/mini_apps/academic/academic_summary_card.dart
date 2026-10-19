@@ -50,7 +50,7 @@ class _AcademicSummaryCardState extends State<AcademicSummaryCard> {
             isError: !c.loading && error != null,
           );
         } else {
-          body = _SummaryBody(summary: summary);
+          body = AcademicSummaryBody(summary: summary);
         }
 
         return Container(
@@ -99,21 +99,19 @@ class _AcademicSummaryCardState extends State<AcademicSummaryCard> {
   }
 }
 
-class _SummaryBody extends StatelessWidget {
-  const _SummaryBody({required this.summary});
+/// 有数据时的卡片主体，公开仅为方便 widget 测试直接渲染。
+@visibleForTesting
+class AcademicSummaryBody extends StatelessWidget {
+  /// 用一条学业概览数据构造。
+  const AcademicSummaryBody({super.key, required this.summary});
 
   final AcademicSummary summary;
 
   @override
   Widget build(BuildContext context) {
     final s = summary;
-    final earned = double.tryParse(s.earnedCredits);
-    final required = double.tryParse(s.requiredCredits);
-    final progress =
-        _parsePercent(s.creditProgress) ??
-        (earned != null && required != null && required > 0
-            ? earned / required
-            : null);
+    // 永远是确定值：新生数据全空 / 全 0 时为 0，不能传 null 让进度条无限转圈。
+    final progress = s.creditProgressRatio;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -151,7 +149,7 @@ class _SummaryBody extends StatelessWidget {
         ClipRRect(
           borderRadius: BorderRadius.circular(3),
           child: LinearProgressIndicator(
-            value: progress?.clamp(0.0, 1.0),
+            value: progress,
             minHeight: 6,
             backgroundColor: AppColors.rowDivider,
             color: AppColors.accent,
@@ -186,14 +184,6 @@ class _SummaryBody extends StatelessWidget {
   }
 
   static String _orDash(String v) => v.isEmpty ? '--' : v;
-
-  /// 「32.9%」→ 0.329。
-  static double? _parsePercent(String text) {
-    final t = text.trim();
-    if (!t.endsWith('%')) return null;
-    final n = double.tryParse(t.substring(0, t.length - 1));
-    return n == null ? null : n / 100;
-  }
 }
 
 /// 大号主要指标：数值在上，标签在下。
