@@ -1,11 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../../core/config/api_endpoints.dart';
 import 'contributor_models.dart';
-
-/// 贡献者名单接口。不是校内服务，按普通常量存放。
-const String kContributorsEndpoint =
-    'https://app.duohuo.org.cn/api/v1/contributors';
 
 /// 拉取贡献者名单。网络或格式错误直接抛出，由调用方处理。
 class ContributorApi {
