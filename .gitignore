@@ -77,3 +77,4 @@ passkey*.json
 # AI 代理的个人本地配置
 .claude/settings.local.json
 CLAUDE.local.md
+.agents/
