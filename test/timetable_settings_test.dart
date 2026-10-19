@@ -426,31 +426,16 @@ void main() {
       expect(_c.settings.reminderLeadMinutes, 20);
     });
 
-    testWidgets('ST19 配色二级页：3 套各一行 8 色块，单选', (tester) async {
+    testWidgets('ST19 外观页暂时不展示配色方案 A/B/C 入口', (tester) async {
       await pumpPage(tester, TimetableSettingsPage(controller: _c));
       await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tt_settings_palette')));
-      await tester.pumpAndSettle();
-      for (final k in ['A', 'B', 'C']) {
-        final row = find.byKey(Key('tt_palette_$k'));
-        expect(row, findsOneWidget);
-        final swatches = find.descendant(
-          of: row,
-          matching: find.byWidgetPredicate(
-            (w) =>
-                w is Container &&
-                w.constraints?.maxWidth == 14 &&
-                w.constraints?.maxHeight == 14,
-          ),
-        );
-        expect(swatches, findsNWidgets(8));
-      }
-      expect(find.text('B 马卡龙'), findsOneWidget);
-      expect(find.text('C 莫兰迪'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('tt_palette_B')));
-      await settleIo(tester);
-      expect(_c.settings.paletteScheme, 'B');
+      expect(find.byKey(const Key('tt_settings_palette')), findsNothing);
+      expect(find.text('A 柔和'), findsNothing);
+      expect(find.text('B 马卡龙'), findsNothing);
+      expect(find.text('C 莫兰迪'), findsNothing);
+      // storage 字段仍可读（默认 A），不因隐藏入口而丢失。
+      expect(_c.settings.paletteScheme, 'A');
     });
   });
 

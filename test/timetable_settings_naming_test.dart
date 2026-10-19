@@ -164,12 +164,12 @@ void main() {
       await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
       await tester.pumpAndSettle();
       expect(find.widgetWithText(AppBar, '外观'), findsOneWidget);
-      for (final t in ['配色', '文字颜色', '不透明度', '今日课表最多显示', '考试颜色']) {
+      for (final t in ['文字颜色', '不透明度', '今日课表最多显示', '考试颜色']) {
         expect(find.text(t), findsWidgets, reason: t);
       }
-      await tester.tap(find.byKey(const Key('tt_settings_palette')));
-      await tester.pumpAndSettle();
-      expect(find.widgetWithText(AppBar, '配色'), findsOneWidget);
+      // 配色方案 A/B/C 入口暂时隐藏。
+      expect(find.byKey(const Key('tt_settings_palette')), findsNothing);
+      expect(find.widgetWithText(AppBar, '配色'), findsNothing);
     });
 
     test('SN05 lib 界面文案不残留旧长名', () {

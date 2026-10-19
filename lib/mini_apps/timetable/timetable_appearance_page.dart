@@ -40,7 +40,6 @@ class TimetableAppearancePage extends StatelessWidget {
           final s = c.settings;
           final colors = TimetableTheme.colorsOf(context);
           final opacity = s.cellOpacity.clamp(opacityMin, opacityMax);
-          final scheme = coursePaletteSchemeOf(s.paletteScheme);
           return ListView(
             padding: const EdgeInsets.only(bottom: 24),
             children: [
@@ -61,25 +60,7 @@ class TimetableAppearancePage extends StatelessWidget {
                 key: const Key('tt_appearance_group'),
                 title: '外观',
                 children: [
-                  _ApRow(
-                    key: const Key('tt_settings_palette'),
-                    title: '配色',
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => TimetablePalettePage(controller: c),
-                      ),
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          coursePaletteSchemeLabel(scheme),
-                          style: TimetableTheme.bodyStyle(color: colors.hint),
-                        ),
-                        Icon(Icons.chevron_right, color: colors.hint),
-                      ],
-                    ),
-                  ),
+                  // 暂时隐藏配色方案 A/B/C 入口；storage/enum/读路径保留。
                   _ApRow(
                     title: '文字颜色',
                     trailing: _ApSegments<CellTextColorMode>(
@@ -405,7 +386,7 @@ class _ApSegments<T> extends StatelessWidget {
   }
 }
 
-/// 配色方案二级页（从外观页进入；原在设置页）。
+/// 配色方案二级页（A/B/C）。暂时从外观页入口隐藏；类与 storage 保留以便恢复。
 class TimetablePalettePage extends StatelessWidget {
   const TimetablePalettePage({super.key, this.controller});
 
