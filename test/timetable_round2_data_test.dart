@@ -14,6 +14,8 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_remaining_weeks.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_color.dart';
 
 const _settings = TimetableSettings(termCode: '2026-2027-1');
 final _termStart = DateTime(2026, 8, 31);
@@ -265,10 +267,7 @@ void main() {
 
   group('整天调课页 keys', () {
     testWidgets('页面含原日期/目标日期/互换与空记录', (tester) async {
-      c.debugSetSnapshot(
-        _snap(const []),
-        viewingWeek: 2,
-      );
+      c.debugSetSnapshot(_snap(const []), viewingWeek: 2);
       await tester.pumpWidget(
         MaterialApp(
           home: TimetableDaySwapsPage(controller: c, initialFrom: _mon2),
@@ -281,6 +280,22 @@ void main() {
       expect(find.byKey(const Key('day_swap_submit')), findsOneWidget);
       expect(find.byKey(const Key('day_swaps_empty')), findsOneWidget);
       expect(find.text('9月7日'), findsOneWidget); // prefilled 原日期
+    });
+  });
+
+  group('自动色板 hueStepped', () {
+    test('无 userColors 时 coursePairFor 走 autoCoursePair', () {
+      c.debugSetSnapshot(_snap([_jwxt('MATH|01', '高数')]), viewingWeek: 2);
+      expect(c.userColorOf(c.courses.single), isNull);
+      final pair = coursePairFor(c, c.courses.single);
+      final auto = TimetableTheme.autoCoursePair(
+        c.colorIndexOf(c.courses.single),
+      );
+      expect(pair.bg.toARGB32(), auto.bg.toARGB32());
+      expect(pair.fg.toARGB32(), auto.fg.toARGB32());
+      // 与 A 柔和色板第 0 号不同（色相步进必与旧 soft 分离）。
+      final soft0 = TimetableTheme.coursePair(0).bg.toARGB32();
+      expect(TimetableTheme.autoCoursePair(0).bg.toARGB32() == soft0, isFalse);
     });
   });
 

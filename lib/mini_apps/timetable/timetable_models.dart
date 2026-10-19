@@ -299,6 +299,9 @@ class PeriodTime {
 /// 考试默认颜色（§14.3）。
 const int kDefaultExamColor = 0xFFC62828;
 
+/// 首页今日课表最多显示条数默认值（spec-next-1020 item 4）。
+const int kDefaultHomeMaxItems = 2;
+
 /// 外观与学期设置（本地）。
 class TimetableSettings {
   const TimetableSettings({
@@ -326,6 +329,7 @@ class TimetableSettings {
     this.showExams = true,
     this.examColor = kDefaultExamColor,
     this.cellTextColor = CellTextColorMode.auto,
+    this.homeMaxItems = kDefaultHomeMaxItems,
   });
 
   final String scheduleName;
@@ -377,6 +381,9 @@ class TimetableSettings {
   /// item 14「文字颜色」：自动（色板字色 + 深色规则）/ 白字 / 黑字。缺省自动。
   final CellTextColorMode cellTextColor;
 
+  /// spec-next-1020 item 4：首页今日课表最多显示条数（1–4，默认 2）。
+  final int homeMaxItems;
+
   /// 每周第一天是周日（设置 9；只影响列顺序）。存储键仍是 `weekStartsOnMonday`。
   bool get weekStartsSunday => !weekStartsOnMonday;
 
@@ -409,6 +416,7 @@ class TimetableSettings {
     bool? showExams,
     int? examColor,
     CellTextColorMode? cellTextColor,
+    int? homeMaxItems,
   }) => TimetableSettings(
     scheduleName: scheduleName ?? this.scheduleName,
     termCode: termCode ?? this.termCode,
@@ -438,6 +446,7 @@ class TimetableSettings {
     showExams: showExams ?? this.showExams,
     examColor: examColor ?? this.examColor,
     cellTextColor: cellTextColor ?? this.cellTextColor,
+    homeMaxItems: homeMaxItems ?? this.homeMaxItems,
   );
 
   /// 用 [o] 的用户偏好（显示/外观/提醒/首页开关）覆盖本对象，学期字段不变。
@@ -460,6 +469,7 @@ class TimetableSettings {
     showExams: o.showExams,
     examColor: o.examColor,
     cellTextColor: o.cellTextColor,
+    homeMaxItems: o.homeMaxItems,
   );
 
   Map<String, dynamic> toJson() => {
@@ -487,6 +497,7 @@ class TimetableSettings {
     'showExams': showExams,
     'examColor': examColor,
     'cellTextColor': cellTextColor.name,
+    'homeMaxItems': homeMaxItems,
   };
 
   // ---- 宽松读取（只在内存纠正，不回写磁盘）----
@@ -513,6 +524,14 @@ class TimetableSettings {
   /// 考试颜色：整数 ARGB 原样用（补满不透明）；其他 → 默认深红。
   static int parseExamColor(Object? raw) =>
       raw is int ? (raw | 0xFF000000) : kDefaultExamColor;
+
+  /// 首页最多显示：1–4 整数；缺失 / 非整数 / 越界 → 默认 2（spec-next-1020 item 4）。
+  static int sanitizeHomeMaxItems(Object? raw) {
+    if (raw is! num || !raw.isFinite) return kDefaultHomeMaxItems;
+    final v = raw.round();
+    if (v < 1 || v > 4) return kDefaultHomeMaxItems;
+    return v;
+  }
 
   /// 文字颜色：'auto'/'white'/'black'；缺失或其他 → 自动（旧文件无此键）。
   static CellTextColorMode parseCellTextColor(Object? raw) {
@@ -567,6 +586,7 @@ class TimetableSettings {
         showExams: _bool(json['showExams'], true),
         examColor: parseExamColor(json['examColor']),
         cellTextColor: parseCellTextColor(json['cellTextColor']),
+        homeMaxItems: sanitizeHomeMaxItems(json['homeMaxItems']),
       );
 }
 

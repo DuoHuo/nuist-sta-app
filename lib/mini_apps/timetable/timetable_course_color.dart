@@ -11,7 +11,7 @@ int courseColorIndex(TimetableController controller, Course course) =>
     controller.colorIndexOf(course);
 
 /// 课程在当前明暗下的（底色, 文字色）：用户自选色优先（item 9，显示时换算），
-/// 否则按色号取色板（含深色规则）。
+/// 否则用色相步进自动色板（item 3，非 A/B/C）；已有 userColors 不迁。
 CourseColorPair coursePairFor(
   TimetableController controller,
   Course course, {
@@ -21,9 +21,8 @@ CourseColorPair coursePairFor(
   if (user != null) {
     return TimetableTheme.userCoursePair(Color(user), dark: dark);
   }
-  return TimetableTheme.coursePair(
+  return TimetableTheme.autoCoursePair(
     courseColorIndex(controller, course),
-    scheme: coursePaletteSchemeFor(controller),
     dark: dark,
   );
 }

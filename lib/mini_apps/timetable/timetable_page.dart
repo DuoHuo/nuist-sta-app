@@ -234,21 +234,6 @@ class _TimetablePageState extends State<TimetablePage> {
     );
   }
 
-  /// 「回到本周」按钮：按跨越周数翻页（[animateWeekPage]，途中由 [_onPageChanged]
-  /// 逐页同步浏览周）；系统关闭动画（disableAnimations）时直接跳转。结束后对齐
-  /// controller 的浏览周。
-  Future<void> _backToCurrentWeek() async {
-    final pc = _pageController;
-    if (pc != null && pc.hasClients) {
-      await animateWeekPage(
-        pc,
-        _pageFor(_controller.currentWeek),
-        reduceMotion: MediaQuery.of(context).disableAnimations,
-      );
-    }
-    if (mounted) _controller.jumpToCurrentWeek();
-  }
-
   @override
   void dispose() {
     _outcomeSub?.cancel();
@@ -300,9 +285,6 @@ class _TimetablePageState extends State<TimetablePage> {
     );
   }
 
-  /// 顶栏齿轮（§13.12）：直接进设置页，不再弹菜单。原「⋮」菜单里的「立即同步」删除
-  /// （同步走自动同步和顶栏同步图标）；「去登录」移到设置页「其他 → 教务账号」，
-  /// debug 包的「[DEBUG] 清空本地课表」也移到「其他」卡片末尾。
   void _openSettings() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -387,14 +369,6 @@ class _TimetablePageState extends State<TimetablePage> {
                     ),
                   ],
                 ),
-                if (!_controller.isViewingCurrentWeek && !_termEnded)
-                  Positioned(
-                    right: 16,
-                    bottom: 24,
-                    child: _BackToWeekButton(
-                      onTap: () => unawaited(_backToCurrentWeek()),
-                    ),
-                  ),
               ],
             );
           },
@@ -654,46 +628,13 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-class _BackToWeekButton extends StatelessWidget {
-  const _BackToWeekButton({required this.onTap});
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    // 右下胶囊（非 FAB）：轻阴影、小圆角条
-    return Material(
-      elevation: 1,
-      shadowColor: Colors.black26,
-      color: TimetableTheme.colorsOf(context).accent,
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Text(
-            '回到本周',
-            // accent 实心胶囊上的白字，明暗都不变。
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              height: 1.2,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// item 3：翻过 [weeks] 周的动画时长：1 周 250ms，每多 1 周 +50ms，上限 500ms。
 Duration weekJumpDuration(int weeks) {
   final n = weeks.abs() < 1 ? 1 : weeks.abs();
   return Duration(milliseconds: (250 + 50 * (n - 1)).clamp(250, 500));
 }
 
-/// 翻到 [target] 页（「回到本周」与周条共用）：时长见 [weekJumpDuration]，曲线
+/// 翻到 [target] 页（周条点本周 / 选周共用）：时长见 [weekJumpDuration]，曲线
 /// easeOutCubic，始终直接滑过去（产品 10/19：不再先瞬移到相邻页）；[reduceMotion]
 /// （系统关闭动画）时直接跳。
 Future<void> animateWeekPage(
@@ -736,6 +677,7 @@ class _WeekStrip extends StatefulWidget {
 
 class _WeekStripState extends State<_WeekStrip> {
   static const double _chipW = 48;
+  static const double _currentChipW = 56;
   static const double _gap = 8;
 
   late final ScrollController _scroll = ScrollController(
@@ -785,10 +727,14 @@ class _WeekStripState extends State<_WeekStrip> {
                 customBorder: const StadiumBorder(),
                 onTap: () => widget.onSelect(week),
                 child: SizedBox(
-                  width: _chipW,
+                  // spec-next-1020 item 6：本周胶囊文案「本周」，点它即回到本周。
+                  width: isCurrent ? _currentChipW : _chipW,
                   child: Center(
                     child: Text(
-                      '$week',
+                      isCurrent ? '本周' : '$week',
+                      key: isCurrent
+                          ? const Key('timetable_week_strip_current')
+                          : null,
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,

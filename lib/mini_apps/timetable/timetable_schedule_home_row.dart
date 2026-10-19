@@ -91,7 +91,8 @@ class ScheduleHomeRow extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 4),
+        // 与课程行一致：项内上下 8、项间距 4。
+        padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
         // 色条随内容高度伸缩（不固定高度）：课名 / 地点换行时整行变高。
         child: IntrinsicHeight(
           child: Row(
@@ -99,7 +100,7 @@ class ScheduleHomeRow extends StatelessWidget {
             children: [
               Container(
                 width: 4,
-                margin: const EdgeInsets.symmetric(vertical: 4),
+                margin: const EdgeInsets.symmetric(vertical: 2),
                 decoration: BoxDecoration(
                   color: done ? colors.divider : accent,
                   borderRadius: BorderRadius.circular(2),
@@ -108,7 +109,7 @@ class ScheduleHomeRow extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(minHeight: 48),
+                  constraints: const BoxConstraints(minHeight: 40),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -138,6 +139,7 @@ class ScheduleHomeRow extends StatelessWidget {
                           ),
                         ],
                       ),
+                      const SizedBox(height: 2),
                       Text(
                         [
                           if (event.location.isNotEmpty) '@${event.location}',

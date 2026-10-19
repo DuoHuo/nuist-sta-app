@@ -141,6 +141,8 @@ void main() {
       expect(switchValue(tester, 'tt_settings_show_teacher'), isFalse);
       expect(chipSelected(tester, 'tt_settings_font_scale', '标准'), isTrue);
       expect(chipSelected(tester, 'tt_settings_week_start', '周一'), isTrue);
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      await tester.pumpAndSettle();
       expect(
         tester
             .widget<Text>(find.byKey(const Key('tt_settings_opacity_value')))
@@ -148,6 +150,8 @@ void main() {
         '100%',
       );
       expect(find.text('A 柔和'), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
       expect(switchValue(tester, 'tt_settings_reminder'), isFalse);
       expect(find.text('15 分钟'), findsOneWidget);
       expect(switchValue(tester, 'tt_settings_show_tomorrow'), isTrue);
@@ -191,7 +195,7 @@ void main() {
       }
       // 「周日」既是行名又是「一周起始」的选项。
       expect(inGroup('display', '周日'), findsNWidgets(2));
-      for (final t in ['配色', '字号', '不透明度', '格子高度']) {
+      for (final t in ['配色与预览', '字号', '格子高度']) {
         expect(inGroup('appearance', t), findsOneWidget, reason: t);
       }
       for (final t in ['上课提醒', '提前时间', '放假期间也会提醒']) {
@@ -199,7 +203,6 @@ void main() {
       }
       expect(inGroup('home', '显示明天的课'), findsOneWidget);
       expect(inGroup('exam', '显示考试'), findsOneWidget);
-      expect(inGroup('exam', '颜色'), findsOneWidget);
       expect(inGroup('other', '教务账号'), findsOneWidget);
       expect(inGroup('other', '恢复教务课程'), findsOneWidget);
       for (final t in ['深色模式', '网格线', '背景', '圆角', '开学', '当前周']) {
@@ -326,6 +329,8 @@ void main() {
 
     testWidgets('ST12 不透明度滑块 30–100、步长 10', (tester) async {
       await pumpPage(tester, TimetableSettingsPage(controller: _c));
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      await tester.pumpAndSettle();
       final slider = tester.widget<Slider>(
         find.byKey(const Key('tt_settings_opacity')),
       );
@@ -364,6 +369,8 @@ void main() {
 
       await pumpPage(tester, TimetableSettingsPage(controller: _c));
       await settleIo(tester);
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      await tester.pumpAndSettle();
       final slider = tester.widget<Slider>(
         find.byKey(const Key('tt_settings_opacity')),
       );
@@ -421,6 +428,8 @@ void main() {
 
     testWidgets('ST19 配色二级页：3 套各一行 8 色块，单选', (tester) async {
       await pumpPage(tester, TimetableSettingsPage(controller: _c));
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tt_settings_palette')));
       await tester.pumpAndSettle();
       for (final k in ['A', 'B', 'C']) {

@@ -62,8 +62,8 @@ String formatClassRemaining(int minutes) {
   return r == 0 ? '上课中·还剩 $h 小时' : '上课中·还剩 $h 小时 $r 分钟';
 }
 
-/// 首页最多列出的项数（item 13：正在上的 + 下一节）。
-const int kHomeMaxItems = 2;
+/// 兼容旧测试：默认上限；实际截断读 [TimetableSettings.homeMaxItems]。
+const int kHomeMaxItems = kDefaultHomeMaxItems;
 
 /// 首页「今日课表」卡片（spec §6），课表唯一入口。
 class TimetableHomeCard extends StatefulWidget {
@@ -190,13 +190,10 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
           items,
           _controller.scheduleEventsOn(today),
         );
-        // item 13：上过的不显示；最多 2 项（正在上的 + 下一节）。
+        // spec-next-1020 item 4：上过的不显示；截断到 homeMaxItems，无「更多」。
         final pending = entries.where((e) => !e.isDone(now)).toList();
-        final visible = pending.take(kHomeMaxItems).toList();
-        final remaining = pending.length - visible.length;
-        final remainingAllCourses = pending
-            .skip(visible.length)
-            .every((e) => e.course != null);
+        final maxItems = _controller.settings.homeMaxItems;
+        final visible = pending.take(maxItems).toList();
         // 明天一栏的规则（开学前、学期结束、明天没课、开关）都在数据层。
         final tomorrow = _controller.homeTomorrow(now: now);
         final ended = _todayEnded(now);
@@ -236,11 +233,7 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
             tomorrow.courses,
             tomorrowEvents,
           );
-          final list = all.take(kHomeMaxItems).toList();
-          final more = all.length - list.length;
-          final moreAllCourses = all
-              .skip(list.length)
-              .every((e) => e.course != null);
+          final list = all.take(maxItems).toList();
           body = [
             Column(
               key: const Key('home_tomorrow_section'),
@@ -248,7 +241,6 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
               children: [
                 for (final entry in list)
                   _entryRow(entry, now, onCourseTap: (_) => _openTimetable()),
-                if (more > 0) _moreLine(more, courses: moreAllCourses),
               ],
             ),
           ];
@@ -310,8 +302,6 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
                   // 10/19：点课程行与点卡片相同，只打开课表页，不再弹详情 / 编辑。
                   onCourseTap: (_) => _openTimetable(),
                 ),
-              if (remaining > 0)
-                _moreLine(remaining, courses: remainingAllCourses),
             ];
           }
         }
@@ -370,19 +360,6 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
       onTap: _openTimetable,
     );
   }
-
-  /// 剩余全是课程时沿用「还有 N 节课」；混有日程时「还有 N 项」。
-  Widget _moreLine(int n, {bool courses = true}) => Builder(
-    builder: (context) => Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Text(
-        courses ? '还有 $n 节课' : '还有 $n 项',
-        style: TimetableTheme.microStyle(
-          color: TimetableTheme.colorsOf(context).accent,
-        ),
-      ),
-    ),
-  );
 
   /// 明天没有课程列表时的一行说明（明天没课 / 距开学 N 天）；其余情况不显示。
   /// 明天有课时整张卡切换为明天的课（见 build）。
@@ -638,7 +615,8 @@ class _CourseRow extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 4),
+        // spec-next-1020 item 2：项内上下 8、项间距 4（bottom 含间距）。
+        padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
         // 色条随内容高度伸缩（不固定高度）：课名 / 地点换行时整行变高。
         child: IntrinsicHeight(
           child: Row(
@@ -646,7 +624,7 @@ class _CourseRow extends StatelessWidget {
             children: [
               Container(
                 width: 4,
-                margin: const EdgeInsets.symmetric(vertical: 4),
+                margin: const EdgeInsets.symmetric(vertical: 2),
                 decoration: BoxDecoration(
                   color: done ? colors.divider : color,
                   borderRadius: BorderRadius.circular(2),
@@ -655,7 +633,7 @@ class _CourseRow extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(minHeight: 48),
+                  constraints: const BoxConstraints(minHeight: 40),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -670,6 +648,8 @@ class _CourseRow extends StatelessWidget {
                           color: fg,
                         ),
                       ),
+                      // item 2：课名与第二行间距 2。
+                      const SizedBox(height: 2),
                       // item 13：时间 · 节次 / 地点 / 老师各一行，长文本换行、不截断；
                       // 地点、老师为空时不占行。
                       Text(

@@ -199,6 +199,8 @@ void main() {
       ),
     );
     await _io(tester);
+    await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+    await tester.pumpAndSettle();
     final seg = find.byKey(const Key('tt_settings_cell_text_color'));
     expect(seg, findsOneWidget);
     for (final label in ['自动', '白字', '黑字']) {

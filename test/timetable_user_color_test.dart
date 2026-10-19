@@ -12,6 +12,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_appearance_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
@@ -70,8 +71,9 @@ Future<void> _pumpGrid(WidgetTester tester, {bool dark = false}) async {
     MaterialApp(
       theme: dark ? appDarkTheme() : appLightTheme(),
       home: Scaffold(
-        body: Builder(
-          builder: (context) => WeekGrid(
+        body: ListenableBuilder(
+          listenable: _c,
+          builder: (context, _) => WeekGrid(
             week: 7,
             controller: _c,
             onCourseTap: (cell) =>
@@ -167,7 +169,7 @@ void main() {
       expect(_c.userColorOf(_a), preset.toARGB32());
       Navigator.of(tester.element(find.byType(WeekGrid))).pop();
       await _settleIo(tester);
-      expect(_cellBg(tester, '测试课甲'), preset);
+      expect(_cellBg(tester, '测试课甲'), TimetableTheme.userCoursePair(preset).bg);
       await _settleIo(tester);
       expect(await tester.runAsync(TimetableStore.readUserCourseColors), {
         'a': preset.toARGB32(),
@@ -222,7 +224,8 @@ void main() {
     testWidgets('UC06 深色：自选色显示时换算（浅色系走色板深色规则，深色系混 25% 白字）', (tester) async {
       _load();
       const strong = Color(0xFF1565C0);
-      final light = TimetableTheme.coursePresetColors[0];
+      // 亮度 > 0.4 才走「浅底深字」深色换算；新预设 0 号偏深，改用明确浅色。
+      const light = Color(0xFFDCE8FB);
       await tester.runAsync(() async {
         await _c.setUserCourseColor('a', light.toARGB32());
         await _c.setUserCourseColor('b', strong.toARGB32());
@@ -265,24 +268,20 @@ void main() {
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
-        MaterialApp(
-          home: TimetableSettingsPage(
-            controller: _c,
-            onOpenAccount: () async {},
-          ),
-        ),
+        MaterialApp(home: TimetableAppearancePage(controller: _c)),
       );
       await _settleIo(tester);
       await tester.tap(find.byKey(const Key('tt_settings_exam_color')));
       await _settleIo(tester);
-      await tester.tap(find.byKey(const Key('tt_exam_color_custom')));
-      await _settleIo(tester);
+      expect(find.byKey(const Key('tt_color_picker')), findsOneWidget);
       await tester.tap(find.byKey(const Key('tt_color_preset_4')));
       await _settleIo(tester);
       final chosen = TimetableTheme.examColorOptions[4];
       expect(_c.settings.examColor, chosen.toARGB32());
       await _pumpGrid(tester);
+      expect(_c.scheduleEvents, hasLength(2));
       for (final e in _c.scheduleEvents) {
+        expect(find.byKey(Key('schedule_cell_${e.id}')), findsOneWidget);
         final ink = tester.widget<Ink>(
           find.descendant(
             of: find.byKey(Key('schedule_cell_${e.id}')),

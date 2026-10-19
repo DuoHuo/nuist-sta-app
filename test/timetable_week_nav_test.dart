@@ -126,12 +126,15 @@ void main() {
     await _io(tester, 5);
   }
 
-  group('item 3 回到本周', () {
-    testWidgets('NAV02 跨 10 周：直接动画（不先瞬移到相邻周），500ms 内到本周', (tester) async {
+  group('item 6 周条回本周', () {
+    testWidgets('NAV02 跨 10 周：点周条「本周」直接动画（不先瞬移），500ms 内到本周', (tester) async {
       _load(manual: [_course('a', '测试课甲')], week: 17);
       await pumpPage(tester);
       expect(_c.viewingWeek, 17);
-      await tester.tap(find.text('回到本周'));
+      expect(find.text('回到本周'), findsNothing);
+      await tester.tap(find.textContaining('第 17 周'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('timetable_week_strip_current')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 16));
       // 没有先瞬移到第 8 周：动画刚开始仍在第 17 周附近。
@@ -139,7 +142,6 @@ void main() {
       await tester.pump(const Duration(milliseconds: 520));
       expect(_c.viewingWeek, _week);
       await tester.pumpAndSettle();
-      expect(find.text('回到本周'), findsNothing);
     });
   });
 

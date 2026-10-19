@@ -39,6 +39,18 @@ void main() {
       expect(f(double.infinity), 100);
     });
 
+    test('homeMaxItems：缺省/非法回落 2，1–4 保留', () {
+      expect(TimetableSettings().homeMaxItems, 2);
+      expect(TimetableSettings.sanitizeHomeMaxItems(null), 2);
+      expect(TimetableSettings.sanitizeHomeMaxItems('x'), 2);
+      expect(TimetableSettings.sanitizeHomeMaxItems(0), 2);
+      expect(TimetableSettings.sanitizeHomeMaxItems(5), 2);
+      expect(TimetableSettings.sanitizeHomeMaxItems(1.2), 1);
+      expect(TimetableSettings.sanitizeHomeMaxItems(4), 4);
+      expect(TimetableSettings.fromJson({'homeMaxItems': 3}).homeMaxItems, 3);
+      expect(TimetableSettings.fromJson({'homeMaxItems': 9}).homeMaxItems, 2);
+    });
+
     test('提前时间吸附到 5/10/15/20/30，距离相同取较大', () {
       int f(Object? v) => TimetableSettings.sanitizeLeadMinutes(v);
       expect(f(5), 5);

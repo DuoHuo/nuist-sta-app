@@ -208,10 +208,56 @@ abstract final class TimetableTheme {
     return dark ? darkCoursePair(p) : p;
   }
 
-  /// item 9：课程颜色 12 个预设（spec 未给色值，取色板 A 0–11 号底色）。
-  static final List<Color> coursePresetColors = [
-    for (final p in _paletteSoft.take(12)) p.bg,
+  /// spec-next-1020 item 3：课程 / 考试共用的 12 个预设（避开灰棕土黄，色相拉开）。
+  static const List<Color> coursePresetColors = [
+    Color(0xFF4C8BF5), // 蓝
+    Color(0xFF2EC4B6), // 青
+    Color(0xFF3DDC97), // 绿
+    Color(0xFF7C5CFF), // 紫
+    Color(0xFFFF6B9A), // 粉
+    Color(0xFFFF8A3D), // 橙
+    Color(0xFFFF5A5A), // 珊瑚
+    Color(0xFF00A3A1), // 薄荷
+    Color(0xFF5B6CFF), // 靛
+    Color(0xFFC44DFF), // 品红
+    Color(0xFF22C55E), // 翠绿
+    Color(0xFFF59E0B), // 琥珀
   ];
+
+  /// 自动补色：按色相步进生成 [count] 个可用色，过滤过灰（S&lt;30%）或过暗/过亮。
+  static List<Color> hueSteppedColors(int count) {
+    final out = <Color>[];
+    // 细步进扫一圈，够用为止。
+    for (var step = 0; step < 72 && out.length < count; step++) {
+      final hue = (step * 5.0) % 360.0;
+      for (final s in const [0.70, 0.55, 0.85]) {
+        for (final v in const [0.92, 0.80, 0.70]) {
+          if (s < 0.30) continue;
+          final c = HSVColor.fromAHSV(1, hue, s, v).toColor();
+          final lum = c.computeLuminance();
+          if (lum < 0.18 || lum > 0.90) continue;
+          // 与已选色相距太近则跳过。
+          final tooClose = out.any((o) {
+            final dh = (HSVColor.fromColor(o).hue - hue).abs();
+            final d = dh > 180 ? 360 - dh : dh;
+            return d < 12;
+          });
+          if (tooClose) continue;
+          out.add(c);
+          if (out.length >= count) return out;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// spec-next-1020 item 3：未自选 [userColors] 的课用色相步进自动色板（非 A/B/C 柔和）。
+  /// 色号仍走 [assignCourseColors] 的 0..15；显示时映射到 [hueSteppedColors]。
+  static CourseColorPair autoCoursePair(int index, {bool dark = false}) {
+    final list = hueSteppedColors(kCoursePaletteSize);
+    final bg = list[index < 0 ? 0 : index % list.length];
+    return userCoursePair(bg, dark: dark);
+  }
 
   /// item 9：用户自选色 [c]（原始 ARGB）在当前明暗下的（底色, 文字色），显示时换算：
   /// 浅色系（亮度 > 0.4）按色板规则「浅底 + 同色相深字」，深色下走 [darkCoursePair]；
@@ -286,17 +332,9 @@ abstract final class TimetableTheme {
   /// 考试格文字 / 「考试」胶囊（白）。
   static const Color examText = Color(0xFFFFFFFF);
 
-  /// 设置「考试 → 颜色」色板（§14.3：每个选项与白字对比度 ≥ 4.5）。第一项为默认。
-  static const List<Color> examColorOptions = [
-    examDefault, // 红 5.6
-    Color(0xFFBF360C), // 橙红 5.6
-    Color(0xFFAD1457), // 玫红 7.0
-    Color(0xFF6A1B9A), // 紫 9.4
-    Color(0xFF283593), // 靛蓝 10.4
-    Color(0xFF1565C0), // 蓝 5.8
-    Color(0xFF00695C), // 青 6.6
-    Color(0xFF2E7D32), // 绿 5.1
-  ];
+  /// 设置「考试 → 颜色」与课程同一套 12 预设（spec-next-1020 item 3）。
+  /// 默认考试色仍为 [examDefault]（不在 12 色内时预览/重置用）。
+  static const List<Color> examColorOptions = coursePresetColors;
 
   /// 课名稳定哈希 → 0-based 色号（与 [Course.resolvedColorIndex] 一致）。
   static int colorIndexFor(String courseName) =>

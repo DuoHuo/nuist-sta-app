@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'timetable_color_picker.dart';
 import 'timetable_colors.dart';
 import 'timetable_controller.dart';
 import 'timetable_apply_weeks_sheet.dart';
@@ -67,8 +68,12 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   /// 编辑应用周数（与课程「周次」分开）；仅从格子进来时有意义。
   late Set<int> _applyWeeks;
 
-  /// 用户自选色号；null = 未选（跟随默认配色）。
+  /// 旧色号字段（仍写入 Course.colorIndex，兼容旧数据）。
   int? _colorIndex;
+
+  /// spec-next-1020 item 3：用户自选 ARGB（12+HSV）；null = 默认自动色。
+  int? _userArgb;
+  bool _userArgbCleared = false;
   bool _saving = false;
   String? _weeksError;
 
@@ -100,6 +105,9 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     _name = TextEditingController(text: c?.name ?? '')
       ..addListener(_onNameChanged);
     _colorIndex = c?.colorIndex;
+    if (c != null) {
+      _userArgb = widget.controller.userColorOf(c);
+    }
     _location = TextEditingController(text: slot?.location ?? '');
     _teacher = TextEditingController(text: slot?.teacher ?? '');
     _note = TextEditingController(text: slot?.note ?? '');
@@ -154,6 +162,16 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     int? color,
   })
   _init;
+
+  Future<void> _persistUserColor(TimetableController c, String courseId) async {
+    if (_userArgbCleared) {
+      await c.setUserCourseColor(courseId, null);
+      return;
+    }
+    if (_userArgb != null) {
+      await c.setUserCourseColor(courseId, _userArgb);
+    }
+  }
 
   void _onNameChanged() {
     // 默认色随课名变化；冲突提示也会重算。
@@ -265,6 +283,7 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
               ),
             );
           }
+          await _persistUserColor(widget.controller, initial.id);
           if (!mounted) return;
           navigator.pop(
             widget.controller.manualCourseById(initial.id) ?? initial,
@@ -314,6 +333,7 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
         ),
       );
     }
+    await _persistUserColor(widget.controller, saved.id);
     if (!mounted) return;
     navigator.pop(saved);
   }
@@ -336,68 +356,33 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   }
 
   Future<void> _pickColor() async {
-    // 课程色板是用户可选的固定色板，明暗两套主题取值相同（见 TimetableTheme 文档）；
-    // 只有标题、选中描边这些 chrome 跟随主题。
     final colors = TimetableTheme.colorsOf(context);
-    final picked = await showModalBottomSheet<int>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '选择颜色',
-                style: TimetableTheme.titleStyle(color: colors.titleText),
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  for (var i = 0; i < kCoursePaletteSize; i++)
-                    InkResponse(
-                      key: Key('manual_course_color_$i'),
-                      onTap: () => Navigator.pop(ctx, i),
-                      // 默认半径 35 会溢出到相邻色块，收到色块自身大小。
-                      radius: 20,
-                      child: Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: TimetableTheme.courseColor(
-                            i,
-                            scheme: coursePaletteSchemeFor(widget.controller),
-                          ),
-                          shape: BoxShape.circle,
-                          border: i == _previewColorIndex
-                              ? Border.all(color: colors.titleText, width: 2)
-                              : null,
-                        ),
-                        child: i == _previewColorIndex
-                            ? Icon(
-                                Icons.check,
-                                size: 20,
-                                color: TimetableTheme.courseTextColor(
-                                  i,
-                                  scheme: coursePaletteSchemeFor(
-                                    widget.controller,
-                                  ),
-                                ),
-                              )
-                            : null,
-                      ),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
+    final current = _previewDisplayBg(colors.isDark);
+    final pick = await showTimetableColorPicker(
+      context,
+      current: current,
+      showReset: _userArgb != null || _colorIndex != null,
+      title: '颜色',
     );
-    if (picked != null && mounted) setState(() => _colorIndex = picked);
+    if (pick == null || !mounted) return;
+    setState(() {
+      if (pick.reset) {
+        _userArgb = null;
+        _userArgbCleared = true;
+        _colorIndex = null;
+      } else {
+        _userArgb = pick.color!.toARGB32() | 0xFF000000;
+        _userArgbCleared = false;
+        _colorIndex = null;
+      }
+    });
+  }
+
+  Color _previewDisplayBg(bool dark) {
+    if (_userArgb != null) {
+      return TimetableTheme.userCoursePair(Color(_userArgb!), dark: dark).bg;
+    }
+    return TimetableTheme.autoCoursePair(_previewColorIndex, dark: dark).bg;
   }
 
   @override
@@ -482,10 +467,9 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
                     width: 24,
                     height: 24,
                     decoration: BoxDecoration(
-                      // 预览用当前配色方案的浅色底。
-                      color: TimetableTheme.courseColor(
-                        _previewColorIndex,
-                        scheme: coursePaletteSchemeFor(widget.controller),
+                      // 与课表格同一套显示换算（item 9）。
+                      color: _previewDisplayBg(
+                        TimetableTheme.colorsOf(context).isDark,
                       ),
                       shape: BoxShape.circle,
                     ),
