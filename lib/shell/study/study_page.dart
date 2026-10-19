@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/pull_to_refresh.dart';
 import '../../mini_apps/academic/academic_controller.dart';
 import '../../mini_apps/academic/academic_summary_card.dart';
 import '../../mini_apps/innovation_credit/innovation_credit_card.dart';
@@ -28,7 +29,7 @@ class StudyPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('学习')),
-      body: RefreshIndicator(
+      body: PullToRefresh(
         onRefresh: _refreshAll,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),

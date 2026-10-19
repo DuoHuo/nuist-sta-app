@@ -63,6 +63,7 @@ lib/
 | `url` | `String?` | 二选一 | H5 小程序地址 |
 | `requiresPortal` | `bool` | | 仅对 H5 有意义，默认 `false` |
 | `homeCard` | `WidgetBuilder?` | | 首页宫格**上方**的常驻卡片 |
+| `onHomeRefresh` | `Future<void> Function()?` | | 首页下拉刷新时调用，刷新自己 `homeCard` 的数据；壳并发调用全部回调 |
 
 两条构造断言（写错了会在构造时直接抛）：
 

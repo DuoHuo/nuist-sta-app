@@ -20,6 +20,7 @@ class AppManifest {
     this.url,
     this.requiresPortal = false,
     this.homeCard,
+    this.onHomeRefresh,
   }) : assert(
          (entry == null) != (url == null),
          '$id 必须且只能提供 entry（原生）或 url（H5）之一',
@@ -63,6 +64,12 @@ class AppManifest {
   ///
   /// 壳只负责把它摆出来，卡片内部的数据与跳转由小程序自己处理，壳不感知。
   final WidgetBuilder? homeCard;
+
+  /// 可选：首页下拉刷新时调用，用来刷新 [homeCard] 的数据。
+  ///
+  /// 壳会并发调用所有小程序的这个回调，等全部完成后收起转圈；各自的失败
+  /// 由小程序自己在卡片上展示，不要抛出异常。
+  final Future<void> Function()? onHomeRefresh;
 
   /// 是否为 H5 形态。
   bool get isWeb => url != null;

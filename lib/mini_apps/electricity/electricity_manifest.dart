@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_manifest.dart';
+import 'electricity_controller.dart';
 import 'electricity_home_card.dart';
 import 'electricity_page.dart';
 
@@ -12,8 +13,11 @@ const electricityManifest = AppManifest(
   icon: Icons.bolt,
   entry: _entry,
   homeCard: _homeCard,
+  onHomeRefresh: _homeRefresh,
 );
 
 Widget _entry(BuildContext context) => const ElectricityPage();
 
 Widget _homeCard(BuildContext context) => const ElectricityHomeCard();
+
+Future<void> _homeRefresh() => ElectricityController.instance.refresh();
