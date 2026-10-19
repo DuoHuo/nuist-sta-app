@@ -32,8 +32,13 @@ class ScheduleEventCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = scheduleCellBg(controller, event);
-    final fg = scheduleCellFg(controller, event);
+    final dark = TimetableTheme.colorsOf(context).isDark;
+    final bg = scheduleCellBg(controller, event, dark: dark);
+    final autoFg = scheduleCellFg(controller, event, dark: dark);
+    // item 14：考试格也受「文字颜色」白字 / 黑字强制。
+    final fg = event.isExam
+        ? TimetableTheme.cellTextFor(autoFg, controller.settings.cellTextColor)
+        : autoFg;
     final stacked = stackCount > 1;
     final showLoc =
         controller.settings.showLocation && event.location.isNotEmpty;

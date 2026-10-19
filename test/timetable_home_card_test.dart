@@ -407,7 +407,7 @@ void main() {
         expect(tester.getRect(find.byType(TimetableHomeCard)).right, 320);
       });
 
-      testWidgets('HT14 长课名换行、长地点与时间完整；课程 + 考试 + 日程混排不溢出'
+      testWidgets('HT14 长课名换行、长地点与时间完整；课程 + 考试混排不溢出，最多 2 项'
           '（textScaler $scale）', (tester) async {
         _load(manual: [_course('a', longName, location: coursePlace)]);
         final day = DateTime(2026, 10, 12);
@@ -442,17 +442,21 @@ void main() {
         expectFull(tester, find.text(longName));
         final courseLine = find.textContaining(coursePlace);
         expectFull(tester, courseLine);
-        expect(tester.widget<Text>(courseLine).data, '@$coursePlace · 第1–2节');
+        // item 13：地点单独一行（不再带「@」），时间 · 节次另起一行。
+        expect(tester.widget<Text>(courseLine).data, coursePlace);
+        expect(
+          tester.widget<Text>(find.byKey(const Key('home_course_time'))).data,
+          '08:00–09:40 · 第1–2节',
+        );
         final examLine = find.textContaining(examPlace);
         expectFull(tester, examLine);
         expect(tester.widget<Text>(examLine).data, contains('10:00–11:30'));
-        final otherLine = find.textContaining(otherPlace);
-        expectFull(tester, otherLine);
-        expect(tester.widget<Text>(otherLine).data, contains('14:00–15:00'));
+        // item 13：最多 2 项（下一节课 + 考试），14:00 的日程不显示。
+        expect(find.textContaining(otherPlace), findsNothing);
         // 卡片高度随内容：长课名那一行比单行最小高度（48）更高。
         expect(
           tester.getSize(find.byType(TimetableHomeCard)).height,
-          greaterThan(3 * 48),
+          greaterThan(2 * 48),
         );
       });
     }

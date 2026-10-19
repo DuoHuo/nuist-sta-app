@@ -1,7 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'timetable_colors.dart';
 import 'timetable_controller.dart';
+import 'timetable_date_edits.dart';
+import 'timetable_edit_scope_sheet.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
 import 'timetable_course_color.dart';
@@ -14,6 +17,7 @@ Future<Course?> showManualCourseForm(
   required TimetableController controller,
   Course? initial,
   CourseSlot? initialSlot,
+  GridCell? cell,
 }) {
   return Navigator.of(context).push<Course>(
     MaterialPageRoute(
@@ -22,6 +26,7 @@ Future<Course?> showManualCourseForm(
         controller: controller,
         initial: initial,
         initialSlot: initialSlot,
+        cell: cell,
       ),
     ),
   );
@@ -35,11 +40,16 @@ class ManualCourseForm extends StatefulWidget {
     required this.controller,
     this.initial,
     this.initialSlot,
+    this.cell,
   });
 
   final TimetableController controller;
   final Course? initial;
   final CourseSlot? initialSlot;
+
+  /// 从周视图某一格进来编辑时传入（第 1 条：保存时可选「只改这一天」）。
+  /// 为空时（如从列表进来）按所有周保存，与以前一致。
+  final GridCell? cell;
 
   @override
   State<ManualCourseForm> createState() => _ManualCourseFormState();
@@ -109,6 +119,59 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     } else {
       _weeks = {for (var w = 1; w <= _totalWeeks; w++) w};
     }
+    _init = (
+      name: _name.text,
+      location: _location.text,
+      teacher: _teacher.text,
+      note: _note.text,
+      day: _day,
+      start: _start,
+      end: _end,
+      weeks: {..._weeks},
+      color: _colorIndex,
+    );
+  }
+
+  /// 打开表单时的值（第 1 条：判断改了哪些、只改这一天时只记改过的字段）。
+  late final ({
+    String name,
+    String location,
+    String teacher,
+    String note,
+    int day,
+    int start,
+    int end,
+    Set<int> weeks,
+    int? color,
+  })
+  _init;
+
+  /// 只改这一天：写单日修改；颜色属于课程本身，改了照样存到课程。
+  Future<Course?> _saveThisDay(GridCell cell, Course initial) async {
+    final c = widget.controller;
+    String? changed(TextEditingController t, String init) =>
+        t.text.trim() == init.trim() ? null : t.text.trim();
+    final timeChanged =
+        _day != _init.day || _start != _init.start || _end != _init.end;
+    final rec = await c.editOccurrence(
+      cell,
+      name: changed(_name, _init.name),
+      teacher: changed(_teacher, _init.teacher),
+      location: changed(_location, _init.location),
+      note: changed(_note, _init.note),
+      toDay: timeChanged ? _day : null,
+      toStart: timeChanged ? _start : null,
+      toEnd: timeChanged ? _end : null,
+    );
+    final base = c.manualCourseById(initial.id);
+    if (base != null && _colorIndex != _init.color) {
+      await c.updateManualCourse(
+        base.copyWith(colorIndex: _colorIndex, clearColor: _colorIndex == null),
+      );
+    }
+    // rec 为 null：改回了原值（记录已删）或格子已失效，课程本身都没动。
+    if (rec == null && kDebugMode) debugPrint('[timetable] 单日修改未写入');
+    return c.manualCourseById(initial.id) ?? initial;
   }
 
   void _onNameChanged() {
@@ -160,12 +223,57 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     );
     final navigator = Navigator.of(context);
     Course saved;
-    final initial = widget.initial;
+    var initial = widget.initial;
+    // 第 1 条：从周视图格子编辑、周次没改、且改了这次课的字段 / 时间 → 先选范围。
+    final cell = widget.cell;
+    CourseSlot? baseSlot = widget.initialSlot;
+    if (initial != null && cell != null && cell.date != null) {
+      final base = widget.controller.baseOccurrenceOf(cell);
+      if (base != null) {
+        initial = widget.controller.manualCourseById(base.course.id) ?? initial;
+        baseSlot = base.course.slots[base.slotIndex];
+      }
+      final weeksChanged =
+          _weeks.length != _init.weeks.length ||
+          !_weeks.containsAll(_init.weeks);
+      final occurrenceChanged =
+          _name.text.trim() != _init.name.trim() ||
+          _teacher.text.trim() != _init.teacher.trim() ||
+          _location.text.trim() != _init.location.trim() ||
+          _note.text.trim() != _init.note.trim() ||
+          _day != _init.day ||
+          _start != _init.start ||
+          _end != _init.end;
+      if (!weeksChanged && occurrenceChanged && cell.activeThisWeek) {
+        final scope = await showEditScopeSheet(context, date: cell.date!);
+        if (scope == null || !mounted) {
+          if (mounted) setState(() => _saving = false);
+          return;
+        }
+        if (scope == EditScope.thisDay) {
+          final r = await _saveThisDay(cell, initial);
+          if (!mounted) return;
+          navigator.pop(r);
+          return;
+        }
+        // 所有周：这一天的单日修改里改过的字段让位给课程本身的新值。
+        final de = cell.dateEdit;
+        if (de != null) {
+          await widget.controller.clearDateEditFields(
+            de.id,
+            name: _name.text.trim() != _init.name.trim(),
+            teacher: _teacher.text.trim() != _init.teacher.trim(),
+            location: _location.text.trim() != _init.location.trim(),
+            note: _note.text.trim() != _init.note.trim(),
+            move:
+                _day != _init.day || _start != _init.start || _end != _init.end,
+          );
+        }
+      }
+    }
     if (initial != null) {
       final slots = [...initial.slots];
-      final idx = widget.initialSlot == null
-          ? -1
-          : slots.indexOf(widget.initialSlot!);
+      final idx = baseSlot == null ? -1 : slots.indexOf(baseSlot);
       if (idx >= 0) {
         slots[idx] = slot;
       } else if (slots.isNotEmpty) {

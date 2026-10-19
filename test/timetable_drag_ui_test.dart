@@ -220,13 +220,14 @@ void main() {
     expect(at.dx - origin.dx, closeTo(step.width, 0.5));
     expect(at.dy - origin.dy, closeTo(step.height * 2, 0.5));
     expect(find.text('此更改应用范围？'), findsOneWidget);
-    expect(find.text('只改本周（第 7 周）'), findsOneWidget);
-    expect(find.text('改以后所有周'), findsOneWidget);
+    // 第 1 条：「只改这一天（M月D日）」（默认，第一项）/「所有周」。
+    expect(find.textContaining('只改这一天（'), findsOneWidget);
+    expect(find.text('所有周'), findsOneWidget);
     expect(find.text('取消'), findsOneWidget);
     expect(find.textContaining('跨周'), findsNothing);
     expect(find.textContaining('按天'), findsNothing);
-    final y1 = tester.getTopLeft(find.text('只改本周（第 7 周）')).dy;
-    final y2 = tester.getTopLeft(find.text('改以后所有周')).dy;
+    final y1 = tester.getTopLeft(find.textContaining('只改这一天（')).dy;
+    final y2 = tester.getTopLeft(find.text('所有周')).dy;
     final y3 = tester.getTopLeft(find.text('取消')).dy;
     expect(y1 < y2 && y2 < y3, isTrue);
   });
@@ -342,16 +343,16 @@ void main() {
     final step = cellStep(tester);
     await longDrag(tester, cellOf('甲课程'), moves: [Offset(step.width, 0)]);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('drag_scope_from_this_week')));
+    await tester.tap(find.byKey(const Key('drag_scope_all_weeks')));
     await tester.pump();
     await settleIo(tester);
     expect(find.text('与丙课程时间冲突'), findsOneWidget);
     final bar = tester.widget<SnackBar>(find.byType(SnackBar));
     expect(bar.behavior, SnackBarBehavior.floating);
     expect(bar.action, isNull);
-    // 修改已生效：第 7 周起甲课程在周二；冲突格按「2 门」样式显示。
+    // 修改已生效：所有周甲课程都在周二；冲突格按「2 门」样式显示。
     final slots = c.manualCourses.firstWhere((x) => x.id == 'm1').slots;
-    expect(slots.any((s) => s.day == 2 && weeksOf(s).first == _week), isTrue);
+    expect(slots.any((s) => s.day == 2 && weeksOf(s).contains(_week)), isTrue);
     expect(find.byKey(const Key('course_cell_stack_badge')), findsOneWidget);
   });
 
@@ -395,7 +396,7 @@ void main() {
     expect(c.visibleDays(_week), [1, 2, 3, 4, 5]);
     await longDrag(tester, cellOf('甲课程'), moves: [const Offset(3000, 0)]);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('drag_scope_from_this_week')));
+    await tester.tap(find.byKey(const Key('drag_scope_all_weeks')));
     await tester.pump();
     await settleIo(tester);
     final slots = c.manualCourses.single.slots;

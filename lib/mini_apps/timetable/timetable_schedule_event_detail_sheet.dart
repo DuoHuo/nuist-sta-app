@@ -15,7 +15,7 @@ Future<void> showAddEntrySheet(
 }) async {
   final choice = await showModalBottomSheet<String>(
     context: context,
-    backgroundColor: TimetableTheme.surface,
+    backgroundColor: TimetableTheme.colorsOf(context).surface,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(
         top: Radius.circular(TimetableTheme.sheetTopRadius),
@@ -31,7 +31,7 @@ Future<void> showAddEntrySheet(
             width: 36,
             height: 4,
             decoration: BoxDecoration(
-              color: TimetableTheme.divider,
+              color: TimetableTheme.colorsOf(context).divider,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -187,8 +187,8 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
         final overridden =
             examKey != null && c.isJwxtOverridden(examKey: examKey);
         return Container(
-          decoration: const BoxDecoration(
-            color: TimetableTheme.surface,
+          decoration: BoxDecoration(
+            color: TimetableTheme.colorsOf(context).surface,
             borderRadius: BorderRadius.vertical(
               top: Radius.circular(TimetableTheme.sheetTopRadius),
             ),
@@ -205,7 +205,7 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
                 width: 36,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: TimetableTheme.divider,
+                  color: TimetableTheme.colorsOf(context).divider,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -223,7 +223,12 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(e.title, style: TimetableTheme.titleStyle()),
+                      child: Text(
+                        e.title,
+                        style: TimetableTheme.titleStyle(
+                          color: TimetableTheme.colorsOf(context).titleText,
+                        ),
+                      ),
                     ),
                     SchedulePill(text: schedulePillLabel(e), color: accent),
                   ],
@@ -252,20 +257,26 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Row(
                     children: [
-                      const Icon(
+                      Icon(
                         Icons.edit_outlined,
                         size: 20,
-                        color: TimetableTheme.hint,
+                        color: TimetableTheme.colorsOf(context).hint,
                       ),
                       const SizedBox(width: 12),
                       Expanded(
-                        child: Text('已修改', style: TimetableTheme.bodyStyle()),
+                        child: Text(
+                          '已修改',
+                          style: TimetableTheme.bodyStyle(
+                            color: TimetableTheme.colorsOf(context).labelText,
+                          ),
+                        ),
                       ),
                       TextButton(
                         key: const Key('schedule_detail_restore'),
                         onPressed: _busy ? null : () => _restore(examKey),
                         style: TextButton.styleFrom(
-                          foregroundColor: TimetableTheme.accent,
+                          foregroundColor: TimetableTheme.colorsOf(context)
+                              .accent,
                         ),
                         child: const Text('恢复原考试'),
                       ),
@@ -283,8 +294,10 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
                           key: const Key('schedule_detail_edit'),
                           onPressed: _busy ? null : () => _edit(e),
                           style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFFF0F1F3),
-                            foregroundColor: TimetableTheme.titleText,
+                            backgroundColor: TimetableTheme.colorsOf(context)
+                                .chipBg,
+                            foregroundColor: TimetableTheme.colorsOf(context)
+                                .titleText,
                             elevation: 0,
                             shape: const StadiumBorder(),
                           ),
@@ -301,7 +314,8 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
                         icon: const Icon(Icons.delete_outline, size: 20),
                         label: const Text('删除'),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.red.shade600,
+                          foregroundColor: TimetableTheme.colorsOf(context)
+                              .danger,
                           shape: const StadiumBorder(),
                         ),
                       ),
@@ -332,13 +346,15 @@ class _Row extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         child: Row(
           children: [
-            Icon(icon, size: 20, color: TimetableTheme.hint),
+            Icon(icon, size: 20, color: TimetableTheme.colorsOf(context).hint),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
                 text,
                 style: TimetableTheme.bodyStyle(
-                  color: muted ? TimetableTheme.hint : TimetableTheme.labelText,
+                  color: muted
+                      ? TimetableTheme.colorsOf(context).hint
+                      : TimetableTheme.colorsOf(context).labelText,
                 ),
               ),
             ),

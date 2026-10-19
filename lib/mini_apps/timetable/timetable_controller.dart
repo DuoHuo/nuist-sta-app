@@ -8,6 +8,7 @@ import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
 import 'timetable_api.dart';
 import 'timetable_colors.dart';
+import 'timetable_date_edits.dart';
 import 'timetable_models.dart';
 import 'timetable_overrides.dart';
 import 'timetable_schedule_event.dart';
@@ -113,6 +114,12 @@ enum ScheduleChangeReason {
   unbind,
   scheduleEvent,
   courseEdit,
+
+  /// 单日修改（第 1 条）。
+  dateEdit,
+
+  /// 整天调课（第 8 条）。
+  daySwap,
 }
 
 /// 课表全局状态：首页卡片与周视图共用。
@@ -230,6 +237,30 @@ class TimetableController extends ChangeNotifier {
   List<Course> get manualCourses => List.unmodifiable(_manualCourses);
 
   Map<String, int>? _colorMap;
+
+  /// item 9：用户自选课程色（课程 id → 原始 ARGB），见 [TimetableStore.readUserCourseColors]。
+  Map<String, int> _userColors = const {};
+
+  /// [c] 的用户自选色（原始 ARGB）；没选过为 null。
+  int? userColorOf(Course c) => _userColors[c.id];
+
+  /// 设 / 清（[color] 为 null，即「恢复默认」）某门课的自选色并落盘。不重算其他课的颜色。
+  Future<void> setUserCourseColor(String courseId, int? color) async {
+    final next = Map<String, int>.of(_userColors);
+    if (color == null) {
+      next.remove(courseId);
+    } else {
+      next[courseId] = color | 0xFF000000;
+    }
+    _userColors = next;
+    notifyListeners();
+    try {
+      await TimetableStore.saveUserCourseColors(next);
+    } catch (_) {}
+  }
+
+  /// 自动配色跳过用户自选色的课（不占色号）。
+  bool _autoColored(Course c) => !_userColors.containsKey(c.id);
   List<Course>? _colorMapJwxt;
   CoursePaletteScheme? _colorMapScheme;
 
@@ -262,8 +293,8 @@ class TimetableController extends ChangeNotifier {
       for (final c in _snapshot.courses) normalizeCourseName(c.name),
     };
     return assignCourseColors([
-      ..._snapshot.courses,
-      for (final c in _manualCourses)
+      ..._snapshot.courses.where(_autoColored),
+      for (final c in _manualCourses.where(_autoColored))
         c.colorIndex == null &&
                 c.assignedColorIndex != null &&
                 !jwxtNames.contains(normalizeCourseName(c.name))
@@ -279,8 +310,10 @@ class TimetableController extends ChangeNotifier {
   Future<bool> _recomputeColors() async {
     final scheme = coursePaletteSchemeOf(settings.paletteScheme);
     final map = assignCourseColors([
-      ..._snapshot.courses, // 教务原始位置，不套调课记录
-      for (final c in _manualCourses) c.copyWith(clearAssignedColor: true),
+      // 教务原始位置，不套调课记录；用户自选色的课不参与（item 9）。
+      ..._snapshot.courses.where(_autoColored),
+      for (final c in _manualCourses.where(_autoColored))
+        c.copyWith(clearAssignedColor: true),
     ], scheme: scheme);
     _colorMap = map;
     _colorMapJwxt = _snapshot.courses;
@@ -351,9 +384,9 @@ class TimetableController extends ChangeNotifier {
       courseColorMap[normalizeCourseName(_colorNameOf(c))] ??
       c.resolvedColorIndex;
 
-  /// 配色用课名：教务课总用教务原课名（改名不换色），手动课用自身课名。
+  /// 配色用课名：教务课总用教务原课名（改名 / 单日改名不换色），手动课用存储的课名。
   String _colorNameOf(Course c) {
-    if (c.isManual || !_courseEdits.containsKey(c.id)) return c.name;
+    if (c.isManual) return manualCourseById(c.id)?.name ?? c.name;
     return _jwxtCourseById(c.id)?.name ?? c.name;
   }
 
@@ -513,6 +546,8 @@ class TimetableController extends ChangeNotifier {
     _scheduleEvents = List.unmodifiable(await ScheduleStore.readEvents());
     _otherColors = Map.unmodifiable(await ScheduleStore.readOtherColors());
     _courseEdits = Map.unmodifiable(await ScheduleStore.readCourseEdits());
+    _dateEdits = List.unmodifiable(await ScheduleStore.readCourseDateEdits());
+    _daySwaps = List.unmodifiable(await ScheduleStore.readDaySwaps());
     _examOverrides = Map.unmodifiable(await ScheduleStore.readExamOverrides());
     _lastSyncSuccessAt = await ScheduleStore.readLastSyncSuccess();
     _portalSessionExpired = await ScheduleStore.readPortalSessionExpired();
@@ -564,6 +599,11 @@ class TimetableController extends ChangeNotifier {
   Future<void> _loadColorMap() async {
     final scheme = coursePaletteSchemeOf(settings.paletteScheme);
     StoredCourseColors? stored;
+    try {
+      _userColors = await TimetableStore.readUserCourseColors();
+    } catch (_) {
+      _userColors = const {};
+    }
     try {
       stored = await TimetableStore.readCourseColors();
     } catch (_) {
@@ -795,7 +835,10 @@ class TimetableController extends ChangeNotifier {
     _effJwxt = null;
     _scheduleEvents = const [];
     _otherColors = const {};
+    _userColors = const {};
     _courseEdits = const {};
+    _dateEdits = const [];
+    _daySwaps = const [];
     _examOverrides = const {};
     _lastSyncSuccessAt = null;
     _lastFailureOffline = false;
@@ -931,6 +974,13 @@ class TimetableController extends ChangeNotifier {
     if (next.length == _manualCourses.length) return false;
     _manualCourses = next;
     await _recomputeColors();
+    if (_dateEdits.any((e) => e.courseId == id)) {
+      _dateEdits = List.unmodifiable([
+        for (final e in _dateEdits)
+          if (e.courseId != id) e,
+      ]);
+      await ScheduleStore.saveCourseDateEdits(_dateEdits);
+    }
     await _persistManual();
     return true;
   }
@@ -1034,12 +1084,14 @@ class TimetableController extends ChangeNotifier {
     if (toDay == slot.day && toStartPeriod == slot.startNode) {
       return const MoveResult.noChange();
     }
-    final affected = scope == MoveScope.thisWeek
-        ? [week]
-        : [
-            for (final w in weeksOf(slot))
-              if (w >= week) w,
-          ];
+    final affected = switch (scope) {
+      MoveScope.thisWeek => [week],
+      MoveScope.fromThisWeek => [
+        for (final w in weeksOf(slot))
+          if (w >= week) w,
+      ],
+      MoveScope.allWeeks => weeksOf(slot),
+    };
 
     if (course.isManual) {
       final index = _manualCourses.indexWhere((c) => c.id == course.id);
@@ -1480,10 +1532,18 @@ class TimetableController extends ChangeNotifier {
   }
 
   /// 详情页「恢复原课程」：清掉这门教务课的编辑、删除和全部调课记录。
+  /// 这门课的单日修改（第 1 条）一并清掉；整天调课记录不动。
   Future<bool> restoreJwxtCourse(String courseId) async {
-    final hadEdit = _courseEdits.containsKey(courseId);
+    var hadEdit = _courseEdits.containsKey(courseId);
     if (hadEdit) {
       await _setCourseEdits({..._courseEdits}..remove(courseId));
+    }
+    if (_dateEdits.any((e) => e.courseId == courseId)) {
+      hadEdit = true;
+      await _setDateEdits([
+        for (final e in _dateEdits)
+          if (e.courseId != courseId) e,
+      ], fire: false);
     }
     final next = [
       for (final o in _overrides)
@@ -1508,9 +1568,22 @@ class TimetableController extends ChangeNotifier {
 
   /// 设置「恢复教务课程」：清掉全部调课记录、教务课编辑/删除和教务考试覆盖。
   /// 什么都没有时返回 false。
+  /// 教务课的单日修改（第 1 条）一并清掉；手动课的单日修改与整天调课记录不动。
   Future<bool> restoreAllJwxt() async {
-    if (_overrides.isEmpty && _courseEdits.isEmpty && _examOverrides.isEmpty) {
+    final jwxtDateEdits = _dateEdits.where(
+      (e) => manualCourseById(e.courseId) == null,
+    );
+    if (_overrides.isEmpty &&
+        _courseEdits.isEmpty &&
+        _examOverrides.isEmpty &&
+        jwxtDateEdits.isEmpty) {
       return false;
+    }
+    if (jwxtDateEdits.isNotEmpty) {
+      await _setDateEdits([
+        for (final e in _dateEdits)
+          if (manualCourseById(e.courseId) != null) e,
+      ], fire: false);
     }
     if (_examOverrides.isNotEmpty) {
       _examOverrides = const {};
@@ -1767,10 +1840,54 @@ class TimetableController extends ChangeNotifier {
   }
 
   /// 指定周、指定星期几的课程格（跨节已是完整 slot）。
+  ///
+  /// 展示优先级（第 1/8 条）：单日修改 > 整天调课 > 拖动调课 > 教务原始。
+  /// - 整天调课：这一天本周有课的格子换成对调日期那天本周有课的格子（时段改成本列
+  ///   星期，[GridCell.swappedFrom] = 对调日期）；非本周灰格仍按本列自己的。
+  /// - 单日修改：按「课程 + 本列日期 + 显示节次」匹配（已套用整天调课后的显示）；
+  ///   对不上的记录忽略（不删）。挪到别的日期的记录在目标日期显示。
+  /// 每格带 [GridCell.date]（本列日期）。
   List<GridCell> cellsForDay(int week, int day) {
-    final result = <GridCell>[];
-    final candidates = <({Course course, CourseSlot slot, bool active})>[];
+    final date = dateOfColumn(week, day);
+    final candidates = (_daySwaps.isEmpty && _dateEdits.isEmpty)
+        ? _baseCandidates(week, day)
+        : _applyDateEdits(date, day, _swapCandidates(week, day, date));
 
+    final result = <GridCell>[];
+    // 冲突：同日起止重叠
+    for (var i = 0; i < candidates.length; i++) {
+      final item = candidates[i];
+      var conflicts = 0;
+      for (var j = 0; j < candidates.length; j++) {
+        if (i == j) continue;
+        final other = candidates[j];
+        if (!_overlap(item.slot, other.slot)) continue;
+        if (item.active || other.active) conflicts++;
+      }
+      result.add(
+        GridCell(
+          course: item.course,
+          slot: item.slot,
+          conflictCount: conflicts,
+          activeThisWeek: item.active,
+          date: date,
+          dateEdit: item.dateEdit,
+          swappedFrom: item.swappedFrom,
+        ),
+      );
+    }
+
+    result.sort((a, b) {
+      final byStart = a.slot.startNode.compareTo(b.slot.startNode);
+      if (byStart != 0) return byStart;
+      return a.course.name.compareTo(b.course.name);
+    });
+    return result;
+  }
+
+  /// 拖动调课 + 教务编辑后（[courses]）第 [week] 周第 [day] 列的候选格。
+  List<_Cand> _baseCandidates(int week, int day) {
+    final candidates = <_Cand>[];
     for (final course in courses) {
       if (course.hidden) continue;
       final splitAway = settings.showNonCurrentWeek && course.isManual
@@ -1782,34 +1899,492 @@ class TimetableController extends ChangeNotifier {
         if (!active && !settings.showNonCurrentWeek) continue;
         // 本周这次已被拖走（拆出的时段本周有课）→ 原位置不画「[非本周]」虚影。
         if (!active && splitAway.contains(slot.ref)) continue;
-        candidates.add((course: course, slot: slot, active: active));
+        candidates.add(_Cand(course, slot, active));
       }
     }
+    return candidates;
+  }
 
-    // 冲突：同日起止重叠
-    for (final item in candidates) {
-      var conflicts = 0;
-      for (final other in candidates) {
-        if (identical(item, other)) continue;
-        if (!_overlap(item.slot, other.slot)) continue;
-        if (item.active || other.active) conflicts++;
+  /// 套用整天调课（第 8 条）后的候选格。
+  List<_Cand> _swapCandidates(int week, int day, DateTime date) {
+    final base = _baseCandidates(week, day);
+    final partner = swapPartnerIn(_daySwaps, date);
+    if (partner == null) return base;
+    final pw = _weekOfDate(partner);
+    return [
+      for (final c in base)
+        if (!c.active) c,
+      if (pw >= 1)
+        for (final c in _baseCandidates(pw, partner.weekday))
+          if (c.active)
+            _Cand(
+              c.course,
+              _redaySlot(c.course.id, c.slot, day),
+              true,
+              swappedFrom: partner,
+            ),
+    ];
+  }
+
+  /// 套用单日修改（第 1 条）后的候选格。
+  List<_Cand> _applyDateEdits(DateTime date, int day, List<_Cand> cands) {
+    final here = [
+      for (final e in _dateEdits)
+        if (isSameDate(e.date, date)) e,
+    ];
+    final incoming = [
+      for (final e in _dateEdits)
+        if (!e.isDelete && e.movesToOtherDate && isSameDate(e.toDate!, date)) e,
+    ];
+    if (here.isEmpty && incoming.isEmpty) return cands;
+    final out = <_Cand>[];
+    for (final c in cands) {
+      if (!c.active) {
+        out.add(c);
+        continue;
       }
-      result.add(
-        GridCell(
-          course: item.course,
-          slot: item.slot,
-          conflictCount: conflicts,
-          activeThisWeek: item.active,
-        ),
+      CourseDateEdit? rec;
+      for (final e in here) {
+        if (e.matches(c.course.id, date, c.slot.startNode, c.slot.endNode)) {
+          rec = e;
+        }
+      }
+      if (rec == null) {
+        out.add(c);
+      } else if (!rec.isDelete && !rec.movesToOtherDate) {
+        out.add(_withDateEdit(c, rec, day));
+      }
+    }
+    for (final rec in incoming) {
+      final src = _activeCandidateFor(rec);
+      if (src != null) out.add(_withDateEdit(src, rec, day));
+    }
+    return out;
+  }
+
+  /// 单日修改记录指向的那次课（记录日期那天、整天调课后、单日修改前）；没有 → null。
+  _Cand? _activeCandidateFor(CourseDateEdit rec) {
+    final w = _weekOfDate(rec.date);
+    if (w < 1) return null;
+    for (final c in _swapCandidates(w, rec.date.weekday, rec.date)) {
+      if (c.active &&
+          rec.matches(
+            c.course.id,
+            rec.date,
+            c.slot.startNode,
+            c.slot.endNode,
+          )) {
+        return c;
+      }
+    }
+    return null;
+  }
+
+  _Cand _withDateEdit(_Cand c, CourseDateEdit rec, int day) {
+    final s = c.slot;
+    final slot = CourseSlot(
+      day: day,
+      startNode: rec.toStart ?? s.startNode,
+      endNode: rec.toEnd ?? s.endNode,
+      weeks: s.weeks,
+      weeksLabel: s.weeksLabel,
+      teacher: rec.teacher ?? s.teacher,
+      location: rec.location ?? s.location,
+      note: rec.note ?? s.note,
+      splitFrom: s.splitFrom,
+    );
+    tagSlotOrigin(
+      slot,
+      slotOriginOf(s) ??
+          SlotOrigin(courseId: c.course.id, original: s, moved: false),
+    );
+    final name = rec.name;
+    return _Cand(
+      name == null ? c.course : c.course.copyWith(name: name),
+      slot,
+      true,
+      swappedFrom: c.swappedFrom,
+      dateEdit: rec,
+    );
+  }
+
+  /// 换到第 [day] 列显示的时段（保留来源标，单双周仍按原时段判断）。
+  static CourseSlot _redaySlot(String courseId, CourseSlot s, int day) {
+    if (s.day == day) return s;
+    final n = CourseSlot(
+      day: day,
+      startNode: s.startNode,
+      endNode: s.endNode,
+      weeks: s.weeks,
+      weeksLabel: s.weeksLabel,
+      teacher: s.teacher,
+      location: s.location,
+      note: s.note,
+      splitFrom: s.splitFrom,
+    );
+    tagSlotOrigin(
+      n,
+      slotOriginOf(s) ??
+          SlotOrigin(courseId: courseId, original: s, moved: false),
+    );
+    return n;
+  }
+
+  /// [date] 所在的教学周（周次待同步时以本周为第 1 周，与 [weekStartDate] 一致）。
+  int _weekOfDate(DateTime date) => teachingWeekOf(
+    settings.termStartDate ?? _mondayOf(_today),
+    DateTime(date.year, date.month, date.day),
+  );
+
+  /// [date] 所在教学周（不钳制）；周次待同步时以本周为第 1 周。
+  int weekOfDate(DateTime date) => _weekOfDate(date);
+
+  // ===== 第 8 条：整天调课 =====
+
+  List<DaySwap> _daySwaps = const [];
+  int _swapSeq = 0;
+
+  /// 全部整天调课记录（设置「调课记录」列表；按添加顺序）。
+  List<DaySwap> get daySwaps => List.unmodifiable(_daySwaps);
+
+  /// [date] 是否参与了整天调课（表头「调」胶囊）。
+  bool isSwappedDate(DateTime date) => _daySwaps.any((s) => s.involves(date));
+
+  /// [date] 的对调日期；没调返回 null。
+  DateTime? swapPartnerOf(DateTime date) => swapPartnerIn(_daySwaps, date);
+
+  /// [date] 所在的调课记录；没有返回 null。
+  DaySwap? daySwapOn(DateTime date) {
+    for (final s in _daySwaps) {
+      if (s.involves(date)) return s;
+    }
+    return null;
+  }
+
+  /// 两天课程互换（考试 / 日程留在原日期）。同一天、或任一天已在别的调课记录里
+  /// → 返回 null 不写（请先恢复那条）。单日修改记录不受影响：调课前在这两天做的
+  /// 单日修改，这门课不在那天显示时暂不生效，恢复调课后自动重新生效。
+  Future<DaySwap?> addDaySwap(DateTime a, DateTime b) async {
+    if (isSameDate(a, b) || isSwappedDate(a) || isSwappedDate(b)) return null;
+    final swap = DaySwap(
+      id: 'swap-${DateTime.now().microsecondsSinceEpoch}-${_swapSeq++}',
+      dateA: DateTime(a.year, a.month, a.day),
+      dateB: DateTime(b.year, b.month, b.day),
+      createdAt: DateTime.now().toIso8601String(),
+    );
+    await _setDaySwaps([..._daySwaps, swap]);
+    return swap;
+  }
+
+  /// 恢复一条整天调课记录。id 不存在返回 false。不删任何单日修改。
+  Future<bool> removeDaySwap(String id) async {
+    final next = [
+      for (final s in _daySwaps)
+        if (s.id != id) s,
+    ];
+    if (next.length == _daySwaps.length) return false;
+    await _setDaySwaps(next);
+    return true;
+  }
+
+  Future<void> _setDaySwaps(List<DaySwap> next) async {
+    _daySwaps = List.unmodifiable(next);
+    await ScheduleStore.saveDaySwaps(_daySwaps);
+    notifyListeners();
+    _fireScheduleChanged(ScheduleChangeReason.daySwap);
+  }
+
+  // ===== 第 1 条：单日修改（只改这一天）=====
+
+  List<CourseDateEdit> _dateEdits = const [];
+  int _dateEditSeq = 0;
+
+  /// 全部单日修改记录（含暂不生效的）。
+  List<CourseDateEdit> get courseDateEdits => List.unmodifiable(_dateEdits);
+
+  /// 某门课的单日修改记录。
+  List<CourseDateEdit> dateEditsOf(String courseId) => [
+    for (final e in _dateEdits)
+      if (e.courseId == courseId) e,
+  ];
+
+  /// 一格对应「这次课」的识别键（单日修改按它存）。非本周格 / 没有日期 → null。
+  ({String courseId, DateTime date, int start, int end})? _occurrenceKey(
+    GridCell cell,
+  ) {
+    final d = cell.date;
+    if (d == null || !cell.activeThisWeek) return null;
+    final e = cell.dateEdit;
+    if (e != null) {
+      return (
+        courseId: e.courseId,
+        date: e.date,
+        start: e.origStart,
+        end: e.origEnd,
       );
     }
+    return (
+      courseId: cell.course.id,
+      date: DateTime(d.year, d.month, d.day),
+      start: cell.slot.startNode,
+      end: cell.slot.endNode,
+    );
+  }
 
-    result.sort((a, b) {
-      final byStart = a.slot.startNode.compareTo(b.slot.startNode);
-      if (byStart != 0) return byStart;
-      return a.course.name.compareTo(b.course.name);
-    });
-    return result;
+  /// [cell] 底层的课程（[courses] 里的那门，未套单日修改）、时段下标与所在周：
+  /// 「所有周」保存 / 拖动用它改课程本身。整天调课换来的格子指回原日期那次课。
+  /// 手工构造、没有 [GridCell.date] 的格子按时段原样找，周取 [week]（默认浏览周）。
+  ({Course course, int slotIndex, int week})? baseOccurrenceOf(
+    GridCell cell, {
+    int? week,
+  }) {
+    final key = _occurrenceKey(cell);
+    final id = key?.courseId ?? cell.course.id;
+    Course? course;
+    for (final c in courses) {
+      if (c.id == id) course = c;
+    }
+    if (course == null) return null;
+    if (key == null) {
+      final i = _indexOfEqualSlot(course.slots, cell.slot, -1);
+      return i < 0
+          ? null
+          : (course: course, slotIndex: i, week: week ?? _viewingWeek);
+    }
+    final baseDate = swapPartnerIn(_daySwaps, key.date) ?? key.date;
+    final w = _weekOfDate(baseDate);
+    for (var i = 0; i < course.slots.length; i++) {
+      final s = course.slots[i];
+      if (s.hasFixedTime &&
+          s.day == baseDate.weekday &&
+          s.startNode == key.start &&
+          s.endNode == key.end &&
+          s.hasClassInWeek(w)) {
+        return (course: course, slotIndex: i, week: w);
+      }
+    }
+    return null;
+  }
+
+  CourseDateEdit? _findDateEdit(
+    ({String courseId, DateTime date, int start, int end}) k,
+  ) {
+    CourseDateEdit? hit;
+    for (final e in _dateEdits) {
+      if (e.matches(k.courseId, k.date, k.start, k.end)) hit = e;
+    }
+    return hit;
+  }
+
+  /// 只改这一天：改这次课的课名 / 老师 / 地点 / 备注，或挪到同一周的 [toDay]
+  /// 第 [toStart]–[toEnd] 节（只给 [toStart] 时保持时长）。传 null 的项保持之前的单日
+  /// 修改（或课程原值）。手动课与教务课规则相同；同步不清这些记录。
+  /// 格子没有日期 / 不是本周有课的格 / 找不到底层课程 → null（不写）。
+  Future<CourseDateEdit?> editOccurrence(
+    GridCell cell, {
+    String? name,
+    String? teacher,
+    String? location,
+    String? note,
+    int? toDay,
+    int? toStart,
+    int? toEnd,
+  }) async {
+    final key = _occurrenceKey(cell);
+    if (key == null || baseOccurrenceOf(cell) == null) return null;
+    if (toDay != null && (toDay < 1 || toDay > 7)) return null;
+    final old = _findDateEdit(key);
+    var rec =
+        old ??
+        CourseDateEdit(
+          id: 'dedit-${DateTime.now().microsecondsSinceEpoch}-${_dateEditSeq++}',
+          courseId: key.courseId,
+          date: key.date,
+          origStart: key.start,
+          origEnd: key.end,
+          createdAt: DateTime.now().toIso8601String(),
+        );
+    rec = rec.copyWith(
+      kind: DateEditKind.edit,
+      name: name,
+      teacher: teacher,
+      location: location,
+      note: note,
+    );
+    if (toDay != null || toStart != null || toEnd != null) {
+      final monday = mondayOfWeek(cell.date!);
+      final toDate = toDay == null
+          ? rec.toDate ?? key.date
+          : DateTime(monday.year, monday.month, monday.day + toDay - 1);
+      final curStart = rec.toStart ?? key.start;
+      final curEnd = rec.toEnd ?? key.end;
+      final s = toStart ?? curStart;
+      final e = toEnd ?? (toStart == null ? curEnd : s + (curEnd - curStart));
+      if (s < 1 || e < s || e > lastPeriod) return null;
+      rec = rec.copyWith(toDate: toDate, toStart: s, toEnd: e);
+      if (!rec.movesTime) rec = rec.copyWith(clearMove: true);
+    }
+    await _upsertDateEdit(old, rec);
+    return rec.isEmpty ? null : rec;
+  }
+
+  /// 只删这一天的这次课（其他周 / 其他天不变）。
+  Future<CourseDateEdit?> deleteOccurrence(GridCell cell) async {
+    final key = _occurrenceKey(cell);
+    if (key == null || baseOccurrenceOf(cell) == null) return null;
+    final old = _findDateEdit(key);
+    final rec =
+        (old ??
+                CourseDateEdit(
+                  id: 'dedit-${DateTime.now().microsecondsSinceEpoch}-${_dateEditSeq++}',
+                  courseId: key.courseId,
+                  date: key.date,
+                  origStart: key.start,
+                  origEnd: key.end,
+                  createdAt: DateTime.now().toIso8601String(),
+                ))
+            .copyWith(kind: DateEditKind.delete);
+    await _upsertDateEdit(old, rec);
+    return rec;
+  }
+
+  /// 详情「已修改·恢复」：删掉一条单日修改。id 不存在返回 false。
+  Future<bool> restoreDateEdit(String id) async {
+    final next = [
+      for (final e in _dateEdits)
+        if (e.id != id) e,
+    ];
+    if (next.length == _dateEdits.length) return false;
+    await _setDateEdits(next);
+    return true;
+  }
+
+  /// 「所有周」保存后去掉这条单日修改里同名的字段（让课程本身的新值在这天也生效）；
+  /// 变空就删。id 不存在返回 false。
+  Future<bool> clearDateEditFields(
+    String id, {
+    bool name = false,
+    bool teacher = false,
+    bool location = false,
+    bool note = false,
+    bool move = false,
+  }) async {
+    final i = _dateEdits.indexWhere((e) => e.id == id);
+    if (i < 0) return false;
+    final rec = _dateEdits[i].copyWith(
+      clearName: name,
+      clearTeacher: teacher,
+      clearLocation: location,
+      clearNote: note,
+      clearMove: move,
+    );
+    await _upsertDateEdit(_dateEdits[i], rec);
+    return true;
+  }
+
+  Future<void> _upsertDateEdit(CourseDateEdit? old, CourseDateEdit rec) async {
+    final next = [
+      for (final e in _dateEdits)
+        if (old == null || e.id != old.id) e,
+      if (!rec.isEmpty) rec,
+    ];
+    await _setDateEdits(next);
+  }
+
+  Future<void> _setDateEdits(
+    List<CourseDateEdit> next, {
+    bool fire = true,
+  }) async {
+    _dateEdits = List.unmodifiable(next);
+    await ScheduleStore.saveCourseDateEdits(_dateEdits);
+    notifyListeners();
+    if (fire) _fireScheduleChanged(ScheduleChangeReason.dateEdit);
+  }
+
+  /// 拖动保存「只改这一天」：普通格走拖动调课（[moveSlot] 只改本周，与以前一致）；
+  /// 整天调课换来的格、已有单日修改的格、或落到调课日期时写单日修改记录。
+  Future<MoveResult> moveOccurrenceThisDay(
+    GridCell cell, {
+    required int toDay,
+    required int toStartPeriod,
+    int? week,
+  }) async {
+    final base = baseOccurrenceOf(cell, week: week);
+    if (base == null) return const MoveResult.error(MoveError.invalidSlot);
+    if (toDay < 1 || toDay > 7 || toStartPeriod < 1) {
+      return const MoveResult.error(MoveError.invalidTarget);
+    }
+    final key = _occurrenceKey(cell);
+    final d = cell.date;
+    if (key == null || d == null) {
+      return moveSlot(
+        base.course,
+        base.slotIndex,
+        toDay: toDay,
+        toStartPeriod: toStartPeriod,
+        week: base.week,
+        scope: MoveScope.thisWeek,
+      );
+    }
+    final monday = mondayOfWeek(d);
+    final toDate = DateTime(monday.year, monday.month, monday.day + toDay - 1);
+    final perDate =
+        cell.swappedFrom != null ||
+        cell.dateEdit != null ||
+        isSwappedDate(toDate) ||
+        isSwappedDate(key.date);
+    if (!perDate) {
+      return moveSlot(
+        base.course,
+        base.slotIndex,
+        toDay: toDay,
+        toStartPeriod: toStartPeriod,
+        week: base.week,
+        scope: MoveScope.thisWeek,
+      );
+    }
+    final span = cell.slot.span;
+    final toEnd = toStartPeriod + span - 1;
+    if (toEnd > lastPeriod) {
+      return const MoveResult.error(MoveError.pastLastPeriod);
+    }
+    if (toDay == cell.slot.day && toStartPeriod == cell.slot.startNode) {
+      return const MoveResult.noChange();
+    }
+    // 拖回这次课的原位置时记录里的挪动被清掉（记录变空就删）。
+    await editOccurrence(
+      cell,
+      toDay: toDay,
+      toStart: toStartPeriod,
+      toEnd: toEnd,
+    );
+    final w = _weekOfDate(toDate);
+    return MoveResult.moved(
+      affectedWeeks: [w],
+      conflictNames: _conflictNames(key.courseId, toDay, toStartPeriod, toEnd, [
+        w,
+      ]),
+    );
+  }
+
+  /// 拖动保存「所有周」：改课程本身（该时段所有有课的周，[MoveScope.allWeeks]）。
+  /// 整天调课换来的格指回原日期那次课的时段。
+  Future<MoveResult> moveOccurrenceAllWeeks(
+    GridCell cell, {
+    required int toDay,
+    required int toStartPeriod,
+    int? week,
+  }) async {
+    final base = baseOccurrenceOf(cell, week: week);
+    if (base == null) return const MoveResult.error(MoveError.invalidSlot);
+    return moveSlot(
+      base.course,
+      base.slotIndex,
+      toDay: toDay,
+      toStartPeriod: toStartPeriod,
+      week: base.week,
+      scope: MoveScope.allWeeks,
+    );
   }
 
   /// 手动课第 [week] 周被拖走的原时段位置：本周有课、带 [CourseSlot.splitFrom] 的
@@ -2026,6 +2601,16 @@ class TimetableController extends ChangeNotifier {
     if (h == null || m == null) return null;
     return DateTime(day.year, day.month, day.day, h, m);
   }
+}
+
+/// [TimetableController.cellsForDay] 的候选格。
+class _Cand {
+  _Cand(this.course, this.slot, this.active, {this.swappedFrom, this.dateEdit});
+  final Course course;
+  final CourseSlot slot;
+  final bool active;
+  final DateTime? swappedFrom;
+  final CourseDateEdit? dateEdit;
 }
 
 class PendingCourseOpen {

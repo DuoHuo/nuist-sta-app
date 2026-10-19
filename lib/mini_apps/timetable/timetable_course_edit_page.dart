@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'timetable_controller.dart';
+import 'timetable_date_edits.dart';
+import 'timetable_edit_scope_sheet.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
 import 'timetable_week_format.dart';
@@ -60,7 +62,10 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
     super.initState();
     final course = widget.cell.course;
     final slot = widget.cell.slot;
-    final edit = widget.controller.courseEditOf(course.id);
+    // 有单日修改的格：预填这一天显示的值（格子已套用课程编辑 + 单日修改）。
+    final edit = widget.cell.dateEdit != null
+        ? null
+        : widget.controller.courseEditOf(course.id);
     _initName = edit?.name ?? course.name;
     _initTeacher = edit?.teacher ?? slot.teacher;
     _initLocation = edit?.location ?? slot.location;
@@ -98,14 +103,49 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
       navigator.pop(false);
       return;
     }
+    // 第 1 条：有日期的格先选范围（默认只改这一天）；关掉面板 = 不保存、留在编辑页。
+    final date = widget.cell.date;
+    var scope = EditScope.allWeeks;
+    if (date != null && widget.cell.activeThisWeek) {
+      final picked = await showEditScopeSheet(context, date: date);
+      if (picked == null || !mounted) return;
+      scope = picked;
+    }
     setState(() => _saving = true);
-    final ok = await widget.controller.editJwxtCourse(
-      widget.cell.course.id,
-      name: name,
-      teacher: teacher,
-      location: location,
-      note: note,
-    );
+    final c = widget.controller;
+    final bool ok;
+    if (scope == EditScope.thisDay) {
+      ok =
+          await c.editOccurrence(
+            widget.cell,
+            name: name,
+            teacher: teacher,
+            location: location,
+            note: note,
+          ) !=
+          null;
+    } else {
+      final id =
+          c.baseOccurrenceOf(widget.cell)?.course.id ?? widget.cell.course.id;
+      ok = await c.editJwxtCourse(
+        id,
+        name: name,
+        teacher: teacher,
+        location: location,
+        note: note,
+      );
+      // 所有周：这一天的单日修改里同名字段让位给课程本身的新值。
+      final de = widget.cell.dateEdit;
+      if (ok && de != null) {
+        await c.clearDateEditFields(
+          de.id,
+          name: name != null,
+          teacher: teacher != null,
+          location: location != null,
+          note: note != null,
+        );
+      }
+    }
     if (!mounted) return;
     setState(() => _saving = false);
     navigator.pop(ok);
@@ -134,10 +174,10 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
   Widget build(BuildContext context) {
     final canSave = !_saving && _name.text.trim().isNotEmpty;
     return Scaffold(
-      backgroundColor: TimetableTheme.pageBg,
+      backgroundColor: TimetableTheme.colorsOf(context).pageBg,
       appBar: AppBar(
         title: const Text('编辑课程'),
-        backgroundColor: TimetableTheme.surface,
+        backgroundColor: TimetableTheme.colorsOf(context).surface,
         surfaceTintColor: Colors.transparent,
         actions: [
           TextButton(
@@ -203,7 +243,9 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
               child: Text(
                 '拖动课程可调整时间',
                 key: const Key('jwxt_edit_time_hint'),
-                style: TimetableTheme.captionStyle(color: TimetableTheme.hint),
+                style: TimetableTheme.captionStyle(
+                  color: TimetableTheme.colorsOf(context).hint,
+                ),
               ),
             ),
           ],
@@ -231,18 +273,22 @@ class _ReadOnlyRow extends StatelessWidget {
       constraints: const BoxConstraints(minHeight: 44),
       child: Row(
         children: [
-          Icon(icon, size: 20, color: TimetableTheme.hint),
+          Icon(icon, size: 20, color: TimetableTheme.colorsOf(context).hint),
           const SizedBox(width: 16),
           Text(
             label,
-            style: TimetableTheme.bodyStyle(color: TimetableTheme.hint),
+            style: TimetableTheme.bodyStyle(
+              color: TimetableTheme.colorsOf(context).hint,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
               value,
               textAlign: TextAlign.end,
-              style: TimetableTheme.bodyStyle(color: TimetableTheme.hint),
+              style: TimetableTheme.bodyStyle(
+                color: TimetableTheme.colorsOf(context).hint,
+              ),
             ),
           ),
         ],
@@ -309,7 +355,9 @@ class _JwxtCourseDetailActionsState extends State<JwxtCourseDetailActions> {
           TextButton(
             key: const Key('jwxt_delete_confirm'),
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red.shade600),
+            style: TextButton.styleFrom(
+              foregroundColor: TimetableTheme.colorsOf(context).danger,
+            ),
             child: const Text('删除'),
           ),
         ],
@@ -342,18 +390,25 @@ class _JwxtCourseDetailActionsState extends State<JwxtCourseDetailActions> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.edit_outlined,
                   size: 20,
-                  color: TimetableTheme.hint,
+                  color: TimetableTheme.colorsOf(context).hint,
                 ),
                 const SizedBox(width: 12),
-                Expanded(child: Text('已修改', style: TimetableTheme.bodyStyle())),
+                Expanded(
+                  child: Text(
+                    '已修改',
+                    style: TimetableTheme.bodyStyle(
+                      color: TimetableTheme.colorsOf(context).labelText,
+                    ),
+                  ),
+                ),
                 TextButton(
                   key: const Key('course_detail_restore_course'),
                   onPressed: _busy ? null : _restore,
                   style: TextButton.styleFrom(
-                    foregroundColor: TimetableTheme.accent,
+                    foregroundColor: TimetableTheme.colorsOf(context).accent,
                   ),
                   child: const Text('恢复原课程'),
                 ),
@@ -371,8 +426,9 @@ class _JwxtCourseDetailActionsState extends State<JwxtCourseDetailActions> {
                     key: const Key('course_detail_jwxt_edit'),
                     onPressed: _busy ? null : _edit,
                     style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFFF0F1F3),
-                      foregroundColor: TimetableTheme.titleText,
+                      backgroundColor: TimetableTheme.colorsOf(context).chipBg,
+                      foregroundColor: TimetableTheme.colorsOf(context)
+                          .titleText,
                       elevation: 0,
                       shape: const StadiumBorder(),
                     ),
@@ -389,7 +445,7 @@ class _JwxtCourseDetailActionsState extends State<JwxtCourseDetailActions> {
                   icon: const Icon(Icons.delete_outline, size: 20),
                   label: const Text('删除'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.red.shade600,
+                    foregroundColor: TimetableTheme.colorsOf(context).danger,
                     shape: const StadiumBorder(),
                   ),
                 ),

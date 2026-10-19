@@ -1,4 +1,7 @@
+import 'dart:ui' show Color;
+
 import 'timetable_colors.dart';
+import 'timetable_theme.dart';
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
 
@@ -6,6 +9,24 @@ import 'timetable_models.dart';
 /// 委托 [TimetableController.colorIndexOf]（学期内相邻/近色撞色顺延）。
 int courseColorIndex(TimetableController controller, Course course) =>
     controller.colorIndexOf(course);
+
+/// 课程在当前明暗下的（底色, 文字色）：用户自选色优先（item 9，显示时换算），
+/// 否则按色号取色板（含深色规则）。
+CourseColorPair coursePairFor(
+  TimetableController controller,
+  Course course, {
+  bool dark = false,
+}) {
+  final user = controller.userColorOf(course);
+  if (user != null) {
+    return TimetableTheme.userCoursePair(Color(user), dark: dark);
+  }
+  return TimetableTheme.coursePair(
+    courseColorIndex(controller, course),
+    scheme: coursePaletteSchemeFor(controller),
+    dark: dark,
+  );
+}
 
 /// 当前设置里的配色方案（`paletteScheme` 'A'/'B'/'C'）。
 CoursePaletteScheme coursePaletteSchemeFor(TimetableController controller) =>

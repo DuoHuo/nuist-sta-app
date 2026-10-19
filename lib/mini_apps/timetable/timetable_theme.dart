@@ -170,14 +170,81 @@ abstract final class TimetableTheme {
   /// 底色按不透明度 [opacity]（30–100）往页面底色 [pageBg] 混合（spec §13.4/§13.6），
   /// 结果不透明。文字、角标、冲突圆点不走这里。
   ///
-  /// 明暗两套主题都往浅色 [pageBg] 混合：课程色板是「浅底 + 深字」，往浅色混只会
-  /// 拉大底色与文字色的对比度（§13.5/§13.7 的对比度表就是这么算的）；若改成往
-  /// 深色底混合，底色会压向文字色，对比度反而掉到 4.5 以下。
-  static Color blendCellBg(Color bg, int opacity) {
+  /// 浅色往浅色 [pageBg] 混合（「浅底 + 深字」，往浅色混只会拉大对比度）；
+  /// 深色（[dark] 为 true，spec-next item 12）往 [darkCellMixBase] #121316 混合：
+  /// 深色下格子是「深底浅字」（[coursePair]），往深色混同样只会拉大对比度。
+  static Color blendCellBg(Color bg, int opacity, {bool dark = false}) {
     final t = (opacity.clamp(30, 100)) / 100.0;
     if (t >= 1) return bg;
-    return Color.lerp(pageBg, bg, t)!;
+    return Color.lerp(dark ? darkCellMixBase : pageBg, bg, t)!;
   }
+
+  /// 深色下课程格 / 考试格换算的混合目标（= 深色页面底 #121316）。
+  static const Color darkCellMixBase = pageBgDark;
+
+  /// 深色课程格底色：色板深字色往 #121316 混的比例。
+  static const double darkCellFgMix = 0.45;
+
+  /// 深色考试格底色：考试色往 #121316 混的比例。
+  static const double darkExamMix = 0.25;
+
+  /// 一个色板色号在深色下的（底色, 文字色）：底 = 浅色的深字色 fg 往 #121316 混 45%，
+  /// 字 = 浅色的浅底色 bg（同色相「深底浅字」）。显示时换算，不存。
+  static CourseColorPair darkCoursePair(CourseColorPair light) =>
+      CourseColorPair(
+        Color.lerp(light.fg, darkCellMixBase, darkCellFgMix)!,
+        light.bg,
+      );
+
+  /// 色号 → 当前明暗下的（底色, 文字色）。浅色与 [courseColor]/[courseTextColor]
+  /// 完全一致；深色见 [darkCoursePair]。
+  static CourseColorPair coursePair(
+    int index, {
+    CoursePaletteScheme scheme = currentScheme,
+    bool dark = false,
+  }) {
+    final list = pairsOf(scheme);
+    final p = index < 0 ? list[0] : list[index % list.length];
+    return dark ? darkCoursePair(p) : p;
+  }
+
+  /// item 9：课程颜色 12 个预设（spec 未给色值，取色板 A 0–11 号底色）。
+  static final List<Color> coursePresetColors = [
+    for (final p in _paletteSoft.take(12)) p.bg,
+  ];
+
+  /// item 9：用户自选色 [c]（原始 ARGB）在当前明暗下的（底色, 文字色），显示时换算：
+  /// 浅色系（亮度 > 0.4）按色板规则「浅底 + 同色相深字」，深色下走 [darkCoursePair]；
+  /// 深色系按考试格规则「白字」，深色下往 #121316 混 25%（[examCellBg]）。
+  static CourseColorPair userCoursePair(Color c, {bool dark = false}) {
+    if (c.computeLuminance() > 0.4) {
+      final hsl = HSLColor.fromColor(c);
+      final fg = hsl
+          .withLightness(0.25)
+          .withSaturation(hsl.saturation.clamp(0.0, 0.7))
+          .toColor();
+      final p = CourseColorPair(c, fg);
+      return dark ? darkCoursePair(p) : p;
+    }
+    return CourseColorPair(examCellBg(c, dark: dark), examText);
+  }
+
+  /// item 14「文字颜色」强制白字 / 黑字（明暗都一样）。
+  static const Color forcedWhiteText = Color(0xFFFFFFFF);
+  static const Color forcedBlackText = Color(0xFF1F2329);
+
+  /// 课程格 / 考试格文字：自动用 [auto]（色板字色或深色规则），白字 / 黑字强制。
+  static Color cellTextFor(Color auto, CellTextColorMode mode) =>
+      switch (mode) {
+        CellTextColorMode.auto => auto,
+        CellTextColorMode.white => forcedWhiteText,
+        CellTextColorMode.black => forcedBlackText,
+      };
+
+  /// 考试格底色：浅色原样；深色往 #121316 混 25%（白字 [examText]）。
+  /// 用户自选的考试色同样在显示时换算，不另存。
+  static Color examCellBg(Color exam, {bool dark = false}) =>
+      dark ? Color.lerp(exam, darkCellMixBase, darkExamMix)! : exam;
 
   /// 当前方案的 16 个 (底色, 文字色)。
   static List<CourseColorPair> get coursePalettePairs =>
@@ -302,6 +369,9 @@ abstract final class TimetableTheme {
   static const double iconTapSize = 48;
   static const double syncBarHeight = 32;
   static const double conflictDotSize = 6;
+
+  /// 单日修改圆点（第 1 条）。
+  static const double dateEditDotSize = 4;
 
   /// AS-1：自动同步失败时顶栏同步图标右上角的小圆点（6dp，#C62828）。
   static const Color syncErrorDot = Color(0xFFC62828);

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -50,6 +52,19 @@ String formatClassCountdown(int minutes) {
   return r == 0 ? '$h 小时后上课' : '$h 小时 $r 分后上课';
 }
 
+/// 首页「上课中」（spec-next item 4）：距下课 [minutes] 分钟，向下取整、至少 1；
+/// ≥ 60 分钟「X 小时 Y 分钟」，Y = 0 时省略。
+String formatClassRemaining(int minutes) {
+  final m = minutes < 1 ? 1 : minutes;
+  if (m < 60) return '上课中·还剩 $m 分钟';
+  final h = m ~/ 60;
+  final r = m % 60;
+  return r == 0 ? '上课中·还剩 $h 小时' : '上课中·还剩 $h 小时 $r 分钟';
+}
+
+/// 首页最多列出的项数（item 13：正在上的 + 下一节）。
+const int kHomeMaxItems = 2;
+
 /// 首页「今日课表」卡片（spec §6），课表唯一入口。
 class TimetableHomeCard extends StatefulWidget {
   const TimetableHomeCard({super.key, this.now});
@@ -65,24 +80,77 @@ class TimetableHomeCard extends StatefulWidget {
 class _TimetableHomeCardState extends State<TimetableHomeCard> {
   final _controller = TimetableController.instance;
 
+  /// item 2：本卡片发起的手动同步还没出结果（只为它弹失败提示）。
+  bool _homeSyncPending = false;
+  StreamSubscription<TimetableSyncOutcome>? _outcomeSub;
+
   @override
   void initState() {
     super.initState();
     _controller.ensureStarted();
+    _outcomeSub = _controller.syncOutcomes.listen(_onSyncOutcome);
+  }
+
+  @override
+  void dispose() {
+    _outcomeSub?.cancel();
+    super.dispose();
+  }
+
+  /// item 2：标题行刷新按钮，与课表顶栏同步图标同一个 [TimetableController.manualSync]；
+  /// 未绑定门户时去登录。
+  Future<void> _manualSync() async {
+    if (_controller.syncStatus == TimetableSyncStatus.syncing) return;
+    _homeSyncPending = true;
+    final started = await _controller.manualSync();
+    if (started) return;
+    _homeSyncPending = false;
+    if (!_controller.portalBound && mounted) await _openLogin();
+  }
+
+  /// 手动同步失败的提示与课表页 AS-1 一致（登录过期由课表页 / 设置处理，不在这里弹）。
+  void _onSyncOutcome(TimetableSyncOutcome outcome) {
+    if (!_homeSyncPending || outcome.automatic || !mounted) return;
+    _homeSyncPending = false;
+    if (outcome.success ||
+        outcome.failure == TimetableSyncFailure.sessionExpired) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    final network =
+        outcome.failure == TimetableSyncFailure.network ||
+        outcome.failure == TimetableSyncFailure.server;
+    final text = !network
+        ? '同步失败，请稍后再试'
+        : (outcome.failure == TimetableSyncFailure.network && outcome.offline
+              ? '同步失败，请检查网络'
+              : '同步超时，请稍后再试');
+    var fired = false;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        key: const Key('home_card_sync_snackbar'),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+        persist: false,
+        content: Text(text),
+        action: network
+            ? SnackBarAction(
+                label: '重试',
+                onPressed: () {
+                  if (fired) return;
+                  fired = true;
+                  messenger.hideCurrentSnackBar();
+                  _manualSync();
+                },
+              )
+            : null,
+      ),
+    );
   }
 
   void _openTimetable() => context.push('/apps/timetable');
-
-  Future<void> _openCourse(TodayCourseItem item) async {
-    _controller.goToCurrentWeek();
-    _controller.requestOpenCourse(
-      courseId: item.course.id,
-      day: item.slot.day,
-      startNode: item.slot.startNode,
-      endNode: item.slot.endNode,
-    );
-    await context.push('/apps/timetable');
-  }
 
   /// 登录：回来后只刷新绑定状态（UI）。登录成功的同步由门户绑定页
   /// （portal_status_page）自己调用 onLoginSucceeded，这里不重复调用。
@@ -122,9 +190,11 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
           items,
           _controller.scheduleEventsOn(today),
         );
-        final visible = entries.take(4).toList();
-        final remaining = entries.length - visible.length;
-        final remainingAllCourses = entries
+        // item 13：上过的不显示；最多 2 项（正在上的 + 下一节）。
+        final pending = entries.where((e) => !e.isDone(now)).toList();
+        final visible = pending.take(kHomeMaxItems).toList();
+        final remaining = pending.length - visible.length;
+        final remainingAllCourses = pending
             .skip(visible.length)
             .every((e) => e.course != null);
         // 明天一栏的规则（开学前、学期结束、明天没课、开关）都在数据层。
@@ -158,13 +228,15 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
             title: tomorrow.title ?? '明天',
             subtitle: items.isEmpty ? '今天没有课' : '今天的课已上完',
             onTap: _openTimetable,
+            syncing: _controller.syncStatus == TimetableSyncStatus.syncing,
+            onRefresh: _manualSync,
           );
           final all = mergeHomeEntries(
             _controller,
             tomorrow.courses,
             tomorrowEvents,
           );
-          final list = all.take(4).toList();
+          final list = all.take(kHomeMaxItems).toList();
           final more = all.length - list.length;
           final moreAllCourses = all
               .skip(list.length)
@@ -188,6 +260,8 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
                 ? '周$weekday · 第 $week 周'
                 : '周$weekday',
             onTap: _openTimetable,
+            syncing: _controller.syncStatus == TimetableSyncStatus.syncing,
+            onRefresh: _manualSync,
           );
           // 今天还有没结束的可见日程时照常列出（EV-1：学期外 / 没有课程的日子也显示）。
           final allDone = entries.every((e) => e.isDone(now));
@@ -230,7 +304,12 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
           } else {
             body = [
               for (final entry in visible)
-                _entryRow(entry, now, onCourseTap: _openCourse),
+                _entryRow(
+                  entry,
+                  now,
+                  // 10/19：点课程行与点卡片相同，只打开课表页，不再弹详情 / 编辑。
+                  onCourseTap: (_) => _openTimetable(),
+                ),
               if (remaining > 0)
                 _moreLine(remaining, courses: remainingAllCourses),
             ];
@@ -278,7 +357,11 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
   }) {
     final course = entry.course;
     if (course != null) {
-      return _CourseRow(item: course, onTap: () => onCourseTap(course));
+      return _CourseRow(
+        item: course,
+        now: now,
+        onTap: () => onCourseTap(course),
+      );
     }
     return ScheduleHomeRow(
       controller: _controller,
@@ -336,18 +419,24 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
       '${t.month}/${t.day} ${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 }
 
-/// 卡片标题行（今天 / 明天共用，保证样式一致）：图标 + 标题 + 副标题 + 箭头。
+/// 卡片标题行（今天 / 明天共用，保证样式一致）：图标 + 标题 + 副标题 + 刷新 + 箭头。
 class _CardHeader extends StatelessWidget {
   const _CardHeader({
     super.key,
     required this.title,
     required this.subtitle,
     required this.onTap,
+    required this.syncing,
+    required this.onRefresh,
   });
 
   final String title;
   final String subtitle;
   final VoidCallback onTap;
+
+  /// item 2：同步中（刷新图标旋转）。
+  final bool syncing;
+  final VoidCallback onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -383,9 +472,75 @@ class _CardHeader extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 4),
+          _RefreshButton(syncing: syncing, onTap: onRefresh),
           Icon(Icons.chevron_right, color: colors.chevron, size: 20),
         ],
+      ),
+    );
+  }
+}
+
+/// item 2：标题行右侧刷新按钮（热区 48dp），同步中图标旋转。
+class _RefreshButton extends StatefulWidget {
+  const _RefreshButton({required this.syncing, required this.onTap});
+
+  final bool syncing;
+  final VoidCallback onTap;
+
+  @override
+  State<_RefreshButton> createState() => _RefreshButtonState();
+}
+
+class _RefreshButtonState extends State<_RefreshButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _spin = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _update();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RefreshButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _update();
+  }
+
+  void _update() {
+    if (widget.syncing) {
+      if (!_spin.isAnimating) _spin.repeat();
+    } else {
+      _spin
+        ..stop()
+        ..value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    return SizedBox(
+      width: TimetableTheme.iconTapSize,
+      height: TimetableTheme.iconTapSize,
+      child: IconButton(
+        key: const Key('home_card_refresh'),
+        tooltip: widget.syncing ? '正在同步' : '刷新课表',
+        onPressed: widget.onTap,
+        icon: RotationTransition(
+          key: const Key('home_card_refresh_spin'),
+          turns: _spin,
+          child: Icon(Icons.refresh, size: 20, color: colors.labelText),
+        ),
       ),
     );
   }
@@ -433,24 +588,51 @@ class _StatusLine extends StatelessWidget {
 }
 
 class _CourseRow extends StatelessWidget {
-  const _CourseRow({required this.item, required this.onTap});
+  const _CourseRow({
+    required this.item,
+    required this.now,
+    required this.onTap,
+  });
 
   final TodayCourseItem item;
+  final DateTime now;
   final VoidCallback onTap;
+
+  /// "08:00" → 当天该时刻；格式不对返回 null。
+  DateTime? _at(String? hhmm) {
+    final parts = (hhmm ?? '').split(':');
+    if (parts.length != 2) return null;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h == null || m == null) return null;
+    return DateTime(now.year, now.month, now.day, h, m);
+  }
 
   @override
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
     // 4dp 色条在卡片面色上用该色号文字色（A 柔和底色太浅，卡片底上看不出）。
-    final color = TimetableTheme.courseTextColor(
-      courseColorIndex(TimetableController.instance, item.course),
-      scheme: coursePaletteSchemeFor(TimetableController.instance),
-    );
+    // 深色下取深色格的浅字色（item 12），在深色卡片上才看得见。
+    final ctl = TimetableController.instance;
+    final color = coursePairFor(ctl, item.course, dark: colors.isDark).fg;
     final done = item.status == TodayCourseStatus.done;
     final fg = done ? colors.hint : colors.titleText;
     final start = item.slot.startNode;
     final end = item.slot.endNode;
-    final timeHint = '第$start${start == end ? '' : '–$end'}节';
+    final nodeHint = '第$start${start == end ? '' : '–$end'}节';
+    final from = ctl.periodAt(start)?.start;
+    final to = ctl.periodAt(end)?.end;
+    // item 13 第二行：「08:00–09:40 · 第1–2节」（没有作息时间时只显示节次）。
+    final timeLine = from != null && to != null
+        ? '$from–$to · $nodeHint'
+        : nodeHint;
+    final endAt = _at(to);
+    final remaining = endAt == null
+        ? null
+        : endAt.difference(now).inSeconds ~/ 60;
+    final subStyle = TimetableTheme.microStyle(
+      color: done ? colors.hint : colors.labelText,
+    );
 
     return InkWell(
       onTap: onTap,
@@ -488,50 +670,47 @@ class _CourseRow extends StatelessWidget {
                           color: fg,
                         ),
                       ),
+                      // item 13：时间 · 节次 / 地点 / 老师各一行，长文本换行、不截断；
+                      // 地点、老师为空时不占行。
                       Text(
-                        [
-                          if (item.slot.location.isNotEmpty)
-                            '@${item.slot.location}',
-                          timeHint,
-                        ].join(' · '),
-                        style: TimetableTheme.microStyle(
-                          color: done ? colors.hint : colors.labelText,
-                        ),
+                        timeLine,
+                        key: const Key('home_course_time'),
+                        style: subStyle,
                       ),
+                      if (item.slot.location.isNotEmpty)
+                        Text(
+                          item.slot.location,
+                          key: const Key('home_course_location'),
+                          style: subStyle,
+                        ),
+                      if (item.slot.teacher.isNotEmpty)
+                        Text(
+                          item.slot.teacher,
+                          key: const Key('home_course_teacher'),
+                          style: subStyle,
+                        ),
                       if (item.status == TodayCourseStatus.ongoing) ...[
                         const SizedBox(height: 2),
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 1,
-                              ),
-                              decoration: BoxDecoration(
-                                color: colors.accent,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                '上课中',
-                                // accent 实心胶囊上的白字，明暗都不变。
-                                style: TimetableTheme.microStyle(
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(2),
-                                child: LinearProgressIndicator(
-                                  value: item.progress ?? 0,
-                                  minHeight: 3,
-                                  backgroundColor: colors.divider,
-                                  color: colors.accent,
-                                ),
-                              ),
-                            ),
-                          ],
+                        // item 4：「上课中·还剩 N 分钟」+ 2dp 主色进度条（已过去的比例）。
+                        Text(
+                          remaining == null
+                              ? '上课中'
+                              : formatClassRemaining(remaining),
+                          key: const Key('home_course_remaining'),
+                          style: TimetableTheme.microStyle(
+                            color: colors.accent,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(1),
+                          child: LinearProgressIndicator(
+                            key: const Key('home_course_progress'),
+                            value: (item.progress ?? 0).clamp(0.0, 1.0),
+                            minHeight: 2,
+                            backgroundColor: colors.divider,
+                            color: colors.accent,
+                          ),
                         ),
                       ],
                       if (item.status == TodayCourseStatus.upcoming &&

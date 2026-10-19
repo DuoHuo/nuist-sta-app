@@ -3,6 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'timetable_day_swap_ui.dart';
+import 'timetable_edit_scope_sheet.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_detail_sheet.dart';
 import 'timetable_schedule_event_layout.dart';
@@ -17,7 +19,9 @@ import 'timetable_schedule_event_cell.dart';
 const _weekdayLabels = ['一', '二', '三', '四', '五', '六', '日'];
 
 /// 面板「此更改应用范围？」的结果；null（点遮罩/下拉关闭）等同取消。
-enum DragScopeChoice { thisWeek, fromThisWeek, cancel }
+/// 拖动松手后的范围选择。第 1 条起面板只给「只改这一天」（[thisWeek]）/「所有周」
+/// （[allWeeks]）；[fromThisWeek] 保留给旧调用方，面板不再提供。
+enum DragScopeChoice { thisWeek, fromThisWeek, allWeeks, cancel }
 
 /// 落点恰好在两列分界 / 两节中间时取哪一边。
 enum DropTieBreak {
@@ -162,6 +166,8 @@ class _WeekGridState extends State<WeekGrid> {
     final days = visibleDaysWithEvents(controller, week);
     final today = DateTime.now();
     final todayDate = DateTime(today.year, today.month, today.day);
+    // item 7：第 N 节下方的「其他」行，只放本周的无节次教务课。
+    final others = otherCoursesForWeek(controller, week);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -184,7 +190,9 @@ class _WeekGridState extends State<WeekGrid> {
                     child: Center(
                       child: Text(
                         '${controller.monthLabelOf(week)}月',
-                        style: TimetableTheme.microStyle(),
+                        style: TimetableTheme.microStyle(
+                          color: TimetableTheme.colorsOf(context).hint,
+                        ),
                       ),
                     ),
                   ),
@@ -209,6 +217,7 @@ class _WeekGridState extends State<WeekGrid> {
                           dotColor: unplaced.isEmpty
                               ? null
                               : scheduleUnplacedDotColor(controller, unplaced),
+                          swapped: controller.isSwappedDate(date),
                         );
                         if (unplaced.isNotEmpty) {
                           header = Semantics(
@@ -230,6 +239,14 @@ class _WeekGridState extends State<WeekGrid> {
                             ),
                           );
                         }
+                        // 第 8 条：长按表头整天调课 / 撤销调课。
+                        header = GestureDetector(
+                          key: ValueKey('day_header_${days[i]}'),
+                          behavior: HitTestBehavior.opaque,
+                          onLongPress: () =>
+                              showDaySwapSheet(context, controller, date),
+                          child: header,
+                        );
                         return SizedBox(width: dayW, child: header);
                       },
                     ),
@@ -238,59 +255,71 @@ class _WeekGridState extends State<WeekGrid> {
             ),
             Expanded(
               child: SingleChildScrollView(
-                child: SizedBox(
-                  height: gridH,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        width: periodW,
-                        height: gridH,
-                        child: Column(
-                          children: [
-                            for (var n = 1; n <= nodes; n++)
-                              SizedBox(
-                                height: periodH,
-                                child: _PeriodLabel(
-                                  node: n,
-                                  period: controller.periodAt(n),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: SizedBox(
-                          height: gridH,
-                          child: Stack(
-                            children: [
-                              if (settings.showGridLines)
-                                CustomPaint(
-                                  size: Size(dayW * days.length, gridH),
-                                  painter: _GridPainter(
-                                    days: days.length,
-                                    nodes: nodes,
-                                    periodH: periodH,
-                                    dayW: dayW,
+                child: Column(
+                  children: [
+                    SizedBox(
+                      height: gridH,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: periodW,
+                            height: gridH,
+                            child: Column(
+                              children: [
+                                for (var n = 1; n <= nodes; n++)
+                                  SizedBox(
+                                    height: periodH,
+                                    child: _PeriodLabel(
+                                      node: n,
+                                      period: controller.periodAt(n),
+                                    ),
                                   ),
-                                ),
-                              for (var di = 0; di < days.length; di++)
-                                ..._cellsFor(
-                                  context,
-                                  day: days[di],
-                                  dayIndex: di,
-                                  dayW: dayW,
-                                  periodH: periodH,
-                                  radius: radius,
-                                  nodes: nodes,
-                                ),
-                              ?_draggedCell(dayW, periodH, radius),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
+                          Expanded(
+                            child: SizedBox(
+                              height: gridH,
+                              child: Stack(
+                                children: [
+                                  if (settings.showGridLines)
+                                    CustomPaint(
+                                      size: Size(dayW * days.length, gridH),
+                                      painter: _GridPainter(
+                                        days: days.length,
+                                        nodes: nodes,
+                                        periodH: periodH,
+                                        dayW: dayW,
+                                        color: TimetableTheme.colorsOf(context)
+                                            .divider,
+                                      ),
+                                    ),
+                                  for (var di = 0; di < days.length; di++)
+                                    ..._cellsFor(
+                                      context,
+                                      day: days[di],
+                                      dayIndex: di,
+                                      dayW: dayW,
+                                      periodH: periodH,
+                                      radius: radius,
+                                      nodes: nodes,
+                                    ),
+                                  ?_draggedCell(dayW, periodH, radius),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                    if (others.isNotEmpty)
+                      _OtherCoursesRow(
+                        courses: others,
+                        periodW: periodW,
+                        onTap: (c) => _showOtherCourseSheet(context, c),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -541,6 +570,9 @@ class _WeekGridState extends State<WeekGrid> {
               slot: d.cell.slot,
               conflictCount: 0,
               activeThisWeek: true,
+              date: d.cell.date,
+              dateEdit: d.cell.dateEdit,
+              swappedFrom: d.cell.swappedFrom,
             ),
             width: width,
             height: height,
@@ -605,7 +637,11 @@ class _WeekGridState extends State<WeekGrid> {
 
   void _onDragStart(GridCell cell) {
     if (_drag != null) return;
-    final idx = _slotIndexOf(cell.course, cell.slot);
+    // 整天调课 / 单日修改后的格子不在 course.slots 里：按底层那次课找下标。
+    var idx = _slotIndexOf(cell.course, cell.slot);
+    if (idx < 0) {
+      idx = controller.baseOccurrenceOf(cell, week: week)?.slotIndex ?? -1;
+    }
     if (idx < 0) return;
     final col = _days.indexOf(cell.slot.day);
     if (col < 0) return;
@@ -661,7 +697,11 @@ class _WeekGridState extends State<WeekGrid> {
     HapticFeedback.lightImpact();
     await _settleTo(d, _slotTopLeft(drop.column, toStart));
     if (!mounted) return;
-    final choice = await showDragScopeSheet(context, week: week);
+    final choice = await showDragScopeSheet(
+      context,
+      week: week,
+      date: d.cell.date,
+    );
     if (!mounted) return;
     if (choice == null || choice == DragScopeChoice.cancel) {
       // 取消 / 点遮罩 / 下拉关闭：滑回原位，数据不变。
@@ -671,16 +711,30 @@ class _WeekGridState extends State<WeekGrid> {
     }
     MoveResult result;
     try {
-      result = await controller.moveSlot(
-        d.cell.course,
-        d.slotIndex,
-        toDay: toDay,
-        toStartPeriod: toStart,
-        week: week,
-        scope: choice == DragScopeChoice.thisWeek
-            ? MoveScope.thisWeek
-            : MoveScope.fromThisWeek,
-      );
+      result = switch (choice) {
+        // 第 1 条：只改这一天（普通格仍是拖动调课「只改本周」；整天调课 / 单日修改的
+        // 格写单日修改记录，见 moveOccurrenceThisDay）。
+        DragScopeChoice.thisWeek => await controller.moveOccurrenceThisDay(
+          d.cell,
+          toDay: toDay,
+          toStartPeriod: toStart,
+          week: week,
+        ),
+        DragScopeChoice.allWeeks => await controller.moveOccurrenceAllWeeks(
+          d.cell,
+          toDay: toDay,
+          toStartPeriod: toStart,
+          week: week,
+        ),
+        _ => await controller.moveSlot(
+          d.cell.course,
+          d.slotIndex,
+          toDay: toDay,
+          toStartPeriod: toStart,
+          week: week,
+          scope: MoveScope.fromThisWeek,
+        ),
+      };
     } catch (_) {
       result = const MoveResult.error(MoveError.invalidSlot);
     }
@@ -705,6 +759,50 @@ class _WeekGridState extends State<WeekGrid> {
     }
   }
 
+  /// 「其他」行里的一门课（item 7）：底部弹层显示课名、周次、老师、地点。
+  Future<void> _showOtherCourseSheet(BuildContext context, Course course) {
+    final colors = TimetableTheme.colorsOf(context);
+    final slot = course.slots.isEmpty ? null : course.slots.first;
+    final weeks = slot == null || slot.weeksLabel.trim().isEmpty
+        ? '无固定时间'
+        : slot.weeksLabel;
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: colors.surface,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          key: const Key('other_course_sheet'),
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                course.name,
+                style: TimetableTheme.titleStyle(color: colors.titleText),
+              ),
+            ),
+            for (final (icon, text) in [
+              (Icons.date_range_outlined, weeks),
+              if (slot != null && slot.teacher.isNotEmpty)
+                (Icons.person_outline, slot.teacher),
+              if (slot != null && slot.location.isNotEmpty)
+                (Icons.place_outlined, slot.location),
+            ])
+              ListTile(
+                leading: Icon(icon, size: 20, color: colors.hint),
+                title: Text(
+                  text,
+                  style: TimetableTheme.bodyStyle(color: colors.labelText),
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// 当天不在节次内的日程（EV-2）：底部弹层列出，点某项打开其详情。
   Future<void> _showUnplacedSheet(
     BuildContext context,
@@ -722,7 +820,9 @@ class _WeekGridState extends State<WeekGrid> {
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: Text(
                 '${scheduleWeekdayName(day)}不在节次内的 ${events.length} 项',
-                style: TimetableTheme.titleStyle(),
+                style: TimetableTheme.titleStyle(
+                  color: TimetableTheme.colorsOf(context).titleText,
+                ),
               ),
             ),
             for (final e in events)
@@ -762,7 +862,9 @@ class _WeekGridState extends State<WeekGrid> {
                 events.isEmpty
                     ? '本时段 ${cells.length} 门课'
                     : '本时段 ${cells.length + events.length} 项',
-                style: TimetableTheme.titleStyle(),
+                style: TimetableTheme.titleStyle(
+                  color: TimetableTheme.colorsOf(context).titleText,
+                ),
               ),
             ),
             for (final c in cells)
@@ -798,14 +900,18 @@ class _WeekGridState extends State<WeekGrid> {
   }
 }
 
-/// 范围面板底色（纯白）。
+/// 范围面板浅色底色（纯白）；实际取 [TimetableColors.surface]，深色下随主题变暗。
 const Color kDragScopeSheetColor = Color(0xFFFFFFFF);
 
 /// 拖动松手后的范围面板（spec §13.2，产品经理 10/18：先做三项）。
 /// 点遮罩或下拉关闭返回 null，调用方按取消处理。
+///
+/// 第 1 条：「只改这一天（M月D日）」（默认，第一项）/「所有周」/「取消」。
+/// [date] 为空（旧调用方）时第一项显示「只改本周（第 N 周）」。
 Future<DragScopeChoice?> showDragScopeSheet(
   BuildContext context, {
   required int week,
+  DateTime? date,
 }) {
   return showModalBottomSheet<DragScopeChoice>(
     context: context,
@@ -817,7 +923,7 @@ Future<DragScopeChoice?> showDragScopeSheet(
     elevation: 0,
     builder: (sheetContext) => Material(
       key: const Key('drag_scope_sheet'),
-      color: kDragScopeSheetColor,
+      color: TimetableTheme.colorsOf(sheetContext).surface,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       shape: const RoundedRectangleBorder(
@@ -834,19 +940,26 @@ Future<DragScopeChoice?> showDragScopeSheet(
             const Center(child: SheetDragHandle()),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text('此更改应用范围？', style: TimetableTheme.titleStyle()),
+              child: Text(
+                '此更改应用范围？',
+                style: TimetableTheme.titleStyle(
+                  color: TimetableTheme.colorsOf(context).titleText,
+                ),
+              ),
             ),
             ListTile(
               key: const Key('drag_scope_this_week'),
-              title: Text('只改本周（第 $week 周）'),
+              title: Text(
+                date == null ? '只改本周（第 $week 周）' : editScopeThisDayLabel(date),
+              ),
               onTap: () =>
                   Navigator.pop(sheetContext, DragScopeChoice.thisWeek),
             ),
             ListTile(
-              key: const Key('drag_scope_from_this_week'),
-              title: const Text('改以后所有周'),
+              key: const Key('drag_scope_all_weeks'),
+              title: const Text('所有周'),
               onTap: () =>
-                  Navigator.pop(sheetContext, DragScopeChoice.fromThisWeek),
+                  Navigator.pop(sheetContext, DragScopeChoice.allWeeks),
             ),
             ListTile(
               key: const Key('drag_scope_cancel'),
@@ -882,6 +995,9 @@ class SlotCellGroup {
       slot: base.slot,
       conflictCount: active.length > 1 ? active.length - 1 : 0,
       activeThisWeek: base.activeThisWeek,
+      date: base.date,
+      dateEdit: base.dateEdit,
+      swappedFrom: base.swappedFrom,
     );
   }
 
@@ -951,13 +1067,138 @@ List<SlotCellGroup> groupSlotCells(List<GridCell> cells) {
   return [..._clusters(active), ..._clusters(ghosts)];
 }
 
+/// 「其他」行（item 7）：只放教务（jwxt）里没有排节次的课，手动课与日程不进来
+/// （不在节次内的日程仍是表头圆点）。周次只认 weeksLabel 里读得出的「a-b周」「a周」
+/// （可带单/双）；读不出或为空时每周都显示。
+List<Course> otherCoursesForWeek(TimetableController c, int week) => [
+  for (final course in c.otherCourses())
+    if (course.source == CourseSource.jwxt && otherCourseInWeek(course, week))
+      course,
+];
+
+/// [course]（无节次课）在第 [week] 周是否显示，规则见 [otherCoursesForWeek]。
+bool otherCourseInWeek(Course course, int week) {
+  for (final s in course.slots) {
+    if (s.weeksLabel.trim().isEmpty) return true;
+    final weeks = parseOtherWeeksLabel(s.weeksLabel);
+    if (weeks == null || weeks.contains(week)) return true;
+  }
+  return course.slots.isEmpty;
+}
+
+/// 「1-16周」「2-17周(双)」「1-8,10-16周」「第3周」→ 周次集合；读不出返回 null。
+Set<int>? parseOtherWeeksLabel(String label) {
+  final out = <int>{};
+  final re = RegExp(r'^第?(\d+)(?:[-–~至](\d+))?周?(?:[(（]?([单双])周?[)）]?)?$');
+  for (final part in label.trim().split(RegExp(r'[,，、;；\s]+'))) {
+    if (part.isEmpty) continue;
+    final m = re.firstMatch(part);
+    if (m == null) return null;
+    final a = int.parse(m[1]!);
+    final b = m[2] == null ? a : int.parse(m[2]!);
+    if (a < 1 || b < a || b > 60) return null;
+    for (var w = a; w <= b; w++) {
+      if (m[3] == '单' && w.isEven) continue;
+      if (m[3] == '双' && w.isOdd) continue;
+      out.add(w);
+    }
+  }
+  return out.isEmpty ? null : out;
+}
+
+class _OtherCoursesRow extends StatelessWidget {
+  const _OtherCoursesRow({
+    required this.courses,
+    required this.periodW,
+    required this.onTap,
+  });
+
+  final List<Course> courses;
+  final double periodW;
+  final void Function(Course course) onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    return Container(
+      key: const Key('week_grid_other_row'),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: colors.divider, width: 0.5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: periodW,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Center(
+                child: Text(
+                  '其他',
+                  style: TimetableTheme.captionStyle(color: colors.labelText),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final c in courses)
+                    Semantics(
+                      button: true,
+                      excludeSemantics: true,
+                      label: '其他课程，${c.name}',
+                      child: Material(
+                        color: colors.chipBg,
+                        shape: const StadiumBorder(),
+                        child: InkWell(
+                          key: ValueKey('other_course_${c.id}'),
+                          customBorder: const StadiumBorder(),
+                          onTap: () => onTap(c),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: 32),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              child: Text(
+                                c.name,
+                                style: TimetableTheme.captionStyle(
+                                  color: colors.titleText,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _DayHeader extends StatelessWidget {
   const _DayHeader({
     required this.label,
     required this.day,
     required this.isToday,
     this.dotColor,
+    this.swapped = false,
   });
+
+  /// 这一天参与了整天调课：星期旁显示「调」（第 8 条）。
+  final bool swapped;
 
   final String label;
   final int day;
@@ -975,18 +1216,37 @@ class _DayHeader extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              label,
-              style: TimetableTheme.captionStyle(
-                color: isToday
-                    ? TimetableTheme.accent
-                    : TimetableTheme.labelText,
-              ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TimetableTheme.captionStyle(
+                    color: isToday
+                        ? TimetableTheme.colorsOf(context).accent
+                        : TimetableTheme.colorsOf(context).labelText,
+                  ),
+                ),
+                if (swapped)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 1),
+                    child: Text(
+                      '调',
+                      key: const Key('day_header_swap_badge'),
+                      semanticsLabel: '已调课',
+                      style: TimetableTheme.microStyle(
+                        color: TimetableTheme.colorsOf(context).warning,
+                      ),
+                    ),
+                  ),
+              ],
             ),
             Text(
               '$day',
               style: TimetableTheme.microStyle(
-                color: isToday ? TimetableTheme.accent : TimetableTheme.hint,
+                color: isToday
+                    ? TimetableTheme.colorsOf(context).accent
+                    : TimetableTheme.colorsOf(context).hint,
               ),
             ),
             if (dotColor case final c?)
@@ -1009,7 +1269,7 @@ class _DayHeader extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       decoration: BoxDecoration(
-        color: TimetableTheme.accentSoft,
+        color: TimetableTheme.colorsOf(context).accentSoft,
         borderRadius: BorderRadius.circular(TimetableTheme.todayHeaderRadius),
       ),
       child: child,
@@ -1033,21 +1293,21 @@ class _PeriodLabel extends StatelessWidget {
           children: [
             Text(
               '$node',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
                 height: 1.05,
-                color: TimetableTheme.titleText,
+                color: TimetableTheme.colorsOf(context).titleText,
               ),
             ),
             if (period != null)
               Text(
                 '${period!.start}\n${period!.end}',
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 9,
                   height: 1.05,
-                  color: TimetableTheme.hint,
+                  color: TimetableTheme.colorsOf(context).hint,
                 ),
               ),
           ],
@@ -1063,6 +1323,7 @@ class _GridPainter extends CustomPainter {
     required this.nodes,
     required this.periodH,
     required this.dayW,
+    required this.color,
   });
 
   final int days;
@@ -1070,10 +1331,13 @@ class _GridPainter extends CustomPainter {
   final double periodH;
   final double dayW;
 
+  /// 网格线颜色（随明暗取 [TimetableColors.divider]）。
+  final Color color;
+
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = TimetableTheme.divider
+      ..color = color
       ..strokeWidth = 0.5;
     for (var i = 0; i <= nodes; i++) {
       final y = i * periodH;
@@ -1090,5 +1354,6 @@ class _GridPainter extends CustomPainter {
       oldDelegate.days != days ||
       oldDelegate.nodes != nodes ||
       oldDelegate.periodH != periodH ||
-      oldDelegate.dayW != dayW;
+      oldDelegate.dayW != dayW ||
+      oldDelegate.color != color;
 }

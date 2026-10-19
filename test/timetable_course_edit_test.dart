@@ -160,7 +160,8 @@ void main() {
       );
       expect(
         del.style?.foregroundColor?.resolve(const {}),
-        Colors.red.shade600,
+        // item 12：Colors.red.shade600 → danger token（浅色 #F53F3F）。
+        TimetableColors.light.danger,
       );
       await tester.tap(find.byKey(const Key('jwxt_delete_cancel')));
       await tester.pumpAndSettle();
@@ -217,6 +218,10 @@ void main() {
 
       await tester.enterText(find.byKey(const Key('jwxt_edit_name')), '测试课乙');
       await tester.tap(find.byKey(const Key('jwxt_edit_save')));
+      await tester.pumpAndSettle();
+      // 第 1 条：有日期的格先选范围；这里选「所有周」（改课程本身，同以前）。
+      expect(find.byKey(const Key('edit_scope_sheet')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('edit_scope_all_weeks')));
       await _settleIo(tester);
       final edit = _c.courseEditOf('j1')!;
       expect(edit.name, '测试课乙');

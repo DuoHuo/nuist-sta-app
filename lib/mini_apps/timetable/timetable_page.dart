@@ -234,22 +234,17 @@ class _TimetablePageState extends State<TimetablePage> {
     );
   }
 
-  /// 「回到本周」按钮：300ms easeOutCubic 翻页动画回到本周（途中由 [_onPageChanged]
+  /// 「回到本周」按钮：按跨越周数翻页（[animateWeekPage]，途中由 [_onPageChanged]
   /// 逐页同步浏览周）；系统关闭动画（disableAnimations）时直接跳转。结束后对齐
   /// controller 的浏览周。
   Future<void> _backToCurrentWeek() async {
     final pc = _pageController;
     if (pc != null && pc.hasClients) {
-      final target = _pageFor(_controller.currentWeek);
-      if (MediaQuery.of(context).disableAnimations) {
-        pc.jumpToPage(target);
-      } else {
-        await pc.animateToPage(
-          target,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutCubic,
-        );
-      }
+      await animateWeekPage(
+        pc,
+        _pageFor(_controller.currentWeek),
+        reduceMotion: MediaQuery.of(context).disableAnimations,
+      );
     }
     if (mounted) _controller.jumpToCurrentWeek();
   }
@@ -267,90 +262,41 @@ class _TimetablePageState extends State<TimetablePage> {
     _controller.setViewingWeek(index + 1);
   }
 
-  Future<void> _pickWeek() async {
-    final max = _totalWeeks;
-    final colors = TimetableTheme.colorsOf(context);
-    final selected = await showModalBottomSheet<int>(
-      context: context,
-      backgroundColor: colors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(TimetableTheme.sheetTopRadius),
-        ),
-      ),
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: colors.divider,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                '选择周次',
-                style: TimetableTheme.titleStyle(color: colors.titleText),
-              ),
-              const SizedBox(height: 12),
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: max,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 5,
-                  mainAxisSpacing: 8,
-                  crossAxisSpacing: 8,
-                  childAspectRatio: 1.4,
-                ),
-                itemBuilder: (context, i) {
-                  final week = i + 1;
-                  final isCurrent = week == _controller.currentWeek;
-                  final isViewing = week == _controller.viewingWeek;
-                  return InkWell(
-                    onTap: () => Navigator.pop(context, week),
-                    borderRadius: BorderRadius.circular(20),
-                    child: Container(
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: isCurrent ? colors.accent : Colors.transparent,
-                        border: Border.all(
-                          color: isViewing && !isCurrent
-                              ? colors.accent
-                              : colors.divider,
-                        ),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        '$week',
-                        style: TextStyle(
-                          // 本周那一格是 accent 实心底，上面压白字。
-                          color: isCurrent ? Colors.white : colors.titleText,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-    if (selected == null || !mounted) return;
-    _controller.setViewingWeek(selected);
+  /// item 5：顶栏周数下方的横向周条是否展开。
+  bool _weekStripOpen = false;
+
+  void _toggleWeekStrip() => setState(() => _weekStripOpen = !_weekStripOpen);
+
+  /// 周条选中某周：先收起，再按 item 3 的规则（[animateWeekPage]）翻过去。
+  Future<void> _selectWeek(int week) async {
+    setState(() => _weekStripOpen = false);
     final pc = _pageController;
-    if (pc == null || !pc.hasClients) return;
-    pc.animateToPage(
-      _pageFor(selected),
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeOut,
+    if (pc != null && pc.hasClients) {
+      await animateWeekPage(
+        pc,
+        _pageFor(week),
+        reduceMotion: MediaQuery.of(context).disableAnimations,
+      );
+    }
+    if (mounted) _controller.setViewingWeek(week);
+  }
+
+  /// 周条展开 / 收起 200ms；减少动画时不套 AnimatedSize，直接出现 / 消失。
+  Widget _weekStripSlot(BuildContext context) {
+    final strip = _weekStripOpen
+        ? _WeekStrip(
+            total: _totalWeeks,
+            current: _controller.currentWeek,
+            selected: _controller.viewingWeek,
+            onSelect: (w) => unawaited(_selectWeek(w)),
+          )
+        : const SizedBox(width: double.infinity);
+    if (MediaQuery.of(context).disableAnimations) return strip;
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.topCenter,
+      child: strip,
     );
   }
 
@@ -392,7 +338,7 @@ class _TimetablePageState extends State<TimetablePage> {
                           : null,
                       dateLabel: _dateLabel(),
                       weekPending: _controller.weekPending,
-                      onWeekTap: _pickWeek,
+                      onWeekTap: _toggleWeekStrip,
                       // §14.1：「+」三选一（课程 / 考试 / 其他）；「课程」仍是原手动课表单。
                       onAdd: () =>
                           showAddEntrySheet(context, controller: _controller),
@@ -402,6 +348,8 @@ class _TimetablePageState extends State<TimetablePage> {
                       syncError: _showSyncErrorDot,
                       onSettings: _openSettings,
                     ),
+                    // item 5：点顶栏周数展开 / 收起的横向周条（200ms）。
+                    _weekStripSlot(context),
                     Expanded(
                       // 只有日程（考试 / 其他）没有课程时也显示周视图。
                       child:
@@ -437,8 +385,6 @@ class _TimetablePageState extends State<TimetablePage> {
                               onLogin: _openLogin,
                             ),
                     ),
-                    if (_controller.hasCourses)
-                      _OtherCoursesBar(controller: _controller),
                   ],
                 ),
                 if (!_controller.isViewingCurrentWeek && !_termEnded)
@@ -741,36 +687,123 @@ class _BackToWeekButton extends StatelessWidget {
   }
 }
 
-class _OtherCoursesBar extends StatelessWidget {
-  const _OtherCoursesBar({required this.controller});
-  final TimetableController controller;
+/// item 3：翻过 [weeks] 周的动画时长：1 周 250ms，每多 1 周 +50ms，上限 500ms。
+Duration weekJumpDuration(int weeks) {
+  final n = weeks.abs() < 1 ? 1 : weeks.abs();
+  return Duration(milliseconds: (250 + 50 * (n - 1)).clamp(250, 500));
+}
+
+/// 翻到 [target] 页（「回到本周」与周条共用）：时长见 [weekJumpDuration]，曲线
+/// easeOutCubic，始终直接滑过去（产品 10/19：不再先瞬移到相邻页）；[reduceMotion]
+/// （系统关闭动画）时直接跳。
+Future<void> animateWeekPage(
+  PageController pc,
+  int target, {
+  required bool reduceMotion,
+}) async {
+  final from = pc.page?.round() ?? pc.initialPage;
+  final delta = target - from;
+  if (delta == 0) return;
+  if (reduceMotion) {
+    pc.jumpToPage(target);
+    return;
+  }
+  final duration = weekJumpDuration(delta);
+  await pc.animateToPage(
+    target,
+    duration: duration,
+    curve: Curves.easeOutCubic,
+  );
+}
+
+/// item 5：横向周条（1…N 周胶囊）。本周描边，当前选中实心；读屏「第 N 周」。
+class _WeekStrip extends StatefulWidget {
+  const _WeekStrip({
+    required this.total,
+    required this.current,
+    required this.selected,
+    required this.onSelect,
+  });
+
+  final int total;
+  final int current;
+  final int selected;
+  final ValueChanged<int> onSelect;
+
+  @override
+  State<_WeekStrip> createState() => _WeekStripState();
+}
+
+class _WeekStripState extends State<_WeekStrip> {
+  static const double _chipW = 48;
+  static const double _gap = 8;
+
+  late final ScrollController _scroll = ScrollController(
+    // 展开时让选中周大致居中（前面留 2 个胶囊）。
+    initialScrollOffset: ((widget.selected - 3) * (_chipW + _gap))
+        .clamp(0, double.infinity)
+        .toDouble(),
+  );
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final others = controller.otherCourses();
-    if (others.isEmpty) return const SizedBox.shrink();
     final colors = TimetableTheme.colorsOf(context);
-    return Material(
-      color: colors.surface,
-      child: ExpansionTile(
-        title: Text(
-          '其他课程（${others.length}）',
-          style: TimetableTheme.captionStyle(color: colors.titleText),
-        ),
-        children: [
-          for (final c in others)
-            ListTile(
-              dense: true,
-              title: Text(c.name),
-              subtitle: Text(
-                c.slots.isEmpty
-                    ? '无固定时间'
-                    : (c.slots.first.weeksLabel.isEmpty
-                          ? '无固定时间'
-                          : c.slots.first.weeksLabel),
+    return SizedBox(
+      key: const Key('timetable_week_strip'),
+      height: 56,
+      child: ListView.separated(
+        controller: _scroll,
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        itemCount: widget.total,
+        separatorBuilder: (_, _) => const SizedBox(width: _gap),
+        itemBuilder: (context, i) {
+          final week = i + 1;
+          final isCurrent = week == widget.current;
+          final isSelected = week == widget.selected;
+          return Semantics(
+            key: ValueKey('week_chip_$week'),
+            button: true,
+            selected: isSelected,
+            excludeSemantics: true,
+            label: isCurrent ? '第 $week 周，本周' : '第 $week 周',
+            onTap: () => widget.onSelect(week),
+            child: Material(
+              color: isSelected ? colors.accent : colors.chipBg,
+              shape: StadiumBorder(
+                side: isCurrent && !isSelected
+                    ? BorderSide(color: colors.accent, width: 1.5)
+                    : BorderSide.none,
+              ),
+              child: InkWell(
+                customBorder: const StadiumBorder(),
+                onTap: () => widget.onSelect(week),
+                child: SizedBox(
+                  width: _chipW,
+                  child: Center(
+                    child: Text(
+                      '$week',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        // 选中为 accent 实心底，上面压白字。
+                        color: isSelected
+                            ? Colors.white
+                            : (isCurrent ? colors.accent : colors.titleText),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
-        ],
+          );
+        },
       ),
     );
   }

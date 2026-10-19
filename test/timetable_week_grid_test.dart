@@ -186,8 +186,10 @@ void main() {
       expect(hits, [endsWith('timetable_theme.dart')], reason: '$hits');
       final cell = File('lib/mini_apps/timetable/timetable_course_cell.dart')
           .readAsStringSync();
-      expect(cell, contains('TimetableTheme.offWeekText'));
-      expect(cell, contains('TimetableTheme.offWeekBorder'));
+      // item 12：经 TimetableTheme.colorsOf(context) 取明暗对应的 offWeek token。
+      expect(cell, contains('TimetableTheme.colorsOf(context)'));
+      expect(cell, contains('colors.offWeekText'));
+      expect(cell, contains('colors.offWeekBorder'));
       expect(cell, isNot(contains('[非本周]')));
     });
 
