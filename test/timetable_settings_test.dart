@@ -334,9 +334,18 @@ void main() {
         find.byKey(const Key('tt_settings_opacity')),
         const Offset(-2000, 0),
       );
-      await settleIo(tester);
+      // updateSettings 先 merge/save 再 notifyListeners，等标签刷新后再断言。
+      String? opacityLabel() => tester
+          .widget<Text>(find.byKey(const Key('tt_settings_opacity_value')))
+          .data;
+      for (var i = 0; i < 40 && opacityLabel() != '30%'; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+      }
       expect(_c.settings.cellOpacity, 30);
-      expect(find.text('30%'), findsWidgets);
+      expect(opacityLabel(), '30%');
     });
 
     testWidgets('ST12b 存储不透明度 55：读出保留 55，滑块/标签显示 55%，打开不回写', (tester) async {
