@@ -2,43 +2,50 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-import 'announcement_api.dart';
-import 'announcement_models.dart';
-import 'announcement_store.dart';
+import 'bulletin_api.dart';
+import 'bulletin_models.dart';
+import 'bulletin_store.dart';
 
 /// 公告浏览、缓存与订阅动态的共享状态。
-class AnnouncementController extends ChangeNotifier {
-  AnnouncementController._();
+class BulletinController extends ChangeNotifier {
+  /// 创建公告状态，可注入接口与存储以隔离数据来源。
+  BulletinController({BulletinApi? api, BulletinStore? store})
+    : _api = api ?? BulletinApi(),
+      _store = store ?? BulletinStore();
 
   /// 首页卡片与公告阅读页共用的状态控制器。
-  static final AnnouncementController instance = AnnouncementController._();
+  static final BulletinController instance = BulletinController();
 
-  final AnnouncementApi _api = AnnouncementApi();
-  final AnnouncementStore _store = AnnouncementStore();
-  final Map<String, AnnouncementListPage> _pages = {};
+  final BulletinApi _api;
+  final BulletinStore _store;
+  final Map<String, BulletinListPage> _pages = {};
   final Set<String> _loadingCategories = {};
   final Map<String, String> _categoryErrors = {};
 
-  AnnouncementCategory _category = AnnouncementCategory.all.first;
-  AnnouncementSubscription _subscription = const AnnouncementSubscription();
-  List<Announcement> _feed = [];
+  BulletinCategory _category = BulletinCategory.all.first;
+  BulletinSubscription _subscription = const BulletinSubscription();
+  List<Bulletin> _feed = [];
   Set<String> _knownIds = {};
   bool _baselineReady = false;
   bool _started = false;
   Future<void>? _starting;
   bool _feedLoading = false;
-  String? _feedError;
+  bool _feedUnavailable = false;
+  bool _disposed = false;
+  int _subscriptionRevision = 0;
 
-  AnnouncementCategory get category => _category;
-  AnnouncementSubscription get subscription => _subscription;
-  List<Announcement> get feed => List.unmodifiable(_feed);
+  BulletinCategory get category => _category;
+  BulletinSubscription get subscription => _subscription;
+  List<Bulletin> get feed => List.unmodifiable(_feed);
   bool get feedLoading => _feedLoading;
-  String? get feedError => _feedError;
+
+  /// 自动重试仍未成功时，首页暂时隐藏动态区域。
+  bool get feedUnavailable => _feedUnavailable;
   bool get isLoadingCategory =>
       _loadingCategories.contains(_categoryKey(_category));
   String? get categoryError => _categoryErrors[_categoryKey(_category)];
 
-  List<Announcement> get items {
+  List<Bulletin> get items {
     final key = _categoryKey(_category);
     final pages =
         _pages.entries
@@ -68,19 +75,21 @@ class AnnouncementController extends ChangeNotifier {
 
   Future<void> _start() async {
     final local = await _store.read();
+    if (_disposed) return;
     _pages
       ..clear()
       ..addAll(local.pages);
     _subscription = local.subscription;
-    _feed = local.feed;
-    _knownIds = local.knownIds;
+    // 空缓存和持久化快照可能不可修改，运行时始终使用可写副本。
+    _feed = List.of(local.feed);
+    _knownIds = Set.of(local.knownIds);
     _baselineReady = local.baselineReady;
     notifyListeners();
     if (_subscription.enabled) unawaited(refreshFeed());
   }
 
   /// 切换当前公告分类并加载首屏内容。
-  Future<void> selectCategory(AnnouncementCategory category) async {
+  Future<void> selectCategory(BulletinCategory category) async {
     _category = category;
     notifyListeners();
     await loadCategory(category);
@@ -88,7 +97,7 @@ class AnnouncementController extends ChangeNotifier {
 
   /// 加载分类首屏，或在 [forceRefresh] 为真时重新请求官网。
   Future<void> loadCategory(
-    AnnouncementCategory category, {
+    BulletinCategory category, {
     bool forceRefresh = false,
   }) async {
     await ensureStarted();
@@ -143,11 +152,13 @@ class AnnouncementController extends ChangeNotifier {
   /// 更新订阅设置；首次开启会记录最新公告作为基线。
   Future<void> configureSubscription({
     required bool enabled,
-    required Set<AnnouncementTopic> topics,
+    required Set<BulletinTopic> topics,
   }) async {
     await ensureStarted();
     final wasEnabled = _subscription.enabled;
-    _subscription = AnnouncementSubscription(
+    _subscriptionRevision++;
+    _feedUnavailable = false;
+    _subscription = BulletinSubscription(
       enabled: enabled,
       topics: Set.unmodifiable(topics),
     );
@@ -155,69 +166,76 @@ class AnnouncementController extends ChangeNotifier {
     if (enabled && !wasEnabled) _baselineReady = false;
     await _save();
     notifyListeners();
-    if (enabled && !_baselineReady) unawaited(_primeBaseline());
+    if (enabled && !_baselineReady) unawaited(refreshFeed());
   }
 
-  /// 检查最新公告并加入符合订阅主题的新动态。
+  /// 检查最新公告，失败后最多尝试三次，持续失败时静默隐藏动态。
   Future<void> refreshFeed() async {
     await ensureStarted();
-    if (!_subscription.enabled || _feedLoading) return;
-    if (!_baselineReady) {
-      await _primeBaseline();
-      return;
-    }
+    if (_disposed || !_subscription.enabled || _feedLoading) return;
+    final revision = _subscriptionRevision;
     _feedLoading = true;
-    _feedError = null;
     notifyListeners();
     try {
-      final latest = await _api.fetchPage(
-        AnnouncementCategory.all.first.uri,
-        pageNumber: 1,
-      );
-      final newItems = latest.items
-          .where((item) => !_knownIds.contains(item.id))
-          .toList();
+      final latest = await _fetchFeedWithRetry(revision);
+      if (latest == null) return;
+      final newItems = _baselineReady
+          ? latest.items.where((item) => !_knownIds.contains(item.id)).toList()
+          : <Bulletin>[];
       _knownIds.addAll(latest.items.map((item) => item.id));
+      _baselineReady = true;
       final matches = newItems.where(_subscription.matches).toList();
       if (matches.isNotEmpty) _feed = [...matches, ..._feed];
       if (_knownIds.length > 3000) {
         _knownIds = _knownIds.skip(_knownIds.length - 2000).toSet();
       }
       if (_feed.length > 100) _feed = _feed.take(100).toList();
-      _pages[_pageKey(AnnouncementCategory.all.first, 1)] = latest;
+      _pages[_pageKey(BulletinCategory.all.first, 1)] = latest;
+      _feedUnavailable = false;
       await _save();
-    } catch (error) {
-      _feedError = '订阅动态刷新失败：$error';
+    } catch (_) {
+      if (_feedRequestIsCurrent(revision)) _feedUnavailable = true;
     } finally {
       _feedLoading = false;
-      notifyListeners();
+      if (!_disposed) {
+        notifyListeners();
+        if (_subscription.enabled && revision != _subscriptionRevision) {
+          unawaited(refreshFeed());
+        }
+      }
     }
   }
 
-  Future<void> _primeBaseline() async {
-    if (_feedLoading) return;
-    _feedLoading = true;
-    _feedError = null;
-    notifyListeners();
-    try {
-      final latest = await _api.fetchPage(
-        AnnouncementCategory.all.first.uri,
-        pageNumber: 1,
-      );
-      _knownIds.addAll(latest.items.map((item) => item.id));
-      _baselineReady = true;
-      _pages[_pageKey(AnnouncementCategory.all.first, 1)] = latest;
-      _feed = _feed.where(_subscription.matches).toList();
-      await _save();
-    } catch (error) {
-      _feedError = '订阅初始化失败：$error';
-    } finally {
-      _feedLoading = false;
-      notifyListeners();
+  Future<BulletinListPage?> _fetchFeedWithRetry(int revision) async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        await Future<void>.delayed(Duration(seconds: attempt * 2));
+      }
+      if (!_feedRequestIsCurrent(revision)) return null;
+      try {
+        final latest = await _api.fetchPage(
+          BulletinCategory.all.first.uri,
+          pageNumber: 1,
+        );
+        return _feedRequestIsCurrent(revision) ? latest : null;
+      } catch (_) {
+        if (!_feedRequestIsCurrent(revision)) return null;
+        if (attempt == 2) rethrow;
+      }
     }
+    return null;
   }
 
-  AnnouncementListPage? _lastPage(AnnouncementCategory category) {
+  bool _feedRequestIsCurrent(int revision) =>
+      !_disposed && _subscription.enabled && revision == _subscriptionRevision;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  BulletinListPage? _lastPage(BulletinCategory category) {
     final key = _categoryKey(category);
     final pages =
         _pages.entries
@@ -228,14 +246,14 @@ class AnnouncementController extends ChangeNotifier {
     return pages.isEmpty ? null : pages.last;
   }
 
-  String _pageKey(AnnouncementCategory category, int page) =>
+  String _pageKey(BulletinCategory category, int page) =>
       '${_categoryKey(category)}|$page';
 
-  String _categoryKey(AnnouncementCategory category) =>
+  String _categoryKey(BulletinCategory category) =>
       category.path.isEmpty ? 'all' : category.path;
 
   Future<void> _save() => _store.save(
-    AnnouncementLocalData(
+    BulletinLocalData(
       subscription: _subscription,
       pages: Map.unmodifiable(_pages),
       feed: List.unmodifiable(_feed),

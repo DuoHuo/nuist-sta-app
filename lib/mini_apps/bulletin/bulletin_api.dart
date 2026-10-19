@@ -5,17 +5,17 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/config/campus_config.dart';
 import '../../core/network/vpn_dio.dart';
-import 'announcement_detail_parser.dart';
-import 'announcement_models.dart';
-import 'announcement_tagger.dart';
+import 'bulletin_detail_parser.dart';
+import 'bulletin_models.dart';
+import 'bulletin_tagger.dart';
 
 /// 信息公告栏官网首页地址（主机名由 `campus_config.dart` 的校园根域派生）。
-final announcementHomeUri = 'https://${CampusHosts.bulletin}/';
+final bulletinHomeUri = 'https://${CampusHosts.bulletin}/';
 
 /// 从学校官网读取公告列表。
-class AnnouncementApi {
+class BulletinApi {
   /// 创建公告接口客户端，可注入 Dio 实例。
-  AnnouncementApi({Dio? dio})
+  BulletinApi({Dio? dio})
     : _dio =
           dio ??
           vpnDio(
@@ -29,10 +29,7 @@ class AnnouncementApi {
   final Dio _dio;
 
   /// 请求并解析指定分类或分页的公告列表。
-  Future<AnnouncementListPage> fetchPage(
-    Uri uri, {
-    required int pageNumber,
-  }) async {
+  Future<BulletinListPage> fetchPage(Uri uri, {required int pageNumber}) async {
     final response = await _dio.get<String>(
       uri.toString(),
       options: Options(responseType: ResponseType.plain),
@@ -41,28 +38,28 @@ class AnnouncementApi {
     if (html == null || html.isEmpty) {
       throw const FormatException('公告栏没有返回列表内容');
     }
-    return parseAnnouncementPage(html, currentUri: uri, pageNumber: pageNumber);
+    return parseBulletinPage(html, currentUri: uri, pageNumber: pageNumber);
   }
 
   /// 请求并解析单条公告正文；无法识别正文时返回 null 交给 WebView 兜底。
-  Future<AnnouncementDetailDocument?> fetchDetail(
-    Announcement announcement,
-  ) async {
-    final uri = Uri.parse(announcement.url);
+  Future<BulletinDetailDocument?> fetchDetail(Bulletin bulletin) async {
+    final uri = Uri.parse(bulletin.url);
     final response = await _dio.get<String>(
       uri.toString(),
       options: Options(responseType: ResponseType.plain),
     );
     final html = response.data;
     if (html == null || html.isEmpty) return null;
-    return parseAnnouncementDetail(html, currentUri: uri);
+    return parseBulletinDetail(html, currentUri: uri);
   }
 
   /// 下载公告附件到临时目录，供系统分享面板保存或打开。
-  Future<File> downloadAttachment(AnnouncementAttachment attachment) async {
+  Future<File> downloadAttachment(BulletinAttachment attachment) async {
     final directory = await getTemporaryDirectory();
     final sourceName = Uri.tryParse(attachment.url)?.pathSegments.last ?? '';
-    final extension = sourceName.contains('.')
+    // 官网的 download.jsp 是下载接口，不能把 .jsp 拼到真实附件名后面。
+    final extension =
+        sourceName.contains('.') && !sourceName.toLowerCase().endsWith('.jsp')
         ? '.${sourceName.split('.').last}'
         : '';
     var name = attachment.name.trim();
@@ -81,12 +78,12 @@ class AnnouncementApi {
 }
 
 /// 解析官网返回的列表 HTML 和分页链接。
-AnnouncementListPage parseAnnouncementPage(
+BulletinListPage parseBulletinPage(
   String html, {
   required Uri currentUri,
   required int pageNumber,
 }) {
-  final items = <Announcement>[];
+  final items = <Bulletin>[];
   final seenIds = <String>{};
   final rows = RegExp(
     r'''<li\b[^>]*class=["'][^"']*\bnews\b[^"']*["'][^>]*>([\s\S]*?)</li>''',
@@ -125,7 +122,7 @@ AnnouncementListPage parseAnnouncementPage(
       row,
       'wjj',
     ).replaceAll('[', '').replaceAll(']', '');
-    final announcement = Announcement(
+    final bulletin = Bulletin(
       id: id,
       title: title,
       url: url.toString(),
@@ -133,7 +130,7 @@ AnnouncementListPage parseAnnouncementPage(
       publisher: _spanText(row, 'news_org'),
       publishedAt: _spanText(row, 'news_date'),
     );
-    items.add(tagAnnouncement(announcement));
+    items.add(tagBulletin(bulletin));
   }
 
   final paging =
@@ -160,7 +157,7 @@ AnnouncementListPage parseAnnouncementPage(
       .firstMatch(paging)
       ?.group(1);
 
-  return AnnouncementListPage(
+  return BulletinListPage(
     items: items,
     pageNumber: pageNumber,
     nextUrl: nextUrl,

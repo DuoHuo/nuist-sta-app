@@ -3,12 +3,12 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
-import 'announcement_models.dart';
+import 'bulletin_models.dart';
 
 /// 在应用文档目录中保存公告缓存和订阅状态。
-class AnnouncementStore {
+class BulletinStore {
   /// 创建公告存储，可注入应用目录解析器。
-  AnnouncementStore({Future<Directory?> Function()? resolveDirectory})
+  BulletinStore({Future<Directory?> Function()? resolveDirectory})
     : _resolveDirectory = resolveDirectory ?? _applicationDirectory;
 
   static const _fileName = 'announcements.json';
@@ -37,23 +37,23 @@ class AnnouncementStore {
   }
 
   /// 读取本地数据；不可用时返回空数据。
-  Future<AnnouncementLocalData> read() async {
+  Future<BulletinLocalData> read() async {
     try {
       final file = await _file();
       if (file == null || !await file.exists()) {
-        return const AnnouncementLocalData();
+        return const BulletinLocalData();
       }
       final json = jsonDecode(await file.readAsString());
-      return AnnouncementLocalData.fromJson(
+      return BulletinLocalData.fromJson(
         json is Map<String, dynamic> ? json : null,
       );
     } catch (_) {
-      return const AnnouncementLocalData();
+      return const BulletinLocalData();
     }
   }
 
   /// 保存本地数据；存储不可用时安静降级。
-  Future<void> save(AnnouncementLocalData data) async {
+  Future<void> save(BulletinLocalData data) async {
     try {
       final file = await _file();
       if (file == null) return;

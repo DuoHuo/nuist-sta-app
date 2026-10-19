@@ -1,7 +1,7 @@
-import 'announcement_models.dart';
+import 'bulletin_models.dart';
 
 /// 将公告详情 HTML 解析为适合 Flutter 原生渲染的正文和附件。
-AnnouncementDetailDocument? parseAnnouncementDetail(
+BulletinDetailDocument? parseBulletinDetail(
   String html, {
   required Uri currentUri,
 }) {
@@ -12,11 +12,14 @@ AnnouncementDetailDocument? parseAnnouncementDetail(
   if (_looksLikeRestrictedPage(allText)) return null;
 
   final content = _findContentNode(document);
-  final attachments = _collectAttachments(content, currentUri);
+  final attachments = _collectAttachments(
+    _findAttachmentScope(document, content),
+    currentUri,
+  );
   final blocks = _extractBlocks(content, currentUri);
   if (blocks.isEmpty && attachments.isEmpty) return null;
 
-  return AnnouncementDetailDocument(
+  return BulletinDetailDocument(
     blocks: List.unmodifiable(blocks),
     attachments: List.unmodifiable(attachments),
   );
@@ -64,20 +67,45 @@ _HtmlNode _findContentNode(_HtmlNode root) {
   return candidates.first.node;
 }
 
-List<AnnouncementAttachment> _collectAttachments(
+_HtmlNode _findAttachmentScope(_HtmlNode document, _HtmlNode content) {
+  // 官网的附件列表通常是正文的兄弟节点，仍在同一个 article / 新闻表单内。
+  // 正文保持原来的提取范围，附件扩大到文章容器，避免混入其他公告的链接。
+  for (_HtmlNode? node = content; node != null; node = node.parent) {
+    final classes = (node.attributes['class'] ?? '').toLowerCase().split(
+      RegExp(r'\s+'),
+    );
+    if (node.tag == 'article' ||
+        classes.contains('article') ||
+        (node.tag == 'form' &&
+            node.attributes['name'] == '_newscontent_fromname')) {
+      return node;
+    }
+  }
+  return document;
+}
+
+Iterable<_HtmlNode> _attachmentElements(_HtmlNode node) sync* {
+  if (_isHidden(node) || {'head', 'header', 'aside'}.contains(node.tag)) return;
+  if (!node.isText) yield node;
+  for (final child in node.children) {
+    yield* _attachmentElements(child);
+  }
+}
+
+List<BulletinAttachment> _collectAttachments(
   _HtmlNode content,
   Uri currentUri,
 ) {
-  final attachments = <AnnouncementAttachment>[];
+  final attachments = <BulletinAttachment>[];
   final seen = <String>{};
-  for (final node in _elements(content)) {
+  for (final node in _attachmentElements(content)) {
     if (node.tag != 'a') continue;
     final url = _resolveUrl(node.attributes['href'], currentUri);
     if (url == null || !_isAttachmentLink(node, url)) continue;
     if (!seen.add(url)) continue;
     final label = _cleanText(_nodeText(node));
     attachments.add(
-      AnnouncementAttachment(name: _attachmentName(label, url), url: url),
+      BulletinAttachment(name: _attachmentName(label, url), url: url),
     );
   }
   return attachments;
@@ -105,8 +133,12 @@ bool _isAttachmentLink(_HtmlNode node, String url) {
     return true;
   }
   final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
-  return RegExp(r'\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|txt|wps|jpg|jpeg|png)$')
-      .hasMatch(path);
+  // CMS 使用下载接口而非文件地址，链接文案也可能没有后缀或「附件」字样。
+  if (path.endsWith('/system/_content/download.jsp')) return true;
+  final fileExtension = RegExp(
+    r'\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|txt|wps|jpg|jpeg|png)$',
+  );
+  return fileExtension.hasMatch(path) || fileExtension.hasMatch(label);
 }
 
 String? _resolveUrl(String? raw, Uri base) {
@@ -118,8 +150,8 @@ String? _resolveUrl(String? raw, Uri base) {
   return resolved.toString();
 }
 
-List<AnnouncementDetailBlock> _extractBlocks(_HtmlNode root, Uri currentUri) {
-  final blocks = <AnnouncementDetailBlock>[];
+List<BulletinDetailBlock> _extractBlocks(_HtmlNode root, Uri currentUri) {
+  final blocks = <BulletinDetailBlock>[];
 
   void visit(_HtmlNode node) {
     if (node.isText || _isHidden(node)) return;
@@ -128,8 +160,8 @@ List<AnnouncementDetailBlock> _extractBlocks(_HtmlNode root, Uri currentUri) {
       final text = _cleanText(_nodeText(node, currentUri: currentUri));
       if (text.isNotEmpty) {
         blocks.add(
-          AnnouncementDetailBlock(
-            kind: AnnouncementDetailBlockKind.heading,
+          BulletinDetailBlock(
+            kind: BulletinDetailBlockKind.heading,
             text: text,
             level: int.tryParse(tag.substring(1)) ?? 2,
             centered: _isCentered(node),
@@ -142,8 +174,8 @@ List<AnnouncementDetailBlock> _extractBlocks(_HtmlNode root, Uri currentUri) {
       final url = _resolveUrl(node.attributes['src'], currentUri);
       if (url != null) {
         blocks.add(
-          AnnouncementDetailBlock(
-            kind: AnnouncementDetailBlockKind.image,
+          BulletinDetailBlock(
+            kind: BulletinDetailBlockKind.image,
             url: url,
             altText: _decodeEntities(node.attributes['alt'] ?? '').trim(),
             centered: _isCentered(node),
@@ -159,10 +191,10 @@ List<AnnouncementDetailBlock> _extractBlocks(_HtmlNode root, Uri currentUri) {
       ].where((item) => item.isNotEmpty).toList();
       if (items.isNotEmpty) {
         blocks.add(
-          AnnouncementDetailBlock(
+          BulletinDetailBlock(
             kind: tag == 'ul'
-                ? AnnouncementDetailBlockKind.bulletList
-                : AnnouncementDetailBlockKind.numberedList,
+                ? BulletinDetailBlockKind.bulletList
+                : BulletinDetailBlockKind.numberedList,
             items: items,
           ),
         );
@@ -173,10 +205,7 @@ List<AnnouncementDetailBlock> _extractBlocks(_HtmlNode root, Uri currentUri) {
       final text = _cleanText(_nodeText(node, currentUri: currentUri));
       if (text.isNotEmpty) {
         blocks.add(
-          AnnouncementDetailBlock(
-            kind: AnnouncementDetailBlockKind.quote,
-            text: text,
-          ),
+          BulletinDetailBlock(kind: BulletinDetailBlockKind.quote, text: text),
         );
       }
       return;
@@ -194,10 +223,7 @@ List<AnnouncementDetailBlock> _extractBlocks(_HtmlNode root, Uri currentUri) {
       }
       if (rows.isNotEmpty) {
         blocks.add(
-          AnnouncementDetailBlock(
-            kind: AnnouncementDetailBlockKind.table,
-            items: rows,
-          ),
+          BulletinDetailBlock(kind: BulletinDetailBlockKind.table, items: rows),
         );
       }
       return;
@@ -212,8 +238,8 @@ List<AnnouncementDetailBlock> _extractBlocks(_HtmlNode root, Uri currentUri) {
         final text = _cleanText(_nodeText(node, currentUri: currentUri));
         if (text.isNotEmpty) {
           blocks.add(
-            AnnouncementDetailBlock(
-              kind: AnnouncementDetailBlockKind.paragraph,
+            BulletinDetailBlock(
+              kind: BulletinDetailBlockKind.paragraph,
               text: text,
               centered: _isCentered(node),
             ),
@@ -321,13 +347,14 @@ class _ContentCandidate {
 }
 
 class _HtmlNode {
-  _HtmlNode.element(this.tag, this.attributes) : text = null;
-  _HtmlNode.text(this.text) : tag = '', attributes = const {};
+  _HtmlNode.element(this.tag, this.attributes, {this.parent}) : text = null;
+  _HtmlNode.text(this.text, {this.parent}) : tag = '', attributes = const {};
 
   final String tag;
   final Map<String, String> attributes;
   final List<_HtmlNode> children = [];
   final String? text;
+  final _HtmlNode? parent;
 
   bool get isText => tag.isEmpty;
 }
@@ -368,6 +395,7 @@ class _HtmlParser {
         final node = _HtmlNode.element(
           tag,
           _parseAttributes(opening.group(2) ?? ''),
+          parent: stack.last,
         );
         stack.last.children.add(node);
         if (!_voidTags.contains(tag) && opening.group(3) != '/') {
@@ -375,7 +403,9 @@ class _HtmlParser {
         }
         continue;
       }
-      if (token.isNotEmpty) stack.last.children.add(_HtmlNode.text(token));
+      if (token.isNotEmpty) {
+        stack.last.children.add(_HtmlNode.text(token, parent: stack.last));
+      }
     }
     return root;
   }

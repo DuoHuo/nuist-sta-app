@@ -3,46 +3,43 @@ import 'package:share_plus/share_plus.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/colors.dart';
-import 'announcement_api.dart';
-import 'announcement_models.dart';
+import 'bulletin_api.dart';
+import 'bulletin_attachment_preview_dialog.dart';
+import 'bulletin_models.dart';
 
 /// 在应用内优先以原生排版阅读学校官网的公告正文。
-class AnnouncementDetailPage extends StatefulWidget {
+class BulletinDetailPage extends StatefulWidget {
   /// 创建指定公告的详情阅读页。
-  const AnnouncementDetailPage({
-    super.key,
-    required this.announcement,
-    this.api,
-  });
+  const BulletinDetailPage({super.key, required this.bulletin, this.api});
 
-  final Announcement announcement;
-  final AnnouncementApi? api;
+  final Bulletin bulletin;
+  final BulletinApi? api;
 
   @override
-  State<AnnouncementDetailPage> createState() => _AnnouncementDetailPageState();
+  State<BulletinDetailPage> createState() => _BulletinDetailPageState();
 }
 
-class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
-  late final AnnouncementApi _api;
-  late final Future<AnnouncementDetailDocument?> _detailFuture;
+class _BulletinDetailPageState extends State<BulletinDetailPage> {
+  late final BulletinApi _api;
+  late final Future<BulletinDetailDocument?> _detailFuture;
   WebViewController? _webViewController;
   int _progress = 0;
   bool _failed = false;
-  String? _downloadingUrl;
+  bool _attachmentPreviewOpen = false;
 
   @override
   void initState() {
     super.initState();
-    _api = widget.api ?? AnnouncementApi();
+    _api = widget.api ?? BulletinApi();
     _detailFuture = _loadDetail();
     _detailFuture.then((detail) {
       if (detail == null) _activateWebViewFallback();
     });
   }
 
-  Future<AnnouncementDetailDocument?> _loadDetail() async {
+  Future<BulletinDetailDocument?> _loadDetail() async {
     try {
-      return await _api.fetchDetail(widget.announcement);
+      return await _api.fetchDetail(widget.bulletin);
     } catch (_) {
       return null;
     }
@@ -65,7 +62,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
         ),
       );
     setState(() => _webViewController = controller);
-    controller.loadRequest(Uri.parse(widget.announcement.url));
+    controller.loadRequest(Uri.parse(widget.bulletin.url));
   }
 
   Future<void> _retryWebView() async {
@@ -75,22 +72,29 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
       _failed = false;
       _progress = 0;
     });
-    await controller.loadRequest(Uri.parse(widget.announcement.url));
+    await controller.loadRequest(Uri.parse(widget.bulletin.url));
   }
 
-  Future<void> _downloadAttachment(AnnouncementAttachment attachment) async {
-    if (_downloadingUrl != null) return;
-    setState(() => _downloadingUrl = attachment.url);
+  Future<void> _openAttachment(BulletinAttachment attachment) async {
+    if (_attachmentPreviewOpen) return;
+    _attachmentPreviewOpen = true;
     try {
-      final file = await _api.downloadAttachment(attachment);
-      if (!mounted) return;
-      await SharePlus.instance.share(
-        ShareParams(files: [XFile(file.path)], subject: attachment.name),
+      await showDialog<void>(
+        context: context,
+        builder: (_) => BulletinAttachmentPreviewDialog(
+          attachment: attachment,
+          api: _api,
+          onDownload: (file) async {
+            await SharePlus.instance.share(
+              ShareParams(files: [XFile(file.path)], subject: attachment.name),
+            );
+          },
+        ),
       );
     } catch (_) {
       if (mounted) _message('附件下载失败，可能需要连接校园网或 VPN');
     } finally {
-      if (mounted) setState(() => _downloadingUrl = null);
+      _attachmentPreviewOpen = false;
     }
   }
 
@@ -123,7 +127,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
         children: [
           _buildHeader(palette),
           Expanded(
-            child: FutureBuilder<AnnouncementDetailDocument?>(
+            child: FutureBuilder<BulletinDetailDocument?>(
               future: _detailFuture,
               builder: (context, snapshot) {
                 final detail = snapshot.data;
@@ -144,10 +148,8 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
 
   Widget _buildHeader(AppPalette palette) {
     final metadata = [
-      if (widget.announcement.publisher.isNotEmpty)
-        widget.announcement.publisher,
-      if (widget.announcement.publishedAt.isNotEmpty)
-        widget.announcement.publishedAt,
+      if (widget.bulletin.publisher.isNotEmpty) widget.bulletin.publisher,
+      if (widget.bulletin.publishedAt.isNotEmpty) widget.bulletin.publishedAt,
     ].join(' · ');
     return Container(
       width: double.infinity,
@@ -157,7 +159,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            widget.announcement.title,
+            widget.bulletin.title,
             style: TextStyle(
               color: palette.titleText,
               fontSize: 16,
@@ -175,7 +177,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
   }
 
   Widget _buildNativeDocument(
-    AnnouncementDetailDocument document,
+    BulletinDetailDocument document,
     AppPalette palette,
   ) {
     return ListView(
@@ -200,10 +202,10 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
     );
   }
 
-  Widget _buildBlock(AnnouncementDetailBlock block, AppPalette palette) {
+  Widget _buildBlock(BulletinDetailBlock block, AppPalette palette) {
     final alignment = block.centered ? TextAlign.center : TextAlign.left;
     switch (block.kind) {
-      case AnnouncementDetailBlockKind.heading:
+      case BulletinDetailBlockKind.heading:
         return Padding(
           padding: const EdgeInsets.only(top: 10, bottom: 6),
           child: Text(
@@ -217,7 +219,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
             ),
           ),
         );
-      case AnnouncementDetailBlockKind.paragraph:
+      case BulletinDetailBlockKind.paragraph:
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Text(
@@ -230,7 +232,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
             ),
           ),
         );
-      case AnnouncementDetailBlockKind.quote:
+      case BulletinDetailBlockKind.quote:
         return Container(
           width: double.infinity,
           margin: const EdgeInsets.only(bottom: 12),
@@ -245,8 +247,8 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
             style: TextStyle(color: palette.labelText, height: 1.7),
           ),
         );
-      case AnnouncementDetailBlockKind.bulletList:
-      case AnnouncementDetailBlockKind.numberedList:
+      case BulletinDetailBlockKind.bulletList:
+      case BulletinDetailBlockKind.numberedList:
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Column(
@@ -260,7 +262,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
                       SizedBox(
                         width: 24,
                         child: Text(
-                          block.kind == AnnouncementDetailBlockKind.bulletList
+                          block.kind == BulletinDetailBlockKind.bulletList
                               ? '•'
                               : '${index + 1}.',
                           style: TextStyle(
@@ -285,7 +287,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
             ],
           ),
         );
-      case AnnouncementDetailBlockKind.table:
+      case BulletinDetailBlockKind.table:
         return Container(
           margin: const EdgeInsets.only(bottom: 12),
           decoration: BoxDecoration(
@@ -314,7 +316,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
             ],
           ),
         );
-      case AnnouncementDetailBlockKind.image:
+      case BulletinDetailBlockKind.image:
         return Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: ClipRRect(
@@ -339,11 +341,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
     }
   }
 
-  Widget _buildAttachment(
-    AnnouncementAttachment attachment,
-    AppPalette palette,
-  ) {
-    final loading = _downloadingUrl == attachment.url;
+  Widget _buildAttachment(BulletinAttachment attachment, AppPalette palette) {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       elevation: 0,
@@ -356,15 +354,9 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(color: palette.titleText, fontSize: 14),
         ),
-        subtitle: const Text('点击下载并分享'),
-        trailing: loading
-            ? const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : Icon(Icons.download_outlined, color: palette.accent),
-        onTap: loading ? null : () => _downloadAttachment(attachment),
+        subtitle: const Text('点击预览，无法预览时下载'),
+        trailing: Icon(Icons.visibility_outlined, color: palette.accent),
+        onTap: () => _openAttachment(attachment),
       ),
     );
   }

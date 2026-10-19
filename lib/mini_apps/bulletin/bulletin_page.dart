@@ -3,21 +3,21 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/colors.dart';
-import 'announcement_controller.dart';
-import 'announcement_detail_page.dart';
-import 'announcement_models.dart';
+import 'bulletin_controller.dart';
+import 'bulletin_detail_page.dart';
+import 'bulletin_models.dart';
 
 /// 学校公告浏览与订阅管理页。
-class AnnouncementPage extends StatefulWidget {
+class BulletinPage extends StatefulWidget {
   /// 创建公告阅读与订阅设置页面。
-  const AnnouncementPage({super.key});
+  const BulletinPage({super.key});
 
   @override
-  State<AnnouncementPage> createState() => _AnnouncementPageState();
+  State<BulletinPage> createState() => _BulletinPageState();
 }
 
-class _AnnouncementPageState extends State<AnnouncementPage> {
-  final _controller = AnnouncementController.instance;
+class _BulletinPageState extends State<BulletinPage> {
+  final _controller = BulletinController.instance;
   final _searchController = TextEditingController();
   String _query = '';
 
@@ -124,7 +124,7 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
                         spacing: 8,
                         runSpacing: 8,
                         children: [
-                          for (final topic in AnnouncementTopic.values)
+                          for (final topic in BulletinTopic.values)
                             FilterChip(
                               label: Text(topic.label),
                               selected: selected.contains(topic),
@@ -234,11 +234,11 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
                   height: 38,
                   child: ListView.separated(
                     scrollDirection: Axis.horizontal,
-                    itemCount: AnnouncementCategory.all.length,
+                    itemCount: BulletinCategory.all.length,
                     separatorBuilder: (context, index) =>
                         const SizedBox(width: 8),
                     itemBuilder: (context, index) {
-                      final category = AnnouncementCategory.all[index];
+                      final category = BulletinCategory.all[index];
                       final selected =
                           category.path == _controller.category.path;
                       return ChoiceChip(
@@ -290,12 +290,11 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
                   for (final item in items)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
-                      child: _AnnouncementTile(
-                        announcement: item,
+                      child: _BulletinTile(
+                        bulletin: item,
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute<void>(
-                            builder: (_) =>
-                                AnnouncementDetailPage(announcement: item),
+                            builder: (_) => BulletinDetailPage(bulletin: item),
                           ),
                         ),
                       ),
@@ -439,16 +438,16 @@ class _SearchBox extends StatelessWidget {
   }
 }
 
-class _AnnouncementTile extends StatelessWidget {
-  const _AnnouncementTile({required this.announcement, required this.onTap});
+class _BulletinTile extends StatelessWidget {
+  const _BulletinTile({required this.bulletin, required this.onTap});
 
-  final Announcement announcement;
+  final Bulletin bulletin;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
-    final topics = announcement.topics.take(3).toList();
+    final topics = bulletin.topics.take(3).toList();
     return Material(
       color: palette.surface,
       borderRadius: BorderRadius.circular(14),
@@ -465,7 +464,7 @@ class _AnnouncementTile extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      announcement.title,
+                      bulletin.title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -485,11 +484,11 @@ class _AnnouncementTile extends StatelessWidget {
                 spacing: 6,
                 runSpacing: 6,
                 children: [
-                  if (announcement.officialCategory.isNotEmpty)
-                    _Tag(announcement.officialCategory, highlighted: false),
+                  if (bulletin.officialCategory.isNotEmpty)
+                    _Tag(bulletin.officialCategory, highlighted: false),
                   for (final topic in topics)
                     _Tag(topic.label, highlighted: true),
-                  for (final action in announcement.actions.take(1))
+                  for (final action in bulletin.actions.take(1))
                     _Tag(action, highlighted: false),
                 ],
               ),
@@ -504,16 +503,16 @@ class _AnnouncementTile extends StatelessWidget {
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      announcement.publisher.isEmpty
+                      bulletin.publisher.isEmpty
                           ? '学校信息公告栏'
-                          : announcement.publisher,
+                          : bulletin.publisher,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: palette.hint, fontSize: 11),
                     ),
                   ),
                   Text(
-                    announcement.publishedAt,
+                    bulletin.publishedAt,
                     style: TextStyle(color: palette.hint, fontSize: 11),
                   ),
                 ],

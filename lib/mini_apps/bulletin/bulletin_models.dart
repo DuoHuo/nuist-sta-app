@@ -1,7 +1,7 @@
 import '../../core/config/campus_config.dart';
 
 /// 用户可以订阅的公告主题。
-enum AnnouncementTopic {
+enum BulletinTopic {
   academicCompetition,
   innovationEntrepreneurship,
   sports,
@@ -19,31 +19,31 @@ enum AnnouncementTopic {
 }
 
 /// 主题对应的中文名称和持久化标识。
-extension AnnouncementTopicLabel on AnnouncementTopic {
+extension BulletinTopicLabel on BulletinTopic {
   /// 主题的界面显示名称。
   String get label => switch (this) {
-    AnnouncementTopic.academicCompetition => '学科竞赛',
-    AnnouncementTopic.innovationEntrepreneurship => '创新创业',
-    AnnouncementTopic.sports => '体育活动',
-    AnnouncementTopic.arts => '文艺活动',
-    AnnouncementTopic.clubs => '社团活动',
-    AnnouncementTopic.academicTalks => '学术讲座',
-    AnnouncementTopic.scholarships => '奖学金与助学金',
-    AnnouncementTopic.courses => '课程与选课',
-    AnnouncementTopic.exams => '考试与测评',
-    AnnouncementTopic.employment => '就业与实习',
-    AnnouncementTopic.exchange => '交换与国际交流',
-    AnnouncementTopic.dormitory => '宿舍与后勤',
-    AnnouncementTopic.campusServices => '校园服务',
-    AnnouncementTopic.importantNotices => '重要通知',
+    BulletinTopic.academicCompetition => '学科竞赛',
+    BulletinTopic.innovationEntrepreneurship => '创新创业',
+    BulletinTopic.sports => '体育活动',
+    BulletinTopic.arts => '文艺活动',
+    BulletinTopic.clubs => '社团活动',
+    BulletinTopic.academicTalks => '学术讲座',
+    BulletinTopic.scholarships => '奖学金与助学金',
+    BulletinTopic.courses => '课程与选课',
+    BulletinTopic.exams => '考试与测评',
+    BulletinTopic.employment => '就业与实习',
+    BulletinTopic.exchange => '交换与国际交流',
+    BulletinTopic.dormitory => '宿舍与后勤',
+    BulletinTopic.campusServices => '校园服务',
+    BulletinTopic.importantNotices => '重要通知',
   };
 
   /// 稳定的本地存储标识。
   String get id => name;
 
   /// 根据本地存储标识解析主题。
-  static AnnouncementTopic? fromId(String id) {
-    for (final topic in AnnouncementTopic.values) {
+  static BulletinTopic? fromId(String id) {
+    for (final topic in BulletinTopic.values) {
       if (topic.id == id) return topic;
     }
     return null;
@@ -51,9 +51,9 @@ extension AnnouncementTopicLabel on AnnouncementTopic {
 }
 
 /// 学校公告栏提供的官方分类。
-class AnnouncementCategory {
+class BulletinCategory {
   /// 创建一个公告分类。
-  const AnnouncementCategory({required this.name, required this.path});
+  const BulletinCategory({required this.name, required this.path});
 
   final String name;
   final String path;
@@ -63,29 +63,29 @@ class AnnouncementCategory {
 
   /// 公告栏支持的全部官方分类。
   static const all = [
-    AnnouncementCategory(name: '全部公告', path: ''),
-    AnnouncementCategory(name: '文件公告', path: 'wjgg.htm'),
-    AnnouncementCategory(name: '学术报告', path: 'xsbg.htm'),
-    AnnouncementCategory(name: '招标信息', path: 'zbxx.htm'),
-    AnnouncementCategory(name: '会议通知', path: 'hytz2.htm'),
-    AnnouncementCategory(name: '党政事务', path: 'dzsw.htm'),
-    AnnouncementCategory(name: '组织人事', path: 'zzrs.htm'),
-    AnnouncementCategory(name: '科研信息', path: 'kyxx.htm'),
-    AnnouncementCategory(name: '招生就业', path: 'zsjy.htm'),
-    AnnouncementCategory(name: '教学考试', path: 'jxks.htm'),
-    AnnouncementCategory(name: '创新创业', path: 'cxcy.htm'),
-    AnnouncementCategory(name: '学术研讨', path: 'xsyt.htm'),
-    AnnouncementCategory(name: '专题讲座', path: 'ztjz.htm'),
-    AnnouncementCategory(name: '校园活动', path: 'xyhd.htm'),
-    AnnouncementCategory(name: '学院动态', path: 'xydt.htm'),
-    AnnouncementCategory(name: '其他', path: 'qt.htm'),
+    BulletinCategory(name: '全部公告', path: ''),
+    BulletinCategory(name: '文件公告', path: 'wjgg.htm'),
+    BulletinCategory(name: '学术报告', path: 'xsbg.htm'),
+    BulletinCategory(name: '招标信息', path: 'zbxx.htm'),
+    BulletinCategory(name: '会议通知', path: 'hytz2.htm'),
+    BulletinCategory(name: '党政事务', path: 'dzsw.htm'),
+    BulletinCategory(name: '组织人事', path: 'zzrs.htm'),
+    BulletinCategory(name: '科研信息', path: 'kyxx.htm'),
+    BulletinCategory(name: '招生就业', path: 'zsjy.htm'),
+    BulletinCategory(name: '教学考试', path: 'jxks.htm'),
+    BulletinCategory(name: '创新创业', path: 'cxcy.htm'),
+    BulletinCategory(name: '学术研讨', path: 'xsyt.htm'),
+    BulletinCategory(name: '专题讲座', path: 'ztjz.htm'),
+    BulletinCategory(name: '校园活动', path: 'xyhd.htm'),
+    BulletinCategory(name: '学院动态', path: 'xydt.htm'),
+    BulletinCategory(name: '其他', path: 'qt.htm'),
   ];
 }
 
 /// 一条公告及端侧生成的主题标签。
-class Announcement {
+class Bulletin {
   /// 创建一条公告记录。
-  const Announcement({
+  const Bulletin({
     required this.id,
     required this.title,
     required this.url,
@@ -107,17 +107,17 @@ class Announcement {
   final List<String> actions;
   final int taggerVersion;
 
-  List<AnnouncementTopic> get topics => [
+  List<BulletinTopic> get topics => [
     for (final entry in topicScores.entries)
-      if (entry.value >= 2) ?AnnouncementTopicLabel.fromId(entry.key),
+      if (entry.value >= 2) ?BulletinTopicLabel.fromId(entry.key),
   ];
 
   /// 根据新的主题分数或行为标签创建副本。
-  Announcement copyWith({
+  Bulletin copyWith({
     Map<String, int>? topicScores,
     List<String>? actions,
     int? taggerVersion,
-  }) => Announcement(
+  }) => Bulletin(
     id: id,
     title: title,
     url: url,
@@ -130,7 +130,7 @@ class Announcement {
   );
 
   /// 从本地 JSON 记录恢复公告。
-  factory Announcement.fromJson(Map<String, dynamic> json) {
+  factory Bulletin.fromJson(Map<String, dynamic> json) {
     final scores = json['topicScores'];
     final topics = json['topics'];
     final parsedScores = <String, int>{};
@@ -145,7 +145,7 @@ class Announcement {
         parsedScores[id] = 4;
       }
     }
-    return Announcement(
+    return Bulletin(
       id: (json['id'] ?? '').toString(),
       title: (json['title'] ?? '').toString(),
       url: (json['url'] ?? '').toString(),
@@ -173,7 +173,7 @@ class Announcement {
 }
 
 /// 公告正文中可渲染的内容块类型。
-enum AnnouncementDetailBlockKind {
+enum BulletinDetailBlockKind {
   heading,
   paragraph,
   bulletList,
@@ -184,9 +184,9 @@ enum AnnouncementDetailBlockKind {
 }
 
 /// 公告正文中的一个排版块。
-class AnnouncementDetailBlock {
+class BulletinDetailBlock {
   /// 创建一个正文排版块。
-  const AnnouncementDetailBlock({
+  const BulletinDetailBlock({
     required this.kind,
     this.text = '',
     this.items = const [],
@@ -196,7 +196,7 @@ class AnnouncementDetailBlock {
     this.centered = false,
   });
 
-  final AnnouncementDetailBlockKind kind;
+  final BulletinDetailBlockKind kind;
   final String text;
   final List<String> items;
   final String? url;
@@ -206,53 +206,53 @@ class AnnouncementDetailBlock {
 }
 
 /// 公告正文中的附件下载项。
-class AnnouncementAttachment {
+class BulletinAttachment {
   /// 创建一个附件下载项。
-  const AnnouncementAttachment({required this.name, required this.url});
+  const BulletinAttachment({required this.name, required this.url});
 
   final String name;
   final String url;
 }
 
 /// 从公告 HTML 页面提取出的原生阅读内容。
-class AnnouncementDetailDocument {
+class BulletinDetailDocument {
   /// 创建一份公告正文文档。
-  const AnnouncementDetailDocument({
+  const BulletinDetailDocument({
     required this.blocks,
     required this.attachments,
   });
 
-  final List<AnnouncementDetailBlock> blocks;
-  final List<AnnouncementAttachment> attachments;
+  final List<BulletinDetailBlock> blocks;
+  final List<BulletinAttachment> attachments;
 
   /// 判断文档是否没有可展示内容。
   bool get isEmpty => blocks.isEmpty && attachments.isEmpty;
 }
 
 /// 某个公告列表页及其分页信息。
-class AnnouncementListPage {
+class BulletinListPage {
   /// 创建一页公告列表。
-  const AnnouncementListPage({
+  const BulletinListPage({
     required this.items,
     required this.pageNumber,
     this.nextUrl,
     this.totalCount,
   });
 
-  final List<Announcement> items;
+  final List<Bulletin> items;
   final int pageNumber;
   final String? nextUrl;
   final int? totalCount;
 
   /// 从本地 JSON 记录恢复公告列表页。
-  factory AnnouncementListPage.fromJson(Map<String, dynamic> json) {
+  factory BulletinListPage.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'];
     final rawCount = json['totalCount'];
-    return AnnouncementListPage(
+    return BulletinListPage(
       items: [
         if (rawItems is List)
           for (final item in rawItems)
-            if (item is Map<String, dynamic>) Announcement.fromJson(item),
+            if (item is Map<String, dynamic>) Bulletin.fromJson(item),
       ],
       pageNumber: (json['pageNumber'] as num?)?.toInt() ?? 1,
       nextUrl: json['nextUrl']?.toString(),
@@ -270,29 +270,26 @@ class AnnouncementListPage {
 }
 
 /// 用户的公告订阅开关与主题选择。
-class AnnouncementSubscription {
+class BulletinSubscription {
   /// 创建订阅设置；默认关闭且不选择主题。
-  const AnnouncementSubscription({
-    this.enabled = false,
-    this.topics = const {},
-  });
+  const BulletinSubscription({this.enabled = false, this.topics = const {}});
 
   final bool enabled;
-  final Set<AnnouncementTopic> topics;
+  final Set<BulletinTopic> topics;
 
   /// 判断公告是否符合已开启的订阅设置。
-  bool matches(Announcement announcement) =>
-      enabled && announcement.topics.any(topics.contains);
+  bool matches(Bulletin bulletin) =>
+      enabled && bulletin.topics.any(topics.contains);
 
   /// 从本地 JSON 记录恢复订阅设置。
-  factory AnnouncementSubscription.fromJson(Map<String, dynamic>? json) {
+  factory BulletinSubscription.fromJson(Map<String, dynamic>? json) {
     final rawTopics = json?['topics'];
-    return AnnouncementSubscription(
+    return BulletinSubscription(
       enabled: json?['enabled'] == true,
       topics: {
         if (rawTopics is List)
           for (final id in rawTopics.whereType<String>())
-            ?AnnouncementTopicLabel.fromId(id),
+            ?BulletinTopicLabel.fromId(id),
       },
     );
   }
@@ -305,30 +302,30 @@ class AnnouncementSubscription {
 }
 
 /// 公告模块需要持久化的缓存、订阅和首页动态。
-class AnnouncementLocalData {
+class BulletinLocalData {
   /// 创建一份公告模块的本地数据快照。
-  const AnnouncementLocalData({
-    this.subscription = const AnnouncementSubscription(),
+  const BulletinLocalData({
+    this.subscription = const BulletinSubscription(),
     this.pages = const {},
     this.feed = const [],
     this.knownIds = const {},
     this.baselineReady = false,
   });
 
-  final AnnouncementSubscription subscription;
-  final Map<String, AnnouncementListPage> pages;
-  final List<Announcement> feed;
+  final BulletinSubscription subscription;
+  final Map<String, BulletinListPage> pages;
+  final List<Bulletin> feed;
   final Set<String> knownIds;
   final bool baselineReady;
 
   /// 从本地 JSON 记录恢复公告模块数据。
-  factory AnnouncementLocalData.fromJson(Map<String, dynamic>? json) {
+  factory BulletinLocalData.fromJson(Map<String, dynamic>? json) {
     final rawPages = json?['pages'];
-    final pages = <String, AnnouncementListPage>{};
+    final pages = <String, BulletinListPage>{};
     if (rawPages is Map) {
       for (final entry in rawPages.entries) {
         if (entry.value is Map<String, dynamic>) {
-          pages[entry.key.toString()] = AnnouncementListPage.fromJson(
+          pages[entry.key.toString()] = BulletinListPage.fromJson(
             entry.value as Map<String, dynamic>,
           );
         }
@@ -337,15 +334,15 @@ class AnnouncementLocalData {
     final rawFeed = json?['feed'];
     final rawKnownIds = json?['knownIds'];
     final rawSubscription = json?['subscription'];
-    return AnnouncementLocalData(
-      subscription: AnnouncementSubscription.fromJson(
+    return BulletinLocalData(
+      subscription: BulletinSubscription.fromJson(
         rawSubscription is Map<String, dynamic> ? rawSubscription : null,
       ),
       pages: pages,
       feed: [
         if (rawFeed is List)
           for (final item in rawFeed)
-            if (item is Map<String, dynamic>) Announcement.fromJson(item),
+            if (item is Map<String, dynamic>) Bulletin.fromJson(item),
       ],
       knownIds: {if (rawKnownIds is List) ...rawKnownIds.whereType<String>()},
       baselineReady: json?['baselineReady'] == true,

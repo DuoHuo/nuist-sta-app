@@ -4,22 +4,25 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/colors.dart';
-import 'announcement_controller.dart';
-import 'announcement_detail_page.dart';
-import 'announcement_models.dart';
+import 'bulletin_controller.dart';
+import 'bulletin_detail_page.dart';
+import 'bulletin_models.dart';
 
 /// 首页展示用户订阅主题命中的最新公告。
-class AnnouncementHomeCard extends StatefulWidget {
+class BulletinHomeCard extends StatefulWidget {
   /// 创建展示订阅动态的首页卡片。
-  const AnnouncementHomeCard({super.key});
+  const BulletinHomeCard({super.key, this.controller});
+
+  /// 可注入独立状态；默认与公告阅读页共用状态。
+  final BulletinController? controller;
 
   @override
-  State<AnnouncementHomeCard> createState() => _AnnouncementHomeCardState();
+  State<BulletinHomeCard> createState() => _BulletinHomeCardState();
 }
 
-class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
+class _BulletinHomeCardState extends State<BulletinHomeCard>
     with WidgetsBindingObserver {
-  final _controller = AnnouncementController.instance;
+  late final _controller = widget.controller ?? BulletinController.instance;
   Timer? _refreshTimer;
   bool _isForeground = true;
 
@@ -62,6 +65,7 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
       builder: (context, _) {
         final enabled = controller.subscription.enabled;
         final feed = controller.feed.take(2).toList();
+        final hideFeed = enabled && controller.feedUnavailable;
         return Container(
           decoration: BoxDecoration(
             color: palette.surface,
@@ -70,7 +74,7 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
           child: Column(
             children: [
               InkWell(
-                onTap: () => context.push('/apps/announcement'),
+                onTap: () => context.push('/apps/bulletin'),
                 borderRadius: BorderRadius.circular(14),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 13, 12, 10),
@@ -97,7 +101,7 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
                           height: 14,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      else if (enabled)
+                      else if (enabled && !hideFeed)
                         Text(
                           '${controller.feed.length} 条动态',
                           style: TextStyle(color: palette.hint, fontSize: 11),
@@ -112,7 +116,9 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
                   ),
                 ),
               ),
-              if (feed.isEmpty)
+              if (!hideFeed &&
+                  feed.isEmpty &&
+                  (!enabled || !controller.feedLoading))
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
                   child: Row(
@@ -127,9 +133,7 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
                       const SizedBox(width: 7),
                       Expanded(
                         child: Text(
-                          enabled
-                              ? controller.feedError ?? '暂时没有匹配的新公告'
-                              : '开启主题订阅，感兴趣的新公告会显示在这里',
+                          enabled ? '暂时没有匹配的新公告' : '开启主题订阅，感兴趣的新公告会显示在这里',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(color: palette.hint, fontSize: 12),
@@ -138,9 +142,9 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
                     ],
                   ),
                 )
-              else
-                for (final announcement in feed)
-                  _HomeAnnouncementRow(announcement: announcement),
+              else if (!hideFeed)
+                for (final bulletin in feed)
+                  _HomeBulletinRow(bulletin: bulletin),
             ],
           ),
         );
@@ -149,20 +153,20 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
   }
 }
 
-class _HomeAnnouncementRow extends StatelessWidget {
-  const _HomeAnnouncementRow({required this.announcement});
+class _HomeBulletinRow extends StatelessWidget {
+  const _HomeBulletinRow({required this.bulletin});
 
-  final Announcement announcement;
+  final Bulletin bulletin;
 
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
-    final topics = announcement.topics;
+    final topics = bulletin.topics;
     final topic = topics.isEmpty ? null : topics.first;
     return InkWell(
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => AnnouncementDetailPage(announcement: announcement),
+          builder: (_) => BulletinDetailPage(bulletin: bulletin),
         ),
       ),
       child: Padding(
@@ -183,7 +187,7 @@ class _HomeAnnouncementRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    announcement.title,
+                    bulletin.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -196,7 +200,7 @@ class _HomeAnnouncementRow extends StatelessWidget {
                   Text(
                     [
                       if (topic != null) topic.label,
-                      announcement.publishedAt,
+                      bulletin.publishedAt,
                     ].join(' · '),
                     style: TextStyle(color: palette.hint, fontSize: 10),
                   ),
