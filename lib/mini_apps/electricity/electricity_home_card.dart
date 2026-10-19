@@ -26,6 +26,8 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    final elec = ElecColors.of(palette);
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
@@ -40,12 +42,12 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
         final VoidCallback onTap;
         if (!c.portalBound) {
           centerText = '请先绑定统一门户';
-          centerColor = AppColors.hint;
+          centerColor = palette.hint;
           footer = '去绑定';
           onTap = () => context.push('/portal-bind');
         } else if (room == null) {
           centerText = '尚未绑定宿舍';
-          centerColor = AppColors.hint;
+          centerColor = palette.hint;
           footer = '点击设置';
           // 与首页宫格一致用 push：go 会把小程序页替换成栈底，
           // 导致顶栏无返回按钮、系统返回键也退不回首页。
@@ -53,10 +55,10 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
         } else {
           centerText = latest == null ? '--' : formatKwh(latest.kwh);
           centerColor = c.isOverdue
-              ? ElecColors.danger
+              ? elec.danger
               : c.isLow
-              ? ElecColors.warning
-              : AppColors.titleText;
+              ? elec.warning
+              : palette.titleText;
           footer = room.displayName;
           onTap = () => context.push('/apps/electricity');
         }
@@ -69,7 +71,7 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
             height: 132,
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: palette.surface,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
@@ -77,14 +79,14 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.bolt, size: 18, color: ElecColors.warning),
+                    Icon(Icons.bolt, size: 18, color: elec.warning),
                     const SizedBox(width: 4),
-                    const Text(
+                    Text(
                       '宿舍电费',
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.titleText,
+                        color: palette.titleText,
                       ),
                     ),
                     const Spacer(),
@@ -99,7 +101,7 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
                           fontSize: 11,
                           color: error != null
                               ? Theme.of(context).colorScheme.error
-                              : AppColors.hint,
+                              : palette.hint,
                         ),
                       ),
                       _RefreshButton(loading: c.loading, onPressed: c.refresh),
@@ -125,11 +127,11 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
                                 ),
                               ),
                               const SizedBox(width: 4),
-                              const Text(
+                              Text(
                                 '度',
                                 style: TextStyle(
                                   fontSize: 14,
-                                  color: AppColors.labelText,
+                                  color: palette.labelText,
                                 ),
                               ),
                             ],
@@ -146,13 +148,13 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
                       child: Text(
                         footer,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
-                          color: AppColors.labelText,
+                          color: palette.labelText,
                         ),
                       ),
                     ),
-                    const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+                    Icon(Icons.chevron_right, color: palette.chevron),
                   ],
                 ),
               ],
@@ -187,7 +189,7 @@ class _RefreshButton extends StatelessWidget {
           : IconButton(
               padding: EdgeInsets.zero,
               iconSize: 18,
-              color: AppColors.accent,
+              color: AppPalette.of(context).accent,
               icon: const Icon(Icons.refresh),
               onPressed: onPressed,
             ),

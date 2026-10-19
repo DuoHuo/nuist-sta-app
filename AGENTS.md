@@ -108,7 +108,7 @@ fix(electricity): 修复只有一条记录时折线图不显示
 - Store 的读写必须 `try/catch`，失败时退化成"没有存储"（widget 测试没有平台通道）。
 - 进入小程序用 `context.push('/apps/<id>')`，禁止用 `go`。
 - 门户接口一律走 `PortalSession`，不要自己实现登录；区分 `PortalNetworkError` / `PortalCredentialError` / `PortalLoginError`；`request` 的回调可能执行两次，不能放有副作用的逻辑。
-- 品牌色用 `AppColors`；`colorScheme.primary` 是 M3 默认紫，不是品牌色。
+- 配色一律用 `AppPalette.of(context)`，它随系统明暗返回对应色值；`AppColors` / `AppColorsDark` 只用于构造主题。深色模式跟随系统，App 内没有手动开关，取色时禁止假定浅色。
 - 注释和文档用中文，公开的类和方法应当写 `///` 文档注释；`lib/` 内部用相对路径 import。
 - 校内主机名一律从 `lib/core/config/campus_config.dart` 的 `CampusHosts` 派生；只模板化 host，路径、大小写、尾斜杠保持服务端原样（CAS 精确匹配 service）。
 - 日志只在 debug 构建输出，禁止打印 Cookie、ticket、私钥、学号等敏感值。

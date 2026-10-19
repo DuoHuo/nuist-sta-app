@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/colors.dart';
 import 'timetable_schedule_home_row.dart';
 import 'timetable_controller.dart';
 import 'timetable_schedule_event.dart';
@@ -110,6 +109,7 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
+        final colors = TimetableTheme.colorsOf(context);
         final now = widget.now?.call() ?? DateTime.now();
         // 今天的真实教学周（未钳制）；开学前（<1）不显示周次。
         final week = _controller.actualWeek(now);
@@ -238,7 +238,7 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
         }
 
         return Material(
-          color: Colors.white,
+          color: colors.surface,
           borderRadius: BorderRadius.circular(TimetableTheme.cardRadius),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(
@@ -259,9 +259,7 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(
                       '缓存于 ${_formatTime(_controller.syncedAt!)}',
-                      style: TimetableTheme.microStyle(
-                        color: TimetableTheme.warning,
-                      ),
+                      style: TimetableTheme.microStyle(color: colors.warning),
                     ),
                   ),
               ],
@@ -291,11 +289,15 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
   }
 
   /// 剩余全是课程时沿用「还有 N 节课」；混有日程时「还有 N 项」。
-  Widget _moreLine(int n, {bool courses = true}) => Padding(
-    padding: const EdgeInsets.only(top: 4),
-    child: Text(
-      courses ? '还有 $n 节课' : '还有 $n 项',
-      style: TimetableTheme.microStyle(color: TimetableTheme.accent),
+  Widget _moreLine(int n, {bool courses = true}) => Builder(
+    builder: (context) => Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Text(
+        courses ? '还有 $n 节课' : '还有 $n 项',
+        style: TimetableTheme.microStyle(
+          color: TimetableTheme.colorsOf(context).accent,
+        ),
+      ),
     ),
   );
 
@@ -315,12 +317,17 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
         text = null;
     }
     if (text == null || text.isEmpty) return null;
-    return Padding(
-      key: const Key('home_tomorrow_note'),
-      padding: const EdgeInsets.only(top: 4),
-      child: Text(
-        text,
-        style: TimetableTheme.microStyle(color: AppColors.labelText),
+    final label = text;
+    return Builder(
+      builder: (context) => Padding(
+        key: const Key('home_tomorrow_note'),
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(
+          label,
+          style: TimetableTheme.microStyle(
+            color: TimetableTheme.colorsOf(context).labelText,
+          ),
+        ),
       ),
     );
   }
@@ -344,16 +351,13 @@ class _CardHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Row(
         children: [
-          const Icon(
-            Icons.calendar_today_outlined,
-            size: 18,
-            color: TimetableTheme.accent,
-          ),
+          Icon(Icons.calendar_today_outlined, size: 18, color: colors.accent),
           const SizedBox(width: 6),
           // 标题始终完整显示；副标题放不下时整体换到标题下一行（不挤占标题）。
           Expanded(
@@ -365,22 +369,22 @@ class _CardHeader extends StatelessWidget {
                 Text(
                   title,
                   key: const Key('home_card_title'),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.titleText,
+                    color: colors.titleText,
                   ),
                 ),
                 Text(
                   subtitle,
                   key: const Key('home_card_subtitle'),
-                  style: TimetableTheme.microStyle(),
+                  style: TimetableTheme.microStyle(color: colors.hint),
                 ),
               ],
             ),
           ),
           const SizedBox(width: 4),
-          const Icon(Icons.chevron_right, color: AppColors.hint, size: 20),
+          Icon(Icons.chevron_right, color: colors.chevron, size: 20),
         ],
       ),
     );
@@ -402,12 +406,13 @@ class _StatusLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
     return Row(
       children: [
         Expanded(
           child: Text(
             text,
-            style: TimetableTheme.bodyStyle(color: AppColors.hint),
+            style: TimetableTheme.bodyStyle(color: colors.hint),
           ),
         ),
         if (actionLabel != null && onAction != null)
@@ -415,7 +420,7 @@ class _StatusLine extends StatelessWidget {
             key: actionKey,
             onPressed: onAction,
             style: TextButton.styleFrom(
-              foregroundColor: TimetableTheme.accent,
+              foregroundColor: colors.accent,
               padding: EdgeInsets.zero,
               minimumSize: const Size(0, 32),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -435,13 +440,14 @@ class _CourseRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 4dp 色条在白底上用该色号文字色（A 柔和底色太浅，白底上看不出）。
+    final colors = TimetableTheme.colorsOf(context);
+    // 4dp 色条在卡片面色上用该色号文字色（A 柔和底色太浅，卡片底上看不出）。
     final color = TimetableTheme.courseTextColor(
       courseColorIndex(TimetableController.instance, item.course),
       scheme: coursePaletteSchemeFor(TimetableController.instance),
     );
     final done = item.status == TodayCourseStatus.done;
-    final fg = done ? AppColors.hint : AppColors.titleText;
+    final fg = done ? colors.hint : colors.titleText;
     final start = item.slot.startNode;
     final end = item.slot.endNode;
     final timeHint = '第$start${start == end ? '' : '–$end'}节';
@@ -460,7 +466,7 @@ class _CourseRow extends StatelessWidget {
                 width: 4,
                 margin: const EdgeInsets.symmetric(vertical: 4),
                 decoration: BoxDecoration(
-                  color: done ? AppColors.divider : color,
+                  color: done ? colors.divider : color,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -489,7 +495,7 @@ class _CourseRow extends StatelessWidget {
                           timeHint,
                         ].join(' · '),
                         style: TimetableTheme.microStyle(
-                          color: done ? AppColors.hint : AppColors.labelText,
+                          color: done ? colors.hint : colors.labelText,
                         ),
                       ),
                       if (item.status == TodayCourseStatus.ongoing) ...[
@@ -502,11 +508,12 @@ class _CourseRow extends StatelessWidget {
                                 vertical: 1,
                               ),
                               decoration: BoxDecoration(
-                                color: TimetableTheme.accent,
+                                color: colors.accent,
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Text(
                                 '上课中',
+                                // accent 实心胶囊上的白字，明暗都不变。
                                 style: TimetableTheme.microStyle(
                                   color: Colors.white,
                                 ),
@@ -519,8 +526,8 @@ class _CourseRow extends StatelessWidget {
                                 child: LinearProgressIndicator(
                                   value: item.progress ?? 0,
                                   minHeight: 3,
-                                  backgroundColor: AppColors.divider,
-                                  color: TimetableTheme.accent,
+                                  backgroundColor: colors.divider,
+                                  color: colors.accent,
                                 ),
                               ),
                             ),
@@ -535,7 +542,7 @@ class _CourseRow extends StatelessWidget {
                             formatClassCountdown(item.minutesUntilStart!),
                             key: const Key('home_course_countdown'),
                             style: TimetableTheme.microStyle(
-                              color: TimetableTheme.accent,
+                              color: colors.accent,
                             ),
                           ),
                         ),

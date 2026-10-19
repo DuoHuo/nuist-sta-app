@@ -36,6 +36,7 @@ class _StudentInfoCardState extends State<StudentInfoCard> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
@@ -65,7 +66,7 @@ class _StudentInfoCardState extends State<StudentInfoCard> {
         return Container(
           padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: palette.surface,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
@@ -76,18 +77,18 @@ class _StudentInfoCardState extends State<StudentInfoCard> {
                   if (StudentInfoCard.showIdentity && info != null)
                     Expanded(child: _Identity(user: info.user))
                   else ...[
-                    const Icon(
+                    Icon(
                       Icons.calendar_today_outlined,
                       size: 18,
-                      color: AppColors.accent,
+                      color: palette.accent,
                     ),
                     const SizedBox(width: 4),
-                    const Text(
+                    Text(
                       '本学期',
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.titleText,
+                        color: palette.titleText,
                       ),
                     ),
                     const Spacer(),
@@ -97,10 +98,7 @@ class _StudentInfoCardState extends State<StudentInfoCard> {
                     // 三张卡一致。
                     Text(
                       info == null ? '' : formatShortTime(info.fetchedAt),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.hint,
-                      ),
+                      style: TextStyle(fontSize: 11, color: palette.hint),
                     ),
                     _RefreshButton(loading: c.loading, onPressed: c.refresh),
                   ] else
@@ -125,12 +123,14 @@ class _Identity extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final org = user.orgLine;
     return Row(
       children: [
         CircleAvatar(
           radius: 20,
-          backgroundColor: AppColors.accent,
+          backgroundColor: palette.accent,
+          // 头像首字压在强调色圆底上，固定用白字。
           child: Text(
             user.initial,
             style: const TextStyle(
@@ -153,10 +153,10 @@ class _Identity extends StatelessWidget {
                     child: Text(
                       user.name.isEmpty ? '--' : user.name,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.titleText,
+                        color: palette.titleText,
                       ),
                     ),
                   ),
@@ -164,10 +164,7 @@ class _Identity extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text(
                       user.studentId,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.labelText,
-                      ),
+                      style: TextStyle(fontSize: 12, color: palette.labelText),
                     ),
                   ],
                 ],
@@ -176,10 +173,7 @@ class _Identity extends StatelessWidget {
               Text(
                 org.isEmpty ? '--' : org,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppColors.labelText,
-                ),
+                style: TextStyle(fontSize: 12, color: palette.labelText),
               ),
             ],
           ),
@@ -200,6 +194,7 @@ class _SemesterSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final s = semester;
     final now = DateTime.now();
 
@@ -207,16 +202,16 @@ class _SemesterSection extends StatelessWidget {
     final Color phaseColor;
     if (s == null) {
       phase = '';
-      phaseColor = AppColors.hint;
+      phaseColor = palette.hint;
     } else if (s.isBeforeStart(now)) {
       phase = '未开学';
-      phaseColor = AppColors.hint;
+      phaseColor = palette.hint;
     } else if (s.isEnded(now)) {
       phase = '假期中';
-      phaseColor = AppColors.hint;
+      phaseColor = palette.hint;
     } else {
       phase = '第 ${s.weekOf(now)} 周';
-      phaseColor = AppColors.accent;
+      phaseColor = palette.accent;
     }
 
     return Column(
@@ -224,23 +219,23 @@ class _SemesterSection extends StatelessWidget {
       children: [
         if (divided) ...[
           const SizedBox(height: 12),
-          const Divider(height: 1, color: AppColors.rowDivider),
+          Divider(height: 1, color: palette.rowDivider),
         ],
         const SizedBox(height: 10),
         if (s == null)
-          const Text(
+          Text(
             '暂无当前学期的校历信息',
-            style: TextStyle(fontSize: 12, color: AppColors.hint),
+            style: TextStyle(fontSize: 12, color: palette.hint),
           )
         else ...[
           Row(
             children: [
               Text(
                 s.label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
-                  color: AppColors.titleText,
+                  color: palette.titleText,
                 ),
               ),
               const SizedBox(width: 8),
@@ -249,7 +244,7 @@ class _SemesterSection extends StatelessWidget {
               if (s.maxWeeks > 0)
                 Text(
                   '共 ${s.maxWeeks} 周',
-                  style: const TextStyle(fontSize: 11, color: AppColors.hint),
+                  style: TextStyle(fontSize: 11, color: palette.hint),
                 ),
             ],
           ),
@@ -259,8 +254,8 @@ class _SemesterSection extends StatelessWidget {
             child: LinearProgressIndicator(
               value: s.isEnded(now) ? 1 : s.progressAt(now),
               minHeight: 5,
-              backgroundColor: AppColors.rowDivider,
-              color: AppColors.accent,
+              backgroundColor: palette.rowDivider,
+              color: palette.accent,
             ),
           ),
           const SizedBox(height: 5),
@@ -268,12 +263,12 @@ class _SemesterSection extends StatelessWidget {
             children: [
               Text(
                 '${formatMonthDay(s.start)} 开学',
-                style: const TextStyle(fontSize: 10, color: AppColors.hint),
+                style: TextStyle(fontSize: 10, color: palette.hint),
               ),
               const Spacer(),
               Text(
                 '${formatMonthDay(s.end)} 结束',
-                style: const TextStyle(fontSize: 10, color: AppColors.hint),
+                style: TextStyle(fontSize: 10, color: palette.hint),
               ),
             ],
           ),
@@ -324,6 +319,7 @@ class _Placeholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: Row(
@@ -335,7 +331,7 @@ class _Placeholder extends StatelessWidget {
                 fontSize: 14,
                 color: isError
                     ? Theme.of(context).colorScheme.error
-                    : AppColors.hint,
+                    : palette.hint,
               ),
             ),
           ),
@@ -364,6 +360,7 @@ class _RefreshButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return SizedBox(
       width: 32,
       height: 32,
@@ -378,7 +375,7 @@ class _RefreshButton extends StatelessWidget {
           : IconButton(
               padding: EdgeInsets.zero,
               iconSize: 18,
-              color: AppColors.accent,
+              color: palette.accent,
               icon: const Icon(Icons.refresh),
               onPressed: onPressed,
             ),

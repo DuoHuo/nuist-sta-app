@@ -9,7 +9,7 @@ import 'free_classroom_widgets.dart';
 Future<T?> _present<T>(BuildContext context, WidgetBuilder builder) {
   return showModalBottomSheet<T>(
     context: context,
-    backgroundColor: Colors.white,
+    backgroundColor: AppPalette.of(context).surface,
     showDragHandle: true,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -73,6 +73,7 @@ class _BuildingSheet extends StatelessWidget {
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
+        final palette = AppPalette.of(context);
         final list = controller.buildings ?? const <Building>[];
         final current = controller.building;
         return SafeArea(
@@ -96,11 +97,11 @@ class _BuildingSheet extends StatelessWidget {
                 ),
                 const SizedBox(height: 14),
                 if (list.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Text(
                       '暂无教学楼数据',
-                      style: TextStyle(fontSize: 13, color: AppColors.hint),
+                      style: TextStyle(fontSize: 13, color: palette.hint),
                     ),
                   )
                 else
@@ -138,6 +139,7 @@ class _BuildingTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -147,7 +149,7 @@ class _BuildingTile extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected
               ? kClassroomColor.withValues(alpha: 0.12)
-              : AppColors.pageBg,
+              : palette.pageBg,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: selected
@@ -163,7 +165,7 @@ class _BuildingTile extends StatelessWidget {
             style: TextStyle(
               fontSize: 14,
               fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-              color: selected ? kClassroomColor : AppColors.titleText,
+              color: selected ? kClassroomColor : palette.titleText,
             ),
           ),
         ),
@@ -225,6 +227,7 @@ class _OptionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -238,19 +241,16 @@ class _OptionRow extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                  color: selected ? kClassroomColor : AppColors.titleText,
+                  color: selected ? kClassroomColor : palette.titleText,
                 ),
               ),
             ),
-            Text(
-              hint,
-              style: const TextStyle(fontSize: 12, color: AppColors.hint),
-            ),
+            Text(hint, style: TextStyle(fontSize: 12, color: palette.hint)),
             const SizedBox(width: 10),
             Icon(
               selected ? Icons.check_circle : Icons.circle_outlined,
               size: 18,
-              color: selected ? kClassroomColor : const Color(0xFFC9CDD4),
+              color: selected ? kClassroomColor : palette.chevron,
             ),
           ],
         ),
@@ -276,6 +276,7 @@ class _RoomDetailSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final cal = day.calendar;
     final meta = [
       if (room.type.isNotEmpty) room.type,
@@ -296,10 +297,10 @@ class _RoomDetailSheet extends StatelessWidget {
               children: [
                 Text(
                   room.name,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w700,
-                    color: AppColors.titleText,
+                    color: palette.titleText,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -307,10 +308,7 @@ class _RoomDetailSheet extends StatelessWidget {
                   child: Text(
                     meta,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: AppColors.labelText,
-                    ),
+                    style: TextStyle(fontSize: 13, color: palette.labelText),
                   ),
                 ),
               ],
@@ -319,10 +317,10 @@ class _RoomDetailSheet extends StatelessWidget {
             Text(
               '${day.building.name} · ${day.date.month}月${day.date.day}日 '
               '${cal.weekdayName} · 第${cal.week}周',
-              style: const TextStyle(fontSize: 12, color: AppColors.hint),
+              style: TextStyle(fontSize: 12, color: palette.hint),
             ),
             const SizedBox(height: 12),
-            const Divider(height: 1, color: AppColors.rowDivider),
+            Divider(height: 1, color: palette.rowDivider),
             for (var i = 0; i < groups.length; i++)
               _GroupDetailRow(
                 group: groups[i],
@@ -352,6 +350,7 @@ class _GroupDetailRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Opacity(
       opacity: over ? 0.45 : 1,
       child: Padding(
@@ -365,16 +364,16 @@ class _GroupDetailRow extends StatelessWidget {
                 children: [
                   Text(
                     '${group.label} 节',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.titleText,
+                      color: palette.titleText,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     group.timeRange,
-                    style: const TextStyle(fontSize: 11, color: AppColors.hint),
+                    style: TextStyle(fontSize: 11, color: palette.hint),
                   ),
                 ],
               ),
@@ -413,6 +412,7 @@ class _PeriodStatusTag extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final free = codes.isEmpty;
     final status = free
         ? '空闲'
@@ -420,16 +420,14 @@ class _PeriodStatusTag extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: free
-            ? AppColors.success.withValues(alpha: 0.1)
-            : AppColors.pageBg,
+        color: free ? palette.success.withValues(alpha: 0.1) : palette.pageBg,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
         '第$period节 $status',
         style: TextStyle(
           fontSize: 12,
-          color: free ? AppColors.success : AppColors.labelText,
+          color: free ? palette.success : palette.labelText,
           fontWeight: free ? FontWeight.w600 : FontWeight.w400,
         ),
       ),
@@ -446,10 +444,10 @@ class _SheetTitle extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
-      style: const TextStyle(
+      style: TextStyle(
         fontSize: 16,
         fontWeight: FontWeight.w600,
-        color: AppColors.titleText,
+        color: AppPalette.of(context).titleText,
       ),
     );
   }

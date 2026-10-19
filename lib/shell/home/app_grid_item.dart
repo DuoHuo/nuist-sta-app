@@ -13,6 +13,7 @@ class AppGridItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
@@ -43,7 +44,7 @@ class AppGridItem extends StatelessWidget {
             app.label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: AppColors.labelText, fontSize: 12),
+            style: TextStyle(color: palette.labelText, fontSize: 12),
           ),
         ],
       ),

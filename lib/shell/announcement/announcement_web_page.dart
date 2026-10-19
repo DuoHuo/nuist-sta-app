@@ -82,6 +82,7 @@ class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final loading = _progress > 0 && _progress < 100;
     return PopScope(
       canPop: false,
@@ -113,17 +114,15 @@ class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
                   child: LinearProgressIndicator(
                     value: _progress / 100,
                     minHeight: 2,
-                    color: AppColors.accent,
+                    color: palette.accent,
                   ),
                 )
               : null,
         ),
+        // 网页内容是学校自己的页面，不做任何注入或反色，只适配容器层。
         body: _error != null
             ? Center(
-                child: Text(
-                  _error!,
-                  style: const TextStyle(color: AppColors.hint),
-                ),
+                child: Text(_error!, style: TextStyle(color: palette.hint)),
               )
             : WebViewWidget(controller: _controller),
       ),

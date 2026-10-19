@@ -27,8 +27,9 @@ class _LaborScorePageState extends State<LaborScorePage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
-      backgroundColor: AppColors.pageBg,
+      backgroundColor: palette.pageBg,
       appBar: AppBar(title: const Text('劳动积分')),
       body: ListenableBuilder(
         listenable: _controller,
@@ -62,6 +63,7 @@ class _StatusHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final c = controller;
     final score = c.score;
     final scheme = Theme.of(context).colorScheme;
@@ -69,7 +71,7 @@ class _StatusHeader extends StatelessWidget {
     if (!c.portalBound) {
       return _IconHeader(
         icon: Icons.link_off,
-        color: AppColors.hint,
+        color: palette.hint,
         title: '未绑定统一门户',
         subtitle: '劳动积分查询需要门户身份，请先到「我的 → 绑定统一门户」完成绑定。',
         onTap: () => context.push('/portal-bind'),
@@ -117,31 +119,31 @@ class _StatusHeader extends StatelessWidget {
                     children: [
                       Text(
                         r == null || r.total.isEmpty ? '--' : r.total,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.titleText,
+                          color: palette.titleText,
                           height: 1.1,
                         ),
                       ),
                       const SizedBox(width: 4),
-                      const Text(
+                      Text(
                         '分',
                         style: TextStyle(
                           fontSize: 13,
-                          color: AppColors.labelText,
+                          color: palette.labelText,
                         ),
                       ),
                       if (r != null) ...[
                         const SizedBox(width: 10),
                         // 「未确认」是常态，不标；只在已确认时给标签。
                         if (r.isConfirmed) ...[
-                          const _Tag(text: '已确认', color: AppColors.success),
+                          _Tag(text: '已确认', color: palette.success),
                           const SizedBox(width: 6),
                         ],
                         _Tag(
                           text: r.isFiled ? '已归档' : '未归档',
-                          color: r.isFiled ? AppColors.success : AppColors.hint,
+                          color: r.isFiled ? palette.success : palette.hint,
                         ),
                       ],
                     ],
@@ -153,17 +155,14 @@ class _StatusHeader extends StatelessWidget {
                         : r.updatedAt.isEmpty
                         ? '官方核算结果'
                         : '核算于 ${r.updatedAt}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: AppColors.labelText,
-                    ),
+                    style: TextStyle(fontSize: 13, color: palette.labelText),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     c.error ?? '更新于 ${formatFullTime(score.fetchedAt)}',
                     style: TextStyle(
                       fontSize: 11,
-                      color: c.error != null ? scheme.error : AppColors.hint,
+                      color: c.error != null ? scheme.error : palette.hint,
                       height: 1.4,
                     ),
                   ),
@@ -183,7 +182,7 @@ class _StatusHeader extends StatelessWidget {
                     )
                   : IconButton(
                       icon: const Icon(Icons.refresh),
-                      color: AppColors.accent,
+                      color: palette.accent,
                       onPressed: c.refresh,
                     ),
             ),
@@ -254,6 +253,7 @@ class _Section extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -262,19 +262,19 @@ class _Section extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Text(
               title,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
-                color: AppColors.titleText,
+                color: palette.titleText,
               ),
             ),
           ),
           for (var i = 0; i < children.length; i++) ...[
             children[i],
             if (i != children.length - 1)
-              const Padding(
-                padding: EdgeInsets.only(left: 16),
-                child: Divider(height: 1, color: AppColors.rowDivider),
+              Padding(
+                padding: const EdgeInsets.only(left: 16),
+                child: Divider(height: 1, color: palette.rowDivider),
               ),
           ],
           if (footnote != null)
@@ -282,9 +282,9 @@ class _Section extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
               child: Text(
                 footnote!,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
-                  color: AppColors.hint,
+                  color: palette.hint,
                   height: 1.5,
                 ),
               ),
@@ -310,21 +310,19 @@ class _KeyValue extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
       child: Row(
         children: [
-          Text(
-            label,
-            style: const TextStyle(fontSize: 13, color: AppColors.labelText),
-          ),
+          Text(label, style: TextStyle(fontSize: 13, color: palette.labelText)),
           const Spacer(),
           Text(
             value.isEmpty ? '--' : value,
             style: TextStyle(
               fontSize: 15,
               fontWeight: muted ? FontWeight.w400 : FontWeight.w600,
-              color: muted ? AppColors.hint : AppColors.titleText,
+              color: muted ? palette.hint : palette.titleText,
             ),
           ),
         ],
@@ -340,12 +338,10 @@ class _Hint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-      child: Text(
-        text,
-        style: const TextStyle(fontSize: 13, color: AppColors.hint),
-      ),
+      child: Text(text, style: TextStyle(fontSize: 13, color: palette.hint)),
     );
   }
 }
@@ -369,6 +365,7 @@ class _IconHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return _Card(
       child: InkWell(
         onTap: onTap,
@@ -393,10 +390,10 @@ class _IconHeader extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.titleText,
+                        color: palette.titleText,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -406,7 +403,7 @@ class _IconHeader extends StatelessWidget {
                         fontSize: 12,
                         color: isError
                             ? Theme.of(context).colorScheme.error
-                            : AppColors.hint,
+                            : palette.hint,
                         height: 1.5,
                       ),
                     ),
@@ -414,7 +411,7 @@ class _IconHeader extends StatelessWidget {
                 ),
               ),
               if (onTap != null)
-                const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+                Icon(Icons.chevron_right, color: palette.chevron),
             ],
           ),
         ),
@@ -456,9 +453,10 @@ class _Card extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: palette.surface,
         borderRadius: BorderRadius.circular(12),
       ),
       clipBehavior: Clip.antiAlias,

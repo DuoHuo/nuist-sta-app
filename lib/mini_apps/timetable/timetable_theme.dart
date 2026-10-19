@@ -6,9 +6,16 @@ import 'timetable_models.dart';
 
 /// 实时课表 UI Token（对齐 design/timetable-spec.md v0.2）。
 ///
-/// 浅色为 MVP 默认；暗色 token 已备，P1 再切主题。
+/// 颜色分两类：
+/// - 页面 chrome（底色、面色、文字、分隔线、强调色、非本周格）随系统明暗切换，
+///   调用方用 [TimetableTheme.colorsOf] 从 context 取 [TimetableColors]，不要自己写
+///   `isDark ? xxxDark : xxx`。本类里的 `static const` 只是两套基准值，用于构造
+///   [TimetableColors.light] / [TimetableColors.dark]，以及确实需要 `const` 的场景。
+/// - 课程色板（[coursePalettes]、[courseColor]、[courseTextColor]、[blendCellBg]）
+///   是用户在设置里选的固定色板，明暗两套主题取值相同，理由见 [blendCellBg]。
 abstract final class TimetableTheme {
   // ---- 颜色（复用 AppColors + 课表专用 *）----
+  // 每个 token 的浅色值与深色值并列，成对喂给 [TimetableColors]。
   static const Color pageBg = AppColors.pageBg;
   static const Color pageBgDark = Color(0xFF121316);
   static const Color surface = Color(0xFFFFFFFF);
@@ -21,16 +28,37 @@ abstract final class TimetableTheme {
   static const Color hintDark = Color(0xFF8A8F99);
   static const Color divider = AppColors.divider;
   static const Color dividerDark = Color(0xFF2A2C32);
+
+  /// 列表行右侧箭头，与 App 其余列表一致（[AppPalette.chevron]）。
+  static const Color chevron = AppColors.chevron;
+  static const Color chevronDark = AppColorsDark.chevron;
+
+  /// 未选中的筹码（周次 FilterChip）底色：浅色沿用 [AppColors.rowDivider]。
+  static const Color chipBg = AppColors.rowDivider;
+  static const Color chipBgDark = Color(0xFF2A2C31);
   static const Color accent = AppColors.accent;
   static const Color accentDark = Color(0xFF4DA3F5);
   static const Color success = AppColors.success;
+  static const Color successDark = AppColorsDark.success;
   static const Color warning = AppColors.warning;
+  static const Color warningDark = AppColorsDark.warning;
   static const Color danger = AppColors.danger;
+  static const Color dangerDark = AppColorsDark.danger;
 
   /// 今天表头底色：accent @12%。
   static Color get accentSoft => accent.withValues(alpha: 0.12);
 
   static Color get accentSoftDark => accentDark.withValues(alpha: 0.18);
+
+  /// 当前主题的课表 chrome 配色。取不到色板时退化成浅色（同 [AppPalette.of]）。
+  static TimetableColors colorsOf(BuildContext context) =>
+      colorsForBrightness(AppPalette.of(context).brightness);
+
+  /// 按明暗取课表 chrome 配色。
+  static TimetableColors colorsForBrightness(Brightness brightness) =>
+      brightness == Brightness.dark
+      ? TimetableColors.dark
+      : TimetableColors.light;
 
   /// 非本周格（spec §13.8）：白底 + 1px #DADDE3 描边（随圆角）+ #6B7280 字。
   /// 不使用任何配色色值，A/B/C 三套都不会撞色；不透明度设置不作用于它。
@@ -38,9 +66,17 @@ abstract final class TimetableTheme {
   static const Color offWeekBorder = Color(0xFFDADDE3);
   static const double offWeekBorderWidth = 1;
 
+  /// 深色下的非本周格：纯白格子太刺眼，改用比 [surfaceDark] 略亮一档的中性面色，
+  /// 同样不取任何配色色值，A/B/C 三套都不会撞色。
+  static const Color offWeekBgDark = Color(0xFF22242A);
+  static const Color offWeekBorderDark = Color(0xFF3A3D45);
+
   /// 非本周格文字（课名/地点/老师/代码）与「非本周」胶囊的描边和字（§13.8，
   /// 白底对比度约 4.8）。
   static const Color offWeekText = Color(0xFF6B7280);
+
+  /// 深色下的非本周格文字：在 [offWeekBgDark] 上对比度约 6.1，不低于浅色的 4.8。
+  static const Color offWeekTextDark = Color(0xFF9CA3AF);
 
   /// 旧名保留为别名（指向 §13.8 新 token，不再有独立灰色值）。
   static const Color inactiveCellBg = offWeekBg;
@@ -133,6 +169,10 @@ abstract final class TimetableTheme {
 
   /// 底色按不透明度 [opacity]（30–100）往页面底色 [pageBg] 混合（spec §13.4/§13.6），
   /// 结果不透明。文字、角标、冲突圆点不走这里。
+  ///
+  /// 明暗两套主题都往浅色 [pageBg] 混合：课程色板是「浅底 + 深字」，往浅色混只会
+  /// 拉大底色与文字色的对比度（§13.5/§13.7 的对比度表就是这么算的）；若改成往
+  /// 深色底混合，底色会压向文字色，对比度反而掉到 4.5 以下。
   static Color blendCellBg(Color bg, int opacity) {
     final t = (opacity.clamp(30, 100)) / 100.0;
     if (t >= 1) return bg;
@@ -273,6 +313,10 @@ abstract final class TimetableTheme {
   static const int maxNodesPerDay = 20;
   static const int defaultMaxWeeks = 20;
 
+  // ---- 文字样式 ----
+  // [color] 省略时退化成浅色基准值；深色下请显式传
+  // `TimetableTheme.colorsOf(context)` 里的对应色。
+
   static TextStyle displayStyle({Color? color}) => TextStyle(
     fontSize: displaySize,
     fontWeight: displayWeight,
@@ -326,4 +370,121 @@ class CourseColorPair {
 
   final Color bg;
   final Color fg;
+}
+
+/// 课表 chrome（页面底色、表头、文字、分隔线、非本周格）的一套配色。
+///
+/// 用 `TimetableTheme.colorsOf(context)` 取当前主题的那一套，调用方不要再写
+/// `isDark ? xxxDark : xxx`。课程格的配色不在这里（见 [TimetableTheme.courseColor]）。
+@immutable
+class TimetableColors {
+  const TimetableColors({
+    required this.brightness,
+    required this.pageBg,
+    required this.surface,
+    required this.titleText,
+    required this.labelText,
+    required this.hint,
+    required this.divider,
+    required this.chevron,
+    required this.chipBg,
+    required this.accent,
+    required this.accentSoft,
+    required this.offWeekBg,
+    required this.offWeekBorder,
+    required this.offWeekText,
+    required this.warning,
+    required this.danger,
+  });
+
+  /// 这套配色对应的明暗。
+  final Brightness brightness;
+
+  /// 页面底色。
+  final Color pageBg;
+
+  /// 卡片 / 弹层 / 表单的面色。
+  final Color surface;
+
+  /// 主文字。
+  final Color titleText;
+
+  /// 次级文字。
+  final Color labelText;
+
+  /// 占位、辅助说明文字。
+  final Color hint;
+
+  /// 分隔线、描边。
+  final Color divider;
+
+  /// 列表行右侧箭头，比 [hint] 更淡。
+  final Color chevron;
+
+  /// 未选中的筹码（周次 FilterChip）底色。
+  final Color chipBg;
+
+  /// 品牌强调色。
+  final Color accent;
+
+  /// 今天表头底色（[accent] 的低不透明度变体）。
+  final Color accentSoft;
+
+  /// 非本周格底色（§13.8）。
+  final Color offWeekBg;
+
+  /// 非本周格描边（§13.8）。
+  final Color offWeekBorder;
+
+  /// 非本周格文字与「非本周」胶囊（§13.8）。
+  final Color offWeekText;
+
+  /// 语义色：待同步 / 提醒。
+  final Color warning;
+
+  /// 语义色：失败 / 删除。
+  final Color danger;
+
+  /// 是否为深色模式。
+  bool get isDark => brightness == Brightness.dark;
+
+  /// 浅色（设计稿基准）。
+  static final light = TimetableColors(
+    brightness: Brightness.light,
+    pageBg: TimetableTheme.pageBg,
+    surface: TimetableTheme.surface,
+    titleText: TimetableTheme.titleText,
+    labelText: TimetableTheme.labelText,
+    hint: TimetableTheme.hint,
+    divider: TimetableTheme.divider,
+    chevron: TimetableTheme.chevron,
+    chipBg: TimetableTheme.chipBg,
+    accent: TimetableTheme.accent,
+    accentSoft: TimetableTheme.accentSoft,
+    offWeekBg: TimetableTheme.offWeekBg,
+    offWeekBorder: TimetableTheme.offWeekBorder,
+    offWeekText: TimetableTheme.offWeekText,
+    warning: TimetableTheme.warning,
+    danger: TimetableTheme.danger,
+  );
+
+  /// 深色。
+  static final dark = TimetableColors(
+    brightness: Brightness.dark,
+    pageBg: TimetableTheme.pageBgDark,
+    surface: TimetableTheme.surfaceDark,
+    titleText: TimetableTheme.titleTextDark,
+    labelText: TimetableTheme.labelTextDark,
+    hint: TimetableTheme.hintDark,
+    divider: TimetableTheme.dividerDark,
+    chevron: TimetableTheme.chevronDark,
+    chipBg: TimetableTheme.chipBgDark,
+    accent: TimetableTheme.accentDark,
+    accentSoft: TimetableTheme.accentSoftDark,
+    offWeekBg: TimetableTheme.offWeekBgDark,
+    offWeekBorder: TimetableTheme.offWeekBorderDark,
+    offWeekText: TimetableTheme.offWeekTextDark,
+    warning: TimetableTheme.warningDark,
+    danger: TimetableTheme.dangerDark,
+  );
 }

@@ -24,6 +24,7 @@ class PortalStatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final (title, subtitle) = switch (bound) {
       null => ('统一门户', ''),
       true => (
@@ -34,7 +35,7 @@ class PortalStatusCard extends StatelessWidget {
     };
     // Material 画底色并按圆角裁剪，水波纹才看得见且不溢出圆角。
     return Material(
-      color: Colors.white,
+      color: palette.surface,
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -46,7 +47,8 @@ class PortalStatusCard extends StatelessWidget {
             children: [
               CircleAvatar(
                 radius: 28,
-                backgroundColor: AppColors.accent,
+                backgroundColor: palette.accent,
+                // 白色图标贴在 accent 实心圆上，底色不随主题变浅，保持白色。
                 child: Icon(
                   bound == true ? Icons.verified_user : Icons.person,
                   color: Colors.white,
@@ -63,8 +65,8 @@ class PortalStatusCard extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppColors.titleText,
+                      style: TextStyle(
+                        color: palette.titleText,
                         fontSize: 17,
                         fontWeight: FontWeight.w600,
                       ),
@@ -75,16 +77,13 @@ class PortalStatusCard extends StatelessWidget {
                         subtitle,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: AppColors.hint,
-                          fontSize: 12,
-                        ),
+                        style: TextStyle(color: palette.hint, fontSize: 12),
                       ),
                     ],
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+              Icon(Icons.chevron_right, color: palette.chevron),
             ],
           ),
         ),

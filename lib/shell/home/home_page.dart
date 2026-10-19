@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/app_info.dart';
+import '../../core/colors.dart';
 import '../../mini_apps/registry.dart';
 import '../announcement/announcement_overlay.dart';
 import 'app_grid_item.dart';
@@ -13,6 +14,7 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text(kAppName),
@@ -30,7 +32,7 @@ class HomePage extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 14),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: palette.surface,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: GridView.count(

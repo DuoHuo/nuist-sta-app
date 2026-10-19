@@ -95,6 +95,7 @@ class _PortalImportPageState extends State<PortalImportPage> {
   }
 
   Future<bool> _preview(PasskeyBundle bundle, {required bool replacing}) async {
+    final palette = AppPalette.of(context);
     final createdAt = bundle.createdAt;
     final rows = <(String, String)>[
       ('学号', bundle.studentId ?? '未知'),
@@ -121,19 +122,16 @@ class _PortalImportPageState extends State<PortalImportPage> {
                   children: [
                     Text(
                       label,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: AppColors.labelText,
-                      ),
+                      style: TextStyle(fontSize: 14, color: palette.labelText),
                     ),
                     const SizedBox(width: 16),
                     Expanded(
                       child: Text(
                         value,
                         textAlign: TextAlign.right,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
-                          color: AppColors.titleText,
+                          color: palette.titleText,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -143,11 +141,11 @@ class _PortalImportPageState extends State<PortalImportPage> {
               ),
             if (replacing) ...[
               const SizedBox(height: 6),
-              const Text(
+              Text(
                 '本机已有一份通行密钥，导入后会被替换。',
                 style: TextStyle(
                   fontSize: 13,
-                  color: AppColors.hint,
+                  color: palette.hint,
                   height: 1.5,
                 ),
               ),
@@ -187,21 +185,22 @@ class _PortalImportPageState extends State<PortalImportPage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
-      backgroundColor: AppColors.pageBg,
+      backgroundColor: palette.pageBg,
       appBar: AppBar(title: const Text('导入通行密钥')),
       body: Stack(
         children: [
           ListView(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
             children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(4, 0, 4, 12),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
                 child: Text(
                   '在另一台设备的「导出通行密钥」页生成内容后，选择一种方式读入。',
                   style: TextStyle(
                     fontSize: 13,
-                    color: AppColors.labelText,
+                    color: palette.labelText,
                     height: 1.5,
                   ),
                 ),
@@ -236,9 +235,10 @@ class _PortalImportPageState extends State<PortalImportPage> {
             ],
           ),
           if (_busy)
-            const ColoredBox(
-              color: Color(0x66FFFFFF),
-              child: Center(child: CircularProgressIndicator()),
+            ColoredBox(
+              // 半透明遮罩取页面底色：浅色下还是原来的白纱，深色下不会糊成一片白。
+              color: palette.pageBg.withValues(alpha: 0.4),
+              child: const Center(child: CircularProgressIndicator()),
             ),
         ],
       ),
@@ -267,6 +267,7 @@ class _PasteDialogState extends State<_PasteDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return AlertDialog(
       title: const Text('粘贴文本'),
       content: TextField(
@@ -279,7 +280,8 @@ class _PasteDialogState extends State<_PasteDialog> {
           hintText: 'nuistkey1:…',
           isDense: true,
           filled: true,
-          fillColor: AppColors.pageBg,
+          // 与 PinField 一致：输入框用页面底色做凹陷感。
+          fillColor: palette.pageBg,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
             borderSide: BorderSide.none,

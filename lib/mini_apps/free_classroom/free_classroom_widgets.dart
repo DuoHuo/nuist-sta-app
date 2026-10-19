@@ -3,10 +3,31 @@ import 'package:flutter/material.dart';
 import '../../core/colors.dart';
 
 /// 空教室小程序的主色。
+///
+/// 两套主题下都用同一个紫：它既要当实心块的底色（上面压白字），又要当
+/// 12% 透明的淡底与前景文字，提亮会让实心态上的白字对比度掉下来，所以
+/// 这里不随明暗变。
 const kClassroomColor = Color(0xFF722ED1);
 
-/// 白底圆角卡。用 Material 而不是 Container 画底色，内部 InkWell 的水波纹
-/// 才不会被底色盖住。
+/// 空教室小程序里几处「置灰 / 占用」的填充色。
+///
+/// 浅色沿用设计稿的浅灰，深色下浅灰会亮过卡片底色，改成按色板取分隔线级别
+/// 的灰。集中放在这里，调用方只传 [AppPalette]，不必各自判断明暗。
+abstract final class ClassroomFillColors {
+  /// 置灰标签、已过时段格的底色。
+  static Color muted(AppPalette palette) =>
+      palette.isDark ? palette.rowDivider : const Color(0xFFF7F8FA);
+
+  /// 置灰态的前景文字与图标。
+  static Color mutedForeground(AppPalette palette) => palette.chevron;
+
+  /// 「所选时段全被占用」状态格的底色，比 [muted] 再深一档。
+  static Color busy(AppPalette palette) =>
+      palette.isDark ? palette.divider : const Color(0xFFEDEFF2);
+}
+
+/// 圆角卡，底色取当前色板的 surface。用 Material 而不是 Container 画底色，
+/// 内部 InkWell 的水波纹才不会被底色盖住。
 class ClassroomCard extends StatelessWidget {
   const ClassroomCard({super.key, required this.child, this.borderRadius});
 
@@ -16,7 +37,7 @@ class ClassroomCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.white,
+      color: AppPalette.of(context).surface,
       borderRadius: borderRadius ?? BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
       child: child,
@@ -51,17 +72,18 @@ class ClassroomChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final Color bg;
     final Color fg;
     if (selected) {
       bg = kClassroomColor.withValues(alpha: 0.12);
       fg = kClassroomColor;
     } else if (muted) {
-      bg = const Color(0xFFF7F8FA);
-      fg = const Color(0xFFC9CDD4);
+      bg = ClassroomFillColors.muted(palette);
+      fg = ClassroomFillColors.mutedForeground(palette);
     } else {
-      bg = AppColors.pageBg;
-      fg = AppColors.labelText;
+      bg = palette.pageBg;
+      fg = palette.labelText;
     }
     return GestureDetector(
       onTap: onTap,

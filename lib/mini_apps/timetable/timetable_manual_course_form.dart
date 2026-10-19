@@ -213,7 +213,9 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   }
 
   Future<void> _pickColor() async {
-    // MVP 仅浅色色板（暗色为 P1）：不随系统暗色切换。
+    // 课程色板是用户可选的固定色板，明暗两套主题取值相同（见 TimetableTheme 文档）；
+    // 只有标题、选中描边这些 chrome 跟随主题。
+    final colors = TimetableTheme.colorsOf(context);
     final picked = await showModalBottomSheet<int>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -223,7 +225,10 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('选择颜色', style: TimetableTheme.titleStyle()),
+              Text(
+                '选择颜色',
+                style: TimetableTheme.titleStyle(color: colors.titleText),
+              ),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 12,
@@ -245,10 +250,7 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
                           ),
                           shape: BoxShape.circle,
                           border: i == _previewColorIndex
-                              ? Border.all(
-                                  color: TimetableTheme.titleText,
-                                  width: 2,
-                                )
+                              ? Border.all(color: colors.titleText, width: 2)
                               : null,
                         ),
                         child: i == _previewColorIndex
@@ -278,7 +280,7 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   @override
   Widget build(BuildContext context) {
     final nodes = _nodes;
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final colors = TimetableTheme.colorsOf(context);
     // 表单目前只有一个时段卡片：用它构造候选时段，交给 controller 判冲突。
     final candidate = CourseSlot(
       day: _day,
@@ -294,22 +296,22 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     return Theme(
       data: theme.copyWith(
         colorScheme: theme.colorScheme.copyWith(
-          primary: TimetableTheme.accent,
+          primary: colors.accent,
           onPrimary: Colors.white,
         ),
       ),
-      child: _buildScaffold(context, nodes, dark, conflict),
+      child: _buildScaffold(context, nodes, colors, conflict),
     );
   }
 
   Widget _buildScaffold(
     BuildContext context,
     List<int> nodes,
-    bool dark,
+    TimetableColors colors,
     String? conflict,
   ) {
     return Scaffold(
-      backgroundColor: TimetableTheme.surface,
+      backgroundColor: colors.surface,
       appBar: AppBar(
         title: Text(_isEdit ? '编辑课程' : '添加课程'),
         actions: [
@@ -320,7 +322,8 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
                 key: const Key('manual_course_save'),
                 onPressed: _saving ? null : _save,
                 style: FilledButton.styleFrom(
-                  backgroundColor: TimetableTheme.accent,
+                  backgroundColor: colors.accent,
+                  // accent 实心按钮上的白字，明暗都不变。
                   foregroundColor: Colors.white,
                   shape: const StadiumBorder(),
                   minimumSize: const Size(64, 36),
@@ -418,16 +421,16 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
                 child: Text(
                   conflict,
                   key: const Key('manual_course_conflict'),
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: TimetableTheme.warning,
-                  ),
+                  style: TextStyle(fontSize: 12, color: colors.warning),
                 ),
               ),
             const SizedBox(height: 16),
             Row(
               children: [
-                Text('周次', style: TimetableTheme.bodyStyle()),
+                Text(
+                  '周次',
+                  style: TimetableTheme.bodyStyle(color: colors.labelText),
+                ),
                 const Spacer(),
                 TextButton(
                   onPressed: () => _quickPick(0),
@@ -453,15 +456,14 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
                     label: Text('$w'),
                     selected: _weeks.contains(w),
                     showCheckmark: false,
-                    selectedColor: TimetableTheme.accent,
-                    backgroundColor: dark
-                        ? const Color(0xFF2A2C31)
-                        : const Color(0xFFF0F1F3),
+                    selectedColor: colors.accent,
+                    backgroundColor: colors.chipBg,
                     side: BorderSide.none,
                     labelStyle: TextStyle(
+                      // 选中态是 accent 实心底，上面压白字。
                       color: _weeks.contains(w)
                           ? Colors.white
-                          : (dark ? Colors.white70 : TimetableTheme.labelText),
+                          : colors.labelText,
                     ),
                     onSelected: (sel) => setState(() {
                       _weeksError = null;

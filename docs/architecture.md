@@ -133,16 +133,33 @@ UI 侧用 `ListenableBuilder(listenable: controller, builder: …)` 订阅。跨
 ## 主题与色板
 
 - Material 3 **开启**（`useMaterial3: true`）
-- **没有配 `colorScheme` / seed color**，所以 `colorScheme.primary` 是 Flutter 默认 M3 紫，
-  不是品牌色。品牌色只存在于 `AppColors.accent`，UI 里显式引用
-- `AppColors`（`lib/core/colors.dart`）是与设计稿 `design/home.op` 对齐的静态色板：
-  `pageBg` / `titleText` / `labelText` / `hint` / `rowDivider` / `accent` / `tabInactive` /
-  `divider` / `success` / `warning` / `danger`
-- 小程序私有配色就地在自己的目录里定义（如 `kClassroomColor`、`ElecColors`）
-- **没有暗色模式**，没有自定义字体
+- **暗色模式跟随系统**（`themeMode: ThemeMode.system`），App 内不提供手动开关
+- `colorScheme` 由 `ColorScheme.fromSeed` 生成后覆盖 `primary` / `surface` / `error`，
+  所以 `colorScheme.primary` 就是品牌色，不再是 M3 默认紫
+- **取色一律用 `AppPalette.of(context)`**（`lib/core/colors.dart`），它是挂在
+  `ThemeData.extensions` 上的 `ThemeExtension`，随系统明暗返回对应色值：
+  `pageBg` / `surface` / `titleText` / `labelText` / `hint` / `rowDivider` / `accent` /
+  `tabInactive` / `divider` / `chevron` / `success` / `warning` / `danger`，另有
+  `brightness` 与 `isDark`。取不到扩展时退化成浅色，不抛异常
+- `AppColors` / `AppColorsDark` 是浅色、深色两套 `static const` 基准值，
+  **只用于构造主题**，业务代码不要直接引用
+- 小程序私有配色同样按明暗取值：课表用 `TimetableTheme.colorsOf(context)`
+  （返回 `TimetableColors`），电费用 `ElecColors.of(palette)`，空教室用
+  `ClassroomFillColors`
+- 没有自定义字体
 
-主题内联在 `app.dart` 的 `build` 里，没有抽成独立函数 —— 这意味着单独 pump 某个页面时
-拿不到 `scaffoldBackgroundColor`。
+主题在 `lib/core/theme.dart` 里，`appLightTheme()` / `appDarkTheme()` 两个函数，
+测试里可直接复用（见 `test/dark_theme_test.dart`、`test/score_page_test.dart`）。
+
+少数颜色**刻意不跟随主题**，都在代码里写了中文注释说明原因：
+
+- 贴在品牌色实心块上的白字白图标（底色本身不随主题变）
+- 导出页的二维码（必须浅底深码才扫得出）、扫码页（相机取景框固定深色）
+- 电费折线图的 tooltip（固定深底白字）
+- 校园地图：底图 tile 与 `assets/map_layers/*.png` 图例都是浅色素材，
+  深色底图需服务端提供，目前整个小程序维持浅色
+- WebView 承载的网页（H5 小程序、公告详情、门户登录绑定）是学校自己的页面，
+  只适配容器层（顶栏、进度条、加载态、错误页），不注入 CSS / JS 反色
 
 ## 校园 VPN 网络请求
 
@@ -206,8 +223,7 @@ final response = await client.get<String>(
 2. **依赖方向只有部分工具强制**。CI 只检查了 `mini_apps/*` 一侧；`shell/*` 的约定和 `core/` 的准入仍靠 review 把关。
 3. **`_RefreshButton` 在四个卡片文件里各写了一份私有同名类**（`academic` / `student_info` /
    `innovation_credit` / `labor_score`），没有上收到 `core/`。
-4. **主题没有抽成函数**，导致测试里单独渲染页面会丢主题。
-5. **`lib/core/auth/` 没有单元测试**。
+4. **`lib/core/auth/` 没有单元测试**。
 
 ## 测试
 

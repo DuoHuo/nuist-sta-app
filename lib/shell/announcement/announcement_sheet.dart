@@ -4,21 +4,24 @@ import '../../core/colors.dart';
 import 'announcement_models.dart';
 import 'announcement_web_page.dart';
 
-/// 按 [AnnouncementTone] 给出卡片配色，只用 [AppColors]。
+/// 按 [AnnouncementTone] 给出卡片配色，色值一律取自传入的 [AppPalette]，
+/// 跟随系统明暗。
 abstract final class AnnouncementToneColors {
   /// 卡片背景色。
-  static Color background(AnnouncementTone tone) => switch (tone) {
-    AnnouncementTone.normal => Colors.white,
-    AnnouncementTone.notice => AppColors.accent.withValues(alpha: 0.08),
-    AnnouncementTone.alert => AppColors.warning.withValues(alpha: 0.10),
-  };
+  static Color background(AnnouncementTone tone, AppPalette palette) =>
+      switch (tone) {
+        AnnouncementTone.normal => palette.surface,
+        AnnouncementTone.notice => palette.accent.withValues(alpha: 0.08),
+        AnnouncementTone.alert => palette.warning.withValues(alpha: 0.10),
+      };
 
   /// 卡片描边色。
-  static Color border(AnnouncementTone tone) => switch (tone) {
-    AnnouncementTone.normal => AppColors.divider,
-    AnnouncementTone.notice => AppColors.accent.withValues(alpha: 0.35),
-    AnnouncementTone.alert => AppColors.warning.withValues(alpha: 0.45),
-  };
+  static Color border(AnnouncementTone tone, AppPalette palette) =>
+      switch (tone) {
+        AnnouncementTone.normal => palette.divider,
+        AnnouncementTone.notice => palette.accent.withValues(alpha: 0.35),
+        AnnouncementTone.alert => palette.warning.withValues(alpha: 0.45),
+      };
 }
 
 /// 弹出居中的公告对话框（铃铛与自动弹出共用），纵向卡片列表，最高约屏幕 70%。
@@ -29,7 +32,7 @@ Future<void> showAnnouncementDialog(
   return showDialog<void>(
     context: context,
     builder: (ctx) => Dialog(
-      backgroundColor: AppColors.pageBg,
+      backgroundColor: AppPalette.of(ctx).pageBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: AnnouncementListPanel(items: items),
     ),
@@ -52,6 +55,7 @@ class AnnouncementListPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final maxHeight = MediaQuery.sizeOf(context).height * 0.7;
     return ConstrainedBox(
       constraints: BoxConstraints(maxHeight: maxHeight),
@@ -62,29 +66,29 @@ class AnnouncementListPanel extends StatelessWidget {
             padding: EdgeInsets.fromLTRB(16, 8, 4, dismissible ? 0 : 8),
             child: Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
                     '公告',
                     style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.titleText,
+                      color: palette.titleText,
                     ),
                   ),
                 ),
                 if (dismissible)
                   IconButton(
                     tooltip: '关闭',
-                    icon: const Icon(Icons.close, color: AppColors.hint),
+                    icon: Icon(Icons.close, color: palette.hint),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
               ],
             ),
           ),
           if (items.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 32),
-              child: Text('暂无公告', style: TextStyle(color: AppColors.hint)),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 32),
+              child: Text('暂无公告', style: TextStyle(color: palette.hint)),
             )
           else
             Flexible(
@@ -129,13 +133,14 @@ class AnnouncementCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final a = item;
     final link = a.link;
     return Material(
-      color: AnnouncementToneColors.background(a.tone),
+      color: AnnouncementToneColors.background(a.tone, palette),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: AnnouncementToneColors.border(a.tone)),
+        side: BorderSide(color: AnnouncementToneColors.border(a.tone, palette)),
       ),
       clipBehavior: Clip.antiAlias,
       child: Padding(
@@ -145,30 +150,27 @@ class AnnouncementCard extends StatelessWidget {
           children: [
             Text(
               a.title,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
-                color: AppColors.titleText,
+                color: palette.titleText,
               ),
             ),
             if (a.summary != null) ...[
               const SizedBox(height: 4),
               Text(
                 a.summary!,
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: AppColors.labelText,
-                ),
+                style: TextStyle(fontSize: 13, color: palette.labelText),
               ),
             ],
             if (a.content.isNotEmpty) ...[
               const SizedBox(height: 10),
               Text(
                 a.content,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
                   height: 1.5,
-                  color: AppColors.titleText,
+                  color: palette.titleText,
                 ),
               ),
             ],
@@ -176,7 +178,7 @@ class AnnouncementCard extends StatelessWidget {
               const SizedBox(height: 8),
               TextButton.icon(
                 style: TextButton.styleFrom(
-                  foregroundColor: AppColors.accent,
+                  foregroundColor: palette.accent,
                   padding: EdgeInsets.zero,
                 ),
                 icon: const Icon(Icons.open_in_new, size: 18),

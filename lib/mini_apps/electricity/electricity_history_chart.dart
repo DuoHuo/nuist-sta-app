@@ -25,6 +25,8 @@ class ElectricityHistoryChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    final elec = ElecColors.of(palette);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final windowStart = today.subtract(Duration(days: days - 1));
@@ -36,12 +38,12 @@ class ElectricityHistoryChart extends StatelessWidget {
       lastOfDay[DateTime(r.time.year, r.time.month, r.time.day)] = r;
     }
     if (lastOfDay.isEmpty) {
-      return const SizedBox(
+      return SizedBox(
         height: 200,
         child: Center(
           child: Text(
             '暂无记录，刷新后再来看',
-            style: TextStyle(fontSize: 12, color: AppColors.hint),
+            style: TextStyle(fontSize: 12, color: palette.hint),
           ),
         ),
       );
@@ -73,7 +75,7 @@ class ElectricityHistoryChart extends StatelessWidget {
     final labelInterval = ((dayCount + 5) ~/ 6).toDouble();
     String two(int n) => n.toString().padLeft(2, '0');
 
-    const accent = AppColors.accent;
+    final accent = palette.accent;
 
     return SizedBox(
       height: 200,
@@ -86,8 +88,9 @@ class ElectricityHistoryChart extends StatelessWidget {
           clipData: const FlClipData.all(),
           gridData: FlGridData(
             drawVerticalLine: false,
+            // 深色下 rowDivider 同样是比底色略亮一档的网格线，直接跟随色板。
             getDrawingHorizontalLine: (_) =>
-                const FlLine(color: AppColors.rowDivider, strokeWidth: 1),
+                FlLine(color: palette.rowDivider, strokeWidth: 1),
           ),
           borderData: FlBorderData(show: false),
           titlesData: FlTitlesData(
@@ -105,10 +108,7 @@ class ElectricityHistoryChart extends StatelessWidget {
                     meta: meta,
                     child: Text(
                       formatKwh(value),
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: AppColors.hint,
-                      ),
+                      style: TextStyle(fontSize: 10, color: palette.hint),
                     ),
                   );
                 },
@@ -127,10 +127,7 @@ class ElectricityHistoryChart extends StatelessWidget {
                     meta: meta,
                     child: Text(
                       '${two(t.month)}-${two(t.day)}',
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: AppColors.hint,
-                      ),
+                      style: TextStyle(fontSize: 10, color: palette.hint),
                     ),
                   );
                 },
@@ -142,7 +139,7 @@ class ElectricityHistoryChart extends StatelessWidget {
               if (showThreshold)
                 HorizontalLine(
                   y: threshold,
-                  color: ElecColors.warning,
+                  color: elec.warning,
                   strokeWidth: 1,
                   dashArray: [4, 4],
                 ),
@@ -155,9 +152,11 @@ class ElectricityHistoryChart extends StatelessWidget {
               barWidth: 2,
               isCurved: false,
               dotData: FlDotData(
+                // 圆心是压在 accent 描边里的“挖空”，应当跟卡片底色一致：
+                // 深色下用纯白会变成一排扎眼的亮点，所以取 surface。
                 getDotPainter: (_, _, _, _) => FlDotCirclePainter(
                   radius: 2.5,
-                  color: Colors.white,
+                  color: palette.surface,
                   strokeWidth: 1.5,
                   strokeColor: accent,
                 ),
@@ -179,6 +178,8 @@ class ElectricityHistoryChart extends StatelessWidget {
             touchTooltipData: LineTouchTooltipData(
               fitInsideHorizontally: true,
               fitInsideVertically: true,
+              // tooltip 两套主题下都画成深底白字：深色里 titleText 是浅色，
+              // 直接拿来当底色会和白字糊在一起，这里固定用浅色色板的主文字色。
               getTooltipColor: (_) => AppColors.titleText,
               getTooltipItems: (touched) => [
                 for (final spot in touched)

@@ -19,6 +19,7 @@ class AnnouncementBell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final c = controller ?? AnnouncementController.instance;
     return ListenableBuilder(
       listenable: c,
@@ -27,7 +28,7 @@ class AnnouncementBell extends StatelessWidget {
         icon: Badge(
           isLabelVisible: c.hasUnread,
           smallSize: 8,
-          backgroundColor: AppColors.danger,
+          backgroundColor: palette.danger,
           child: const Icon(Icons.notifications_none),
         ),
         onPressed: () => openAnnouncements(context, c),
@@ -188,8 +189,10 @@ class _AnnouncementBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Material(
-      color: Colors.white,
+      // 悬浮条是贴在页面内容之上的面板，底色随主题走。
+      color: palette.surface,
       elevation: 3,
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
@@ -199,23 +202,19 @@ class _AnnouncementBanner extends StatelessWidget {
           padding: const EdgeInsets.only(left: 14),
           child: Row(
             children: [
-              const Icon(
-                Icons.campaign_outlined,
-                size: 20,
-                color: AppColors.accent,
-              ),
+              Icon(Icons.campaign_outlined, size: 20, color: palette.accent),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   text,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: AppColors.titleText),
+                  style: TextStyle(color: palette.titleText),
                 ),
               ),
               IconButton(
                 tooltip: '收起',
-                icon: const Icon(Icons.close, size: 18, color: AppColors.hint),
+                icon: Icon(Icons.close, size: 18, color: palette.hint),
                 onPressed: onClose,
               ),
             ],
@@ -282,7 +281,7 @@ class _BlockingDialogState extends State<_BlockingDialog> {
     return PopScope(
       canPop: false,
       child: Dialog(
-        backgroundColor: AppColors.pageBg,
+        backgroundColor: AppPalette.of(context).pageBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: AnnouncementListPanel(items: [widget.item], dismissible: false),
       ),

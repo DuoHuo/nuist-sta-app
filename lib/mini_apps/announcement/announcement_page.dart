@@ -54,11 +54,12 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
     final current = _controller.subscription;
     var enabled = current.enabled;
     final selected = current.topics.toSet();
+    final palette = AppPalette.of(context);
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: AppColors.pageBg,
+      backgroundColor: palette.pageBg,
       builder: (sheetContext) => StatefulBuilder(
         builder: (context, setSheetState) => SafeArea(
           child: Padding(
@@ -73,25 +74,25 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     '公告订阅',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w700,
-                      color: AppColors.titleText,
+                      color: palette.titleText,
                     ),
                   ),
                   const SizedBox(height: 6),
-                  const Text(
+                  Text(
                     '选择感兴趣的主题，匹配的新公告会显示在首页。',
-                    style: TextStyle(fontSize: 13, color: AppColors.hint),
+                    style: TextStyle(fontSize: 13, color: palette.hint),
                   ),
                   const SizedBox(height: 12),
                   Container(
-                    decoration: _cardDecoration,
+                    decoration: _cardDecoration(palette),
                     child: SwitchListTile.adaptive(
                       value: enabled,
-                      activeTrackColor: AppColors.accent,
+                      activeTrackColor: palette.accent,
                       title: const Text(
                         '开启首页公告动态',
                         style: TextStyle(
@@ -108,12 +109,12 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  const Text(
+                  Text(
                     '感兴趣的主题',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.titleText,
+                      color: palette.titleText,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -128,18 +129,18 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
                               label: Text(topic.label),
                               selected: selected.contains(topic),
                               showCheckmark: false,
-                              selectedColor: AppColors.accent.withValues(
+                              selectedColor: palette.accent.withValues(
                                 alpha: 0.12,
                               ),
                               side: BorderSide(
                                 color: selected.contains(topic)
-                                    ? AppColors.accent.withValues(alpha: 0.55)
-                                    : AppColors.divider,
+                                    ? palette.accent.withValues(alpha: 0.55)
+                                    : palette.divider,
                               ),
                               labelStyle: TextStyle(
                                 color: selected.contains(topic)
-                                    ? AppColors.accent
-                                    : AppColors.labelText,
+                                    ? palette.accent
+                                    : palette.labelText,
                                 fontSize: 12,
                               ),
                               onSelected: (value) => setSheetState(() {
@@ -185,8 +186,9 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
-      backgroundColor: AppColors.pageBg,
+      backgroundColor: palette.pageBg,
       appBar: AppBar(
         title: const Text('信息公告'),
         actions: [
@@ -243,19 +245,18 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
                         label: Text(category.name),
                         selected: selected,
                         showCheckmark: false,
-                        selectedColor: AppColors.accent,
-                        backgroundColor: Colors.white,
+                        selectedColor: palette.accent,
+                        backgroundColor: palette.surface,
+                        // 选中时底是实心强调色，白字在两套主题下都成立。
                         labelStyle: TextStyle(
-                          color: selected ? Colors.white : AppColors.labelText,
+                          color: selected ? Colors.white : palette.labelText,
                           fontSize: 12,
                           fontWeight: selected
                               ? FontWeight.w600
                               : FontWeight.w400,
                         ),
                         side: BorderSide(
-                          color: selected
-                              ? AppColors.accent
-                              : AppColors.divider,
+                          color: selected ? palette.accent : palette.divider,
                         ),
                         onSelected: (_) => _controller.selectCategory(category),
                       );
@@ -316,12 +317,12 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
                     ),
                   )
                 else if (items.isNotEmpty && !_controller.hasMore)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 14),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                     child: Center(
                       child: Text(
                         '已经看到当前分类的全部公告',
-                        style: TextStyle(fontSize: 12, color: AppColors.hint),
+                        style: TextStyle(fontSize: 12, color: palette.hint),
                       ),
                     ),
                   ),
@@ -342,6 +343,8 @@ class _IntroCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 整张卡是实心蓝渐变，里面所有白色都是压在彩色块上的前景，
+    // 深浅主题下都成立，整块不随主题变。
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -406,13 +409,14 @@ class _SearchBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return TextField(
       controller: controller,
       onChanged: onChanged,
       textInputAction: TextInputAction.search,
       decoration: InputDecoration(
         hintText: '搜索公告标题或发布单位',
-        prefixIcon: const Icon(Icons.search, color: AppColors.hint),
+        prefixIcon: Icon(Icons.search, color: palette.hint),
         suffixIcon: controller.text.isEmpty
             ? null
             : IconButton(
@@ -424,7 +428,7 @@ class _SearchBox extends StatelessWidget {
                 icon: const Icon(Icons.close),
               ),
         filled: true,
-        fillColor: Colors.white,
+        fillColor: palette.surface,
         contentPadding: const EdgeInsets.symmetric(vertical: 12),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
@@ -443,9 +447,10 @@ class _AnnouncementTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final topics = announcement.topics.take(3).toList();
     return Material(
-      color: Colors.white,
+      color: palette.surface,
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         onTap: onTap,
@@ -463,8 +468,8 @@ class _AnnouncementTile extends StatelessWidget {
                       announcement.title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppColors.titleText,
+                      style: TextStyle(
+                        color: palette.titleText,
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
                         height: 1.45,
@@ -472,11 +477,7 @@ class _AnnouncementTile extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  const Icon(
-                    Icons.chevron_right,
-                    size: 20,
-                    color: AppColors.hint,
-                  ),
+                  Icon(Icons.chevron_right, size: 20, color: palette.chevron),
                 ],
               ),
               const SizedBox(height: 10),
@@ -495,10 +496,10 @@ class _AnnouncementTile extends StatelessWidget {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.account_balance_outlined,
                     size: 13,
-                    color: AppColors.hint,
+                    color: palette.hint,
                   ),
                   const SizedBox(width: 4),
                   Expanded(
@@ -508,15 +509,12 @@ class _AnnouncementTile extends StatelessWidget {
                           : announcement.publisher,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppColors.hint,
-                        fontSize: 11,
-                      ),
+                      style: TextStyle(color: palette.hint, fontSize: 11),
                     ),
                   ),
                   Text(
                     announcement.publishedAt,
-                    style: const TextStyle(color: AppColors.hint, fontSize: 11),
+                    style: TextStyle(color: palette.hint, fontSize: 11),
                   ),
                 ],
               ),
@@ -536,11 +534,15 @@ class _Tag extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = highlighted ? AppColors.accent : AppColors.labelText;
+    final palette = AppPalette.of(context);
+    final color = highlighted ? palette.accent : palette.labelText;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: highlighted ? const Color(0xFFEAF5FF) : AppColors.pageBg,
+        // 高亮标签原来是写死的淡蓝，换成按强调色透明，深色下自然跟着压暗。
+        color: highlighted
+            ? palette.accent.withValues(alpha: 0.12)
+            : palette.pageBg,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
@@ -558,26 +560,29 @@ class _ErrorCard extends StatelessWidget {
   final VoidCallback onRetry;
 
   @override
-  Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(bottom: 10),
-    padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
-    decoration: _cardDecoration,
-    child: Row(
-      children: [
-        const Icon(Icons.wifi_off, color: AppColors.warning, size: 18),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            message,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 12, color: AppColors.labelText),
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+      decoration: _cardDecoration(palette),
+      child: Row(
+        children: [
+          Icon(Icons.wifi_off, color: palette.warning, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, color: palette.labelText),
+            ),
           ),
-        ),
-        TextButton(onPressed: onRetry, child: const Text('重试')),
-      ],
-    ),
-  );
+          TextButton(onPressed: onRetry, child: const Text('重试')),
+        ],
+      ),
+    );
+  }
 }
 
 class _LoadingCard extends StatelessWidget {
@@ -586,7 +591,7 @@ class _LoadingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     height: 150,
-    decoration: _cardDecoration,
+    decoration: _cardDecoration(AppPalette.of(context)),
     alignment: Alignment.center,
     child: const CircularProgressIndicator(strokeWidth: 2),
   );
@@ -604,32 +609,36 @@ class _EmptyCard extends StatelessWidget {
   final String subtitle;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
-    decoration: _cardDecoration,
-    child: Column(
-      children: [
-        Icon(icon, size: 32, color: AppColors.hint),
-        const SizedBox(height: 10),
-        Text(
-          title,
-          style: const TextStyle(
-            color: AppColors.titleText,
-            fontWeight: FontWeight.w600,
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
+      decoration: _cardDecoration(palette),
+      child: Column(
+        children: [
+          Icon(icon, size: 32, color: palette.hint),
+          const SizedBox(height: 10),
+          Text(
+            title,
+            style: TextStyle(
+              color: palette.titleText,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          subtitle,
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: AppColors.hint, fontSize: 12),
-        ),
-      ],
-    ),
-  );
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: palette.hint, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-final _cardDecoration = BoxDecoration(
-  color: Colors.white,
+/// 页内各种占位卡的统一外观，底色随主题。
+BoxDecoration _cardDecoration(AppPalette palette) => BoxDecoration(
+  color: palette.surface,
   borderRadius: BorderRadius.circular(14),
 );

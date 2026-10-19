@@ -54,8 +54,9 @@ class _ElectricityPageState extends State<ElectricityPage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
-      backgroundColor: AppColors.pageBg,
+      backgroundColor: palette.pageBg,
       appBar: AppBar(title: const Text('宿舍电费')),
       body: ListenableBuilder(
         listenable: _controller,
@@ -80,11 +81,11 @@ class _ElectricityPageState extends State<ElectricityPage> {
                       expanded: _pickerOpen,
                       child: Column(
                         children: [
-                          const Padding(
-                            padding: EdgeInsets.only(left: 16),
+                          Padding(
+                            padding: const EdgeInsets.only(left: 16),
                             child: Divider(
                               height: 1,
-                              color: AppColors.rowDivider,
+                              color: palette.rowDivider,
                             ),
                           ),
                           RoomPickerPanel(
@@ -110,12 +111,12 @@ class _ElectricityPageState extends State<ElectricityPage> {
                       children: [
                         Row(
                           children: [
-                            const Text(
+                            Text(
                               '历史电量',
                               style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w600,
-                                color: AppColors.titleText,
+                                color: palette.titleText,
                               ),
                             ),
                             const Spacer(),
@@ -156,6 +157,8 @@ class _StatusHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    final elec = ElecColors.of(palette);
     final c = controller;
     final room = c.room;
     final latest = c.latest;
@@ -164,26 +167,26 @@ class _StatusHeader extends StatelessWidget {
     if (!c.portalBound) {
       return _IconHeader(
         icon: Icons.link_off,
-        color: AppColors.hint,
+        color: palette.hint,
         title: '未绑定统一门户',
         subtitle: '电费查询需要门户身份，请先到「我的 → 统一门户」完成绑定。',
         onTap: () => context.push('/portal-bind'),
       );
     }
     if (room == null) {
-      return const _IconHeader(
+      return _IconHeader(
         icon: Icons.home_outlined,
-        color: AppColors.hint,
+        color: palette.hint,
         title: '未绑定宿舍',
         subtitle: '选择区域、楼栋和房间后，首页会常驻显示剩余电量。',
       );
     }
 
     final valueColor = c.isOverdue
-        ? ElecColors.danger
+        ? elec.danger
         : c.isLow
-        ? ElecColors.warning
-        : AppColors.titleText;
+        ? elec.warning
+        : palette.titleText;
     return _Card(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 16, 8, 16),
@@ -194,14 +197,10 @@ class _StatusHeader extends StatelessWidget {
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: ElecColors.warning.withValues(alpha: 0.1),
+                color: elec.warning.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(
-                Icons.bolt,
-                color: ElecColors.warning,
-                size: 22,
-              ),
+              child: Icon(Icons.bolt, color: elec.warning, size: 22),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -222,11 +221,11 @@ class _StatusHeader extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 4),
-                      const Text(
+                      Text(
                         '度',
                         style: TextStyle(
                           fontSize: 13,
-                          color: AppColors.labelText,
+                          color: palette.labelText,
                         ),
                       ),
                     ],
@@ -234,10 +233,7 @@ class _StatusHeader extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     room.displayName,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: AppColors.labelText,
-                    ),
+                    style: TextStyle(fontSize: 13, color: palette.labelText),
                   ),
                   const SizedBox(height: 2),
                   Text(
@@ -248,21 +244,21 @@ class _StatusHeader extends StatelessWidget {
                         : '更新于 ${formatFullTime(latest.time)}',
                     style: TextStyle(
                       fontSize: 11,
-                      color: c.error != null ? scheme.error : AppColors.hint,
+                      color: c.error != null ? scheme.error : palette.hint,
                       height: 1.4,
                     ),
                   ),
                   if (c.isOverdue) ...[
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       '已欠费，请尽快充值',
-                      style: TextStyle(fontSize: 11, color: ElecColors.danger),
+                      style: TextStyle(fontSize: 11, color: elec.danger),
                     ),
                   ] else if (c.isLow) ...[
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       '电量不足，请及时充值',
-                      style: TextStyle(fontSize: 11, color: ElecColors.warning),
+                      style: TextStyle(fontSize: 11, color: elec.warning),
                     ),
                   ],
                 ],
@@ -281,7 +277,7 @@ class _StatusHeader extends StatelessWidget {
                     )
                   : IconButton(
                       icon: const Icon(Icons.refresh),
-                      color: AppColors.accent,
+                      color: palette.accent,
                       onPressed: c.refresh,
                     ),
             ),
@@ -309,6 +305,7 @@ class _IconHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return _Card(
       child: InkWell(
         onTap: onTap,
@@ -333,18 +330,18 @@ class _IconHeader extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.titleText,
+                        color: palette.titleText,
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       subtitle,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: AppColors.hint,
+                        color: palette.hint,
                         height: 1.5,
                       ),
                     ),
@@ -352,7 +349,7 @@ class _IconHeader extends StatelessWidget {
                 ),
               ),
               if (onTap != null)
-                const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+                Icon(Icons.chevron_right, color: palette.chevron),
             ],
           ),
         ),
@@ -378,6 +375,7 @@ class _ActionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -386,7 +384,7 @@ class _ActionRow extends StatelessWidget {
           height: 56,
           child: Row(
             children: [
-              Icon(icon, size: 20, color: AppColors.labelText),
+              Icon(icon, size: 20, color: palette.labelText),
               const SizedBox(width: 12),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -394,16 +392,16 @@ class _ActionRow extends StatelessWidget {
                 children: [
                   Text(
                     label,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
-                      color: AppColors.titleText,
+                      color: palette.titleText,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     hint,
-                    style: const TextStyle(fontSize: 11, color: AppColors.hint),
+                    style: TextStyle(fontSize: 11, color: palette.hint),
                   ),
                 ],
               ),
@@ -412,10 +410,7 @@ class _ActionRow extends StatelessWidget {
                 turns: expanded ? 0.25 : 0,
                 duration: const Duration(milliseconds: 250),
                 curve: Curves.easeOutCubic,
-                child: const Icon(
-                  Icons.chevron_right,
-                  color: Color(0xFFC9CDD4),
-                ),
+                child: Icon(Icons.chevron_right, color: palette.chevron),
               ),
             ],
           ),
@@ -460,22 +455,23 @@ class _RangeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Container(
       padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(
-        color: AppColors.pageBg,
+        color: palette.pageBg,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          for (final d in const [7, 30]) _segment(d),
+          for (final d in const [7, 30]) _segment(d, palette),
         ],
       ),
     );
   }
 
-  Widget _segment(int days) {
+  Widget _segment(int days, AppPalette palette) {
     final selected = days == value;
     return GestureDetector(
       onTap: () => onChanged(days),
@@ -483,7 +479,8 @@ class _RangeSelector extends StatelessWidget {
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-          color: selected ? Colors.white : Colors.transparent,
+          // 选中的那一格是浮在 pageBg 槽里的小“卡片”，用 surface。
+          color: selected ? palette.surface : Colors.transparent,
           borderRadius: BorderRadius.circular(6),
         ),
         child: Text(
@@ -491,7 +488,7 @@ class _RangeSelector extends StatelessWidget {
           style: TextStyle(
             fontSize: 11,
             fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-            color: selected ? AppColors.titleText : AppColors.hint,
+            color: selected ? palette.titleText : palette.hint,
           ),
         ),
       ),
@@ -508,7 +505,7 @@ class _Card extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppPalette.of(context).surface,
         borderRadius: BorderRadius.circular(12),
       ),
       clipBehavior: Clip.antiAlias,

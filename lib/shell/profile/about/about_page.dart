@@ -50,6 +50,7 @@ class _AboutPageState extends State<AboutPage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('关于')),
       body: ListView(
@@ -67,11 +68,11 @@ class _AboutPageState extends State<AboutPage> {
             ),
           ),
           const SizedBox(height: 12),
-          const Text(
+          Text(
             kAppName,
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: AppColors.titleText,
+              color: palette.titleText,
               fontSize: 20,
               fontWeight: FontWeight.w600,
             ),
@@ -80,22 +81,22 @@ class _AboutPageState extends State<AboutPage> {
           Text(
             _version ?? '',
             textAlign: TextAlign.center,
-            style: const TextStyle(color: AppColors.hint, fontSize: 13),
+            style: TextStyle(color: palette.hint, fontSize: 13),
           ),
           const SizedBox(height: 24),
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: palette.surface,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   '贡献者',
                   style: TextStyle(
-                    color: AppColors.titleText,
+                    color: palette.titleText,
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),
@@ -103,7 +104,7 @@ class _AboutPageState extends State<AboutPage> {
                 const SizedBox(height: 12),
                 ListenableBuilder(
                   listenable: _controller,
-                  builder: (context, _) => _buildContributors(),
+                  builder: (context, _) => _buildContributors(palette),
                 ),
               ],
             ),
@@ -113,16 +114,16 @@ class _AboutPageState extends State<AboutPage> {
     );
   }
 
-  Widget _buildContributors() {
+  Widget _buildContributors(AppPalette palette) {
     final items = _controller.items;
     if (items == null) {
       if (_controller.failed) {
         return Center(
           child: Column(
             children: [
-              const Text(
+              Text(
                 '贡献者名单暂时无法获取',
-                style: TextStyle(color: AppColors.hint, fontSize: 13),
+                style: TextStyle(color: palette.hint, fontSize: 13),
               ),
               TextButton(onPressed: _controller.retry, child: const Text('重试')),
             ],
@@ -135,10 +136,7 @@ class _AboutPageState extends State<AboutPage> {
       );
     }
     if (items.isEmpty) {
-      return const Text(
-        '暂无',
-        style: TextStyle(color: AppColors.hint, fontSize: 13),
-      );
+      return Text('暂无', style: TextStyle(color: palette.hint, fontSize: 13));
     }
     return Wrap(
       spacing: 16,
@@ -155,6 +153,8 @@ class _ContributorChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    // 首字母贴在 accent 实心圆上，底色不随主题变浅，保持白色。
     final initial = Text(
       contributor.name.characters.first,
       style: const TextStyle(color: Colors.white, fontSize: 16),
@@ -168,7 +168,7 @@ class _ContributorChip extends StatelessWidget {
             child: Container(
               width: 44,
               height: 44,
-              color: AppColors.accent,
+              color: palette.accent,
               alignment: Alignment.center,
               child: avatar == null
                   ? initial
@@ -187,7 +187,7 @@ class _ContributorChip extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: AppColors.labelText, fontSize: 12),
+            style: TextStyle(color: palette.labelText, fontSize: 12),
           ),
         ],
       ),

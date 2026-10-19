@@ -102,8 +102,9 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
-      backgroundColor: AppColors.pageBg,
+      backgroundColor: palette.pageBg,
       appBar: AppBar(
         title: const Text('公告详情'),
         bottom: PreferredSize(
@@ -112,22 +113,26 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
               ? LinearProgressIndicator(
                   minHeight: 2,
                   value: _progress / 100,
-                  color: AppColors.accent,
-                  backgroundColor: AppColors.rowDivider,
+                  color: palette.accent,
+                  backgroundColor: palette.rowDivider,
                 )
               : const SizedBox(height: 2),
         ),
       ),
       body: Column(
         children: [
-          _buildHeader(),
+          _buildHeader(palette),
           Expanded(
             child: FutureBuilder<AnnouncementDetailDocument?>(
               future: _detailFuture,
               builder: (context, snapshot) {
                 final detail = snapshot.data;
-                if (detail != null) return _buildNativeDocument(detail);
-                if (_webViewController != null) return _buildWebViewFallback();
+                if (detail != null) {
+                  return _buildNativeDocument(detail, palette);
+                }
+                if (_webViewController != null) {
+                  return _buildWebViewFallback(palette);
+                }
                 return const Center(child: CircularProgressIndicator());
               },
             ),
@@ -137,7 +142,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildHeader(AppPalette palette) {
     final metadata = [
       if (widget.announcement.publisher.isNotEmpty)
         widget.announcement.publisher,
@@ -146,15 +151,15 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
     ].join(' · ');
     return Container(
       width: double.infinity,
-      color: Colors.white,
+      color: palette.surface,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             widget.announcement.title,
-            style: const TextStyle(
-              color: AppColors.titleText,
+            style: TextStyle(
+              color: palette.titleText,
               fontSize: 16,
               fontWeight: FontWeight.w600,
               height: 1.4,
@@ -162,40 +167,40 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
           ),
           if (metadata.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text(
-              metadata,
-              style: const TextStyle(color: AppColors.hint, fontSize: 11),
-            ),
+            Text(metadata, style: TextStyle(color: palette.hint, fontSize: 11)),
           ],
         ],
       ),
     );
   }
 
-  Widget _buildNativeDocument(AnnouncementDetailDocument document) {
+  Widget _buildNativeDocument(
+    AnnouncementDetailDocument document,
+    AppPalette palette,
+  ) {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
       children: [
-        for (final block in document.blocks) _buildBlock(block),
+        for (final block in document.blocks) _buildBlock(block, palette),
         if (document.attachments.isNotEmpty) ...[
           const SizedBox(height: 12),
-          const Text(
+          Text(
             '附件',
             style: TextStyle(
-              color: AppColors.titleText,
+              color: palette.titleText,
               fontSize: 16,
               fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 8),
           for (final attachment in document.attachments)
-            _buildAttachment(attachment),
+            _buildAttachment(attachment, palette),
         ],
       ],
     );
   }
 
-  Widget _buildBlock(AnnouncementDetailBlock block) {
+  Widget _buildBlock(AnnouncementDetailBlock block, AppPalette palette) {
     final alignment = block.centered ? TextAlign.center : TextAlign.left;
     switch (block.kind) {
       case AnnouncementDetailBlockKind.heading:
@@ -205,7 +210,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
             block.text,
             textAlign: alignment,
             style: TextStyle(
-              color: AppColors.titleText,
+              color: palette.titleText,
               fontSize: block.level <= 2 ? 18 : 16,
               fontWeight: FontWeight.w700,
               height: 1.5,
@@ -218,8 +223,8 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
           child: Text(
             block.text,
             textAlign: alignment,
-            style: const TextStyle(
-              color: AppColors.titleText,
+            style: TextStyle(
+              color: palette.titleText,
               fontSize: 15,
               height: 1.85,
             ),
@@ -231,15 +236,13 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
           decoration: BoxDecoration(
-            color: Colors.white,
-            border: const Border(
-              left: BorderSide(color: AppColors.accent, width: 3),
-            ),
+            color: palette.surface,
+            border: Border(left: BorderSide(color: palette.accent, width: 3)),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Text(
             block.text,
-            style: const TextStyle(color: AppColors.labelText, height: 1.7),
+            style: TextStyle(color: palette.labelText, height: 1.7),
           ),
         );
       case AnnouncementDetailBlockKind.bulletList:
@@ -260,8 +263,8 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
                           block.kind == AnnouncementDetailBlockKind.bulletList
                               ? '•'
                               : '${index + 1}.',
-                          style: const TextStyle(
-                            color: AppColors.accent,
+                          style: TextStyle(
+                            color: palette.accent,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -269,8 +272,8 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
                       Expanded(
                         child: Text(
                           block.items[index],
-                          style: const TextStyle(
-                            color: AppColors.titleText,
+                          style: TextStyle(
+                            color: palette.titleText,
                             fontSize: 15,
                             height: 1.7,
                           ),
@@ -286,7 +289,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
         return Container(
           margin: const EdgeInsets.only(bottom: 12),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: palette.surface,
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
@@ -298,17 +301,14 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
                     horizontal: 12,
                     vertical: 9,
                   ),
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     border: Border(
-                      bottom: BorderSide(color: AppColors.rowDivider),
+                      bottom: BorderSide(color: palette.rowDivider),
                     ),
                   ),
                   child: Text(
                     row,
-                    style: const TextStyle(
-                      color: AppColors.titleText,
-                      height: 1.5,
-                    ),
+                    style: TextStyle(color: palette.titleText, height: 1.5),
                   ),
                 ),
             ],
@@ -330,7 +330,7 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
                       child: Text(
                         block.altText,
                         textAlign: alignment,
-                        style: const TextStyle(color: AppColors.hint),
+                        style: TextStyle(color: palette.hint),
                       ),
                     ),
             ),
@@ -339,19 +339,22 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
     }
   }
 
-  Widget _buildAttachment(AnnouncementAttachment attachment) {
+  Widget _buildAttachment(
+    AnnouncementAttachment attachment,
+    AppPalette palette,
+  ) {
     final loading = _downloadingUrl == attachment.url;
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       elevation: 0,
-      color: Colors.white,
+      color: palette.surface,
       child: ListTile(
-        leading: const Icon(Icons.attach_file, color: AppColors.accent),
+        leading: Icon(Icons.attach_file, color: palette.accent),
         title: Text(
           attachment.name,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: AppColors.titleText, fontSize: 14),
+          style: TextStyle(color: palette.titleText, fontSize: 14),
         ),
         subtitle: const Text('点击下载并分享'),
         trailing: loading
@@ -360,32 +363,33 @@ class _AnnouncementDetailPageState extends State<AnnouncementDetailPage> {
                 height: 20,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
-            : const Icon(Icons.download_outlined, color: AppColors.accent),
+            : Icon(Icons.download_outlined, color: palette.accent),
         onTap: loading ? null : () => _downloadAttachment(attachment),
       ),
     );
   }
 
-  Widget _buildWebViewFallback() {
+  Widget _buildWebViewFallback(AppPalette palette) {
     final controller = _webViewController;
     if (controller == null) {
       return const Center(child: CircularProgressIndicator());
     }
+    // 只改错误态这层容器；网页正文是学校自己的页面，不注入任何样式。
     return Stack(
       children: [
         WebViewWidget(controller: controller),
         if (_failed)
           ColoredBox(
-            color: AppColors.pageBg,
+            color: palette.pageBg,
             child: Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.wifi_off, size: 38, color: AppColors.hint),
+                  Icon(Icons.wifi_off, size: 38, color: palette.hint),
                   const SizedBox(height: 10),
-                  const Text(
+                  Text(
                     '公告内容暂时无法加载',
-                    style: TextStyle(color: AppColors.labelText),
+                    style: TextStyle(color: palette.labelText),
                   ),
                   const SizedBox(height: 10),
                   OutlinedButton.icon(

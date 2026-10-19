@@ -5,6 +5,8 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../core/auth/passkey_transfer.dart';
 
 /// 扫另一台设备屏幕上的导出二维码，识别到就把文本 `pop` 回导入页。
+///
+/// 扫码页固定深色，不随主题切换：纯黑底 + 白字是相机取景框的固有设计。
 class PortalScanPage extends StatefulWidget {
   const PortalScanPage({super.key});
 

@@ -55,6 +55,7 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final controller = _controller;
     return ListenableBuilder(
       listenable: controller,
@@ -63,7 +64,7 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
         final feed = controller.feed.take(2).toList();
         return Container(
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: palette.surface,
             borderRadius: BorderRadius.circular(14),
           ),
           child: Column(
@@ -75,16 +76,16 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
                   padding: const EdgeInsets.fromLTRB(16, 13, 12, 10),
                   child: Row(
                     children: [
-                      const Icon(
+                      Icon(
                         Icons.campaign_outlined,
                         size: 19,
-                        color: AppColors.accent,
+                        color: palette.accent,
                       ),
                       const SizedBox(width: 7),
-                      const Text(
+                      Text(
                         '信息公告',
                         style: TextStyle(
-                          color: AppColors.titleText,
+                          color: palette.titleText,
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
                         ),
@@ -99,16 +100,13 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
                       else if (enabled)
                         Text(
                           '${controller.feed.length} 条动态',
-                          style: const TextStyle(
-                            color: AppColors.hint,
-                            fontSize: 11,
-                          ),
+                          style: TextStyle(color: palette.hint, fontSize: 11),
                         ),
                       const SizedBox(width: 5),
-                      const Icon(
+                      Icon(
                         Icons.chevron_right,
                         size: 19,
-                        color: AppColors.hint,
+                        color: palette.chevron,
                       ),
                     ],
                   ),
@@ -124,7 +122,7 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
                             ? Icons.inbox_outlined
                             : Icons.notifications_none,
                         size: 17,
-                        color: AppColors.hint,
+                        color: palette.hint,
                       ),
                       const SizedBox(width: 7),
                       Expanded(
@@ -134,10 +132,7 @@ class _AnnouncementHomeCardState extends State<AnnouncementHomeCard>
                               : '开启主题订阅，感兴趣的新公告会显示在这里',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: AppColors.hint,
-                            fontSize: 12,
-                          ),
+                          style: TextStyle(color: palette.hint, fontSize: 12),
                         ),
                       ),
                     ],
@@ -161,6 +156,7 @@ class _HomeAnnouncementRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final topics = announcement.topics;
     final topic = topics.isEmpty ? null : topics.first;
     return InkWell(
@@ -177,7 +173,7 @@ class _HomeAnnouncementRow extends StatelessWidget {
               width: 4,
               height: 30,
               decoration: BoxDecoration(
-                color: AppColors.accent.withValues(alpha: 0.65),
+                color: palette.accent.withValues(alpha: 0.65),
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -190,8 +186,8 @@ class _HomeAnnouncementRow extends StatelessWidget {
                     announcement.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: AppColors.labelText,
+                    style: TextStyle(
+                      color: palette.labelText,
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
                     ),
@@ -202,12 +198,12 @@ class _HomeAnnouncementRow extends StatelessWidget {
                       if (topic != null) topic.label,
                       announcement.publishedAt,
                     ].join(' · '),
-                    style: const TextStyle(color: AppColors.hint, fontSize: 10),
+                    style: TextStyle(color: palette.hint, fontSize: 10),
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, size: 17, color: AppColors.hint),
+            Icon(Icons.chevron_right, size: 17, color: palette.chevron),
           ],
         ),
       ),

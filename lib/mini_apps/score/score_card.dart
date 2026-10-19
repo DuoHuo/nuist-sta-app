@@ -27,6 +27,7 @@ class _ScoreCardState extends State<ScoreCard> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
@@ -58,7 +59,7 @@ class _ScoreCardState extends State<ScoreCard> {
           child: Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: palette.surface,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
@@ -72,22 +73,19 @@ class _ScoreCardState extends State<ScoreCard> {
                       color: kScoreColor,
                     ),
                     const SizedBox(width: 4),
-                    const Text(
+                    Text(
                       '成绩查询',
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.titleText,
+                        color: palette.titleText,
                       ),
                     ),
                     const Spacer(),
                     if (c.portalBound) ...[
                       Text(
                         report == null ? '' : formatShortTime(report.fetchedAt),
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.hint,
-                        ),
+                        style: TextStyle(fontSize: 11, color: palette.hint),
                       ),
                       _RefreshButton(loading: c.loading, onPressed: c.refresh),
                     ] else
@@ -112,6 +110,7 @@ class _ScoreBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -120,16 +119,16 @@ class _ScoreBody extends StatelessWidget {
           children: [
             Text(
               term ?? '全部成绩',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
-                color: AppColors.titleText,
+                color: palette.titleText,
               ),
             ),
             const Spacer(),
             Text(
               '${summary.total} 门',
-              style: const TextStyle(fontSize: 12, color: AppColors.hint),
+              style: TextStyle(fontSize: 12, color: palette.hint),
             ),
           ],
         ),
@@ -148,14 +147,14 @@ class _ScoreBody extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 10),
-        const Row(
+        Row(
           children: [
             Text(
               '查看全部成绩',
-              style: TextStyle(fontSize: 12, color: AppColors.labelText),
+              style: TextStyle(fontSize: 12, color: palette.labelText),
             ),
-            Spacer(),
-            Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+            const Spacer(),
+            Icon(Icons.chevron_right, color: palette.chevron),
           ],
         ),
       ],
@@ -176,23 +175,21 @@ class _Metric extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           value,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w600,
-            color: AppColors.titleText,
+            color: palette.titleText,
             height: 1.1,
           ),
         ),
         const SizedBox(height: 3),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 11, color: AppColors.labelText),
-        ),
+        Text(label, style: TextStyle(fontSize: 11, color: palette.labelText)),
       ],
     );
   }
@@ -213,6 +210,7 @@ class _Placeholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: Row(
@@ -224,7 +222,7 @@ class _Placeholder extends StatelessWidget {
                 fontSize: 14,
                 color: isError
                     ? Theme.of(context).colorScheme.error
-                    : AppColors.hint,
+                    : palette.hint,
               ),
             ),
           ),

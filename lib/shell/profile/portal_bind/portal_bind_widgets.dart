@@ -5,7 +5,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../../../core/auth/passkey_transfer.dart';
 import '../../../core/colors.dart';
 
-/// 「我的」页那套白色圆角卡片，统一门户相关的几个页面共用。
+/// 「我的」页那套圆角卡片，统一门户相关的几个页面共用；底色随主题明暗切换。
 class PortalCard extends StatelessWidget {
   const PortalCard({super.key, required this.child});
 
@@ -13,10 +13,11 @@ class PortalCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     // 用 Material 画底色：里面行的 InkWell 水波纹画在它上面才看得见，
     // 并随圆角裁剪。
     return Material(
-      color: Colors.white,
+      color: palette.surface,
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
       child: child,
@@ -45,9 +46,10 @@ class PortalActionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final color = destructive
         ? Theme.of(context).colorScheme.error
-        : AppColors.labelText;
+        : palette.labelText;
     return InkWell(
       onTap: onTap,
       child: Column(
@@ -75,7 +77,7 @@ class PortalActionRow extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w500,
-                            color: destructive ? color : AppColors.titleText,
+                            color: destructive ? color : palette.titleText,
                           ),
                         ),
                         const SizedBox(height: 2),
@@ -83,23 +85,20 @@ class PortalActionRow extends StatelessWidget {
                           hint,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: AppColors.hint,
-                          ),
+                          style: TextStyle(fontSize: 11, color: palette.hint),
                         ),
                       ],
                     ),
                   ),
-                  const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+                  Icon(Icons.chevron_right, color: palette.chevron),
                 ],
               ),
             ),
           ),
           if (showDivider)
-            const Padding(
-              padding: EdgeInsets.only(left: 16),
-              child: Divider(height: 1, color: AppColors.rowDivider),
+            Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: Divider(height: 1, color: palette.rowDivider),
             ),
         ],
       ),
@@ -231,6 +230,7 @@ class PinField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return TextField(
       controller: controller,
       autofocus: autofocus,
@@ -247,7 +247,8 @@ class PinField extends StatelessWidget {
         counterText: '',
         isDense: true,
         filled: true,
-        fillColor: AppColors.pageBg,
+        // 输入框压在对话框的 surface 面上，用页面底色做凹陷感，深浅色都成立。
+        fillColor: palette.pageBg,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
           borderSide: BorderSide.none,

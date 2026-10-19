@@ -31,6 +31,7 @@ class _LaborScoreCardState extends State<LaborScoreCard> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
@@ -62,7 +63,7 @@ class _LaborScoreCardState extends State<LaborScoreCard> {
           child: Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: palette.surface,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
@@ -76,12 +77,12 @@ class _LaborScoreCardState extends State<LaborScoreCard> {
                       color: kLaborColor,
                     ),
                     const SizedBox(width: 4),
-                    const Text(
+                    Text(
                       '劳动积分',
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.titleText,
+                        color: palette.titleText,
                       ),
                     ),
                     const Spacer(),
@@ -90,10 +91,7 @@ class _LaborScoreCardState extends State<LaborScoreCard> {
                       // 时间就知道数据有多旧。
                       Text(
                         score == null ? '' : formatShortTime(score.fetchedAt),
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.hint,
-                        ),
+                        style: TextStyle(fontSize: 11, color: palette.hint),
                       ),
                       _RefreshButton(loading: c.loading, onPressed: c.refresh),
                     ] else
@@ -117,15 +115,16 @@ class _ScoreBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final r = score.official;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 8),
         if (r == null)
-          const Text(
+          Text(
             '平台尚未生成你的劳动积分核算结果',
-            style: TextStyle(fontSize: 13, color: AppColors.hint),
+            style: TextStyle(fontSize: 13, color: palette.hint),
           )
         else ...[
           Row(
@@ -134,35 +133,35 @@ class _ScoreBody extends StatelessWidget {
             children: [
               Text(
                 r.total.isEmpty ? '--' : r.total,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 26,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.titleText,
+                  color: palette.titleText,
                   height: 1.1,
                 ),
               ),
               const SizedBox(width: 4),
-              const Text(
+              Text(
                 '分',
-                style: TextStyle(fontSize: 13, color: AppColors.labelText),
+                style: TextStyle(fontSize: 13, color: palette.labelText),
               ),
               // 「未确认」是常态（确认由学生在平台上手动点），标出来只会让人
               // 以为哪里出了问题，所以只在已确认时给个标签。
               if (r.isConfirmed) ...[
                 const SizedBox(width: 10),
-                const _Tag(text: '已确认', color: AppColors.success),
+                _Tag(text: '已确认', color: palette.success),
               ],
               if (r.updatedAt.isNotEmpty) ...[
                 const SizedBox(width: 10),
                 Text(
                   '核算于 ${r.updatedShort}',
-                  style: const TextStyle(fontSize: 11, color: AppColors.hint),
+                  style: TextStyle(fontSize: 11, color: palette.hint),
                 ),
               ],
             ],
           ),
           const SizedBox(height: 12),
-          const Divider(height: 1, color: AppColors.rowDivider),
+          Divider(height: 1, color: palette.rowDivider),
           const SizedBox(height: 10),
           Row(
             children: [
@@ -182,14 +181,14 @@ class _ScoreBody extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 10),
-        const Row(
+        Row(
           children: [
             Text(
               '查看明细',
-              style: TextStyle(fontSize: 12, color: AppColors.labelText),
+              style: TextStyle(fontSize: 12, color: palette.labelText),
             ),
-            Spacer(),
-            Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+            const Spacer(),
+            Icon(Icons.chevron_right, color: palette.chevron),
           ],
         ),
       ],
@@ -206,22 +205,20 @@ class _Stat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Column(
       children: [
         Text(
           value.isEmpty ? '--' : value,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w600,
-            color: AppColors.titleText,
+            color: palette.titleText,
             height: 1.1,
           ),
         ),
         const SizedBox(height: 3),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 11, color: AppColors.labelText),
-        ),
+        Text(label, style: TextStyle(fontSize: 11, color: palette.labelText)),
       ],
     );
   }
@@ -268,6 +265,7 @@ class _Placeholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: Row(
@@ -279,7 +277,7 @@ class _Placeholder extends StatelessWidget {
                 fontSize: 14,
                 color: isError
                     ? Theme.of(context).colorScheme.error
-                    : AppColors.hint,
+                    : palette.hint,
               ),
             ),
           ),
@@ -308,6 +306,7 @@ class _RefreshButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return SizedBox(
       width: 32,
       height: 32,
@@ -322,7 +321,7 @@ class _RefreshButton extends StatelessWidget {
           : IconButton(
               padding: EdgeInsets.zero,
               iconSize: 18,
-              color: AppColors.accent,
+              color: palette.accent,
               icon: const Icon(Icons.refresh),
               onPressed: onPressed,
             ),

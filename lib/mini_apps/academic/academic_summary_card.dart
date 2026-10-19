@@ -28,6 +28,7 @@ class _AcademicSummaryCardState extends State<AcademicSummaryCard> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
@@ -56,7 +57,7 @@ class _AcademicSummaryCardState extends State<AcademicSummaryCard> {
         return Container(
           padding: const EdgeInsets.fromLTRB(16, 12, 8, 16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: palette.surface,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
@@ -64,14 +65,14 @@ class _AcademicSummaryCardState extends State<AcademicSummaryCard> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.school, size: 18, color: AppColors.accent),
+                  Icon(Icons.school, size: 18, color: palette.accent),
                   const SizedBox(width: 4),
-                  const Text(
+                  Text(
                     '学业概览',
                     style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.titleText,
+                      color: palette.titleText,
                     ),
                   ),
                   const Spacer(),
@@ -80,10 +81,7 @@ class _AcademicSummaryCardState extends State<AcademicSummaryCard> {
                     // 时间就知道数据有多旧。
                     Text(
                       summary == null ? '' : formatShortTime(summary.fetchedAt),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.hint,
-                      ),
+                      style: TextStyle(fontSize: 11, color: palette.hint),
                     ),
                     _RefreshButton(loading: c.loading, onPressed: c.refresh),
                   ] else
@@ -109,6 +107,7 @@ class AcademicSummaryBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final s = summary;
     // 永远是确定值：新生数据全空 / 全 0 时为 0，不能传 null 让进度条无限转圈。
     final progress = s.creditProgressRatio;
@@ -133,15 +132,15 @@ class AcademicSummaryBody extends StatelessWidget {
         const SizedBox(height: 16),
         Row(
           children: [
-            const Text(
+            Text(
               '学分进度',
-              style: TextStyle(fontSize: 12, color: AppColors.labelText),
+              style: TextStyle(fontSize: 12, color: palette.labelText),
             ),
             const Spacer(),
             Text(
               '已获 ${_orDash(s.earnedCredits)} / 应修 ${_orDash(s.requiredCredits)}'
               '　${_orDash(s.creditProgress)}',
-              style: const TextStyle(fontSize: 12, color: AppColors.labelText),
+              style: TextStyle(fontSize: 12, color: palette.labelText),
             ),
           ],
         ),
@@ -151,12 +150,12 @@ class AcademicSummaryBody extends StatelessWidget {
           child: LinearProgressIndicator(
             value: progress,
             minHeight: 6,
-            backgroundColor: AppColors.rowDivider,
-            color: AppColors.accent,
+            backgroundColor: palette.rowDivider,
+            color: palette.accent,
           ),
         ),
         const SizedBox(height: 14),
-        const Divider(height: 1, color: AppColors.rowDivider),
+        Divider(height: 1, color: palette.rowDivider),
         const SizedBox(height: 10),
         Row(
           children: [
@@ -195,23 +194,21 @@ class _Metric extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           value.isEmpty ? '--' : value,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 26,
             fontWeight: FontWeight.w700,
-            color: AppColors.titleText,
+            color: palette.titleText,
             height: 1.1,
           ),
         ),
         const SizedBox(height: 2),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12, color: AppColors.labelText),
-        ),
+        Text(label, style: TextStyle(fontSize: 12, color: palette.labelText)),
       ],
     );
   }
@@ -226,21 +223,19 @@ class _Stat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Row(
       children: [
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12, color: AppColors.labelText),
-        ),
+        Text(label, style: TextStyle(fontSize: 12, color: palette.labelText)),
         const SizedBox(width: 6),
         Expanded(
           child: Text(
             value.isEmpty ? '--' : value,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w600,
-              color: AppColors.titleText,
+              color: palette.titleText,
             ),
           ),
         ),
@@ -264,6 +259,7 @@ class _Placeholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: Row(
@@ -275,7 +271,7 @@ class _Placeholder extends StatelessWidget {
                 fontSize: 14,
                 color: isError
                     ? Theme.of(context).colorScheme.error
-                    : AppColors.hint,
+                    : palette.hint,
               ),
             ),
           ),
@@ -304,6 +300,7 @@ class _RefreshButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return SizedBox(
       width: 32,
       height: 32,
@@ -318,7 +315,7 @@ class _RefreshButton extends StatelessWidget {
           : IconButton(
               padding: EdgeInsets.zero,
               iconSize: 18,
-              color: AppColors.accent,
+              color: palette.accent,
               icon: const Icon(Icons.refresh),
               onPressed: onPressed,
             ),

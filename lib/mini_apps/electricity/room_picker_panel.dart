@@ -189,6 +189,7 @@ class _RoomPickerPanelState extends State<RoomPickerPanel> {
               const SizedBox(width: 8),
               FilledButton(
                 onPressed: canSave ? _save : null,
+                // 转圈压在 FilledButton 的实心强调色上，白色在两套主题下都成立。
                 child: _saving
                     ? const SizedBox(
                         width: 16,
@@ -227,6 +228,7 @@ class _Dropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final options = items ?? const <ElecOption>[];
     final active = enabled && !loading && options.isNotEmpty;
     return Row(
@@ -235,7 +237,7 @@ class _Dropdown extends StatelessWidget {
           width: 44,
           child: Text(
             label,
-            style: const TextStyle(fontSize: 14, color: AppColors.labelText),
+            style: TextStyle(fontSize: 14, color: palette.labelText),
           ),
         ),
         Expanded(
@@ -243,7 +245,7 @@ class _Dropdown extends StatelessWidget {
             height: 40,
             padding: const EdgeInsets.only(left: 12, right: 8),
             decoration: BoxDecoration(
-              color: AppColors.pageBg,
+              color: palette.pageBg,
               borderRadius: BorderRadius.circular(8),
             ),
             child: DropdownButtonHideUnderline(
@@ -266,12 +268,9 @@ class _Dropdown extends StatelessWidget {
                       : options.isEmpty && items != null
                       ? '暂无数据'
                       : '请选择',
-                  style: const TextStyle(fontSize: 14, color: AppColors.hint),
+                  style: TextStyle(fontSize: 14, color: palette.hint),
                 ),
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: AppColors.titleText,
-                ),
+                style: TextStyle(fontSize: 14, color: palette.titleText),
                 icon: loading
                     ? const SizedBox(
                         width: 16,
@@ -280,7 +279,7 @@ class _Dropdown extends StatelessWidget {
                       )
                     : Icon(
                         Icons.expand_more,
-                        color: active ? AppColors.labelText : AppColors.hint,
+                        color: active ? palette.labelText : palette.hint,
                       ),
               ),
             ),

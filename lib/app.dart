@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/app_info.dart';
-import 'core/colors.dart';
+import 'core/theme.dart';
 import 'mini_apps/timetable/timetable_lifecycle.dart';
 import 'router.dart';
 
@@ -20,21 +20,10 @@ class _NuistAppState extends State<NuistApp> {
   Widget build(BuildContext context) {
     return MaterialApp.router(
       title: kAppName,
-      theme: ThemeData(
-        useMaterial3: true,
-        scaffoldBackgroundColor: AppColors.pageBg,
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.white,
-          surfaceTintColor: Colors.transparent,
-          centerTitle: true,
-          elevation: 0,
-          titleTextStyle: TextStyle(
-            color: AppColors.titleText,
-            fontSize: 17,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
+      theme: appLightTheme(),
+      darkTheme: appDarkTheme(),
+      // 跟随系统明暗，App 内不提供手动开关。
+      themeMode: ThemeMode.system,
       routerConfig: _router,
       // 课表同步时机：冷启动 / 回前台 / 网络恢复。
       builder: (context, child) =>

@@ -120,8 +120,9 @@ class _PortalExportPageState extends State<PortalExportPage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
-      backgroundColor: AppColors.pageBg,
+      backgroundColor: palette.pageBg,
       appBar: AppBar(title: const Text('导出通行密钥')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -133,6 +134,7 @@ class _PortalExportPageState extends State<PortalExportPage> {
   }
 
   List<Widget> _setupChildren() {
+    final palette = AppPalette.of(context);
     final bundle = _bundle;
     return [
       PortalCard(
@@ -141,22 +143,22 @@ class _PortalExportPageState extends State<PortalExportPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 '导出后怎么用',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
-                  color: AppColors.titleText,
+                  color: palette.titleText,
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 '生成的内容会用你设置的六位 PIN 加密。在另一台设备上打开 NUIST++，'
                 '进入「我的 → 绑定统一门户 → 导入通行密钥」，扫码、粘贴或选择文件，'
                 '再输入同一个 PIN 即可。',
                 style: TextStyle(
                   fontSize: 13,
-                  color: AppColors.labelText,
+                  color: palette.labelText,
                   height: 1.6,
                 ),
               ),
@@ -182,8 +184,15 @@ class _PortalExportPageState extends State<PortalExportPage> {
   }
 
   List<Widget> _resultChildren() {
+    final palette = AppPalette.of(context);
     return [
-      PortalCard(
+      // 二维码卡片**固定浅底深码**，不跟随主题：qr_flutter 的码点默认是黑色，
+      // 换成深色底就成了黑底黑码，对面根本扫不出来。卡片内的文字因此也取
+      // 浅色色板，保证在这块固定白底上有对比度。
+      Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -229,12 +238,12 @@ class _PortalExportPageState extends State<PortalExportPage> {
         ),
       ),
       const SizedBox(height: 12),
-      const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 4),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
         child: Text(
           '这段内容等同于你的门户登录凭据，只受六位 PIN 保护。传到新设备后请立即删除，'
           '不要留在聊天记录或云盘里。',
-          style: TextStyle(fontSize: 12, color: AppColors.hint, height: 1.5),
+          style: TextStyle(fontSize: 12, color: palette.hint, height: 1.5),
         ),
       ),
     ];

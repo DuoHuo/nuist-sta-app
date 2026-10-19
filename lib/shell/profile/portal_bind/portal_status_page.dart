@@ -238,8 +238,9 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
-      backgroundColor: AppColors.pageBg,
+      backgroundColor: palette.pageBg,
       appBar: AppBar(title: const Text('统一门户')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -338,6 +339,7 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
   }
 
   Widget _debugSection(PasskeyBundle? bundle) {
+    final palette = AppPalette.of(context);
     final result = _testResult;
     return PortalCard(
       child: Padding(
@@ -347,35 +349,27 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
           children: [
             Row(
               children: [
-                const Icon(
-                  Icons.bug_report_outlined,
-                  size: 18,
-                  color: AppColors.hint,
-                ),
+                Icon(Icons.bug_report_outlined, size: 18, color: palette.hint),
                 const SizedBox(width: 6),
-                const Text(
+                Text(
                   '调试',
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.labelText,
+                    color: palette.labelText,
                   ),
                 ),
                 const Spacer(),
-                const Text(
+                Text(
                   '仅 debug 构建可见',
-                  style: TextStyle(fontSize: 11, color: AppColors.hint),
+                  style: TextStyle(fontSize: 11, color: palette.hint),
                 ),
               ],
             ),
             const SizedBox(height: 4),
-            const Text(
+            Text(
               '用真实的 Passkey 流程登录教务系统，验证本机凭据是否还能用。',
-              style: TextStyle(
-                fontSize: 12,
-                color: AppColors.hint,
-                height: 1.4,
-              ),
+              style: TextStyle(fontSize: 12, color: palette.hint, height: 1.4),
             ),
             const SizedBox(height: 12),
             SizedBox(
@@ -419,11 +413,12 @@ class _StatusHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final scheme = Theme.of(context).colorScheme;
     final (icon, color, title, subtitle) = switch ((bundle, revoked)) {
       (null, _) => (
         Icons.link_off,
-        AppColors.hint,
+        palette.hint,
         '未绑定',
         '绑定后即可在 APP 内直接使用教务、电费等需要门户身份的功能。',
       ),
@@ -435,7 +430,7 @@ class _StatusHeader extends StatelessWidget {
       ),
       _ => (
         Icons.verified_user,
-        const Color(0xFF00B42A),
+        palette.success,
         '已绑定',
         '本机已保存通行密钥，APP 内需要门户身份时会自动登录。',
       ),
@@ -466,15 +461,15 @@ class _StatusHeader extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: revoked ? color : AppColors.titleText,
+                      color: revoked ? color : palette.titleText,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     subtitle,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: AppColors.hint,
+                      color: palette.hint,
                       height: 1.5,
                     ),
                   ),
@@ -537,6 +532,7 @@ class _InfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Column(
       children: [
         Padding(
@@ -547,10 +543,7 @@ class _InfoRow extends StatelessWidget {
               children: [
                 Text(
                   label,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: AppColors.labelText,
-                  ),
+                  style: TextStyle(fontSize: 14, color: palette.labelText),
                 ),
                 const SizedBox(width: 16),
                 // 用 Expanded 而不是 Spacer + Flexible：两个弹性组件会平分剩余
@@ -560,9 +553,9 @@ class _InfoRow extends StatelessWidget {
                     value,
                     textAlign: TextAlign.right,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
-                      color: AppColors.titleText,
+                      color: palette.titleText,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -571,9 +564,9 @@ class _InfoRow extends StatelessWidget {
             ),
           ),
         ),
-        const Padding(
-          padding: EdgeInsets.only(left: 16),
-          child: Divider(height: 1, color: AppColors.rowDivider),
+        Padding(
+          padding: const EdgeInsets.only(left: 16),
+          child: Divider(height: 1, color: palette.rowDivider),
         ),
       ],
     );
@@ -599,8 +592,9 @@ class _TestResultView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final color = result.ok
-        ? const Color(0xFF00B42A)
+        ? palette.success
         : Theme.of(context).colorScheme.error;
     return Container(
       width: double.infinity,
@@ -637,9 +631,9 @@ class _TestResultView extends StatelessWidget {
             const SizedBox(height: 6),
             SelectableText(
               line,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11,
-                color: AppColors.labelText,
+                color: palette.labelText,
                 height: 1.5,
               ),
             ),

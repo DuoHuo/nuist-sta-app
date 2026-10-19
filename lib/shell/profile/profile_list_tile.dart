@@ -28,6 +28,7 @@ class ProfileListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return InkWell(
       onTap: onTap,
       child: Column(
@@ -43,7 +44,7 @@ class ProfileListTile extends StatelessWidget {
                     child: Center(
                       child: Icon(
                         tile.icon,
-                        color: AppColors.labelText,
+                        color: palette.labelText,
                         size: 20,
                       ),
                     ),
@@ -54,8 +55,8 @@ class ProfileListTile extends StatelessWidget {
                       tile.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xFF1F2329),
+                      style: TextStyle(
+                        color: palette.titleText,
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
                       ),
@@ -64,20 +65,17 @@ class ProfileListTile extends StatelessWidget {
                   if (tile.trailing != null) ...[
                     Text(
                       tile.trailing!,
-                      style: const TextStyle(
-                        color: AppColors.hint,
-                        fontSize: 13,
-                      ),
+                      style: TextStyle(color: palette.hint, fontSize: 13),
                     ),
                     const SizedBox(width: 4),
                   ],
-                  const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+                  Icon(Icons.chevron_right, color: palette.chevron),
                 ],
               ),
             ),
           ),
           if (showDivider)
-            const Divider(height: 1, indent: 52, color: AppColors.rowDivider),
+            Divider(height: 1, indent: 52, color: palette.rowDivider),
         ],
       ),
     );

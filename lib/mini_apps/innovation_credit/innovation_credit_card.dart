@@ -31,6 +31,7 @@ class _InnovationCreditCardState extends State<InnovationCreditCard> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
@@ -64,7 +65,7 @@ class _InnovationCreditCardState extends State<InnovationCreditCard> {
           child: Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: palette.surface,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
@@ -78,12 +79,12 @@ class _InnovationCreditCardState extends State<InnovationCreditCard> {
                       color: kInnovationColor,
                     ),
                     const SizedBox(width: 4),
-                    const Text(
+                    Text(
                       '双创学分',
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.titleText,
+                        color: palette.titleText,
                       ),
                     ),
                     const Spacer(),
@@ -92,10 +93,7 @@ class _InnovationCreditCardState extends State<InnovationCreditCard> {
                       // 时间就知道数据有多旧。
                       Text(
                         credit == null ? '' : formatShortTime(credit.fetchedAt),
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.hint,
-                        ),
+                        style: TextStyle(fontSize: 11, color: palette.hint),
                       ),
                       _RefreshButton(loading: c.loading, onPressed: c.refresh),
                     ] else
@@ -121,6 +119,7 @@ class _CreditBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final items = credit.items;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -132,35 +131,32 @@ class _CreditBody extends StatelessWidget {
           children: [
             Text(
               credit.total.isEmpty ? '--' : credit.total,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 26,
                 fontWeight: FontWeight.w700,
-                color: AppColors.titleText,
+                color: palette.titleText,
                 height: 1.1,
               ),
             ),
             const SizedBox(width: 4),
-            const Text(
-              '分',
-              style: TextStyle(fontSize: 13, color: AppColors.labelText),
-            ),
+            Text('分', style: TextStyle(fontSize: 13, color: palette.labelText)),
             if (credit.grade.isNotEmpty) ...[
               const SizedBox(width: 10),
               _Tag(
                 text: gradeLabel(credit),
-                color: gradeColor(credit.gradeKind),
+                color: gradeColor(credit.gradeKind, palette),
               ),
             ],
           ],
         ),
         const SizedBox(height: 12),
-        const Divider(height: 1, color: AppColors.rowDivider),
+        Divider(height: 1, color: palette.rowDivider),
         if (items.isEmpty)
-          const Padding(
-            padding: EdgeInsets.only(top: 10),
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
             child: Text(
               '暂无已认定的学分项目',
-              style: TextStyle(fontSize: 12, color: AppColors.hint),
+              style: TextStyle(fontSize: 12, color: palette.hint),
             ),
           )
         else
@@ -173,24 +169,21 @@ class _CreditBody extends StatelessWidget {
                     child: Text(
                       item.name,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: AppColors.titleText,
-                      ),
+                      style: TextStyle(fontSize: 13, color: palette.titleText),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Text(
                     item.date,
-                    style: const TextStyle(fontSize: 11, color: AppColors.hint),
+                    style: TextStyle(fontSize: 11, color: palette.hint),
                   ),
                   const SizedBox(width: 12),
                   Text(
                     item.score.isEmpty ? '--' : '+${item.score}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.accent,
+                      color: palette.accent,
                     ),
                   ),
                 ],
@@ -201,10 +194,10 @@ class _CreditBody extends StatelessWidget {
           children: [
             Text(
               items.length > _maxItems ? '共 ${items.length} 项 · 查看全部' : '查看明细',
-              style: const TextStyle(fontSize: 12, color: AppColors.labelText),
+              style: TextStyle(fontSize: 12, color: palette.labelText),
             ),
             const Spacer(),
-            const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+            Icon(Icons.chevron_right, color: palette.chevron),
           ],
         ),
       ],
@@ -220,18 +213,24 @@ String gradeLabel(InnovationCredit credit) => switch (credit.gradeKind) {
 };
 
 /// 成绩评定用的颜色：合格绿、未达标灰（只是还没攒够，不是出了什么错）。
-Color gradeColor(InnovationStatusKind? kind) => switch (kind) {
-  InnovationStatusKind.approved => AppColors.success,
-  InnovationStatusKind.rejected => AppColors.hint,
-  _ => AppColors.labelText,
-};
+///
+/// [palette] 由调用方从 `AppPalette.of(context)` 取，保证深色下跟随提亮。
+Color gradeColor(InnovationStatusKind? kind, AppPalette palette) =>
+    switch (kind) {
+      InnovationStatusKind.approved => palette.success,
+      InnovationStatusKind.rejected => palette.hint,
+      _ => palette.labelText,
+    };
 
 /// 条目状态用的颜色：通过绿、审核中橙、驳回红。
-Color statusColor(InnovationStatusKind kind) => switch (kind) {
-  InnovationStatusKind.approved => AppColors.success,
-  InnovationStatusKind.pending => AppColors.warning,
-  InnovationStatusKind.rejected => AppColors.danger,
-};
+///
+/// [palette] 由调用方从 `AppPalette.of(context)` 取，保证深色下跟随提亮。
+Color statusColor(InnovationStatusKind kind, AppPalette palette) =>
+    switch (kind) {
+      InnovationStatusKind.approved => palette.success,
+      InnovationStatusKind.pending => palette.warning,
+      InnovationStatusKind.rejected => palette.danger,
+    };
 
 class _Tag extends StatelessWidget {
   const _Tag({required this.text, required this.color});
@@ -274,6 +273,7 @@ class _Placeholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: Row(
@@ -285,7 +285,7 @@ class _Placeholder extends StatelessWidget {
                 fontSize: 14,
                 color: isError
                     ? Theme.of(context).colorScheme.error
-                    : AppColors.hint,
+                    : palette.hint,
               ),
             ),
           ),
@@ -314,6 +314,7 @@ class _RefreshButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return SizedBox(
       width: 32,
       height: 32,
@@ -328,7 +329,7 @@ class _RefreshButton extends StatelessWidget {
           : IconButton(
               padding: EdgeInsets.zero,
               iconSize: 18,
-              color: AppColors.accent,
+              color: palette.accent,
               icon: const Icon(Icons.refresh),
               onPressed: onPressed,
             ),

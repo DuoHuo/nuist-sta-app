@@ -18,16 +18,17 @@ class RootPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final current = navigationShell.currentIndex;
     return Scaffold(
       body: navigationShell,
       // 不用 BottomNavigationBar：它的水波纹以整条栏为画布铺开。
       // 每个条目各自一块 Material + InkWell，涟漪只落在被按的格子里。
       bottomNavigationBar: Material(
-        color: Colors.white,
+        color: palette.surface,
         child: Container(
-          decoration: const BoxDecoration(
-            border: Border(top: BorderSide(color: AppColors.divider)),
+          decoration: BoxDecoration(
+            border: Border(top: BorderSide(color: palette.divider)),
           ),
           child: SafeArea(
             top: false,
@@ -78,7 +79,8 @@ class _TabButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = selected ? AppColors.accent : AppColors.tabInactive;
+    final palette = AppPalette.of(context);
+    final color = selected ? palette.accent : palette.tabInactive;
     return Semantics(
       button: true,
       selected: selected,

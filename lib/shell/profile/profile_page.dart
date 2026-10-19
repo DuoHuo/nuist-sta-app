@@ -5,6 +5,7 @@ import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/auth/student_id_mask.dart';
+import '../../core/colors.dart';
 import '../../core/wip.dart';
 import 'profile_list_tile.dart';
 import 'user_card.dart';
@@ -52,6 +53,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
       body: ListView(
@@ -70,7 +72,7 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
           const SizedBox(height: 10),
           Material(
-            color: Colors.white,
+            color: palette.surface,
             borderRadius: BorderRadius.circular(12),
             clipBehavior: Clip.antiAlias,
             child: Column(

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nuist_sta_app/core/colors.dart';
+import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/score/score_page.dart';
 
 void main() {
@@ -13,17 +13,8 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(
-      MaterialApp(
-        theme: ThemeData(
-          useMaterial3: true,
-          scaffoldBackgroundColor: AppColors.pageBg,
-          appBarTheme: const AppBarTheme(
-            backgroundColor: Colors.white,
-            surfaceTintColor: Colors.transparent,
-          ),
-        ),
-        home: const ScorePage(),
-      ),
+      // 直接用线上主题，避免测试里自备一份 ThemeData 与实现脱节。
+      MaterialApp(theme: appLightTheme(), home: const ScorePage()),
     );
     await tester.pumpAndSettle();
 

@@ -27,8 +27,9 @@ class _InnovationCreditPageState extends State<InnovationCreditPage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
-      backgroundColor: AppColors.pageBg,
+      backgroundColor: palette.pageBg,
       appBar: AppBar(title: const Text('双创学分')),
       body: ListenableBuilder(
         listenable: _controller,
@@ -60,6 +61,7 @@ class _StatusHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final c = controller;
     final credit = c.credit;
     final scheme = Theme.of(context).colorScheme;
@@ -67,7 +69,7 @@ class _StatusHeader extends StatelessWidget {
     if (!c.portalBound) {
       return _IconHeader(
         icon: Icons.link_off,
-        color: AppColors.hint,
+        color: palette.hint,
         title: '未绑定统一门户',
         subtitle: '双创学分查询需要门户身份，请先到「我的 → 绑定统一门户」完成绑定。',
         onTap: () => context.push('/portal-bind'),
@@ -114,26 +116,26 @@ class _StatusHeader extends StatelessWidget {
                     children: [
                       Text(
                         credit.total.isEmpty ? '--' : credit.total,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.titleText,
+                          color: palette.titleText,
                           height: 1.1,
                         ),
                       ),
                       const SizedBox(width: 4),
-                      const Text(
+                      Text(
                         '分',
                         style: TextStyle(
                           fontSize: 13,
-                          color: AppColors.labelText,
+                          color: palette.labelText,
                         ),
                       ),
                       if (credit.grade.isNotEmpty) ...[
                         const SizedBox(width: 10),
                         _Tag(
                           text: gradeLabel(credit),
-                          color: gradeColor(credit.gradeKind),
+                          color: gradeColor(credit.gradeKind, palette),
                         ),
                       ],
                     ],
@@ -141,17 +143,14 @@ class _StatusHeader extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     '已认定 ${credit.items.length} 项',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: AppColors.labelText,
-                    ),
+                    style: TextStyle(fontSize: 13, color: palette.labelText),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     c.error ?? '更新于 ${formatFullTime(credit.fetchedAt)}',
                     style: TextStyle(
                       fontSize: 11,
-                      color: c.error != null ? scheme.error : AppColors.hint,
+                      color: c.error != null ? scheme.error : palette.hint,
                       height: 1.4,
                     ),
                   ),
@@ -171,7 +170,7 @@ class _StatusHeader extends StatelessWidget {
                     )
                   : IconButton(
                       icon: const Icon(Icons.refresh),
-                      color: AppColors.accent,
+                      color: palette.accent,
                       onPressed: c.refresh,
                     ),
             ),
@@ -189,14 +188,15 @@ class _ItemList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     if (items.isEmpty) {
-      return const _Card(
+      return _Card(
         child: Padding(
-          padding: EdgeInsets.all(20),
+          padding: const EdgeInsets.all(20),
           child: Center(
             child: Text(
               '暂无已认定的双创学分',
-              style: TextStyle(fontSize: 13, color: AppColors.hint),
+              style: TextStyle(fontSize: 13, color: palette.hint),
             ),
           ),
         ),
@@ -208,9 +208,9 @@ class _ItemList extends StatelessWidget {
           for (var i = 0; i < items.length; i++) ...[
             _ItemTile(item: items[i]),
             if (i != items.length - 1)
-              const Padding(
-                padding: EdgeInsets.only(left: 16),
-                child: Divider(height: 1, color: AppColors.rowDivider),
+              Padding(
+                padding: const EdgeInsets.only(left: 16),
+                child: Divider(height: 1, color: palette.rowDivider),
               ),
           ],
         ],
@@ -226,6 +226,7 @@ class _ItemTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final meta = [
       if (item.date.isNotEmpty) item.date,
       if (item.batch.isNotEmpty) item.batch,
@@ -241,10 +242,10 @@ class _ItemTile extends StatelessWidget {
               Expanded(
                 child: Text(
                   item.name,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.titleText,
+                    color: palette.titleText,
                   ),
                 ),
               ),
@@ -254,19 +255,16 @@ class _ItemTile extends StatelessWidget {
                 children: [
                   Text(
                     item.score.isEmpty ? '--' : '+${item.score}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.accent,
+                      color: palette.accent,
                     ),
                   ),
                   if (item.isDiscounted)
                     Text(
                       '参照 ${item.standardScore}',
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: AppColors.hint,
-                      ),
+                      style: TextStyle(fontSize: 10, color: palette.hint),
                     ),
                 ],
               ),
@@ -276,7 +274,7 @@ class _ItemTile extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               item.categoryPath,
-              style: const TextStyle(fontSize: 12, color: AppColors.labelText),
+              style: TextStyle(fontSize: 12, color: palette.labelText),
             ),
           ],
           const SizedBox(height: 6),
@@ -286,11 +284,14 @@ class _ItemTile extends StatelessWidget {
                 child: Text(
                   meta,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: AppColors.hint),
+                  style: TextStyle(fontSize: 11, color: palette.hint),
                 ),
               ),
               if (item.status.isNotEmpty)
-                _Tag(text: item.status, color: statusColor(item.statusKind)),
+                _Tag(
+                  text: item.status,
+                  color: statusColor(item.statusKind, palette),
+                ),
             ],
           ),
         ],
@@ -318,6 +319,7 @@ class _IconHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return _Card(
       child: InkWell(
         onTap: onTap,
@@ -342,10 +344,10 @@ class _IconHeader extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.titleText,
+                        color: palette.titleText,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -355,7 +357,7 @@ class _IconHeader extends StatelessWidget {
                         fontSize: 12,
                         color: isError
                             ? Theme.of(context).colorScheme.error
-                            : AppColors.hint,
+                            : palette.hint,
                         height: 1.5,
                       ),
                     ),
@@ -363,7 +365,7 @@ class _IconHeader extends StatelessWidget {
                 ),
               ),
               if (onTap != null)
-                const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+                Icon(Icons.chevron_right, color: palette.chevron),
             ],
           ),
         ),
@@ -405,9 +407,10 @@ class _Card extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: palette.surface,
         borderRadius: BorderRadius.circular(12),
       ),
       clipBehavior: Clip.antiAlias,

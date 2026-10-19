@@ -73,6 +73,7 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 只管容器层（顶栏、进度条、错误页）；网页内容是学校自己的页面，不做反色。
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.manifest.label),
@@ -84,7 +85,7 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
                   minHeight: 2,
                   value: _progress / 100,
                   color: Theme.of(context).colorScheme.primary,
-                  backgroundColor: AppColors.rowDivider,
+                  backgroundColor: AppPalette.of(context).rowDivider,
                 )
               : const SizedBox(height: 2),
         ),
@@ -110,6 +111,7 @@ class _PortalErrorView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final needsBinding = error is PortalCredentialError;
     return Center(
       child: Padding(
@@ -120,26 +122,22 @@ class _PortalErrorView extends StatelessWidget {
             Icon(
               needsBinding ? Icons.gpp_maybe_outlined : Icons.wifi_off,
               size: 40,
-              color: AppColors.hint,
+              color: palette.hint,
             ),
             const SizedBox(height: 12),
             Text(
               needsBinding ? '需要统一门户身份' : '网络不可用',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
-                color: AppColors.titleText,
+                color: palette.titleText,
               ),
             ),
             const SizedBox(height: 6),
             Text(
               error.message,
               textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.hint,
-                height: 1.5,
-              ),
+              style: TextStyle(fontSize: 12, color: palette.hint, height: 1.5),
             ),
             const SizedBox(height: 20),
             if (needsBinding)

@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/colors.dart';
 import 'timetable_schedule_event_detail_sheet.dart';
 import 'timetable_controller.dart';
 import 'timetable_perf.dart';
@@ -270,9 +269,10 @@ class _TimetablePageState extends State<TimetablePage> {
 
   Future<void> _pickWeek() async {
     final max = _totalWeeks;
+    final colors = TimetableTheme.colorsOf(context);
     final selected = await showModalBottomSheet<int>(
       context: context,
-      backgroundColor: TimetableTheme.surface,
+      backgroundColor: colors.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(
           top: Radius.circular(TimetableTheme.sheetTopRadius),
@@ -288,12 +288,15 @@ class _TimetablePageState extends State<TimetablePage> {
                 width: 36,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: TimetableTheme.divider,
+                  color: colors.divider,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
               const SizedBox(height: 12),
-              Text('选择周次', style: TimetableTheme.titleStyle()),
+              Text(
+                '选择周次',
+                style: TimetableTheme.titleStyle(color: colors.titleText),
+              ),
               const SizedBox(height: 12),
               GridView.builder(
                 shrinkWrap: true,
@@ -315,22 +318,19 @@ class _TimetablePageState extends State<TimetablePage> {
                     child: Container(
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: isCurrent
-                            ? TimetableTheme.accent
-                            : Colors.transparent,
+                        color: isCurrent ? colors.accent : Colors.transparent,
                         border: Border.all(
                           color: isViewing && !isCurrent
-                              ? TimetableTheme.accent
-                              : TimetableTheme.divider,
+                              ? colors.accent
+                              : colors.divider,
                         ),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
                         '$week',
                         style: TextStyle(
-                          color: isCurrent
-                              ? Colors.white
-                              : TimetableTheme.titleText,
+                          // 本周那一格是 accent 实心底，上面压白字。
+                          color: isCurrent ? Colors.white : colors.titleText,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -370,8 +370,9 @@ class _TimetablePageState extends State<TimetablePage> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
     return Scaffold(
-      backgroundColor: TimetableTheme.pageBg,
+      backgroundColor: colors.pageBg,
       body: SafeArea(
         child: ListenableBuilder(
           listenable: _controller,
@@ -495,6 +496,7 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
     // 最小高度而非固定高度：大字号下可增高，不裁切。
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: TimetableTheme.appBarHeight),
@@ -520,14 +522,16 @@ class _TopBar extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         TextSpan(
-                          style: TimetableTheme.displayStyle(),
+                          style: TimetableTheme.displayStyle(
+                            color: colors.titleText,
+                          ),
                           children: [
                             TextSpan(text: '第 $week 周'),
                             if (!isCurrent && endedCurrentWeek == null)
                               TextSpan(
                                 text: '(非本周)',
                                 style: TimetableTheme.displayStyle(
-                                  color: TimetableTheme.hint,
+                                  color: colors.hint,
                                 ).copyWith(fontSize: 14),
                               ),
                           ],
@@ -539,9 +543,7 @@ class _TopBar extends StatelessWidget {
                           key: const Key('timetable_term_ended'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TimetableTheme.microStyle(
-                            color: TimetableTheme.hint,
-                          ),
+                          style: TimetableTheme.microStyle(color: colors.hint),
                         )
                       else if (weekPending)
                         Text(
@@ -549,7 +551,7 @@ class _TopBar extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TimetableTheme.microStyle(
-                            color: TimetableTheme.warning,
+                            color: colors.warning,
                           ),
                         )
                       else
@@ -557,7 +559,7 @@ class _TopBar extends StatelessWidget {
                           dateLabel,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TimetableTheme.microStyle(),
+                          style: TimetableTheme.microStyle(color: colors.hint),
                         ),
                     ],
                   ),
@@ -646,7 +648,7 @@ class _IconBtn extends StatelessWidget {
         tooltip: tooltip,
         onPressed: onTap,
         icon: Icon(icon, size: TimetableTheme.iconSize),
-        color: TimetableTheme.titleText,
+        color: TimetableTheme.colorsOf(context).titleText,
       ),
     );
   }
@@ -667,6 +669,7 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -676,24 +679,25 @@ class _EmptyState extends StatelessWidget {
             Icon(
               Icons.calendar_view_week_outlined,
               size: 56,
-              color: TimetableTheme.hint.withValues(alpha: 0.7),
+              color: colors.hint.withValues(alpha: 0.7),
             ),
             const SizedBox(height: 12),
-            Text('还没有课程', style: TimetableTheme.titleStyle()),
+            Text(
+              '还没有课程',
+              style: TimetableTheme.titleStyle(color: colors.titleText),
+            ),
             const SizedBox(height: 8),
             Text(
               loggedIn ? '点右上角同步图标，从教务同步本学期课表' : '登录统一门户后自动同步课表',
               textAlign: TextAlign.center,
-              style: TimetableTheme.captionStyle(color: TimetableTheme.hint),
+              style: TimetableTheme.captionStyle(color: colors.hint),
             ),
             if (!loggedIn) ...[
               const SizedBox(height: 20),
               FilledButton(
                 key: const Key('timetable_empty_login'),
                 onPressed: loading ? null : onLogin,
-                style: FilledButton.styleFrom(
-                  backgroundColor: TimetableTheme.accent,
-                ),
+                style: FilledButton.styleFrom(backgroundColor: colors.accent),
                 child: const Text('去登录'),
               ),
             ],
@@ -714,7 +718,7 @@ class _BackToWeekButton extends StatelessWidget {
     return Material(
       elevation: 1,
       shadowColor: Colors.black26,
-      color: TimetableTheme.accent,
+      color: TimetableTheme.colorsOf(context).accent,
       borderRadius: BorderRadius.circular(999),
       child: InkWell(
         onTap: onTap,
@@ -723,6 +727,7 @@ class _BackToWeekButton extends StatelessWidget {
           padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Text(
             '回到本周',
+            // accent 实心胶囊上的白字，明暗都不变。
             style: TextStyle(
               color: Colors.white,
               fontSize: 12,
@@ -744,12 +749,13 @@ class _OtherCoursesBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final others = controller.otherCourses();
     if (others.isEmpty) return const SizedBox.shrink();
+    final colors = TimetableTheme.colorsOf(context);
     return Material(
-      color: Colors.white,
+      color: colors.surface,
       child: ExpansionTile(
         title: Text(
           '其他课程（${others.length}）',
-          style: TimetableTheme.captionStyle(color: AppColors.titleText),
+          style: TimetableTheme.captionStyle(color: colors.titleText),
         ),
         children: [
           for (final c in others)

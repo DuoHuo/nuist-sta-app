@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../core/colors.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_layout.dart';
 import 'timetable_controller.dart';
@@ -84,8 +83,9 @@ class ScheduleHomeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
     final accent = scheduleAccentOnWhite(controller, event);
-    final fg = done ? AppColors.hint : AppColors.titleText;
+    final fg = done ? colors.hint : colors.titleText;
     return InkWell(
       key: Key('home_event_row_${event.id}'),
       onTap: onTap,
@@ -101,7 +101,7 @@ class ScheduleHomeRow extends StatelessWidget {
                 width: 4,
                 margin: const EdgeInsets.symmetric(vertical: 4),
                 decoration: BoxDecoration(
-                  color: done ? AppColors.divider : accent,
+                  color: done ? colors.divider : accent,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -134,7 +134,7 @@ class ScheduleHomeRow extends StatelessWidget {
                                   : 'home_event_other_pill',
                             ),
                             text: schedulePillLabel(event),
-                            color: done ? AppColors.hint : accent,
+                            color: done ? colors.hint : accent,
                           ),
                         ],
                       ),
@@ -144,7 +144,7 @@ class ScheduleHomeRow extends StatelessWidget {
                           scheduleTimeText(event),
                         ].join(' · '),
                         style: TimetableTheme.microStyle(
-                          color: done ? AppColors.hint : AppColors.labelText,
+                          color: done ? colors.hint : colors.labelText,
                         ),
                       ),
                     ],

@@ -132,7 +132,7 @@ class _FreeClassroomPageState extends State<FreeClassroomPage> {
       builder: (context, _) {
         final c = _controller;
         return Scaffold(
-          backgroundColor: AppColors.pageBg,
+          backgroundColor: AppPalette.of(context).pageBg,
           appBar: AppBar(
             title: const Text('空教室'),
             actions: [
@@ -312,6 +312,7 @@ class _BuildingRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final c = controller;
     final building = c.building;
     final day = c.result;
@@ -354,12 +355,12 @@ class _BuildingRow extends StatelessWidget {
         child: CircularProgressIndicator(strokeWidth: 2),
       );
     } else if (listFailed) {
-      trailing = const Text(
+      trailing = Text(
         '重试',
-        style: TextStyle(fontSize: 13, color: AppColors.accent),
+        style: TextStyle(fontSize: 13, color: palette.accent),
       );
     } else {
-      trailing = const Icon(Icons.expand_more, color: Color(0xFFC9CDD4));
+      trailing = Icon(Icons.expand_more, color: palette.chevron);
     }
 
     return InkWell(
@@ -388,10 +389,10 @@ class _BuildingRow extends StatelessWidget {
                 children: [
                   Text(
                     building?.name ?? '选择教学楼',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.titleText,
+                      color: palette.titleText,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -404,7 +405,7 @@ class _BuildingRow extends StatelessWidget {
                       height: 1.35,
                       color: isError
                           ? Theme.of(context).colorScheme.error
-                          : AppColors.hint,
+                          : palette.hint,
                     ),
                   ),
                 ],
@@ -430,6 +431,7 @@ class _DateStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     return SizedBox(
@@ -455,7 +457,7 @@ class _DateStrip extends StatelessWidget {
               duration: const Duration(milliseconds: 180),
               width: 46,
               decoration: BoxDecoration(
-                color: isSelected ? kClassroomColor : AppColors.pageBg,
+                color: isSelected ? kClassroomColor : palette.pageBg,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Column(
@@ -463,12 +465,13 @@ class _DateStrip extends StatelessWidget {
                 children: [
                   _FitText(
                     top,
+                    // 选中态是压在实心紫块上的文字，两套主题下都得是白的。
                     style: TextStyle(
                       fontSize: 10,
                       height: 1.2,
                       color: isSelected
                           ? Colors.white.withValues(alpha: 0.85)
-                          : AppColors.hint,
+                          : palette.hint,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -478,7 +481,7 @@ class _DateStrip extends StatelessWidget {
                       fontSize: 15,
                       height: 1.2,
                       fontWeight: FontWeight.w600,
-                      color: isSelected ? Colors.white : AppColors.titleText,
+                      color: isSelected ? Colors.white : palette.titleText,
                     ),
                   ),
                 ],
@@ -509,7 +512,10 @@ class _ChipRow extends StatelessWidget {
             width: 40,
             child: Text(
               label,
-              style: const TextStyle(fontSize: 12, color: AppColors.labelText),
+              style: TextStyle(
+                fontSize: 12,
+                color: AppPalette.of(context).labelText,
+              ),
             ),
           ),
           Expanded(
@@ -538,9 +544,13 @@ class _CardDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.only(left: 14),
-      child: Divider(height: 1, thickness: 1, color: AppColors.rowDivider),
+    return Padding(
+      padding: const EdgeInsets.only(left: 14),
+      child: Divider(
+        height: 1,
+        thickness: 1,
+        color: AppPalette.of(context).rowDivider,
+      ),
     );
   }
 }
@@ -608,6 +618,7 @@ class _PeriodHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final c = controller;
     final groups = day.groups;
     final selected = c.selectedGroups;
@@ -635,10 +646,12 @@ class _PeriodHeader extends StatelessWidget {
       child: Container(
         height: height,
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: palette.surface,
           borderRadius: pinned
               ? BorderRadius.zero
               : const BorderRadius.vertical(top: Radius.circular(12)),
+          // 投影是半透明纯黑，深色下压在暗底上几乎看不见，但也不会发白，
+          // 不随主题改。
           boxShadow: pinned
               ? const [
                   BoxShadow(
@@ -665,10 +678,10 @@ class _PeriodHeader extends StatelessWidget {
                             '$matched 间可用',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
-                              color: AppColors.titleText,
+                              color: palette.titleText,
                             ),
                           ),
                           if (quickLabel != null)
@@ -679,10 +692,10 @@ class _PeriodHeader extends StatelessWidget {
                                 padding: const EdgeInsets.only(top: 3),
                                 child: Text(
                                   '$quickLabel ›',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 11,
                                     fontWeight: FontWeight.w500,
-                                    color: AppColors.accent,
+                                    color: palette.accent,
                                   ),
                                 ),
                               ),
@@ -705,7 +718,7 @@ class _PeriodHeader extends StatelessWidget {
                 ),
               ),
             ),
-            const Divider(height: 1, thickness: 1, color: AppColors.rowDivider),
+            Divider(height: 1, thickness: 1, color: palette.rowDivider),
           ],
         ),
       ),
@@ -730,17 +743,18 @@ class _ColumnToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final Color bg;
     final Color fg;
     if (selected) {
       bg = kClassroomColor.withValues(alpha: 0.12);
       fg = kClassroomColor;
     } else if (over) {
-      bg = const Color(0xFFF7F8FA);
-      fg = const Color(0xFFC9CDD4);
+      bg = ClassroomFillColors.muted(palette);
+      fg = ClassroomFillColors.mutedForeground(palette);
     } else {
-      bg = AppColors.pageBg;
-      fg = AppColors.labelText;
+      bg = palette.pageBg;
+      fg = palette.labelText;
     }
     // 「08:00」→「8:00」，格子窄，省一个字符。
     final start = group.startTime.replaceFirst(RegExp(r'^0'), '');
@@ -896,7 +910,8 @@ class _RoomList extends StatelessWidget {
   }
 }
 
-/// 列表每一项的白底外壳：横向留出页边距，最后一项收出圆角，连起来就是一张卡。
+/// 列表每一项的卡片底外壳：横向留出页边距，最后一项收出圆角，连起来就是
+/// 一张卡。
 class _ListShell extends StatelessWidget {
   const _ListShell({required this.isLast, required this.child});
 
@@ -908,7 +923,7 @@ class _ListShell extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Material(
-        color: Colors.white,
+        color: AppPalette.of(context).surface,
         borderRadius: isLast
             ? const BorderRadius.vertical(bottom: Radius.circular(12))
             : BorderRadius.zero,
@@ -941,14 +956,17 @@ class _SectionLabel extends StatelessWidget {
     _Section.busy => '所选时段全部占用',
   };
 
-  static Color colorOf(_Section section) => switch (section) {
-    _Section.free => AppColors.success,
-    _Section.partial => AppColors.warning,
-    _Section.busy => AppColors.hint,
-  };
+  /// 段标题左侧的色条，按色板取值。
+  static Color colorOf(_Section section, AppPalette palette) =>
+      switch (section) {
+        _Section.free => palette.success,
+        _Section.partial => palette.warning,
+        _Section.busy => palette.hint,
+      };
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -961,29 +979,29 @@ class _SectionLabel extends StatelessWidget {
               width: 3,
               height: 12,
               decoration: BoxDecoration(
-                color: colorOf(section),
+                color: colorOf(section, palette),
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
             const SizedBox(width: 8),
             Text(
               titleOf(section),
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: AppColors.titleText,
+                color: palette.titleText,
               ),
             ),
             const SizedBox(width: 6),
             Text(
               '$count 间',
-              style: const TextStyle(fontSize: 12, color: AppColors.hint),
+              style: TextStyle(fontSize: 12, color: palette.hint),
             ),
             const Spacer(),
             Icon(
               collapsed ? Icons.expand_more : Icons.expand_less,
               size: 20,
-              color: const Color(0xFFC9CDD4),
+              color: palette.chevron,
             ),
           ],
         ),
@@ -1013,6 +1031,7 @@ class _RoomRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final room = match.room;
     // 楼层不放这里：名字里通常带着，筛选行也有；列窄，留给类型和座位。
     final meta = [
@@ -1035,11 +1054,11 @@ class _RoomRow extends StatelessWidget {
                         room.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 15,
                           height: 1.2,
                           fontWeight: FontWeight.w600,
-                          color: AppColors.titleText,
+                          color: palette.titleText,
                         ),
                       ),
                       const SizedBox(height: 3),
@@ -1047,10 +1066,10 @@ class _RoomRow extends StatelessWidget {
                         meta.isEmpty ? '—' : meta,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           height: 1.2,
-                          color: AppColors.hint,
+                          color: palette.hint,
                         ),
                       ),
                     ],
@@ -1071,11 +1090,11 @@ class _RoomRow extends StatelessWidget {
             ),
           ),
           if (showDivider)
-            const Divider(
+            Divider(
               height: 1,
               thickness: 1,
               indent: 12,
-              color: AppColors.rowDivider,
+              color: palette.rowDivider,
             ),
         ],
       ),
@@ -1103,26 +1122,27 @@ class _StatusCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final free = room.freeCountIn(group);
     final total = group.periods.length;
     final Color bg;
     final Widget? mark;
     if (free == total) {
-      bg = AppColors.success.withValues(alpha: 0.18);
+      bg = palette.success.withValues(alpha: 0.18);
       mark = null;
     } else if (free > 0) {
-      bg = AppColors.warning.withValues(alpha: 0.18);
+      bg = palette.warning.withValues(alpha: 0.18);
       mark = _FitText(
         '$free/$total',
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 9,
           height: 1,
           fontWeight: FontWeight.w700,
-          color: AppColors.warning,
+          color: palette.warning,
         ),
       );
     } else {
-      bg = const Color(0xFFEDEFF2);
+      bg = ClassroomFillColors.busy(palette);
       mark = null;
     }
     return Opacity(
@@ -1161,6 +1181,7 @@ class _EmptyBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final noRooms = day.rooms.isEmpty;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
@@ -1169,18 +1190,18 @@ class _EmptyBody extends StatelessWidget {
           Icon(
             Icons.event_busy_outlined,
             size: 32,
-            color: AppColors.hint.withValues(alpha: 0.7),
+            color: palette.hint.withValues(alpha: 0.7),
           ),
           const SizedBox(height: 10),
           Text(
             noRooms ? '教务没有返回这栋楼的教室' : '所选条件下没有空教室',
-            style: const TextStyle(fontSize: 14, color: AppColors.labelText),
+            style: TextStyle(fontSize: 14, color: palette.labelText),
           ),
           if (!noRooms) ...[
             const SizedBox(height: 4),
-            const Text(
+            Text(
               '试试换个时段、楼层或放宽筛选',
-              style: TextStyle(fontSize: 12, color: AppColors.hint),
+              style: TextStyle(fontSize: 12, color: palette.hint),
             ),
           ],
         ],
@@ -1194,12 +1215,16 @@ class _Footer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.fromLTRB(20, 10, 20, 0),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
       child: Text(
         '绿色：该时段全部空闲；橙色：部分节次空闲，数字为空闲节数 / 总节数；'
         '灰色：有课或已被占用。数据来自教务排课与借用记录，临时使用可能未登记，以现场为准。',
-        style: TextStyle(fontSize: 11, color: AppColors.hint, height: 1.5),
+        style: TextStyle(
+          fontSize: 11,
+          color: AppPalette.of(context).hint,
+          height: 1.5,
+        ),
       ),
     );
   }
@@ -1236,7 +1261,10 @@ class _StateView extends StatelessWidget {
           const SizedBox(height: 14),
           Text(
             '正在查询${c.building!.name}…',
-            style: const TextStyle(fontSize: 13, color: AppColors.labelText),
+            style: TextStyle(
+              fontSize: 13,
+              color: AppPalette.of(context).labelText,
+            ),
           ),
         ],
       );
@@ -1275,6 +1303,7 @@ class _Prompt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final errorColor = Theme.of(context).colorScheme.error;
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -1284,7 +1313,7 @@ class _Prompt extends StatelessWidget {
           size: 40,
           color: isError
               ? errorColor.withValues(alpha: 0.7)
-              : AppColors.hint.withValues(alpha: 0.6),
+              : palette.hint.withValues(alpha: 0.6),
         ),
         const SizedBox(height: 12),
         Text(
@@ -1293,7 +1322,7 @@ class _Prompt extends StatelessWidget {
           style: TextStyle(
             fontSize: 14,
             height: 1.5,
-            color: isError ? errorColor : AppColors.labelText,
+            color: isError ? errorColor : palette.labelText,
           ),
         ),
         if (action != null && onAction != null) ...[
@@ -1320,6 +1349,7 @@ class _PortalGuide extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: [
@@ -1335,17 +1365,13 @@ class _PortalGuide extends StatelessWidget {
                     width: 40,
                     height: 40,
                     decoration: BoxDecoration(
-                      color: AppColors.hint.withValues(alpha: 0.1),
+                      color: palette.hint.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Icon(
-                      Icons.link_off,
-                      color: AppColors.hint,
-                      size: 22,
-                    ),
+                    child: Icon(Icons.link_off, color: palette.hint, size: 22),
                   ),
                   const SizedBox(width: 12),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -1354,22 +1380,22 @@ class _PortalGuide extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.titleText,
+                            color: palette.titleText,
                           ),
                         ),
-                        SizedBox(height: 4),
+                        const SizedBox(height: 4),
                         Text(
                           '空教室数据来自教务系统，请先到「我的 → 绑定统一门户」完成绑定。',
                           style: TextStyle(
                             fontSize: 12,
-                            color: AppColors.hint,
+                            color: palette.hint,
                             height: 1.5,
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+                  Icon(Icons.chevron_right, color: palette.chevron),
                 ],
               ),
             ),
@@ -1402,7 +1428,7 @@ class _RefreshAction extends StatelessWidget {
     }
     return IconButton(
       icon: const Icon(Icons.refresh),
-      color: AppColors.accent,
+      color: AppPalette.of(context).accent,
       tooltip: '刷新',
       onPressed: onPressed,
     );

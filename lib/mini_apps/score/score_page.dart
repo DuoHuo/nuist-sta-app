@@ -27,8 +27,9 @@ class _ScorePageState extends State<ScorePage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
-      backgroundColor: AppColors.pageBg,
+      backgroundColor: palette.pageBg,
       appBar: AppBar(title: const Text('成绩查询')),
       body: ListenableBuilder(
         listenable: _controller,
@@ -105,6 +106,7 @@ class _OverviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return _Card(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
@@ -119,18 +121,18 @@ class _OverviewCard extends StatelessWidget {
                   color: kScoreColor,
                 ),
                 const SizedBox(width: 6),
-                const Text(
+                Text(
                   '成绩概览',
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.titleText,
+                    color: palette.titleText,
                   ),
                 ),
                 const Spacer(),
                 Text(
                   formatShortTime(report.fetchedAt),
-                  style: const TextStyle(fontSize: 11, color: AppColors.hint),
+                  style: TextStyle(fontSize: 11, color: palette.hint),
                 ),
                 SizedBox(
                   width: 32,
@@ -156,10 +158,10 @@ class _OverviewCard extends StatelessWidget {
             const SizedBox(height: 10),
             Text(
               term ?? '全部成绩',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.w700,
-                color: AppColors.titleText,
+                color: palette.titleText,
               ),
             ),
             const SizedBox(height: 12),
@@ -214,6 +216,7 @@ class _TermPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return _Card(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
@@ -222,7 +225,7 @@ class _TermPicker extends StatelessWidget {
             value: selected,
             isExpanded: true,
             icon: const Icon(Icons.expand_more),
-            style: const TextStyle(fontSize: 14, color: AppColors.titleText),
+            style: TextStyle(fontSize: 14, color: palette.titleText),
             items: [
               for (final term in terms)
                 DropdownMenuItem(value: term, child: Text(term)),
@@ -242,35 +245,36 @@ class _CourseSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return _Card(
       child: records.isEmpty
-          ? const Padding(
-              padding: EdgeInsets.all(16),
+          ? Padding(
+              padding: const EdgeInsets.all(16),
               child: Text(
                 '这个学期还没有成绩记录',
-                style: TextStyle(fontSize: 13, color: AppColors.hint),
+                style: TextStyle(fontSize: 13, color: palette.hint),
               ),
             )
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                   child: Text(
                     '课程成绩',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.titleText,
+                      color: palette.titleText,
                     ),
                   ),
                 ),
                 for (var i = 0; i < records.length; i++) ...[
                   _CourseTile(record: records[i]),
                   if (i != records.length - 1)
-                    const Padding(
-                      padding: EdgeInsets.only(left: 16),
-                      child: Divider(height: 1, color: AppColors.rowDivider),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 16),
+                      child: Divider(height: 1, color: palette.rowDivider),
                     ),
                 ],
                 const SizedBox(height: 4),
@@ -287,11 +291,12 @@ class _CourseTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final color = record.failed
-        ? AppColors.danger
+        ? palette.danger
         : record.passed
-        ? AppColors.success
-        : AppColors.warning;
+        ? palette.success
+        : palette.warning;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -305,18 +310,18 @@ class _CourseTile extends StatelessWidget {
                   record.displayCourseName,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.titleText,
+                    color: palette.titleText,
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   _details(record),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
-                    color: AppColors.hint,
+                    color: palette.hint,
                     height: 1.4,
                   ),
                 ),
@@ -371,23 +376,21 @@ class _Metric extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           value,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 17,
             fontWeight: FontWeight.w600,
-            color: AppColors.titleText,
+            color: palette.titleText,
             height: 1.1,
           ),
         ),
         const SizedBox(height: 3),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 11, color: AppColors.labelText),
-        ),
+        Text(label, style: TextStyle(fontSize: 11, color: palette.labelText)),
       ],
     );
   }
@@ -410,6 +413,7 @@ class _StateCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: [
@@ -426,13 +430,13 @@ class _StateCard extends StatelessWidget {
                     width: 40,
                     height: 40,
                     decoration: BoxDecoration(
-                      color: (isError ? AppColors.danger : kScoreColor)
+                      color: (isError ? palette.danger : kScoreColor)
                           .withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Icon(
                       icon,
-                      color: isError ? AppColors.danger : kScoreColor,
+                      color: isError ? palette.danger : kScoreColor,
                       size: 22,
                     ),
                   ),
@@ -443,10 +447,10 @@ class _StateCard extends StatelessWidget {
                       children: [
                         Text(
                           title,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.titleText,
+                            color: palette.titleText,
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -456,7 +460,7 @@ class _StateCard extends StatelessWidget {
                             fontSize: 12,
                             color: isError
                                 ? Theme.of(context).colorScheme.error
-                                : AppColors.hint,
+                                : palette.hint,
                             height: 1.5,
                           ),
                         ),
@@ -464,7 +468,7 @@ class _StateCard extends StatelessWidget {
                     ),
                   ),
                   if (onTap != null)
-                    const Icon(Icons.chevron_right, color: Color(0xFFC9CDD4)),
+                    Icon(Icons.chevron_right, color: palette.chevron),
                 ],
               ),
             ),
@@ -482,9 +486,10 @@ class _Card extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: palette.surface,
         borderRadius: BorderRadius.circular(12),
       ),
       clipBehavior: Clip.antiAlias,

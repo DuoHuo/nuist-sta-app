@@ -249,7 +249,9 @@ class _PortalBindPageState extends State<PortalBindPage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final error = _error;
+    // WebView 里是门户自己的页面，不注入任何样式脚本，只适配容器层。
     return Scaffold(
       appBar: AppBar(
         title: const Text('绑定统一门户'),
@@ -261,7 +263,7 @@ class _PortalBindPageState extends State<PortalBindPage> {
                   minHeight: 2,
                   value: _progress / 100,
                   color: Theme.of(context).colorScheme.primary,
-                  backgroundColor: AppColors.rowDivider,
+                  backgroundColor: palette.rowDivider,
                 )
               : const SizedBox(height: 2),
         ),
