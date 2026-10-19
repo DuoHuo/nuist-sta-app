@@ -9,6 +9,7 @@ import '../../core/auth/portal_exceptions.dart';
 import 'timetable_api.dart';
 import 'timetable_colors.dart';
 import 'timetable_date_edits.dart';
+import 'timetable_remaining_weeks.dart';
 import 'timetable_models.dart';
 import 'timetable_overrides.dart';
 import 'timetable_schedule_event.dart';
@@ -1897,6 +1898,8 @@ class TimetableController extends ChangeNotifier {
         if (!slot.hasFixedTime || slot.day != day) continue;
         final active = slot.hasClassInWeek(week);
         if (!active && !settings.showNonCurrentWeek) continue;
+        // 第 15 条：非本周灰格只在之后还有安排时显示，否则隐藏。
+        if (!active && !slotHasRemainingWeeks(slot, week)) continue;
         // 本周这次已被拖走（拆出的时段本周有课）→ 原位置不画「[非本周]」虚影。
         if (!active && splitAway.contains(slot.ref)) continue;
         candidates.add(_Cand(course, slot, active));
@@ -1926,23 +1929,57 @@ class TimetableController extends ChangeNotifier {
     ];
   }
 
-  /// 套用单日修改（第 1 条）后的候选格。
+  /// 套用单日 / 多周修改后的候选格。
   List<_Cand> _applyDateEdits(DateTime date, int day, List<_Cand> cands) {
+    final week = _weekOfDate(date);
     final here = [
       for (final e in _dateEdits)
-        if (isSameDate(e.date, date)) e,
+        if (e.scope == DateEditScope.oneDay && isSameDate(e.date, date)) e,
+    ];
+    final weekScoped = [
+      for (final e in _dateEdits)
+        if (e.isWeeksScoped) e,
+    ];
+    final weekdayDels = [
+      for (final e in _dateEdits)
+        if (e.isWeekdayMatch && e.isDelete) e,
     ];
     final incoming = [
       for (final e in _dateEdits)
-        if (!e.isDelete && e.movesToOtherDate && isSameDate(e.toDate!, date)) e,
+        if (!e.isDelete &&
+            e.scope == DateEditScope.oneDay &&
+            e.movesToOtherDate &&
+            isSameDate(e.toDate!, date))
+          e,
     ];
-    if (here.isEmpty && incoming.isEmpty) return cands;
+    if (here.isEmpty &&
+        weekScoped.isEmpty &&
+        weekdayDels.isEmpty &&
+        incoming.isEmpty) {
+      return cands;
+    }
     final out = <_Cand>[];
     for (final c in cands) {
       if (!c.active) {
         out.add(c);
         continue;
       }
+      // weekdayMatch 删除优先按匹配隐藏。
+      var killed = false;
+      for (final e in weekdayDels) {
+        if (e.matchesWeekdaySlot(
+          courseId: c.course.id,
+          courseName: c.course.name,
+          weekday: day,
+          teacher: c.slot.teacher,
+          location: c.slot.location,
+        )) {
+          killed = true;
+          break;
+        }
+      }
+      if (killed) continue;
+
       CourseDateEdit? rec;
       for (final e in here) {
         if (e.matches(c.course.id, date, c.slot.startNode, c.slot.endNode)) {
@@ -1950,10 +1987,24 @@ class TimetableController extends ChangeNotifier {
         }
       }
       if (rec == null) {
+        for (final e in weekScoped) {
+          if (e.matchesWeek(
+            c.course.id,
+            week,
+            day,
+            c.slot.startNode,
+            c.slot.endNode,
+          )) {
+            rec = e;
+          }
+        }
+      }
+      if (rec == null) {
         out.add(c);
       } else if (!rec.isDelete && !rec.movesToOtherDate) {
         out.add(_withDateEdit(c, rec, day));
       }
+      // delete / 挪走：不加入 out
     }
     for (final rec in incoming) {
       final src = _activeCandidateFor(rec);
@@ -2108,6 +2159,15 @@ class TimetableController extends ChangeNotifier {
       if (e.courseId == courseId) e,
   ];
 
+  /// 第 15 条：非本周格 / 考试是否在 [viewedWeek] 之后还有安排。
+  bool hasRemainingWeeks(Object item, int viewedWeek) => switch (item) {
+    Course c => courseHasRemainingWeeks(c, viewedWeek),
+    CourseSlot s => slotHasRemainingWeeks(s, viewedWeek),
+    GridCell g => slotHasRemainingWeeks(g.slot, viewedWeek),
+    ScheduleEvent e => examHasRemainingWeeks(_weekOfDate(e.date), viewedWeek),
+    _ => false,
+  };
+
   /// 一格对应「这次课」的识别键（单日修改按它存）。非本周格 / 没有日期 → null。
   ({String courseId, DateTime date, int start, int end})? _occurrenceKey(
     GridCell cell,
@@ -2206,6 +2266,8 @@ class TimetableController extends ChangeNotifier {
         );
     rec = rec.copyWith(
       kind: DateEditKind.edit,
+      scope: DateEditScope.oneDay,
+      clearWeeks: true,
       name: name,
       teacher: teacher,
       location: location,
@@ -2228,7 +2290,7 @@ class TimetableController extends ChangeNotifier {
     return rec.isEmpty ? null : rec;
   }
 
-  /// 只删这一天的这次课（其他周 / 其他天不变）。
+  /// 只删这一天的这次课（其他周 / 其他天不变）。scope=oneDay。
   Future<CourseDateEdit?> deleteOccurrence(GridCell cell) async {
     final key = _occurrenceKey(cell);
     if (key == null || baseOccurrenceOf(cell) == null) return null;
@@ -2243,7 +2305,127 @@ class TimetableController extends ChangeNotifier {
                   origEnd: key.end,
                   createdAt: DateTime.now().toIso8601String(),
                 ))
-            .copyWith(kind: DateEditKind.delete);
+            .copyWith(
+              kind: DateEditKind.delete,
+              scope: DateEditScope.oneDay,
+              clearWeeks: true,
+            );
+    await _upsertDateEdit(old, rec);
+    return rec;
+  }
+
+  /// 编辑页「应用周数」：对勾选周写入一条 scope=weeks 的修改。
+  /// [weeks] 空 → null（调用方应拦截）。单周且等于格子所在周 → 退回 [editOccurrence]
+  /// （oneDay，不写 weeks）。
+  Future<CourseDateEdit?> editOccurrenceWeeks(
+    GridCell cell, {
+    required List<int> weeks,
+    String? name,
+    String? teacher,
+    String? location,
+    String? note,
+    int? toDay,
+    int? toStart,
+    int? toEnd,
+  }) async {
+    final sorted = {...weeks}.where((w) => w >= 1).toList()..sort();
+    if (sorted.isEmpty) return null;
+    final key = _occurrenceKey(cell);
+    if (key == null || baseOccurrenceOf(cell) == null) return null;
+    final cellWeek = _weekOfDate(key.date);
+    if (sorted.length == 1 && sorted.single == cellWeek) {
+      return editOccurrence(
+        cell,
+        name: name,
+        teacher: teacher,
+        location: location,
+        note: note,
+        toDay: toDay,
+        toStart: toStart,
+        toEnd: toEnd,
+      );
+    }
+    // 替换同课程同节次的旧 weeks 记录。
+    CourseDateEdit? old;
+    for (final e in _dateEdits) {
+      if (e.isWeeksScoped &&
+          e.courseId == key.courseId &&
+          e.origStart == key.start &&
+          e.origEnd == key.end) {
+        old = e;
+      }
+    }
+    var rec =
+        old ??
+        CourseDateEdit(
+          id: 'dedit-${DateTime.now().microsecondsSinceEpoch}-${_dateEditSeq++}',
+          courseId: key.courseId,
+          date: key.date,
+          origStart: key.start,
+          origEnd: key.end,
+          createdAt: DateTime.now().toIso8601String(),
+        );
+    rec = rec.copyWith(
+      kind: DateEditKind.edit,
+      scope: DateEditScope.weeks,
+      weeks: sorted,
+      name: name,
+      teacher: teacher,
+      location: location,
+      note: note,
+    );
+    if (toDay != null || toStart != null || toEnd != null) {
+      final monday = mondayOfWeek(cell.date!);
+      final toDate = toDay == null
+          ? rec.toDate ?? key.date
+          : DateTime(monday.year, monday.month, monday.day + toDay - 1);
+      final curStart = rec.toStart ?? key.start;
+      final curEnd = rec.toEnd ?? key.end;
+      final s = toStart ?? curStart;
+      final e = toEnd ?? (toStart == null ? curEnd : s + (curEnd - curStart));
+      if (s < 1 || e < s || e > lastPeriod) return null;
+      rec = rec.copyWith(toDate: toDate, toStart: s, toEnd: e);
+      if (!rec.movesTime) rec = rec.copyWith(clearMove: true);
+    }
+    await _upsertDateEdit(old, rec);
+    return rec.isEmpty ? null : rec;
+  }
+
+  /// 删除菜单第 2 档：全部同星期 + 同老师同地点（空则同名课）。
+  Future<CourseDateEdit?> deleteWeekdayMatch(GridCell cell) async {
+    final key = _occurrenceKey(cell);
+    if (key == null || baseOccurrenceOf(cell) == null) return null;
+    final teacher = cell.slot.teacher;
+    final location = cell.slot.location;
+    final empty = teacher.isEmpty || location.isEmpty;
+    // 替换同课程同 weekday 的旧 weekdayMatch 删除。
+    CourseDateEdit? old;
+    for (final e in _dateEdits) {
+      if (e.isWeekdayMatch &&
+          e.isDelete &&
+          e.courseId == key.courseId &&
+          e.weekday == key.date.weekday) {
+        old = e;
+      }
+    }
+    final rec = CourseDateEdit(
+      id:
+          old?.id ??
+          'dedit-${DateTime.now().microsecondsSinceEpoch}-${_dateEditSeq++}',
+      courseId: key.courseId,
+      date: key.date,
+      origStart: key.start,
+      origEnd: key.end,
+      kind: DateEditKind.delete,
+      scope: DateEditScope.weekdayMatch,
+      weekday: key.date.weekday,
+      matchEmptyTeacherLocation: empty,
+      // 空放宽时 name 存课名快照；否则 teacher/location 为匹配快照。
+      name: empty ? cell.course.name : null,
+      teacher: empty ? null : teacher,
+      location: empty ? null : location,
+      createdAt: old?.createdAt ?? DateTime.now().toIso8601String(),
+    );
     await _upsertDateEdit(old, rec);
     return rec;
   }

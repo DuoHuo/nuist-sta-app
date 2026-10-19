@@ -352,20 +352,16 @@ class TimetableSettingsPage extends StatelessWidget {
                 ],
               ),
               _Group(
-                key: const Key('tt_settings_group_swaps'),
-                title: '调课',
+                key: const Key('tt_settings_group_other'),
+                title: '其他',
                 children: [
                   _Row(
                     key: const Key('tt_settings_day_swaps'),
-                    title: '调课记录',
+                    title: '整天调课',
                     semanticsStatus: c.daySwaps.isEmpty
                         ? '无'
                         : '${c.daySwaps.length} 条',
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => TimetableDaySwapsPage(controller: c),
-                      ),
-                    ),
+                    onTap: () => openDaySwapPage(context, c),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -384,12 +380,6 @@ class TimetableSettingsPage extends StatelessWidget {
                       ],
                     ),
                   ),
-                ],
-              ),
-              _Group(
-                key: const Key('tt_settings_group_other'),
-                title: '其他',
-                children: [
                   _Row(
                     key: const Key('tt_settings_account'),
                     title: '教务账号',

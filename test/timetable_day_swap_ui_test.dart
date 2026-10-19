@@ -1,4 +1,4 @@
-// 第 8 条整天调课 UI + 第 1 条详情「恢复这一天 / 只删这一天」。全部为构造数据。
+// 第 5 条整天调课页 UI + 第 7 条删除范围 / 恢复这一天。全部为构造数据。
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -114,15 +114,18 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('SWU01 长按表头 → 整天调课 → 选日期 → 确认互换；两天都显示「调」', (tester) async {
+  testWidgets('SWU01 长按表头 → 整天调课页（原日期预填）→ 选目标 → 互换；两天都显示「调」', (tester) async {
     load();
     await pumpGrid(tester);
     expect(find.byKey(const Key('day_header_swap_badge')), findsNothing);
     await longPressHeader(tester, 1);
-    expect(find.byKey(const Key('day_swap_sheet')), findsOneWidget);
-    expect(find.byKey(const Key('day_swap_undo')), findsNothing);
+    expect(find.byKey(const Key('day_swaps_page')), findsOneWidget);
+    expect(find.text('10月12日'), findsOneWidget); // 原日期预填
     picked = _wed;
-    await tester.tap(find.byKey(const Key('day_swap_start')));
+    await tester.tap(find.byKey(const Key('day_swap_to')));
+    await tester.pumpAndSettle();
+    expect(find.text('10月14日'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('day_swap_submit')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('day_swap_confirm_dialog')), findsOneWidget);
     expect(find.text('与10月14日互换'), findsOneWidget);
@@ -131,6 +134,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(c.daySwaps, hasLength(1));
     expect(c.isSwappedDate(_mon) && c.isSwappedDate(_wed), isTrue);
+    // 回到网格看角标
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('day_header_swap_badge')), findsNWidgets(2));
     expect(find.text('已与10月14日互换'), findsOneWidget);
   });
@@ -140,47 +146,51 @@ void main() {
     await pumpGrid(tester);
     await longPressHeader(tester, 1);
     picked = null;
-    await tester.tap(find.byKey(const Key('day_swap_start')));
+    await tester.tap(find.byKey(const Key('day_swap_to')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('day_swap_confirm_dialog')), findsNothing);
-    await longPressHeader(tester, 1);
     picked = _wed;
-    await tester.tap(find.byKey(const Key('day_swap_start')));
+    await tester.tap(find.byKey(const Key('day_swap_to')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('day_swap_submit')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('day_swap_cancel')));
     await settleIo(tester);
     expect(c.daySwaps, isEmpty);
   });
 
-  testWidgets('SWU03 已调课的日期：面板给「撤销调课」，点后恢复', (tester) async {
+  testWidgets('SWU03 已调课：页内记录可「恢复」', (tester) async {
     load();
-    await tester.runAsync(() => c.addDaySwap(_mon, _wed));
+    final s = (await tester.runAsync(() => c.addDaySwap(_mon, _wed)))!;
     await pumpGrid(tester);
     expect(find.byKey(const Key('day_header_swap_badge')), findsNWidgets(2));
     await longPressHeader(tester, 3);
-    expect(find.byKey(const Key('day_swap_start')), findsNothing);
-    expect(find.text('10月14日已与10月12日互换课程'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('day_swap_undo')));
+    expect(find.byKey(const Key('day_swaps_page')), findsOneWidget);
+    expect(find.text('10月12日与10月14日的课程互换'), findsOneWidget);
+    await tester.tap(find.byKey(Key('day_swap_restore_${s.id}')));
     await settleIo(tester);
     await tester.pumpAndSettle();
     expect(c.daySwaps, isEmpty);
-    expect(find.byKey(const Key('day_header_swap_badge')), findsNothing);
-    expect(find.text('已撤销调课'), findsOneWidget);
+    expect(find.byKey(const Key('day_swaps_empty')), findsOneWidget);
   });
 
   testWidgets('SWU04 失败提示：同一天 / 学期外 / 对方已调过课', (tester) async {
     load();
     await tester.runAsync(() => c.addDaySwap(_wed, _thu));
-    await pumpGrid(tester);
+    await pumpHost(
+      tester,
+      TimetableDaySwapsPage(controller: c, initialFrom: _mon),
+    );
 
     Future<void> attempt(DateTime d, String msg) async {
-      await longPressHeader(tester, 1);
       picked = d;
-      await tester.tap(find.byKey(const Key('day_swap_start')));
+      await tester.tap(find.byKey(const Key('day_swap_to')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('day_swap_submit')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('day_swap_confirm_dialog')), findsNothing);
       expect(find.text(msg), findsOneWidget);
-      ScaffoldMessenger.of(tester.element(find.byType(WeekGrid)))
+      ScaffoldMessenger.of(tester.element(find.byType(TimetableDaySwapsPage)))
           .removeCurrentSnackBar();
       await tester.pumpAndSettle();
     }
@@ -251,7 +261,7 @@ void main() {
       .cellsForDay(c.weekOfDate(d), d.weekday)
       .firstWhere((x) => x.activeThisWeek && x.course.id == id);
 
-  testWidgets('SWU08 详情「只删这一天」→ 只那天消失；「恢复这一天」→ 回来', (tester) async {
+  testWidgets('SWU08 详情删除三档 → 只删这一天；「恢复这一天」→ 回来', (tester) async {
     load();
     await pumpHost(
       tester,
@@ -260,7 +270,11 @@ void main() {
       ),
     );
     expect(find.byKey(const Key('course_detail_restore_day')), findsNothing);
-    await tester.tap(find.byKey(const Key('course_detail_delete_day')));
+    expect(find.byKey(const Key('course_detail_delete_day')), findsNothing);
+    await tester.tap(find.byKey(const Key('course_detail_delete')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('delete_scope_sheet')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('delete_scope_one_day')));
     await settleIo(tester);
     expect(
       c
@@ -268,11 +282,9 @@ void main() {
           .where((x) => x.activeThisWeek && x.course.id == 'm1'),
       isEmpty,
     );
-    // 下一周照常。
     expect(cellOn(DateTime(2026, 10, 19), 'm1').dateEdit, isNull);
     expect(c.courseDateEdits, hasLength(1));
 
-    // 改名后详情显示「恢复这一天」。
     await tester.runAsync(() async {
       await c.restoreDateEdit(c.courseDateEdits.single.id);
       await c.editOccurrence(cellOn(_mon, 'm1'), name: '读书会·改');

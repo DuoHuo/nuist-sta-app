@@ -154,6 +154,9 @@ void main() {
       await openDetail(tester, 'j1');
       await tester.tap(find.byKey(const Key('course_detail_jwxt_delete')));
       await tester.pumpAndSettle();
+      expect(find.byKey(const Key('delete_scope_sheet')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('delete_scope_whole_course')));
+      await tester.pumpAndSettle();
       expect(find.text('删除这门课？同步后也不会恢复，可在设置里一键恢复。'), findsOneWidget);
       final del = tester.widget<TextButton>(
         find.byKey(const Key('jwxt_delete_confirm')),
@@ -168,6 +171,8 @@ void main() {
       expect(_c.courseEditOf('j1'), isNull);
 
       await tester.tap(find.byKey(const Key('course_detail_jwxt_delete')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('delete_scope_whole_course')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('jwxt_delete_confirm')));
       await _settleIo(tester);
@@ -216,12 +221,16 @@ void main() {
       expect(find.byType(Dialog), findsNothing);
       expect(find.byType(BottomSheet), findsNothing);
 
+      expect(find.byKey(const Key('jwxt_edit_apply_weeks')), findsOneWidget);
       await tester.enterText(find.byKey(const Key('jwxt_edit_name')), '测试课乙');
-      await tester.tap(find.byKey(const Key('jwxt_edit_save')));
+      // 选「全选」→ 所有周，改课程本身。
+      await tester.tap(find.byKey(const Key('jwxt_edit_apply_weeks')));
       await tester.pumpAndSettle();
-      // 第 1 条：有日期的格先选范围；这里选「所有周」（改课程本身，同以前）。
-      expect(find.byKey(const Key('edit_scope_sheet')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('edit_scope_all_weeks')));
+      expect(find.byKey(const Key('apply_weeks_sheet')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('apply_weeks_all')));
+      await tester.tap(find.byKey(const Key('apply_weeks_done')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('jwxt_edit_save')));
       await _settleIo(tester);
       final edit = _c.courseEditOf('j1')!;
       expect(edit.name, '测试课乙');

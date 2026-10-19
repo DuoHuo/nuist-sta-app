@@ -31,8 +31,8 @@ class ScheduleStore {
   static const daySwapsFile = 'day_swaps.json';
   static const int schemaVersion = 1;
 
-  /// `course_edits.json` 的内容版本：2 = 含单日修改 `dateEdits`。
-  static const int courseEditsVersion = 2;
+  /// `course_edits.json` 的内容版本：2 = 含单日修改 `dateEdits`；3 = 含 weeks/scope。
+  static const int courseEditsVersion = 3;
 
   static Future<Map<String, dynamic>> _read(String name) async {
     final file = await TimetableStore.fileFor(name);

@@ -1,10 +1,8 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'timetable_colors.dart';
 import 'timetable_controller.dart';
-import 'timetable_date_edits.dart';
-import 'timetable_edit_scope_sheet.dart';
+import 'timetable_apply_weeks_sheet.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
 import 'timetable_course_color.dart';
@@ -65,6 +63,9 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   late int _start;
   late int _end;
   late Set<int> _weeks;
+
+  /// 编辑应用周数（与课程「周次」分开）；仅从格子进来时有意义。
+  late Set<int> _applyWeeks;
 
   /// 用户自选色号；null = 未选（跟随默认配色）。
   int? _colorIndex;
@@ -130,6 +131,14 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
       weeks: {..._weeks},
       color: _colorIndex,
     );
+    final cell = widget.cell;
+    if (cell?.date != null && cell!.activeThisWeek) {
+      final w = widget.controller.weekOfDate(cell.date!);
+      _applyWeeks = {if (w >= 1) w};
+    } else {
+      final total = widget.controller.totalWeeks;
+      _applyWeeks = {for (var w = 1; w <= total; w++) w};
+    }
   }
 
   /// 打开表单时的值（第 1 条：判断改了哪些、只改这一天时只记改过的字段）。
@@ -145,34 +154,6 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     int? color,
   })
   _init;
-
-  /// 只改这一天：写单日修改；颜色属于课程本身，改了照样存到课程。
-  Future<Course?> _saveThisDay(GridCell cell, Course initial) async {
-    final c = widget.controller;
-    String? changed(TextEditingController t, String init) =>
-        t.text.trim() == init.trim() ? null : t.text.trim();
-    final timeChanged =
-        _day != _init.day || _start != _init.start || _end != _init.end;
-    final rec = await c.editOccurrence(
-      cell,
-      name: changed(_name, _init.name),
-      teacher: changed(_teacher, _init.teacher),
-      location: changed(_location, _init.location),
-      note: changed(_note, _init.note),
-      toDay: timeChanged ? _day : null,
-      toStart: timeChanged ? _start : null,
-      toEnd: timeChanged ? _end : null,
-    );
-    final base = c.manualCourseById(initial.id);
-    if (base != null && _colorIndex != _init.color) {
-      await c.updateManualCourse(
-        base.copyWith(colorIndex: _colorIndex, clearColor: _colorIndex == null),
-      );
-    }
-    // rec 为 null：改回了原值（记录已删）或格子已失效，课程本身都没动。
-    if (rec == null && kDebugMode) debugPrint('[timetable] 单日修改未写入');
-    return c.manualCourseById(initial.id) ?? initial;
-  }
 
   void _onNameChanged() {
     // 默认色随课名变化；冲突提示也会重算。
@@ -245,15 +226,49 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
           _start != _init.start ||
           _end != _init.end;
       if (!weeksChanged && occurrenceChanged && cell.activeThisWeek) {
-        final scope = await showEditScopeSheet(context, date: cell.date!);
-        if (scope == null || !mounted) {
-          if (mounted) setState(() => _saving = false);
+        final total = widget.controller.totalWeeks;
+        if (_applyWeeks.isEmpty) {
+          if (mounted) {
+            setState(() => _saving = false);
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              const SnackBar(
+                behavior: SnackBarBehavior.floating,
+                content: Text('请至少选择一周，或在「应用周数」里选「全选」'),
+              ),
+            );
+          }
           return;
         }
-        if (scope == EditScope.thisDay) {
-          final r = await _saveThisDay(cell, initial);
+        if (!isAllSemesterWeeks(_applyWeeks, total)) {
+          final sorted = _applyWeeks.toList()..sort();
+          String? changed(TextEditingController x, String init) =>
+              x.text.trim() == init.trim() ? null : x.text.trim();
+          final timeChanged =
+              _day != _init.day || _start != _init.start || _end != _init.end;
+          await widget.controller.editOccurrenceWeeks(
+            cell,
+            weeks: sorted,
+            name: changed(_name, _init.name),
+            teacher: changed(_teacher, _init.teacher),
+            location: changed(_location, _init.location),
+            note: changed(_note, _init.note),
+            toDay: timeChanged ? _day : null,
+            toStart: timeChanged ? _start : null,
+            toEnd: timeChanged ? _end : null,
+          );
+          final base = widget.controller.manualCourseById(initial.id);
+          if (base != null && _colorIndex != _init.color) {
+            await widget.controller.updateManualCourse(
+              base.copyWith(
+                colorIndex: _colorIndex,
+                clearColor: _colorIndex == null,
+              ),
+            );
+          }
           if (!mounted) return;
-          navigator.pop(r);
+          navigator.pop(
+            widget.controller.manualCourseById(initial.id) ?? initial,
+          );
           return;
         }
         // 所有周：这一天的单日修改里改过的字段让位给课程本身的新值。
@@ -532,6 +547,43 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
                   style: TextStyle(fontSize: 12, color: colors.warning),
                 ),
               ),
+            if (widget.cell?.date != null && widget.cell!.activeThisWeek) ...[
+              const SizedBox(height: 8),
+              ListTile(
+                key: const Key('manual_edit_apply_weeks'),
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.date_range_outlined, color: colors.hint),
+                title: Text(
+                  '应用周数',
+                  style: TimetableTheme.bodyStyle(color: colors.labelText),
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      applyWeeksSummary(
+                        _applyWeeks,
+                        widget.controller.totalWeeks,
+                      ),
+                      key: const Key('manual_edit_apply_weeks_summary'),
+                      style: TimetableTheme.bodyStyle(color: colors.hint),
+                    ),
+                    Icon(Icons.chevron_right, color: colors.hint),
+                  ],
+                ),
+                onTap: _saving
+                    ? null
+                    : () async {
+                        final picked = await showApplyWeeksSheet(
+                          context,
+                          totalWeeks: widget.controller.totalWeeks,
+                          initial: _applyWeeks,
+                        );
+                        if (picked == null || !mounted) return;
+                        setState(() => _applyWeeks = picked.toSet());
+                      },
+              ),
+            ],
             const SizedBox(height: 16),
             Row(
               children: [

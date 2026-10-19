@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'timetable_controller.dart';
-import 'timetable_date_edits.dart';
-import 'timetable_edit_scope_sheet.dart';
+import 'timetable_apply_weeks_sheet.dart';
+import 'timetable_delete_scope_sheet.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
 import 'timetable_week_format.dart';
@@ -57,6 +57,9 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
   late final TextEditingController _note;
   bool _saving = false;
 
+  /// 应用周数：默认当前格所在周；空则保存时提示。
+  late Set<int> _applyWeeks;
+
   @override
   void initState() {
     super.initState();
@@ -74,6 +77,14 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
     _teacher = TextEditingController(text: _initTeacher);
     _location = TextEditingController(text: _initLocation);
     _note = TextEditingController(text: _initNote);
+    final d = widget.cell.date;
+    if (d != null && widget.cell.activeThisWeek) {
+      final w = widget.controller.weekOfDate(d);
+      _applyWeeks = {if (w >= 1) w};
+    } else {
+      final total = widget.controller.totalWeeks;
+      _applyWeeks = {for (var w = 1; w <= total; w++) w};
+    }
   }
 
   void _changed() => setState(() {});
@@ -92,6 +103,17 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
     return v == initial.trim() ? null : v;
   }
 
+  Future<void> _pickApplyWeeks() async {
+    final total = widget.controller.totalWeeks;
+    final picked = await showApplyWeeksSheet(
+      context,
+      totalWeeks: total,
+      initial: _applyWeeks,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _applyWeeks = picked.toSet());
+  }
+
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     final name = _ifChanged(_name, _initName);
@@ -99,32 +121,27 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
     final location = _ifChanged(_location, _initLocation);
     final note = _ifChanged(_note, _initNote);
     final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
     if (name == null && teacher == null && location == null && note == null) {
       navigator.pop(false);
       return;
     }
-    // 第 1 条：有日期的格先选范围（默认只改这一天）；关掉面板 = 不保存、留在编辑页。
     final date = widget.cell.date;
-    var scope = EditScope.allWeeks;
-    if (date != null && widget.cell.activeThisWeek) {
-      final picked = await showEditScopeSheet(context, date: date);
-      if (picked == null || !mounted) return;
-      scope = picked;
+    final canScope = date != null && widget.cell.activeThisWeek;
+    final total = widget.controller.totalWeeks;
+    if (canScope && _applyWeeks.isEmpty) {
+      messenger?.showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('请至少选择一周，或在「应用周数」里选「全选」'),
+        ),
+      );
+      return;
     }
     setState(() => _saving = true);
     final c = widget.controller;
     final bool ok;
-    if (scope == EditScope.thisDay) {
-      ok =
-          await c.editOccurrence(
-            widget.cell,
-            name: name,
-            teacher: teacher,
-            location: location,
-            note: note,
-          ) !=
-          null;
-    } else {
+    if (!canScope || isAllSemesterWeeks(_applyWeeks, total)) {
       final id =
           c.baseOccurrenceOf(widget.cell)?.course.id ?? widget.cell.course.id;
       ok = await c.editJwxtCourse(
@@ -134,7 +151,6 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
         location: location,
         note: note,
       );
-      // 所有周：这一天的单日修改里同名字段让位给课程本身的新值。
       final de = widget.cell.dateEdit;
       if (ok && de != null) {
         await c.clearDateEditFields(
@@ -145,6 +161,18 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
           note: note != null,
         );
       }
+    } else {
+      final sorted = _applyWeeks.toList()..sort();
+      ok =
+          await c.editOccurrenceWeeks(
+            widget.cell,
+            weeks: sorted,
+            name: name,
+            teacher: teacher,
+            location: location,
+            note: note,
+          ) !=
+          null;
     }
     if (!mounted) return;
     setState(() => _saving = false);
@@ -223,6 +251,17 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
                 hintText: '选填',
               ),
             ),
+            if (widget.cell.date != null && widget.cell.activeThisWeek) ...[
+              const SizedBox(height: 8),
+              _ApplyWeeksRow(
+                key: const Key('jwxt_edit_apply_weeks'),
+                summary: applyWeeksSummary(
+                  _applyWeeks,
+                  widget.controller.totalWeeks,
+                ),
+                onTap: _saving ? null : _pickApplyWeeks,
+              ),
+            ],
             const SizedBox(height: 16),
             // 只读：不可点、不弹键盘或选择器（JE22）。
             _ReadOnlyRow(
@@ -248,6 +287,44 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ApplyWeeksRow extends StatelessWidget {
+  const _ApplyWeeksRow({super.key, required this.summary, this.onTap});
+
+  final String summary;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    return InkWell(
+      onTap: onTap,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: Row(
+          children: [
+            Icon(Icons.date_range_outlined, size: 20, color: colors.hint),
+            const SizedBox(width: 16),
+            Text(
+              '应用周数',
+              style: TimetableTheme.bodyStyle(color: colors.labelText),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                summary,
+                key: const Key('jwxt_edit_apply_weeks_summary'),
+                textAlign: TextAlign.end,
+                style: TimetableTheme.bodyStyle(color: colors.hint),
+              ),
+            ),
+            Icon(Icons.chevron_right, color: colors.hint),
           ],
         ),
       ),
@@ -339,6 +416,36 @@ class _JwxtCourseDetailActionsState extends State<JwxtCourseDetailActions> {
   }
 
   Future<void> _delete() async {
+    final cell = widget.cell;
+    final date = cell.date;
+    if (date != null && cell.activeThisWeek) {
+      final week = widget.controller.weekOfDate(date);
+      final scope = await showDeleteScopeSheet(
+        context,
+        week: week,
+        weekday: date.weekday,
+        teacherOrLocationEmpty:
+            cell.slot.teacher.isEmpty || cell.slot.location.isEmpty,
+      );
+      if (scope == null || !mounted) return;
+      setState(() => _busy = true);
+      switch (scope) {
+        case DeleteScope.oneDay:
+          final rec = await widget.controller.deleteOccurrence(cell);
+          if (!mounted) return;
+          _closeWith(rec == null ? '删除失败' : '已删除这一天的课');
+          return;
+        case DeleteScope.weekdayMatch:
+          final rec = await widget.controller.deleteWeekdayMatch(cell);
+          if (!mounted) return;
+          _closeWith(rec == null ? '删除失败' : '已删除同星期匹配的课');
+          return;
+        case DeleteScope.wholeCourse:
+          break;
+      }
+    } else {
+      setState(() => _busy = true);
+    }
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -363,8 +470,10 @@ class _JwxtCourseDetailActionsState extends State<JwxtCourseDetailActions> {
         ],
       ),
     );
-    if (ok != true || !mounted) return;
-    setState(() => _busy = true);
+    if (ok != true || !mounted) {
+      if (mounted) setState(() => _busy = false);
+      return;
+    }
     await widget.controller.deleteJwxtCourse(_id);
     if (!mounted) return;
     _closeWith('已删除');
