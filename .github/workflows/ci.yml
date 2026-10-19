@@ -113,6 +113,17 @@ jobs:
 
       - name: Install dependencies
         run: flutter pub get
+      # 启动图标必须由 assets/images/app_icon.png 经 flutter_launcher_icons 生成，且已提交。
+      - name: Check launcher icons
+        run: |
+          set -euo pipefail
+          dart run flutter_launcher_icons
+          if ! git diff --exit-code -- android/app/src/main/res \
+            || [ -n "$(git status --porcelain -- android/app/src/main/res)" ]; then
+            git status --porcelain -- android/app/src/main/res
+            echo "::error::启动图标与源图不一致，请运行 dart run flutter_launcher_icons 并提交 android/app/src/main/res 下的改动"
+            exit 1
+          fi
 
       # 在 crate 目录执行，让 rustup 按 rust-toolchain.toml 安装固定工具链和 Android target。
       - name: Set up Rust

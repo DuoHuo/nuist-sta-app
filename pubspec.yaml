@@ -64,6 +64,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: 0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -82,7 +83,7 @@ flutter:
     - assets/js/portal_passkey.js
     # 端上调试控制台，只在 debug 构建注入页面（见 PortalBindPage._injectVConsole）。
     - assets/js/vconsole.min.js
-    # 关于页展示的应用图标（复制自 Android launcher 图标）。
+    # 应用图标唯一真源：flutter_launcher_icons 据此生成 Android 启动图标，关于页也直接展示它。
     - assets/images/app_icon.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
@@ -110,3 +111,15 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# 启动图标生成配置：改完源图后运行 `dart run flutter_launcher_icons`，并提交生成的 res/ 文件（CI 会校验）。
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: false
+  image_path: "assets/images/app_icon.png"
+  # 与 Flutter 3.47 的 flutter.minSdkVersion 一致（android/app/build.gradle.kts）。
+  min_sdk_android: 24
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/app_icon.png"
+  # 四边各内缩 20%，画面占 108dp 画布的 60%（约 65dp），整体落入 66dp 安全区，避免启动器遮罩裁掉角色头部。
+  adaptive_icon_foreground_inset: 20
