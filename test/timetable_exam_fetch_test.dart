@@ -68,7 +68,7 @@ void main() {
         for (final e in _parse('exam_mock.json')) e.toJson(),
       ]);
       for (final s in [
-        '202500000000',
+        '202512340001',
         '张老师',
         '李老师',
         'synthetic-',
@@ -293,7 +293,7 @@ void main() {
       final raw = File('${tmp.path}/${ScheduleStore.scheduleEventsFile}')
           .readAsStringSync();
       expect(raw, contains('示例课程甲'));
-      for (final s in ['202500000000', '张老师', 'synthetic-', 'ZJJSXM']) {
+      for (final s in ['202512340001', '张老师', 'synthetic-', 'ZJJSXM']) {
         expect(raw, isNot(contains(s)), reason: s);
       }
     });
@@ -624,7 +624,7 @@ void main() {
       ].join('\n');
       final logText = logs.join('\n');
       for (final s in [
-        '202500000000',
+        '202512340001',
         '张老师',
         '李老师',
         '王老师',

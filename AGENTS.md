@@ -96,7 +96,7 @@ fix(electricity): 修复只有一条记录时折线图不显示
 - 构建产物：`build/`、`*.apk`、`*.aab`
 - 临时文件：`.tmp*/`、`test/failures/`、一次性调试脚本
 - 凭据：`*.jks`、`*.keystore`、`key.properties`、`passkey*.json`、`*.nuistkey`、Cookie、`.env`
-- 真实个人数据：学号、姓名、成绩等；测试夹具必须脱敏
+- 真实个人数据：学号、姓名、成绩等；测试夹具必须脱敏。mock 学号统一用 `202512340001`（CI 学号守卫的唯一白名单），禁止另造其他 12 位学号
 - 校内端点与密钥：`*.edu.cn` 域名、`20x` 开头IP、通行密钥导出密钥、VPN SPA 密钥等一律**hex 编码**集中存放在 `lib/core/config/campus_config.dart`（见 [校园地址与密钥](docs/configuration.md)），禁止明文硬编码；业务代码只引用 `CampusHosts`
 
 ## 8. 代码约定

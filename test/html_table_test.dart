@@ -37,7 +37,7 @@ const _summaryQuery = '''
         1
       </td>
       <td>
-        202500000000
+        202512340001
       </td>
       <td>
         示例同学
@@ -86,7 +86,7 @@ const _detail = '''
       <td>
         示例同学
         <div>
-          <small>(202500000000)</small>
+          <small>(202512340001)</small>
         </div>
       </td>
       <td>
@@ -97,7 +97,7 @@ const _detail = '''
       <td><div class="hidden td-data"><td-data data-name='ItemName' data-value='国家英语四级'></td-data></div>2</td>
       <td><span>国家英语四级</span></td>
       <td>1</td>
-      <td>示例同学<div><small>(202500000000)</small></div></td>
+      <td>示例同学<div><small>(202512340001)</small></div></td>
       <td><span class='m-badge'>学校审核学分通过</span></td>
     </tr>
   </tbody>
@@ -178,7 +178,7 @@ void main() {
     expect(rows, isNotNull);
     expect(rows, hasLength(1));
     final row = rows!.single;
-    expect(row['账号'], '202500000000');
+    expect(row['账号'], '202512340001');
     expect(row['用户名'], '示例同学');
     expect(row['成绩'], '不及格');
     expect(row['总学分'], '3');
@@ -192,7 +192,7 @@ void main() {
     expect(rows![0]['序号'], '1');
     expect(rows[0]['项目名称'], '程序设计竞赛实验班');
     expect(rows[0]['实际分值'], '1');
-    expect(rows[0]['学分申请人'], '示例同学 (202500000000)');
+    expect(rows[0]['学分申请人'], '示例同学 (202512340001)');
     expect(rows[0]['状态'], '学校审核学分通过');
     expect(rows[1]['项目名称'], '国家英语四级');
   });

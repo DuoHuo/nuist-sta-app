@@ -296,14 +296,14 @@ void main() {
 
   test('SPA 与 Python PoC 的固定向量一致', () {
     final encoded = VpnSpa.encode(
-      '202500000000',
+      '202512340001',
       salt: Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]),
       timestamp: 1700000000,
       randomValue: '1043321819600133',
     );
     expect(
       ascii.decode(encoded),
-      '8BAgMEBQYHCP+okvuIjojwJJtyRtVHdFsOE8tnP56dc7CTK4zOtqsiAdRtDLlC28U33mSXX8yqRIO3i7AkUT/VQtHLhkdlRbW4PW2CnP/E4HxtTw5b3xmMtwgMfWkLjV0Wp+8L7b6ITxqRWI9j2h4J56KYvzlmIqAWSjruQstqNLFPcX5SrgNF/Z2JjcBx3BOS1PmPvUUMjs',
+      '8BAgMEBQYHCP+okvuIjojwJJtyRtVHdFsa7VNrRHNUnv1POq3fPGbt1mhnRIF7dsBRLDWoWA914s7ddaXLtfkLKZ/DmJENWKy93v10iYs0iVIIqmmHrOGEi1WWrxGvG/ODTu7t4O0QL4pAZd03C4zRP/BjOEMoRh0CJeTC03PK1vzs4gVyAr6jx45g5ru8sxrtHkNfTfz3vs',
     );
   });
 

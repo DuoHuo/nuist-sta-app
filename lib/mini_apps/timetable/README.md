@@ -256,7 +256,7 @@ fetchUnscheduled(t)  → POST xskcb/xswpkc.do     XNXQDM=
 
 ### 4. Mock
 
-`test/fixtures/timetable/exam_mock.json`：全部合成数据（学号用守卫白名单 `202500000000`）。含 2 条正常考试（同一天上下午）和 1 条 `SFAPSJ="0"` 的未排时间记录。第 3 条的 null 写法是推断的边界用例，真实响应里只有已排时间的记录。
+`test/fixtures/timetable/exam_mock.json`：全部合成数据（学号用守卫白名单 `202512340001`）。含 2 条正常考试（同一天上下午）和 1 条 `SFAPSJ="0"` 的未排时间记录。第 3 条的 null 写法是推断的边界用例，真实响应里只有已排时间的记录。
 
 #### 4.1 边界样例
 

@@ -3,7 +3,7 @@ import 'package:nuist_sta_app/core/auth/student_id_mask.dart';
 
 void main() {
   test('12 位学号保留前 4 后 2', () {
-    expect(maskStudentId('202312345601'), '2023******01');
+    expect(maskStudentId('202512340001'), '2025******01');
   });
 
   test('10 位学号', () {
