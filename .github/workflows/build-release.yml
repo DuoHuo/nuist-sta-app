@@ -26,6 +26,7 @@ jobs:
 
       - name: Generate Release Notes
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
