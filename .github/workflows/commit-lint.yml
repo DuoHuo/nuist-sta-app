@@ -44,17 +44,24 @@ jobs:
           ident_re='^(codex|claude|copilot|cursor|gemini|devin)( agent| code)? <|<[^>]*(anthropic\.com|openai\.com|@local>|cursor\.com|copilot)'
           trailer_re='^(co-authored-by|claude-session):.*(codex|claude|anthropic|openai|copilot|cursor|gemini|devin)|generated (with|by) .*(claude|codex|copilot|cursor|gemini|chatgpt)'
 
+          # 摘要不超过该字符数时不强制中文（如 "chore: release"）
+          short_max=20
+
           fail=0
           for sha in $commits; do
             subject=$(git log -1 --format=%s "$sha")
+            summary_text=${subject#*: }
             problems=()
 
             if [[ $subject == 'Revert "'* ]]; then
               :
             elif ! [[ $subject =~ $type_re ]]; then
               problems+=("格式应为 <type>(<scope>): <中文摘要>，scope 用 kebab-case")
-            elif [[ $subject != chore\(release\):* ]] && ! grep -qP '\p{Han}' <<<"$subject"; then
-              problems+=("摘要需用中文")
+            elif [[ $subject != chore\(release\):* ]] \
+              && [ "${#summary_text}" -gt "$short_max" ] \
+              && ! grep -qP '\p{Han}' <<<"$subject"; then
+              # 摘要极短（如 chore: release）时豁免中文要求
+              problems+=("摘要需用中文（摘要不超过 ${short_max} 个字符时可豁免）")
             fi
             if [[ $subject =~ [.。]$ ]]; then
               problems+=("摘要末尾不加句号")
