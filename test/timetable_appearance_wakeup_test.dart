@@ -118,7 +118,7 @@ void main() {
     expect(stored.showPeriodTimes, isFalse);
   });
 
-  testWidgets('AW04 选色盘末格「+」展开 HSV；预设点选即返回', (tester) async {
+  testWidgets('AW04 选色盘网格无 HSV；点「+」弹出 HSV；预设点选即返回', (tester) async {
     await pumpAppearance(tester);
     final exam = find.byKey(const Key('tt_settings_exam_color'));
     await tester.ensureVisible(exam);
@@ -127,10 +127,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('tt_color_picker')), findsOneWidget);
     expect(find.byKey(const Key('tt_color_custom_plus')), findsOneWidget);
-    // 默认考试色不在预设 → HSV 可能已展开；折叠场景：再点 + 保持展开。
+    // 网格 alone：HSV 对话框 / 色相条不可见。
+    expect(find.byKey(const Key('tt_color_hsv_dialog')), findsNothing);
+    expect(find.byKey(const Key('tt_color_hue')), findsNothing);
+    expect(find.byKey(const Key('tt_color_sv_panel')), findsNothing);
+    // 点「+」弹出 WakeUp 式 HSV 对话框。
     await tester.tap(find.byKey(const Key('tt_color_custom_plus')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('tt_color_hsv_dialog')), findsOneWidget);
+    expect(find.byKey(const Key('tt_color_sv_panel')), findsOneWidget);
     expect(find.byKey(const Key('tt_color_hue')), findsOneWidget);
+    expect(find.byKey(const Key('tt_color_hex')), findsOneWidget);
+    // 取消关闭对话框，网格仍在、HSV 不再可见。
+    await tester.tap(find.byKey(const Key('tt_color_hsv_cancel')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('tt_color_hsv_dialog')), findsNothing);
+    expect(find.byKey(const Key('tt_color_picker')), findsOneWidget);
+    // 预设点选仍直接返回。
     await tester.tap(find.byKey(const Key('tt_color_preset_2')));
     await settleIo(tester);
     expect(_c.settings.examColor, isNot(kDefaultExamColor));
