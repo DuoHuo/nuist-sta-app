@@ -134,11 +134,13 @@ UI 侧用 `ListenableBuilder(listenable: controller, builder: …)` 订阅。跨
 ## 主题与色板
 
 - Material 3 **开启**（`useMaterial3: true`）
-- **暗色模式跟随系统**（`themeMode: ThemeMode.system`），App 内不提供手动开关
+- **明暗模式默认跟随系统**，也可以在「我的 → 设置」里手动选浅色或深色。
+  选择由 `AppThemeMode`（`lib/core/theme_mode.dart`）持有并存到应用支持目录的
+  `settings/theme_mode`，`NuistApp` 监听它切换 `themeMode`
 - `colorScheme` 由 `ColorScheme.fromSeed` 生成后覆盖 `primary` / `surface` / `error`，
   所以 `colorScheme.primary` 就是品牌色，不再是 M3 默认紫
 - **取色一律用 `AppPalette.of(context)`**（`lib/core/colors.dart`），它是挂在
-  `ThemeData.extensions` 上的 `ThemeExtension`，随系统明暗返回对应色值：
+  `ThemeData.extensions` 上的 `ThemeExtension`，随当前主题明暗返回对应色值：
   `pageBg` / `surface` / `titleText` / `labelText` / `hint` / `rowDivider` / `accent` /
   `tabInactive` / `divider` / `chevron` / `success` / `warning` / `danger`，另有
   `brightness` 与 `isDark`。取不到扩展时退化成浅色，不抛异常

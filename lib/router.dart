@@ -16,6 +16,7 @@ import 'shell/profile/portal_bind/portal_import_page.dart';
 import 'shell/profile/portal_bind/portal_scan_page.dart';
 import 'shell/profile/portal_bind/portal_status_page.dart';
 import 'shell/profile/profile_page.dart';
+import 'shell/profile/settings/settings_page.dart';
 import 'shell/root_page.dart';
 import 'shell/study/study_page.dart';
 
@@ -37,6 +38,7 @@ import 'shell/study/study_page.dart';
 /// - `/place/:placeId`：校园地图的地物详情页（建筑 / POI / 通用地物共用）。
 ///   与壳平级，可深链与分享；页面按编号自行取数，不依赖地图页是否打开。
 /// - `/about`：关于页（应用图标、版本号、贡献者名单），与壳平级。
+/// - `/settings`：App 级设置页（深色模式），与壳平级。
 GoRouter buildRouter() => GoRouter(
   routes: [
     StatefulShellRoute.indexedStack(
@@ -98,6 +100,7 @@ GoRouter buildRouter() => GoRouter(
     GoRoute(path: '/labor-score', builder: (_, _) => const LaborScorePage()),
     GoRoute(path: '/scores', builder: (_, _) => const ScorePage()),
     GoRoute(path: '/about', builder: (_, _) => const AboutPage()),
+    GoRoute(path: '/settings', builder: (_, _) => const SettingsPage()),
   ],
 );
 

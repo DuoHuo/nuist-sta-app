@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 /// 与设计稿 design/home.op 保持一致的颜色，作为**浅色基准**。
 ///
-/// 业务代码请改用 [AppPalette.of]，它会跟随系统明暗返回对应色值；
+/// 业务代码请改用 [AppPalette.of]，它会随当前主题明暗返回对应色值；
 /// 这里的常量只用于构造主题、以及确实需要 `const` 的浅色场景。
 abstract final class AppColors {
   static const pageBg = Color(0xFFF5F6F8);

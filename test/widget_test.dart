@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nuist_sta_app/app.dart';
+import 'package:nuist_sta_app/core/theme_mode.dart';
 import 'package:nuist_sta_app/mini_apps/registry.dart';
 
 void main() {
@@ -92,15 +93,37 @@ void main() {
     }
   });
 
-  testWidgets('我的页点击设置显示开发中提示', (WidgetTester tester) async {
+  testWidgets('我的页进入设置并切换深色模式', (WidgetTester tester) async {
+    addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
     await tester.pumpWidget(const NuistApp());
 
     await tester.tap(find.text('我的'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('设置'));
-    await tester.pump(); // 触发 SnackBar 入场
+    await tester.pumpAndSettle();
 
-    expect(find.text('「设置」开发中'), findsOneWidget);
+    for (final label in ['跟随系统', '浅色', '深色']) {
+      expect(find.text(label), findsOneWidget);
+    }
+
+    await tester.tap(find.text('深色'));
+    await tester.pumpAndSettle();
+    expect(AppThemeMode.instance.value, ThemeMode.dark);
+    expect(
+      tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
+      ThemeMode.dark,
+    );
+    expect(
+      Theme.of(tester.element(find.text('深色'))).brightness,
+      Brightness.dark,
+    );
+
+    await tester.tap(find.text('浅色'));
+    await tester.pumpAndSettle();
+    expect(
+      Theme.of(tester.element(find.text('浅色'))).brightness,
+      Brightness.light,
+    );
   });
 }

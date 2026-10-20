@@ -6,7 +6,6 @@ import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/auth/student_id_mask.dart';
 import '../../core/colors.dart';
-import '../../core/wip.dart';
 import 'profile_list_tile.dart';
 import 'user_card.dart';
 
@@ -19,9 +18,10 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  static const _wipTiles = <ProfileTile>[
-    ProfileTile(icon: Icons.settings_outlined, label: '设置'),
-  ];
+  static const _settingsTile = ProfileTile(
+    icon: Icons.settings_outlined,
+    label: '设置',
+  );
   static const _aboutTile = ProfileTile(icon: Icons.info_outline, label: '关于');
 
   // null = 还没读到安全存储的结果。
@@ -77,12 +77,11 @@ class _ProfilePageState extends State<ProfilePage> {
             clipBehavior: Clip.antiAlias,
             child: Column(
               children: [
-                for (final tile in _wipTiles)
-                  ProfileListTile(
-                    tile: tile,
-                    showDivider: true,
-                    onTap: () => showWipSnackBar(context, tile.label),
-                  ),
+                ProfileListTile(
+                  tile: _settingsTile,
+                  showDivider: true,
+                  onTap: () => context.push('/settings'),
+                ),
                 ProfileListTile(
                   tile: _aboutTile,
                   showDivider: false,
