@@ -100,6 +100,15 @@ void _setShowExams(bool on) {
   );
 }
 
+void _setShowNonCurrentWeek(bool on) {
+  _c.debugSetSnapshot(
+    _c.snapshot.copyWith(
+      settings: _c.settings.copyWith(showNonCurrentWeek: on),
+    ),
+    viewingWeek: _c.viewingWeek,
+  );
+}
+
 /// 让真实文件 IO 走完：controller 先改内存、写完盘才 notify，写盘有多个 await，
 /// 每个都要一轮 runAsync + pump。
 Future<void> _settleIo(WidgetTester tester) async {
@@ -500,6 +509,99 @@ void main() {
       expect(_eventCell('测试考试甲'), findsOneWidget);
     });
 
+    test('EX-offweek-1 日期在查看周内必有 item；showExams 关则无', () async {
+      _load(manual: [_course('m1', '测试课甲')]);
+      await _c.addScheduleEvent(_event('ex1'));
+      final items = scheduleItemsForColumn(_c, _week, 2);
+      expect(items.single.event.title, '测试考试甲');
+      expect(items.single.activeThisWeek, isTrue); // clock 默认≈第 8 周
+      _setShowExams(false);
+      expect(scheduleItemsForColumn(_c, _week, 2), isEmpty);
+    });
+
+    testWidgets('EX-offweek-2 考试所在周：即使查看周≠本周也正常色 + 仅「考试」', (tester) async {
+      final orig = TimetableController.clock;
+      addTearDown(() => TimetableController.clock = orig);
+      // 本周固定第 5 周；查看第 8 周（考试所在周）→ 仍正常色。
+      TimetableController.clock = () => DateTime(2026, 9, 28, 10);
+      _load(manual: [_course('m1', '测试课甲')]);
+      await tester.runAsync(() => _c.addScheduleEvent(_event('')));
+      expect(_c.currentWeek, 5);
+      expect(_c.viewingWeek, _week);
+      final item = scheduleItemsForColumn(_c, _week, 2).single;
+      expect(item.activeThisWeek, isTrue);
+
+      await _pumpGrid(tester);
+      final cell = _eventCell('测试考试甲');
+      expect(cell, findsOneWidget);
+      expect(
+        find.descendant(
+          of: cell,
+          matching: find.byKey(const Key('schedule_cell_exam_pill')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: cell,
+          matching: find.byKey(const Key('schedule_cell_off_week_pill')),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: cell, matching: find.text('非本周')),
+        findsNothing,
+      );
+      final ink = tester.widget<Ink>(
+        find.descendant(of: cell, matching: find.byType(Ink)),
+      );
+      final deco = ink.decoration! as BoxDecoration;
+      expect(
+        deco.color,
+        TimetableTheme.examCellBg(Color(_c.settings.examColor)),
+      );
+      expect(deco.border, isNull);
+    });
+
+    testWidgets('EX-offweek-3 更早周 + 显示非本周：幽灵灰底双胶囊；更晚周不画', (tester) async {
+      _load(manual: [_course('m1', '测试课甲')]);
+      await tester.runAsync(() => _c.addScheduleEvent(_event('')));
+      // 默认关：第 5 周不幽灵
+      expect(scheduleItemsForColumn(_c, 5, 2), isEmpty);
+      _setShowNonCurrentWeek(true);
+      final ghosts = scheduleItemsForColumn(_c, 5, 2);
+      expect(ghosts, hasLength(1));
+      expect(ghosts.single.activeThisWeek, isFalse);
+      expect(ghosts.single.event.title, '测试考试甲');
+      // 更晚周不画
+      expect(scheduleItemsForColumn(_c, 9, 2), isEmpty);
+
+      await _pumpGrid(tester, week: 5);
+      final cell = _eventCell('测试考试甲');
+      expect(cell, findsOneWidget);
+      expect(
+        find.descendant(
+          of: cell,
+          matching: find.byKey(const Key('schedule_cell_exam_pill')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: cell,
+          matching: find.byKey(const Key('schedule_cell_off_week_pill')),
+        ),
+        findsOneWidget,
+      );
+      final ink = tester.widget<Ink>(
+        find.descendant(of: cell, matching: find.byType(Ink)),
+      );
+      expect(
+        (ink.decoration! as BoxDecoration).color,
+        TimetableTheme.offWeekBg,
+      );
+    });
+
     testWidgets('EV10/EX06 与课程重叠显示冲突圆点和「2 门」；考试隐藏时不计冲突', (tester) async {
       _load(manual: [_course('m1', '测试课甲', day: 2, start: 1, end: 2)]);
       await tester.runAsync(() => _c.addScheduleEvent(_event('')));
@@ -719,9 +821,9 @@ void main() {
       final l = find.byKey(const Key('home_event_row_lunch'));
       final t = find.byKey(const Key('home_event_row_late'));
       expect(l, findsOneWidget);
-      // item 13：首页最多 2 项，最晚的一项收进「还有 1 项」。
+      // design item 4：最多 homeMaxItems（默认 2）项，截断且无「还有 N 项」。
       expect(t, findsNothing);
-      expect(find.text('还有 1 项'), findsOneWidget);
+      expect(find.textContaining('还有'), findsNothing);
     });
   });
 

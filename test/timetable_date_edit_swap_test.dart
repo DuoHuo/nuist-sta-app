@@ -120,7 +120,7 @@ void main() {
           as Map<String, dynamic>;
 
   group('第 1 条 只改这一天', () {
-    test('教务课：只改这一天只影响那一天；落盘 version=2；重启仍在', () async {
+    test('教务课：只改这一天只影响那一天；落盘 version=3；重启仍在', () async {
       await seed();
       final cell = cellOf(_mon2, 'MATH|01');
       expect(cell.date, _mon2);
@@ -141,7 +141,7 @@ void main() {
       // 课程本身（所有周）不变。
       expect(c.courses.firstWhere((x) => x.id == 'MATH|01').name, '高数');
       final file = readJson(ScheduleStore.courseEditsFile);
-      expect(file['version'], 2);
+      expect(file['version'], 3);
       expect((file['dateEdits'] as List).single['date'], '2026-09-07');
       await restart();
       expect(cellOf(_mon2, 'MATH|01').course.name, '高数习题课');
@@ -204,7 +204,7 @@ void main() {
         expect(cellOf(_mon2, 'MATH|01').course.name, '高数A');
         await c.editOccurrence(cellOf(_mon2, 'MATH|01'), note: '带计算器');
         final file = readJson(ScheduleStore.courseEditsFile);
-        expect(file['version'], 2);
+        expect(file['version'], 3);
         expect(file['futureKey'], 1);
         expect((file['edits'] as List).single['name'], '高数A');
         expect((file['dateEdits'] as List), hasLength(1));

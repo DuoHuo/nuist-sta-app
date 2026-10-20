@@ -4,8 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-import 'timetable_color_picker.dart';
-import 'timetable_colors.dart';
+import 'timetable_appearance_page.dart';
+export 'timetable_appearance_page.dart'
+    show TimetableAppearancePage, TimetablePalettePage;
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
@@ -58,11 +59,6 @@ class TimetableSettingsPage extends StatelessWidget {
   /// 格子高度步长（dp）。
   static const double periodHeightStep = 2;
 
-  /// 不透明度范围与步长（%）。
-  static const int opacityMin = 30;
-  static const int opacityMax = 100;
-  static const int opacityStep = 10;
-
   /// 卡片行高与圆角（spec §13.3）。
   static const double rowHeight = TimetableTheme.listRowHeight;
 
@@ -72,12 +68,6 @@ class TimetableSettingsPage extends StatelessWidget {
 
   /// 「恢复教务课程」二次确认文案（§14.3，含考试覆盖）。
   static const restoreConfirmText = '恢复所有教务课程和考试？你的修改、删除和调课都会清除。';
-
-  static const cellTextColorLabels = {
-    CellTextColorMode.auto: '自动',
-    CellTextColorMode.white: '白字',
-    CellTextColorMode.black: '黑字',
-  };
 
   static const fontScaleLabels = {
     CellFontScale.small: '小',
@@ -103,8 +93,6 @@ class TimetableSettingsPage extends StatelessWidget {
             TimetableTheme.periodHeightMin,
             TimetableTheme.periodHeightMax,
           );
-          final opacity = s.cellOpacity.clamp(opacityMin, opacityMax);
-          final scheme = coursePaletteSchemeOf(s.paletteScheme);
           return ListView(
             padding: const EdgeInsets.only(bottom: 24),
             children: [
@@ -112,26 +100,7 @@ class TimetableSettingsPage extends StatelessWidget {
                 key: const Key('tt_settings_group_display'),
                 title: '显示',
                 children: [
-                  _SwitchRow(
-                    key: const Key('tt_settings_saturday'),
-                    title: '周六',
-                    value: s.showSaturday,
-                    onChanged: (v) =>
-                        update((x) => x.copyWith(showSaturday: v)),
-                  ),
-                  _SwitchRow(
-                    key: const Key('tt_settings_sunday'),
-                    title: '周日',
-                    value: s.showSunday,
-                    onChanged: (v) => update((x) => x.copyWith(showSunday: v)),
-                  ),
-                  _SwitchRow(
-                    key: const Key('tt_settings_non_current'),
-                    title: '非本周课程',
-                    value: s.showNonCurrentWeek,
-                    onChanged: (v) =>
-                        update((x) => x.copyWith(showNonCurrentWeek: v)),
-                  ),
+                  // 周六 / 周日 / 非本周课程：迁入外观页（spec-next-1020b）。
                   _SwitchRow(
                     key: const Key('tt_settings_show_location'),
                     title: '地点',
@@ -162,27 +131,16 @@ class TimetableSettingsPage extends StatelessWidget {
                 title: '外观',
                 children: [
                   _Row(
-                    key: const Key('tt_settings_palette'),
-                    title: '配色',
+                    key: const Key('tt_settings_appearance_entry'),
+                    title: '配色与预览',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (_) => TimetablePalettePage(controller: c),
+                        builder: (_) => TimetableAppearancePage(controller: c),
                       ),
                     ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          coursePaletteSchemeLabel(scheme),
-                          style: TimetableTheme.bodyStyle(
-                            color: TimetableTheme.colorsOf(context).hint,
-                          ),
-                        ),
-                        Icon(
-                          Icons.chevron_right,
-                          color: TimetableTheme.colorsOf(context).hint,
-                        ),
-                      ],
+                    trailing: Icon(
+                      Icons.chevron_right,
+                      color: TimetableTheme.colorsOf(context).hint,
                     ),
                   ),
                   _Row(
@@ -193,35 +151,6 @@ class TimetableSettingsPage extends StatelessWidget {
                       selected: s.fontScale,
                       onSelected: (v) =>
                           update((x) => x.copyWith(fontScale: v)),
-                    ),
-                  ),
-                  _Row(
-                    title: '文字颜色',
-                    trailing: _Segments<CellTextColorMode>(
-                      key: const Key('tt_settings_cell_text_color'),
-                      options: cellTextColorLabels,
-                      selected: s.cellTextColor,
-                      onSelected: (v) =>
-                          update((x) => x.copyWith(cellTextColor: v)),
-                    ),
-                  ),
-                  _SliderRow(
-                    title: '不透明度',
-                    valueLabel: '$opacity%',
-                    valueKey: const Key('tt_settings_opacity_value'),
-                    slider: Slider(
-                      key: const Key('tt_settings_opacity'),
-                      min: opacityMin.toDouble(),
-                      max: opacityMax.toDouble(),
-                      divisions: (opacityMax - opacityMin) ~/ opacityStep,
-                      value: opacity.toDouble(),
-                      activeColor: TimetableTheme.colorsOf(context).accent,
-                      label: '$opacity%',
-                      onChanged: (v) {
-                        final next = v.round();
-                        if (next == c.settings.cellOpacity) return;
-                        update((x) => x.copyWith(cellOpacity: next));
-                      },
                     ),
                   ),
                   _SliderRow(
@@ -326,46 +255,19 @@ class TimetableSettingsPage extends StatelessWidget {
                     value: s.showExams,
                     onChanged: (v) => update((x) => x.copyWith(showExams: v)),
                   ),
-                  _Row(
-                    key: const Key('tt_settings_exam_color'),
-                    title: '颜色',
-                    onTap: () => _pickExamColor(context, c),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          key: const Key('tt_settings_exam_color_swatch'),
-                          width: 18,
-                          height: 18,
-                          decoration: BoxDecoration(
-                            color: Color(s.examColor),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                        ),
-                        Icon(
-                          Icons.chevron_right,
-                          color: TimetableTheme.colorsOf(context).hint,
-                        ),
-                      ],
-                    ),
-                  ),
                 ],
               ),
               _Group(
-                key: const Key('tt_settings_group_swaps'),
-                title: '调课',
+                key: const Key('tt_settings_group_other'),
+                title: '其他',
                 children: [
                   _Row(
                     key: const Key('tt_settings_day_swaps'),
-                    title: '调课记录',
+                    title: '整天调课',
                     semanticsStatus: c.daySwaps.isEmpty
                         ? '无'
                         : '${c.daySwaps.length} 条',
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => TimetableDaySwapsPage(controller: c),
-                      ),
-                    ),
+                    onTap: () => openDaySwapPage(context, c),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -384,12 +286,6 @@ class TimetableSettingsPage extends StatelessWidget {
                       ],
                     ),
                   ),
-                ],
-              ),
-              _Group(
-                key: const Key('tt_settings_group_other'),
-                title: '其他',
-                children: [
                   _Row(
                     key: const Key('tt_settings_account'),
                     title: '教务账号',
@@ -496,92 +392,6 @@ class TimetableSettingsPage extends StatelessWidget {
     );
   }
 
-  /// 「考试 → 颜色」：色板单选（选项与白字对比度均 ≥ 4.5，见 [TimetableTheme.examColorOptions]）。
-  Future<void> _pickExamColor(
-    BuildContext context,
-    TimetableController c,
-  ) async {
-    final picked = await showModalBottomSheet<Color>(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '颜色',
-                style: TimetableTheme.titleStyle(
-                  color: TimetableTheme.colorsOf(context).titleText,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  for (final color in TimetableTheme.examColorOptions)
-                    Semantics(
-                      button: true,
-                      selected: color.toARGB32() == c.settings.examColor,
-                      label: '考试颜色 ${_hex(color)}',
-                      child: InkWell(
-                        key: Key('tt_exam_color_${_hex(color)}'),
-                        borderRadius: BorderRadius.circular(20),
-                        onTap: () => Navigator.pop(sheetContext, color),
-                        child: Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: color,
-                            shape: BoxShape.circle,
-                          ),
-                          child: color.toARGB32() == c.settings.examColor
-                              ? const Icon(
-                                  Icons.check,
-                                  color: TimetableTheme.examText,
-                                )
-                              : null,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              // item 9：同一个颜色面板（预设 + 自定义 HSV），教务 / 手动考试共用。
-              TextButton(
-                key: const Key('tt_exam_color_custom'),
-                onPressed: () =>
-                    Navigator.pop(sheetContext, const Color(0x00000000)),
-                child: const Text('自定义颜色…'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (picked == null) return;
-    var chosen = picked;
-    if (picked.toARGB32() == 0) {
-      if (!context.mounted) return;
-      final pick = await showTimetableColorPicker(
-        context,
-        current: Color(c.settings.examColor),
-        presets: TimetableTheme.examColorOptions,
-        showReset: c.settings.examColor != kDefaultExamColor,
-      );
-      if (pick == null) return;
-      chosen = pick.reset ? const Color(kDefaultExamColor) : pick.color!;
-    }
-    final argb = chosen.toARGB32() | 0xFF000000;
-    if (argb == c.settings.examColor) return;
-    await c.updateSettings(c.settings.copyWith(examColor: argb));
-  }
-
-  static String _hex(Color c) =>
-      c.toARGB32().toRadixString(16).padLeft(8, '0').substring(2).toUpperCase();
-
   Future<void> _pickLead(BuildContext context, TimetableController c) async {
     final picked = await showModalBottomSheet<int>(
       context: context,
@@ -616,76 +426,6 @@ class TimetableSettingsPage extends StatelessWidget {
     );
     if (picked == null || picked == c.settings.reminderLeadMinutes) return;
     await c.updateSettings(c.settings.copyWith(reminderLeadMinutes: picked));
-  }
-}
-
-/// 课程配色二级页：每个方案一行（名字 + 8 个色块），单选。
-class TimetablePalettePage extends StatelessWidget {
-  const TimetablePalettePage({super.key, this.controller});
-
-  final TimetableController? controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = controller ?? TimetableController.instance;
-    return Scaffold(
-      backgroundColor: TimetableTheme.colorsOf(context).pageBg,
-      appBar: AppBar(title: const Text('配色')),
-      body: ListenableBuilder(
-        listenable: c,
-        builder: (context, _) {
-          final current = coursePaletteSchemeOf(c.settings.paletteScheme);
-          return ListView(
-            children: [
-              _Group(
-                title: '方案',
-                children: [
-                  for (final scheme in CoursePaletteScheme.values)
-                    _Row(
-                      key: Key('tt_palette_${coursePaletteSchemeKey(scheme)}'),
-                      title: coursePaletteSchemeLabel(scheme),
-                      onTap: () {
-                        final key = coursePaletteSchemeKey(scheme);
-                        if (c.settings.paletteScheme == key) return;
-                        c.updateSettings(
-                          c.settings.copyWith(paletteScheme: key),
-                        );
-                      },
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          for (final pair in TimetableTheme.pairsOf(
-                            scheme,
-                          ).take(8))
-                            Container(
-                              width: 14,
-                              height: 14,
-                              margin: const EdgeInsets.only(left: 3),
-                              decoration: BoxDecoration(
-                                color: pair.bg,
-                                borderRadius: BorderRadius.circular(3),
-                              ),
-                            ),
-                          const SizedBox(width: 8),
-                          Icon(
-                            scheme == current
-                                ? Icons.radio_button_checked
-                                : Icons.radio_button_unchecked,
-                            color: scheme == current
-                                ? TimetableTheme.colorsOf(context).accent
-                                : TimetableTheme.colorsOf(context).hint,
-                            size: 20,
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            ],
-          );
-        },
-      ),
-    );
   }
 }
 

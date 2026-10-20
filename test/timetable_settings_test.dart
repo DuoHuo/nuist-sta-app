@@ -11,6 +11,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_color.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_grid.dart';
 
@@ -141,13 +142,19 @@ void main() {
       expect(switchValue(tester, 'tt_settings_show_teacher'), isFalse);
       expect(chipSelected(tester, 'tt_settings_font_scale', '标准'), isTrue);
       expect(chipSelected(tester, 'tt_settings_week_start', '周一'), isTrue);
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      await tester.pumpAndSettle();
       expect(
         tester
             .widget<Text>(find.byKey(const Key('tt_settings_opacity_value')))
             .data,
         '100%',
       );
-      expect(find.text('A 柔和'), findsOneWidget);
+      // A/B/C 入口已隐藏（ST19）；默认方案仍为 A（存储）。
+      expect(find.text('A 柔和'), findsNothing);
+      expect(_c.settings.paletteScheme, 'A');
+      await tester.pageBack();
+      await tester.pumpAndSettle();
       expect(switchValue(tester, 'tt_settings_reminder'), isFalse);
       expect(find.text('15 分钟'), findsOneWidget);
       expect(switchValue(tester, 'tt_settings_show_tomorrow'), isTrue);
@@ -186,12 +193,14 @@ void main() {
         matching: find.text(text),
       );
       // §13.16 新名。
-      for (final t in ['周六', '非本周课程', '地点', '老师', '一周起始']) {
+      for (final t in ['地点', '老师', '一周起始']) {
         expect(inGroup('display', t), findsOneWidget, reason: t);
       }
-      // 「周日」既是行名又是「一周起始」的选项。
-      expect(inGroup('display', '周日'), findsNWidgets(2));
-      for (final t in ['配色', '字号', '不透明度', '格子高度']) {
+      // 「周日」仅剩「一周起始」选项；周六/非本周已迁入外观页。
+      expect(inGroup('display', '周日'), findsOneWidget);
+      expect(inGroup('display', '周六'), findsNothing);
+      expect(inGroup('display', '非本周课程'), findsNothing);
+      for (final t in ['配色与预览', '字号', '格子高度']) {
         expect(inGroup('appearance', t), findsOneWidget, reason: t);
       }
       for (final t in ['上课提醒', '提前时间', '放假期间也会提醒']) {
@@ -199,7 +208,6 @@ void main() {
       }
       expect(inGroup('home', '显示明天的课'), findsOneWidget);
       expect(inGroup('exam', '显示考试'), findsOneWidget);
-      expect(inGroup('exam', '颜色'), findsOneWidget);
       expect(inGroup('other', '教务账号'), findsOneWidget);
       expect(inGroup('other', '恢复教务课程'), findsOneWidget);
       for (final t in ['深色模式', '网格线', '背景', '圆角', '开学', '当前周']) {
@@ -326,6 +334,8 @@ void main() {
 
     testWidgets('ST12 不透明度滑块 30–100、步长 10', (tester) async {
       await pumpPage(tester, TimetableSettingsPage(controller: _c));
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      await tester.pumpAndSettle();
       final slider = tester.widget<Slider>(
         find.byKey(const Key('tt_settings_opacity')),
       );
@@ -364,6 +374,8 @@ void main() {
 
       await pumpPage(tester, TimetableSettingsPage(controller: _c));
       await settleIo(tester);
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      await tester.pumpAndSettle();
       final slider = tester.widget<Slider>(
         find.byKey(const Key('tt_settings_opacity')),
       );
@@ -419,29 +431,16 @@ void main() {
       expect(_c.settings.reminderLeadMinutes, 20);
     });
 
-    testWidgets('ST19 配色二级页：3 套各一行 8 色块，单选', (tester) async {
+    testWidgets('ST19 外观页暂时不展示配色方案 A/B/C 入口', (tester) async {
       await pumpPage(tester, TimetableSettingsPage(controller: _c));
-      await tester.tap(find.byKey(const Key('tt_settings_palette')));
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
       await tester.pumpAndSettle();
-      for (final k in ['A', 'B', 'C']) {
-        final row = find.byKey(Key('tt_palette_$k'));
-        expect(row, findsOneWidget);
-        final swatches = find.descendant(
-          of: row,
-          matching: find.byWidgetPredicate(
-            (w) =>
-                w is Container &&
-                w.constraints?.maxWidth == 14 &&
-                w.constraints?.maxHeight == 14,
-          ),
-        );
-        expect(swatches, findsNWidgets(8));
-      }
-      expect(find.text('B 马卡龙'), findsOneWidget);
-      expect(find.text('C 莫兰迪'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('tt_palette_B')));
-      await settleIo(tester);
-      expect(_c.settings.paletteScheme, 'B');
+      expect(find.byKey(const Key('tt_settings_palette')), findsNothing);
+      expect(find.text('A 柔和'), findsNothing);
+      expect(find.text('B 马卡龙'), findsNothing);
+      expect(find.text('C 莫兰迪'), findsNothing);
+      // storage 字段仍可读（默认 A），不因隐藏入口而丢失。
+      expect(_c.settings.paletteScheme, 'A');
     });
   });
 
@@ -526,7 +525,6 @@ void main() {
       );
       await pumpGrid(tester);
       final cell = tester.widget<CourseCell>(find.byType(CourseCell));
-      final idx = _c.colorIndexOf(cell.cell.course);
       final ink = tester.widget<Ink>(
         find.descendant(
           of: find.byType(CourseCell),
@@ -534,12 +532,10 @@ void main() {
         ),
       );
       final bg = (ink.decoration! as BoxDecoration).color!;
-      expect(
-        bg,
-        Color.lerp(TimetableTheme.pageBg, TimetableTheme.courseColor(idx), 0.3),
-      );
+      final pair = coursePairFor(_c, cell.cell.course);
+      expect(bg, Color.lerp(TimetableTheme.pageBg, pair.bg, 0.3));
       expect(bg.a, 1.0);
-      final fg = TimetableTheme.courseTextColor(idx);
+      final fg = pair.fg;
       final name = tester.widget<CourseNameText>(find.byType(CourseNameText));
       expect(name.style.color, fg);
       final dot = tester.widget<Container>(
@@ -557,7 +553,6 @@ void main() {
       await pumpGrid(tester);
       expect(_c.settings.cellOpacity, 55);
       final cell = tester.widget<CourseCell>(find.byType(CourseCell));
-      final idx = _c.colorIndexOf(cell.cell.course);
       final ink = tester.widget<Ink>(
         find.descendant(
           of: find.byType(CourseCell),
@@ -565,7 +560,7 @@ void main() {
         ),
       );
       final bg = (ink.decoration! as BoxDecoration).color!;
-      final raw = TimetableTheme.courseColor(idx);
+      final raw = coursePairFor(_c, cell.cell.course).bg;
       expect(bg, TimetableTheme.blendCellBg(raw, 55));
       expect(bg, Color.lerp(TimetableTheme.pageBg, raw, 0.55));
       expect(bg, isNot(TimetableTheme.blendCellBg(raw, 50)));
@@ -573,21 +568,25 @@ void main() {
       expect(bg.a, 1.0);
     });
 
-    testWidgets('换配色 B：格子底色/文字色取 B 方案', (tester) async {
+    testWidgets('换配色 B：未自选时格子仍走 id 哈希 12 预设（忽略 A/B/C）', (tester) async {
       load(
         settings: base().copyWith(paletteScheme: 'B'),
         manual: [_course('a', '测试课甲', colorIndex: 12)],
       );
       await pumpGrid(tester);
+      final cell = tester.widget<CourseCell>(find.byType(CourseCell));
+      final pair = coursePairFor(_c, cell.cell.course);
       final ink = tester.widget<Ink>(
         find.descendant(
           of: find.byType(CourseCell),
           matching: find.byType(Ink),
         ),
       );
-      expect((ink.decoration! as BoxDecoration).color, _hex('F2CFA8'));
+      expect((ink.decoration! as BoxDecoration).color, pair.bg);
       final name = tester.widget<CourseNameText>(find.byType(CourseNameText));
-      expect(name.style.color, _hex('1F2430'));
+      expect(name.style.color, pair.fg);
+      // 不再等于旧 B 柔和色板。
+      expect(pair.bg, isNot(_hex('F2CFA8')));
     });
 
     testWidgets('每周第一天=周日：周日放第一列，日期 10/18，月份按周一', (tester) async {

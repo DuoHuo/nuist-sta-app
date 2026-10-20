@@ -190,13 +190,13 @@ void main() {
       expect(find.byKey(const Key('home_course_remaining')), findsOneWidget);
     });
 
-    testWidgets('HN07 剩 3+ 项：只列 2 项，其余「还有 N 节课」', (tester) async {
+    testWidgets('HN07 剩 3+ 项：只列 homeMaxItems（默认 2）项，无「更多」', (tester) async {
       _load(manual: [a, b, c, d]);
       await pumpHome(tester, DateTime(2026, 10, 12, 10, 30));
       expect(find.text('测试课乙'), findsOneWidget);
       expect(find.text('测试课丙'), findsOneWidget);
       expect(find.text('测试课丁'), findsNothing);
-      expect(find.text('还有 1 节课'), findsOneWidget);
+      expect(find.textContaining('还有'), findsNothing);
     });
 
     testWidgets('HN08 四行：课名 / 时间 · 节次 / 地点 / 老师', (tester) async {

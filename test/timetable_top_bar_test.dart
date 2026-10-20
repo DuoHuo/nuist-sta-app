@@ -434,37 +434,38 @@ void main() {
       }
     }
 
-    final backToWeek = find.text('回到本周');
+    Future<void> openStripTapCurrent(WidgetTester tester) async {
+      await tester.tap(find.textContaining('第 9 周'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('timetable_week_strip_current')));
+    }
 
-    testWidgets('SW02 「回到本周」按钮：按跨周数时长 easeOutCubic 翻页动画到本周，'
+    testWidgets('SW02 周条「本周」：按跨周数时长 easeOutCubic 翻页动画到本周，'
         '动画结束后浏览周对齐本周', (tester) async {
       _load(manual: [_course('a', '测试课甲')], syncedAt: DateTime.now(), week: 9);
       await pumpWithMotion(tester, disableAnimations: false);
       await _settleIo(tester);
       expect(_c.viewingWeek, 9);
-      await tester.tap(backToWeek);
+      expect(find.text('回到本周'), findsNothing);
+      await openStripTapCurrent(tester);
       await tester.pump();
       // 动画刚开始：还没到本周（不是直接跳）。
       expect(_c.viewingWeek, 9);
       await tester.pumpAndSettle();
       expect(_c.viewingWeek, _week);
       expect(_c.isViewingCurrentWeek, isTrue);
-      expect(backToWeek, findsNothing);
     });
 
-    testWidgets('SW02 「回到本周」按钮：系统关闭动画（disableAnimations）时直接跳到本周', (
-      tester,
-    ) async {
+    testWidgets('SW02 周条「本周」：系统关闭动画（disableAnimations）时直接跳到本周', (tester) async {
       _load(manual: [_course('a', '测试课甲')], syncedAt: DateTime.now(), week: 9);
       await pumpWithMotion(tester, disableAnimations: true);
       await _settleIo(tester);
       expect(_c.viewingWeek, 9);
-      await tester.tap(backToWeek);
+      await openStripTapCurrent(tester);
       // 不等动画：点下即到本周。
       expect(_c.viewingWeek, _week);
       expect(_c.isViewingCurrentWeek, isTrue);
       await tester.pump();
-      expect(backToWeek, findsNothing);
     });
 
     // ---- AS-1（设计师 10/18，取代 §24 AS03 原「标题栏轻提示」）：

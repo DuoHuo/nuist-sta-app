@@ -134,7 +134,7 @@ void main() {
       expect(off.backgroundColor, const Color(0xFFF0F1F3));
     });
 
-    testWidgets('暗色主题下色板仍为浅色', (tester) async {
+    testWidgets('暗色主题下预设色板仍为浅色（12 预设）', (tester) async {
       _setCourses(const []);
       tester.view.physicalSize = const Size(1080, 2400);
       tester.view.devicePixelRatio = 2.75;
@@ -156,16 +156,16 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('manual_course_color')));
       await tester.pumpAndSettle();
-      for (var i = 0; i < kCoursePaletteSize; i++) {
+      final presets = TimetableTheme.coursePresetColors;
+      for (var i = 0; i < presets.length; i++) {
         final swatch = tester.widget<Container>(
           find.descendant(
-            of: find.byKey(Key('manual_course_color_$i')),
+            of: find.byKey(Key('tt_color_preset_$i')),
             matching: find.byType(Container),
           ),
         );
         final color = (swatch.decoration! as BoxDecoration).color;
-        expect(color, TimetableTheme.coursePalette[i]);
-        expect(color, isNot(TimetableTheme.coursePaletteDark[i]));
+        expect(color, presets[i]);
       }
     });
 
@@ -179,25 +179,28 @@ void main() {
       );
       expect(
         (preview.decoration! as BoxDecoration).color,
-        TimetableTheme.courseColor(TimetableTheme.colorIndexFor('体育')),
+        TimetableTheme.autoCoursePairForName('体育').bg,
       );
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settle(tester);
       expect(_c.manualCourses.single.colorIndex, isNull);
     });
 
-    testWidgets('选色后保存写入 colorIndex；编辑预填', (tester) async {
+    testWidgets('选色后保存写入 userColors；编辑预填', (tester) async {
       _setCourses(const []);
       await _openForm(tester);
       await tester.enterText(find.byKey(const Key('manual_course_name')), '体育');
       await tester.tap(find.byKey(const Key('manual_course_color')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('manual_course_color_5')));
+      final preset = TimetableTheme.coursePresetColors[5];
+      await tester.tap(find.byKey(const Key('tt_color_preset_5')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settle(tester);
       final saved = _c.manualCourses.single;
-      expect(saved.colorIndex, 5);
+      // item 9：自选写入 userColors，不再写 colorIndex。
+      expect(saved.colorIndex, isNull);
+      expect(_c.userColorOf(saved), preset.toARGB32() | 0xFF000000);
 
       await _openForm(tester, initial: saved);
       expect(find.text('编辑课程'), findsOneWidget);
@@ -206,11 +209,15 @@ void main() {
       );
       expect(
         (preview.decoration! as BoxDecoration).color,
-        TimetableTheme.courseColor(5),
+        TimetableTheme.userCoursePair(preset).bg,
       );
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settle(tester);
-      expect(_c.manualCourses.single.colorIndex, 5);
+      expect(_c.manualCourses.single.colorIndex, isNull);
+      expect(
+        _c.userColorOf(_c.manualCourses.single),
+        preset.toARGB32() | 0xFF000000,
+      );
     });
   });
 

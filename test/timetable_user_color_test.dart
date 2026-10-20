@@ -12,6 +12,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_appearance_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
@@ -51,14 +52,13 @@ void _load() {
   );
 }
 
-Future<void> _io(WidgetTester tester) async {
-  for (var i = 0; i < 3; i++) {
-    await tester.pump(const Duration(milliseconds: 20));
-  }
-}
-
-Future<void> _settle(WidgetTester tester) async {
-  for (var i = 0; i < 10; i++) {
+/// 让真实文件 IO / 底栏动画走完：FakeAsync 下 dart:io 不会推进，必须用 runAsync。
+/// 不用 pumpAndSettle，避免周视图上可能残留的定时器导致挂死。
+Future<void> _settleIo(WidgetTester tester) async {
+  for (var i = 0; i < 20; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
     await tester.pump(const Duration(milliseconds: 100));
   }
 }
@@ -71,8 +71,9 @@ Future<void> _pumpGrid(WidgetTester tester, {bool dark = false}) async {
     MaterialApp(
       theme: dark ? appDarkTheme() : appLightTheme(),
       home: Scaffold(
-        body: Builder(
-          builder: (context) => WeekGrid(
+        body: ListenableBuilder(
+          listenable: _c,
+          builder: (context, _) => WeekGrid(
             week: 7,
             controller: _c,
             onCourseTap: (cell) =>
@@ -82,7 +83,7 @@ Future<void> _pumpGrid(WidgetTester tester, {bool dark = false}) async {
       ),
     ),
   );
-  await _io(tester);
+  await _settleIo(tester);
 }
 
 Color? _cellBg(WidgetTester tester, String name) =>
@@ -99,10 +100,10 @@ Color? _cellBg(WidgetTester tester, String name) =>
 
 Future<void> _openColorPicker(WidgetTester tester, String name) async {
   await tester.tap(find.widgetWithText(CourseCell, name));
-  await _settle(tester);
+  await _settleIo(tester);
   await tester.ensureVisible(find.byKey(const Key('course_detail_color')));
   await tester.tap(find.byKey(const Key('course_detail_color')));
-  await _settle(tester);
+  await _settleIo(tester);
   expect(find.byKey(const Key('tt_color_picker')), findsOneWidget);
 }
 
@@ -122,7 +123,7 @@ void main() {
     TimetableController.bindingCheck = () async => false;
     TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
         throw const SocketException('offline (test)');
-    TimetableController.clock = () => DateTime(2026, 10, 12, 9);
+    TimetableController.clock = () => DateTime(2026, 10, 12, 12);
   });
   tearDown(() {
     TimetableController.clock = origClock;
@@ -163,36 +164,44 @@ void main() {
       await _pumpGrid(tester);
       await _openColorPicker(tester, '测试课甲');
       await tester.tap(find.byKey(const Key('tt_color_preset_3')));
-      await _settle(tester);
+      await _settleIo(tester);
       final preset = TimetableTheme.coursePresetColors[3];
       expect(_c.userColorOf(_a), preset.toARGB32());
       Navigator.of(tester.element(find.byType(WeekGrid))).pop();
-      await _settle(tester);
-      expect(_cellBg(tester, '测试课甲'), preset);
-      await _io(tester);
-      expect(await TimetableStore.readUserCourseColors(), {
+      await _settleIo(tester);
+      expect(_cellBg(tester, '测试课甲'), TimetableTheme.userCoursePair(preset).bg);
+      await _settleIo(tester);
+      expect(await tester.runAsync(TimetableStore.readUserCourseColors), {
         'a': preset.toARGB32(),
       });
-    }, skip: true /* UI 流程在 flutter_tester 下卡死，待查 */);
+    });
 
-    testWidgets('UC03 自定义颜色：拖色相滑条后「使用自定义颜色」', (tester) async {
+    testWidgets('UC03 自定义颜色：点「+」弹出 HSV，拖色相条再「保存」', (tester) async {
       _load();
       await _pumpGrid(tester);
       await _openColorPicker(tester, '测试课甲');
+      // 网格 alone 无 HSV。
+      expect(find.byKey(const Key('tt_color_hue')), findsNothing);
+      expect(find.byKey(const Key('tt_color_sv_panel')), findsNothing);
+      await tester.tap(find.byKey(const Key('tt_color_custom_plus')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tt_color_hsv_dialog')), findsOneWidget);
+      expect(find.byKey(const Key('tt_color_sv_panel')), findsOneWidget);
+      // 竖向色相条：向下拖改变色相。
       await tester.drag(
         find.byKey(const Key('tt_color_hue')),
-        const Offset(200, 0),
+        const Offset(0, 120),
       );
       await tester.pump();
       await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
-      await _settle(tester);
+      await _settleIo(tester);
       final v = _c.userColorOf(_a);
       expect(v, isNotNull);
       expect(
         TimetableTheme.coursePresetColors.map((c) => c.toARGB32()),
         isNot(contains(v)),
       );
-    }, skip: true /* UI 流程在 flutter_tester 下卡死，待查 */);
+    });
 
     testWidgets('UC04 恢复默认：清掉自选标记，回到自动色', (tester) async {
       _load();
@@ -202,11 +211,14 @@ void main() {
       expect(before, isNotNull);
       await _openColorPicker(tester, '测试课甲');
       await tester.tap(find.byKey(const Key('tt_color_reset')));
-      await _settle(tester);
+      await _settleIo(tester);
       expect(_c.userColorOf(_a), isNull);
-      await _io(tester);
-      expect(await TimetableStore.readUserCourseColors(), isEmpty);
-    }, skip: true /* UI 流程在 flutter_tester 下卡死，待查 */);
+      await _settleIo(tester);
+      expect(
+        await tester.runAsync(TimetableStore.readUserCourseColors),
+        isEmpty,
+      );
+    });
 
     test('UC05 自动配色跳过自选色的课（不占色号）', () async {
       _load();
@@ -217,28 +229,27 @@ void main() {
       expect(_c.courseColorMap.keys.any((k) => k.contains('乙')), isTrue);
     });
 
-    testWidgets('UC06 深色：自选色显示时换算（浅色系走色板深色规则，深色系混 25% 白字）', (tester) async {
+    testWidgets('UC06 深色：自选色一律走 darkCoursePair（不再按亮度白字分叉）', (tester) async {
       _load();
       const strong = Color(0xFF1565C0);
-      final light = TimetableTheme.coursePresetColors[0];
+      const light = Color(0xFFDCE8FB);
       await tester.runAsync(() async {
         await _c.setUserCourseColor('a', light.toARGB32());
         await _c.setUserCourseColor('b', strong.toARGB32());
       });
       await _pumpGrid(tester, dark: true);
       final pa = TimetableTheme.userCoursePair(light, dark: true);
+      final pb = TimetableTheme.userCoursePair(strong, dark: true);
       expect(_cellBg(tester, '测试课甲'), pa.bg);
-      expect(pa.fg, light);
-      expect(
-        _cellBg(tester, '测试课乙'),
-        Color.lerp(strong, const Color(0xFF121316), 0.25),
-      );
+      expect(pa.fg, TimetableTheme.userCoursePair(light).bg);
+      expect(_cellBg(tester, '测试课乙'), pb.bg);
+      expect(pb.fg, TimetableTheme.userCoursePair(strong).bg);
       // 只存原始值，没有第二份深色色值。
-      expect(await TimetableStore.readUserCourseColors(), {
+      expect(await tester.runAsync(TimetableStore.readUserCourseColors), {
         'a': light.toARGB32(),
         'b': strong.toARGB32(),
       });
-    }, skip: true /* UI 流程在 flutter_tester 下卡死，待查 */);
+    });
   });
 
   group('UC 考试统一颜色', () {
@@ -263,25 +274,20 @@ void main() {
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
-        MaterialApp(
-          home: TimetableSettingsPage(
-            controller: _c,
-            onOpenAccount: () async {},
-          ),
-        ),
+        MaterialApp(home: TimetableAppearancePage(controller: _c)),
       );
-      await _io(tester);
+      await _settleIo(tester);
       await tester.tap(find.byKey(const Key('tt_settings_exam_color')));
-      await _settle(tester);
-      await tester.tap(find.byKey(const Key('tt_exam_color_custom')));
-      await _settle(tester);
+      await _settleIo(tester);
+      expect(find.byKey(const Key('tt_color_picker')), findsOneWidget);
       await tester.tap(find.byKey(const Key('tt_color_preset_4')));
-      await _settle(tester);
-      await _io(tester);
+      await _settleIo(tester);
       final chosen = TimetableTheme.examColorOptions[4];
       expect(_c.settings.examColor, chosen.toARGB32());
       await _pumpGrid(tester);
+      expect(_c.scheduleEvents, hasLength(2));
       for (final e in _c.scheduleEvents) {
+        expect(find.byKey(Key('schedule_cell_${e.id}')), findsOneWidget);
         final ink = tester.widget<Ink>(
           find.descendant(
             of: find.byKey(Key('schedule_cell_${e.id}')),
@@ -291,6 +297,6 @@ void main() {
         expect((ink.decoration! as BoxDecoration).color, chosen);
       }
       expect(_c.scheduleEvents, hasLength(2));
-    }, skip: true /* UI 流程在 flutter_tester 下卡死，待查 */);
+    });
   });
 }

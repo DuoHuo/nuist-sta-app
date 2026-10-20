@@ -145,11 +145,8 @@ void main() {
             ),
           );
           await _io(tester);
-          final pair = TimetableTheme.coursePair(
-            courseColorIndex(_c, _course),
-            scheme: coursePaletteSchemeFor(_c),
-            dark: dark,
-          );
+          // 未自选时格子走课名哈希 12 预设（非 A/B/C）。
+          final pair = coursePairFor(_c, _course, dark: dark);
           final expected = switch (mode) {
             CellTextColorMode.auto => pair.fg,
             CellTextColorMode.white => const Color(0xFFFFFFFF),
@@ -199,6 +196,8 @@ void main() {
       ),
     );
     await _io(tester);
+    await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+    await tester.pumpAndSettle();
     final seg = find.byKey(const Key('tt_settings_cell_text_color'));
     expect(seg, findsOneWidget);
     for (final label in ['自动', '白字', '黑字']) {

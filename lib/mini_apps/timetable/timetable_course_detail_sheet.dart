@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'timetable_color_picker.dart';
+import 'timetable_delete_scope_sheet.dart';
 import 'timetable_course_edit_page.dart';
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
@@ -164,7 +165,9 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      '这一天已单独修改',
+                      widget.cell.dateEdit?.isWeeksScoped == true
+                          ? '已按周修改'
+                          : '这一天已单独修改',
                       style: TimetableTheme.bodyStyle(
                         color: TimetableTheme.colorsOf(context).labelText,
                       ),
@@ -176,7 +179,11 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                     style: TextButton.styleFrom(
                       foregroundColor: TimetableTheme.colorsOf(context).accent,
                     ),
-                    child: const Text('恢复这一天'),
+                    child: Text(
+                      widget.cell.dateEdit?.isWeeksScoped == true
+                          ? '恢复'
+                          : '恢复这一天',
+                    ),
                   ),
                 ],
               ),
@@ -248,24 +255,6 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                 ],
               ),
             ),
-          if (widget.cell.date != null &&
-              widget.cell.activeThisWeek &&
-              widget.cell.dateEdit?.isDelete != true)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  key: const Key('course_detail_delete_day'),
-                  onPressed: _restoring ? null : _deleteDay,
-                  icon: const Icon(Icons.event_busy_outlined, size: 20),
-                  label: const Text('只删这一天'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: TimetableTheme.colorsOf(context).danger,
-                  ),
-                ),
-              ),
-            ),
         ],
       ),
     );
@@ -286,23 +275,6 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
       SnackBar(
         behavior: SnackBarBehavior.floating,
         content: Text(ok ? '已恢复这一天' : '恢复失败'),
-      ),
-    );
-  }
-
-  /// 第 1 条：只删这一天（可在「恢复这一天」撤销，不弹确认）。
-  Future<void> _deleteDay() async {
-    setState(() => _restoring = true);
-    final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    final rec = await widget.controller.deleteOccurrence(widget.cell);
-    if (!mounted) return;
-    setState(() => _restoring = false);
-    if (navigator.canPop()) navigator.pop();
-    messenger?.showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        content: Text(rec == null ? '删除失败' : '已删除这一天的课'),
       ),
     );
   }
@@ -366,6 +338,47 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
   }
 
   Future<void> _delete(Course course) async {
+    final cell = widget.cell;
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final date = cell.date;
+    if (date != null && cell.activeThisWeek) {
+      final week = widget.controller.weekOfDate(date);
+      final scope = await showDeleteScopeSheet(
+        context,
+        week: week,
+        weekday: date.weekday,
+        teacherOrLocationEmpty:
+            cell.slot.teacher.isEmpty || cell.slot.location.isEmpty,
+      );
+      if (scope == null || !mounted) return;
+      switch (scope) {
+        case DeleteScope.oneDay:
+          final rec = await widget.controller.deleteOccurrence(cell);
+          if (!mounted) return;
+          if (navigator.canPop()) navigator.pop();
+          messenger?.showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              content: Text(rec == null ? '删除失败' : '已删除这一天的课'),
+            ),
+          );
+          return;
+        case DeleteScope.weekdayMatch:
+          final rec = await widget.controller.deleteWeekdayMatch(cell);
+          if (!mounted) return;
+          if (navigator.canPop()) navigator.pop();
+          messenger?.showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              content: Text(rec == null ? '删除失败' : '已删除同星期匹配的课'),
+            ),
+          );
+          return;
+        case DeleteScope.wholeCourse:
+          break;
+      }
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -385,8 +398,6 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.maybeOf(context);
     await widget.controller.deleteManualCourse(course.id);
     if (!mounted) return;
     if (navigator.canPop()) navigator.pop();

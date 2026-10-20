@@ -83,12 +83,6 @@ void _bigView(WidgetTester tester, {Size size = const Size(1080, 2400)}) {
   addTearDown(tester.view.reset);
 }
 
-double _contrast(Color a, Color b) {
-  final la = a.computeLuminance(), lb = b.computeLuminance();
-  final hi = la > lb ? la : lb, lo = la > lb ? lb : la;
-  return (hi + 0.05) / (lo + 0.05);
-}
-
 void main() {
   late Directory tmp;
   final origClock = TimetableController.clock;
@@ -138,17 +132,19 @@ void main() {
       _load();
       await pumpSettings(tester);
       expect(find.widgetWithText(AppBar, '设置'), findsOneWidget);
-      for (final t in ['周六', '非本周课程', '地点', '老师', '一周起始']) {
+      for (final t in ['地点', '老师', '一周起始']) {
         expect(inGroup('display', t), findsOneWidget, reason: t);
       }
       expect(inGroup('display', '周一'), findsOneWidget);
-      expect(inGroup('display', '周日'), findsNWidgets(2));
-      for (final t in ['配色', '字号', '小', '标准', '大', '不透明度', '格子高度']) {
+      expect(inGroup('display', '周日'), findsOneWidget); // 一周起始选项
+      // 周六 / 非本周已迁入外观页，设置「显示」组不再有。
+      expect(inGroup('display', '周六'), findsNothing);
+      expect(inGroup('display', '非本周课程'), findsNothing);
+      for (final t in ['配色与预览', '字号', '小', '标准', '大', '格子高度']) {
         expect(inGroup('appearance', t), findsOneWidget, reason: t);
       }
       expect(inGroup('home', '显示明天的课'), findsOneWidget);
       expect(inGroup('exam', '显示考试'), findsOneWidget);
-      expect(inGroup('exam', '颜色'), findsOneWidget);
       expect(inGroup('other', '教务账号'), findsOneWidget);
       expect(inGroup('other', '恢复教务课程'), findsOneWidget);
       // SN05 旧长名不残留。
@@ -163,15 +159,34 @@ void main() {
         '格子不透明度',
         '首页卡片显示明天的课',
         '在课表中显示考试',
-        '考试颜色',
         '恢复全部教务课程',
         '课表设置',
       ]) {
         expect(find.textContaining(t), findsNothing, reason: t);
       }
-      await tester.tap(find.byKey(const Key('tt_settings_palette')));
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
       await tester.pumpAndSettle();
-      expect(find.widgetWithText(AppBar, '配色'), findsOneWidget);
+      expect(find.widgetWithText(AppBar, '外观'), findsOneWidget);
+      for (final t in [
+        '文字颜色',
+        '不透明度',
+        '今日课表最多显示',
+        '表头文字大小',
+        '节数栏显示时间',
+        '周六',
+        '周日',
+        '非本周课程',
+        '考试颜色',
+      ]) {
+        expect(find.text(t), findsWidgets, reason: t);
+      }
+      expect(
+        find.byKey(const Key('tt_appearance_preview_grid')),
+        findsOneWidget,
+      );
+      // 配色方案 A/B/C 入口暂时隐藏。
+      expect(find.byKey(const Key('tt_settings_palette')), findsNothing);
+      expect(find.widgetWithText(AppBar, '配色'), findsNothing);
     });
 
     test('SN05 lib 界面文案不残留旧长名', () {
@@ -187,7 +202,6 @@ void main() {
         "'格子不透明度'",
         "'首页卡片显示明天的课'",
         "'在课表中显示考试'",
-        "'考试颜色'",
         "'恢复全部教务课程'",
         "'课表设置'",
       ];
@@ -205,19 +219,14 @@ void main() {
       _load();
       await pumpSettings(tester);
       for (final l in [
-        '显示，周六',
-        '显示，周日',
-        '显示，非本周课程',
         '显示，地点',
         '显示，老师',
         '显示，一周起始',
-        '外观，配色',
+        '外观，配色与预览',
         '外观，字号',
-        '外观，不透明度',
         '外观，格子高度',
         '首页，显示明天的课',
         '考试，显示考试',
-        '考试，颜色',
         '其他，教务账号',
         '其他，恢复教务课程',
       ]) {
@@ -262,16 +271,20 @@ void main() {
             ),
           )
           .value;
-      expect(sw('tt_settings_saturday'), isFalse);
-      expect(sw('tt_settings_sunday'), isFalse);
-      expect(sw('tt_settings_non_current'), isTrue);
       expect(sw('tt_settings_show_location'), isFalse);
       expect(sw('tt_settings_show_teacher'), isTrue);
       expect(sw('tt_settings_show_tomorrow'), isFalse);
       expect(sw('tt_settings_show_exams'), isFalse);
-      expect(find.text('60%'), findsOneWidget);
       expect(find.text('80'), findsOneWidget);
-      expect(find.textContaining('马卡龙'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      await tester.pumpAndSettle();
+      expect(sw('tt_settings_saturday'), isFalse);
+      expect(sw('tt_settings_sunday'), isFalse);
+      expect(sw('tt_settings_non_current'), isTrue);
+      expect(find.text('60%'), findsOneWidget);
+      // A/B/C 入口已隐藏；存储仍保留 paletteScheme=B（见下方 after 断言）。
+      expect(find.textContaining('马卡龙'), findsNothing);
+      expect(_c.settings.paletteScheme, 'B');
       expect(
         (tester
                     .widget<Container>(
@@ -280,8 +293,10 @@ void main() {
                     .decoration!
                 as BoxDecoration)
             .color,
-        const Color(0xFF1565C0),
+        TimetableTheme.examCellBg(const Color(0xFF1565C0)),
       );
+      await tester.pageBack();
+      await tester.pumpAndSettle();
       final keysBefore = (jsonDecode(file.readAsStringSync()) as Map).keys
           .toSet();
       await tester.tap(find.byKey(const Key('tt_settings_show_exams')));
@@ -295,28 +310,25 @@ void main() {
       }
     });
 
-    testWidgets('EX03 考试颜色色板：每项白字对比度 ≥ 4.5，默认 #C62828；选中后写入 examColor', (
-      tester,
-    ) async {
-      expect(TimetableTheme.examColorOptions.first, const Color(0xFFC62828));
+    testWidgets('EX03 考试颜色与课程同套 12 预设；外观页选预设写入 examColor', (tester) async {
       expect(
-        TimetableTheme.examColorOptions.first.toARGB32(),
-        kDefaultExamColor,
+        TimetableTheme.examColorOptions,
+        TimetableTheme.coursePresetColors,
       );
-      for (final c in TimetableTheme.examColorOptions) {
-        expect(
-          _contrast(c, Colors.white),
-          greaterThanOrEqualTo(4.5),
-          reason: '$c',
-        );
-      }
+      expect(TimetableTheme.coursePresetColors, hasLength(12));
+      expect(kDefaultExamColor, 0xFFC62828);
       _load();
       await pumpSettings(tester);
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tt_settings_exam_color')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tt_exam_color_2E7D32')));
+      await tester.tap(find.byKey(const Key('tt_color_preset_6')));
       await _settleIo(tester);
-      expect(_c.settings.examColor, 0xFF2E7D32);
+      expect(
+        _c.settings.examColor,
+        TimetableTheme.coursePresetColors[6].toARGB32(),
+      );
     });
 
     testWidgets('恢复教务课程：二次确认；取消不动，确认后 restoreAllJwxt 清掉调课记录', (tester) async {

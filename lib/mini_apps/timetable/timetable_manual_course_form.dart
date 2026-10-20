@@ -1,10 +1,9 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'timetable_color_picker.dart';
 import 'timetable_colors.dart';
 import 'timetable_controller.dart';
-import 'timetable_date_edits.dart';
-import 'timetable_edit_scope_sheet.dart';
+import 'timetable_apply_weeks_sheet.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
 import 'timetable_course_color.dart';
@@ -66,8 +65,15 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   late int _end;
   late Set<int> _weeks;
 
-  /// 用户自选色号；null = 未选（跟随默认配色）。
+  /// 编辑应用周数（与课程「周次」分开）；仅从格子进来时有意义。
+  late Set<int> _applyWeeks;
+
+  /// 旧色号字段（仍写入 Course.colorIndex，兼容旧数据）。
   int? _colorIndex;
+
+  /// spec-next-1020 item 3：用户自选 ARGB（12+HSV）；null = 默认自动色。
+  int? _userArgb;
+  bool _userArgbCleared = false;
   bool _saving = false;
   String? _weeksError;
 
@@ -99,6 +105,9 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     _name = TextEditingController(text: c?.name ?? '')
       ..addListener(_onNameChanged);
     _colorIndex = c?.colorIndex;
+    if (c != null) {
+      _userArgb = widget.controller.userColorOf(c);
+    }
     _location = TextEditingController(text: slot?.location ?? '');
     _teacher = TextEditingController(text: slot?.teacher ?? '');
     _note = TextEditingController(text: slot?.note ?? '');
@@ -130,6 +139,14 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
       weeks: {..._weeks},
       color: _colorIndex,
     );
+    final cell = widget.cell;
+    if (cell?.date != null && cell!.activeThisWeek) {
+      final w = widget.controller.weekOfDate(cell.date!);
+      _applyWeeks = {if (w >= 1) w};
+    } else {
+      final total = widget.controller.totalWeeks;
+      _applyWeeks = {for (var w = 1; w <= total; w++) w};
+    }
   }
 
   /// 打开表单时的值（第 1 条：判断改了哪些、只改这一天时只记改过的字段）。
@@ -146,32 +163,14 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   })
   _init;
 
-  /// 只改这一天：写单日修改；颜色属于课程本身，改了照样存到课程。
-  Future<Course?> _saveThisDay(GridCell cell, Course initial) async {
-    final c = widget.controller;
-    String? changed(TextEditingController t, String init) =>
-        t.text.trim() == init.trim() ? null : t.text.trim();
-    final timeChanged =
-        _day != _init.day || _start != _init.start || _end != _init.end;
-    final rec = await c.editOccurrence(
-      cell,
-      name: changed(_name, _init.name),
-      teacher: changed(_teacher, _init.teacher),
-      location: changed(_location, _init.location),
-      note: changed(_note, _init.note),
-      toDay: timeChanged ? _day : null,
-      toStart: timeChanged ? _start : null,
-      toEnd: timeChanged ? _end : null,
-    );
-    final base = c.manualCourseById(initial.id);
-    if (base != null && _colorIndex != _init.color) {
-      await c.updateManualCourse(
-        base.copyWith(colorIndex: _colorIndex, clearColor: _colorIndex == null),
-      );
+  Future<void> _persistUserColor(TimetableController c, String courseId) async {
+    if (_userArgbCleared) {
+      await c.setUserCourseColor(courseId, null);
+      return;
     }
-    // rec 为 null：改回了原值（记录已删）或格子已失效，课程本身都没动。
-    if (rec == null && kDebugMode) debugPrint('[timetable] 单日修改未写入');
-    return c.manualCourseById(initial.id) ?? initial;
+    if (_userArgb != null) {
+      await c.setUserCourseColor(courseId, _userArgb);
+    }
   }
 
   void _onNameChanged() {
@@ -245,15 +244,50 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
           _start != _init.start ||
           _end != _init.end;
       if (!weeksChanged && occurrenceChanged && cell.activeThisWeek) {
-        final scope = await showEditScopeSheet(context, date: cell.date!);
-        if (scope == null || !mounted) {
-          if (mounted) setState(() => _saving = false);
+        final total = widget.controller.totalWeeks;
+        if (_applyWeeks.isEmpty) {
+          if (mounted) {
+            setState(() => _saving = false);
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              const SnackBar(
+                behavior: SnackBarBehavior.floating,
+                content: Text('请至少选择一周，或在「应用周数」里选「全选」'),
+              ),
+            );
+          }
           return;
         }
-        if (scope == EditScope.thisDay) {
-          final r = await _saveThisDay(cell, initial);
+        if (!isAllSemesterWeeks(_applyWeeks, total)) {
+          final sorted = _applyWeeks.toList()..sort();
+          String? changed(TextEditingController x, String init) =>
+              x.text.trim() == init.trim() ? null : x.text.trim();
+          final timeChanged =
+              _day != _init.day || _start != _init.start || _end != _init.end;
+          await widget.controller.editOccurrenceWeeks(
+            cell,
+            weeks: sorted,
+            name: changed(_name, _init.name),
+            teacher: changed(_teacher, _init.teacher),
+            location: changed(_location, _init.location),
+            note: changed(_note, _init.note),
+            toDay: timeChanged ? _day : null,
+            toStart: timeChanged ? _start : null,
+            toEnd: timeChanged ? _end : null,
+          );
+          final base = widget.controller.manualCourseById(initial.id);
+          if (base != null && _colorIndex != _init.color) {
+            await widget.controller.updateManualCourse(
+              base.copyWith(
+                colorIndex: _colorIndex,
+                clearColor: _colorIndex == null,
+              ),
+            );
+          }
+          await _persistUserColor(widget.controller, initial.id);
           if (!mounted) return;
-          navigator.pop(r);
+          navigator.pop(
+            widget.controller.manualCourseById(initial.id) ?? initial,
+          );
           return;
         }
         // 所有周：这一天的单日修改里改过的字段让位给课程本身的新值。
@@ -299,6 +333,7 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
         ),
       );
     }
+    await _persistUserColor(widget.controller, saved.id);
     if (!mounted) return;
     navigator.pop(saved);
   }
@@ -309,80 +344,45 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     (i) => _weeks.contains(i + 1) ? '1' : '0',
   ).join();
 
-  /// 预览色号：用户自选优先，否则按 [courseColorIndex] 的默认规则。
+  /// 预览自动色下标：与 [coursePairFor] 一致（已有课优先 id，新建按课名）。
   int get _previewColorIndex {
+    final existing = widget.cell?.course;
+    if (existing != null && existing.id.trim().isNotEmpty) {
+      return coursePresetIndexForCourse(existing);
+    }
     final name = _name.text.trim();
-    final base = (widget.initial ?? const Course(id: '', name: '')).copyWith(
-      name: name,
-      colorIndex: _colorIndex,
-      clearColor: _colorIndex == null,
-    );
-    return courseColorIndex(widget.controller, base);
+    if (name.isEmpty) return 0;
+    return coursePresetIndexForName(name);
   }
 
   Future<void> _pickColor() async {
-    // 课程色板是用户可选的固定色板，明暗两套主题取值相同（见 TimetableTheme 文档）；
-    // 只有标题、选中描边这些 chrome 跟随主题。
     final colors = TimetableTheme.colorsOf(context);
-    final picked = await showModalBottomSheet<int>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '选择颜色',
-                style: TimetableTheme.titleStyle(color: colors.titleText),
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  for (var i = 0; i < kCoursePaletteSize; i++)
-                    InkResponse(
-                      key: Key('manual_course_color_$i'),
-                      onTap: () => Navigator.pop(ctx, i),
-                      // 默认半径 35 会溢出到相邻色块，收到色块自身大小。
-                      radius: 20,
-                      child: Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: TimetableTheme.courseColor(
-                            i,
-                            scheme: coursePaletteSchemeFor(widget.controller),
-                          ),
-                          shape: BoxShape.circle,
-                          border: i == _previewColorIndex
-                              ? Border.all(color: colors.titleText, width: 2)
-                              : null,
-                        ),
-                        child: i == _previewColorIndex
-                            ? Icon(
-                                Icons.check,
-                                size: 20,
-                                color: TimetableTheme.courseTextColor(
-                                  i,
-                                  scheme: coursePaletteSchemeFor(
-                                    widget.controller,
-                                  ),
-                                ),
-                              )
-                            : null,
-                      ),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
+    final current = _previewDisplayBg(colors.isDark);
+    final pick = await showTimetableColorPicker(
+      context,
+      current: current,
+      showReset: _userArgb != null || _colorIndex != null,
+      title: '颜色',
     );
-    if (picked != null && mounted) setState(() => _colorIndex = picked);
+    if (pick == null || !mounted) return;
+    setState(() {
+      if (pick.reset) {
+        _userArgb = null;
+        _userArgbCleared = true;
+        _colorIndex = null;
+      } else {
+        _userArgb = pick.color!.toARGB32() | 0xFF000000;
+        _userArgbCleared = false;
+        _colorIndex = null;
+      }
+    });
+  }
+
+  Color _previewDisplayBg(bool dark) {
+    if (_userArgb != null) {
+      return TimetableTheme.userCoursePair(Color(_userArgb!), dark: dark).bg;
+    }
+    return TimetableTheme.autoCoursePair(_previewColorIndex, dark: dark).bg;
   }
 
   @override
@@ -467,10 +467,9 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
                     width: 24,
                     height: 24,
                     decoration: BoxDecoration(
-                      // 预览用当前配色方案的浅色底。
-                      color: TimetableTheme.courseColor(
-                        _previewColorIndex,
-                        scheme: coursePaletteSchemeFor(widget.controller),
+                      // 与课表格同一套显示换算（item 9）。
+                      color: _previewDisplayBg(
+                        TimetableTheme.colorsOf(context).isDark,
                       ),
                       shape: BoxShape.circle,
                     ),
@@ -532,6 +531,43 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
                   style: TextStyle(fontSize: 12, color: colors.warning),
                 ),
               ),
+            if (widget.cell?.date != null && widget.cell!.activeThisWeek) ...[
+              const SizedBox(height: 8),
+              ListTile(
+                key: const Key('manual_edit_apply_weeks'),
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.date_range_outlined, color: colors.hint),
+                title: Text(
+                  '应用周数',
+                  style: TimetableTheme.bodyStyle(color: colors.labelText),
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      applyWeeksSummary(
+                        _applyWeeks,
+                        widget.controller.totalWeeks,
+                      ),
+                      key: const Key('manual_edit_apply_weeks_summary'),
+                      style: TimetableTheme.bodyStyle(color: colors.hint),
+                    ),
+                    Icon(Icons.chevron_right, color: colors.hint),
+                  ],
+                ),
+                onTap: _saving
+                    ? null
+                    : () async {
+                        final picked = await showApplyWeeksSheet(
+                          context,
+                          totalWeeks: widget.controller.totalWeeks,
+                          initial: _applyWeeks,
+                        );
+                        if (picked == null || !mounted) return;
+                        setState(() => _applyWeeks = picked.toSet());
+                      },
+              ),
+            ],
             const SizedBox(height: 16),
             Row(
               children: [

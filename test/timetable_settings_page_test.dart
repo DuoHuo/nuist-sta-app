@@ -60,6 +60,13 @@ void main() {
     await tester.pump();
   }
 
+  Future<void> tapAppearanceKey(WidgetTester tester, Key key) async {
+    final f = find.byKey(key);
+    await tester.ensureVisible(f);
+    await tester.pumpAndSettle();
+    await tester.tap(f);
+  }
+
   Widget grid() => Scaffold(
     body: ListenableBuilder(
       listenable: _c,
@@ -67,16 +74,18 @@ void main() {
     ),
   );
 
-  testWidgets('原三项设置仍在（v0.4 卡片版），旧「M2 接入」骨架已移除；非本周课程默认关', (tester) async {
+  testWidgets('设置页保留地点等；周六/非本周迁入外观；非本周课程默认关', (tester) async {
     expect(const TimetableSettings().showNonCurrentWeek, isFalse);
     await pumpPage(tester, TimetableSettingsPage(controller: _c));
-    // §13.16 新名（卡片「显示」已给上下文）。
-    expect(find.text('周六'), findsOneWidget);
-    expect(find.text('周日'), findsWidgets); // 行名 + 一周起始的「周日」选项
-    expect(find.text('非本周课程'), findsOneWidget);
+    expect(find.text('地点'), findsOneWidget);
     expect(find.text('格子高度'), findsOneWidget);
     expect(find.textContaining('M2'), findsNothing);
-    // v0.4 改为自绘 52dp 行 + Switch（不再是 SwitchListTile）。
+    // 周六 / 非本周课程只在外观页。
+    expect(find.byKey(const Key('tt_settings_saturday')), findsNothing);
+    expect(find.byKey(const Key('tt_settings_non_current')), findsNothing);
+    await pumpPage(tester, TimetableAppearancePage(controller: _c));
+    expect(find.text('周六'), findsOneWidget);
+    expect(find.text('非本周课程'), findsOneWidget);
     final sw = tester.widget<Switch>(
       find.descendant(
         of: find.byKey(const Key('tt_settings_non_current')),
@@ -84,17 +93,18 @@ void main() {
       ),
     );
     expect(sw.value, isFalse);
+    expect(find.byKey(const Key('tt_appearance_preview_grid')), findsOneWidget);
   });
 
-  testWidgets('周六/周日开关：持久化并增删网格列', (tester) async {
+  testWidgets('外观页周六/周日开关：持久化并增删网格列', (tester) async {
     await pumpPage(tester, grid());
     expect(find.text('六'), findsOneWidget);
     expect(find.text('日'), findsOneWidget);
 
-    await pumpPage(tester, TimetableSettingsPage(controller: _c));
-    await tester.tap(find.byKey(const Key('tt_settings_saturday')));
+    await pumpPage(tester, TimetableAppearancePage(controller: _c));
+    await tapAppearanceKey(tester, const Key('tt_settings_saturday'));
     await settleIo(tester);
-    await tester.tap(find.byKey(const Key('tt_settings_sunday')));
+    await tapAppearanceKey(tester, const Key('tt_settings_sunday'));
     await settleIo(tester);
     expect(_c.settings.showSaturday, isFalse);
     expect(_c.settings.showSunday, isFalse);
@@ -107,20 +117,20 @@ void main() {
     expect(find.text('日'), findsNothing);
     expect(find.text('五'), findsOneWidget);
 
-    await pumpPage(tester, TimetableSettingsPage(controller: _c));
-    await tester.tap(find.byKey(const Key('tt_settings_sunday')));
+    await pumpPage(tester, TimetableAppearancePage(controller: _c));
+    await tapAppearanceKey(tester, const Key('tt_settings_sunday'));
     await settleIo(tester);
     await pumpPage(tester, grid());
     expect(find.text('六'), findsNothing);
     expect(find.text('日'), findsOneWidget);
   });
 
-  testWidgets('显示非本周课程开关：持久化并显示/隐藏灰格', (tester) async {
+  testWidgets('外观页非本周课程开关：持久化并显示/隐藏灰格', (tester) async {
     await pumpPage(tester, grid());
     expect(find.byType(CourseCell), findsNothing);
 
-    await pumpPage(tester, TimetableSettingsPage(controller: _c));
-    await tester.tap(find.byKey(const Key('tt_settings_non_current')));
+    await pumpPage(tester, TimetableAppearancePage(controller: _c));
+    await tapAppearanceKey(tester, const Key('tt_settings_non_current'));
     await settleIo(tester);
     expect(_c.settings.showNonCurrentWeek, isTrue);
     final stored = (await tester.runAsync(TimetableStore.readSettings))!;
@@ -133,8 +143,8 @@ void main() {
       isFalse,
     );
 
-    await pumpPage(tester, TimetableSettingsPage(controller: _c));
-    await tester.tap(find.byKey(const Key('tt_settings_non_current')));
+    await pumpPage(tester, TimetableAppearancePage(controller: _c));
+    await tapAppearanceKey(tester, const Key('tt_settings_non_current'));
     await settleIo(tester);
     await pumpPage(tester, grid());
     expect(find.byType(CourseCell), findsNothing);

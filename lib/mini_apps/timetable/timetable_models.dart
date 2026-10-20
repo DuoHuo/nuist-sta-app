@@ -299,6 +299,16 @@ class PeriodTime {
 /// 考试默认颜色（§14.3）。
 const int kDefaultExamColor = 0xFFC62828;
 
+/// 首页今日课表最多显示条数默认值（spec-next-1020 item 4）。
+const int kDefaultHomeMaxItems = 2;
+
+/// 周视图表头文字大小默认值（spec-next-1020b：约 11sp，范围 10–14）。
+const double kDefaultHeaderTextSize = 11;
+
+/// 表头文字大小下限 / 上限。
+const double kHeaderTextSizeMin = 10;
+const double kHeaderTextSizeMax = 14;
+
 /// 外观与学期设置（本地）。
 class TimetableSettings {
   const TimetableSettings({
@@ -326,6 +336,9 @@ class TimetableSettings {
     this.showExams = true,
     this.examColor = kDefaultExamColor,
     this.cellTextColor = CellTextColorMode.auto,
+    this.homeMaxItems = kDefaultHomeMaxItems,
+    this.headerTextSize = kDefaultHeaderTextSize,
+    this.showPeriodTimes = true,
   });
 
   final String scheduleName;
@@ -377,6 +390,15 @@ class TimetableSettings {
   /// item 14「文字颜色」：自动（色板字色 + 深色规则）/ 白字 / 黑字。缺省自动。
   final CellTextColorMode cellTextColor;
 
+  /// spec-next-1020 item 4：首页今日课表最多显示条数（1–4，默认 2）。
+  final int homeMaxItems;
+
+  /// spec-next-1020b：周视图表头文字大小（sp，10–14，默认 11）。
+  final double headerTextSize;
+
+  /// spec-next-1020b：节数栏是否显示作息时间（默认开）。
+  final bool showPeriodTimes;
+
   /// 每周第一天是周日（设置 9；只影响列顺序）。存储键仍是 `weekStartsOnMonday`。
   bool get weekStartsSunday => !weekStartsOnMonday;
 
@@ -409,6 +431,9 @@ class TimetableSettings {
     bool? showExams,
     int? examColor,
     CellTextColorMode? cellTextColor,
+    int? homeMaxItems,
+    double? headerTextSize,
+    bool? showPeriodTimes,
   }) => TimetableSettings(
     scheduleName: scheduleName ?? this.scheduleName,
     termCode: termCode ?? this.termCode,
@@ -438,6 +463,9 @@ class TimetableSettings {
     showExams: showExams ?? this.showExams,
     examColor: examColor ?? this.examColor,
     cellTextColor: cellTextColor ?? this.cellTextColor,
+    homeMaxItems: homeMaxItems ?? this.homeMaxItems,
+    headerTextSize: headerTextSize ?? this.headerTextSize,
+    showPeriodTimes: showPeriodTimes ?? this.showPeriodTimes,
   );
 
   /// 用 [o] 的用户偏好（显示/外观/提醒/首页开关）覆盖本对象，学期字段不变。
@@ -460,6 +488,9 @@ class TimetableSettings {
     showExams: o.showExams,
     examColor: o.examColor,
     cellTextColor: o.cellTextColor,
+    homeMaxItems: o.homeMaxItems,
+    headerTextSize: o.headerTextSize,
+    showPeriodTimes: o.showPeriodTimes,
   );
 
   Map<String, dynamic> toJson() => {
@@ -487,6 +518,9 @@ class TimetableSettings {
     'showExams': showExams,
     'examColor': examColor,
     'cellTextColor': cellTextColor.name,
+    'homeMaxItems': homeMaxItems,
+    'headerTextSize': headerTextSize,
+    'showPeriodTimes': showPeriodTimes,
   };
 
   // ---- 宽松读取（只在内存纠正，不回写磁盘）----
@@ -513,6 +547,20 @@ class TimetableSettings {
   /// 考试颜色：整数 ARGB 原样用（补满不透明）；其他 → 默认深红。
   static int parseExamColor(Object? raw) =>
       raw is int ? (raw | 0xFF000000) : kDefaultExamColor;
+
+  /// 首页最多显示：1–4 整数；缺失 / 非整数 / 越界 → 默认 2（spec-next-1020 item 4）。
+  static int sanitizeHomeMaxItems(Object? raw) {
+    if (raw is! num || !raw.isFinite) return kDefaultHomeMaxItems;
+    final v = raw.round();
+    if (v < 1 || v > 4) return kDefaultHomeMaxItems;
+    return v;
+  }
+
+  /// 表头文字大小：数字钳到 10–14；非数字/非有限值 → 11。
+  static double sanitizeHeaderTextSize(Object? raw) {
+    if (raw is! num || !raw.isFinite) return kDefaultHeaderTextSize;
+    return raw.toDouble().clamp(kHeaderTextSizeMin, kHeaderTextSizeMax);
+  }
 
   /// 文字颜色：'auto'/'white'/'black'；缺失或其他 → 自动（旧文件无此键）。
   static CellTextColorMode parseCellTextColor(Object? raw) {
@@ -567,6 +615,9 @@ class TimetableSettings {
         showExams: _bool(json['showExams'], true),
         examColor: parseExamColor(json['examColor']),
         cellTextColor: parseCellTextColor(json['cellTextColor']),
+        homeMaxItems: sanitizeHomeMaxItems(json['homeMaxItems']),
+        headerTextSize: sanitizeHeaderTextSize(json['headerTextSize']),
+        showPeriodTimes: _bool(json['showPeriodTimes'], true),
       );
 }
 
@@ -1113,24 +1164,44 @@ _WeeksNorm? _normalizeWeeks(String raw, int maxWeeks) {
   return _WeeksNorm(raw);
 }
 
-/// 课程色板大小（[Course.colorIndex] 取值 0..15）。
+/// 课程色板大小（[Course.colorIndex] / A/B/C 方案取值 0..15）。
 const int kCoursePaletteSize = 16;
+
+/// 自动色板预设个数（[TimetableTheme.coursePresetColors]；id 优先、否则课名哈希取模）。
+const int kCoursePresetCount = 12;
 
 /// 课名归一化（仅用于配色哈希）：去首尾空白，半角括号转全角。
 String normalizeCourseName(String name) =>
     name.trim().replaceAll('(', '（').replaceAll(')', '）');
 
-/// 课名 → 默认色号：FNV-1a 32 位哈希（UTF-8 字节）对 16 取模。
-///
-/// 不用 String.hashCode（不保证跨版本/平台稳定）；教务课与手动课同名同色。
-/// 先经 [normalizeCourseName]，「学术英语(1)」与「 学术英语（1） 」同色。
-int courseColorIndexForName(String name) {
+/// FNV-1a 32 位（UTF-8）；不用 String.hashCode（跨版本/平台不稳）。
+int _fnv1a32CourseName(String name) {
   var hash = 0x811c9dc5;
   for (final b in utf8.encode(normalizeCourseName(name))) {
     hash ^= b;
     hash = (hash * 0x01000193) & 0xffffffff;
   }
-  return hash % kCoursePaletteSize;
+  return hash;
+}
+
+/// 课名 → A/B/C / 旧 16 色号：FNV-1a 对 [kCoursePaletteSize] 取模。
+///
+/// 教务课与手动课同名同色。先经 [normalizeCourseName]。
+int courseColorIndexForName(String name) =>
+    _fnv1a32CourseName(name) % kCoursePaletteSize;
+
+/// 课名 → 自动色板下标（0..11）：FNV-1a 对 [kCoursePresetCount] 取模。
+///
+/// 无 id 时的回退；有 [Course.id] 时请用 [coursePresetIndexForCourse]。
+/// 用户自选色仍按课程 id 存在 userColors，见 [TimetableController.userColorOf]。
+int coursePresetIndexForName(String name) =>
+    _fnv1a32CourseName(name) % kCoursePresetCount;
+
+/// 自动色板下标：优先非空 [Course.id]（稳定、改名不换色），否则 [colorName] / 课名。
+int coursePresetIndexForCourse(Course course, {String? colorName}) {
+  final id = course.id.trim();
+  if (id.isNotEmpty) return _fnv1a32CourseName(id) % kCoursePresetCount;
+  return coursePresetIndexForName(colorName ?? course.name);
 }
 
 int? _asColorIndex(Object? v) {

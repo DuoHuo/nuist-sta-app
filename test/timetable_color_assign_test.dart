@@ -579,12 +579,14 @@ void main() {
       );
     }
 
-    void expectCellColors(WidgetTester tester, int idx, Color fg) {
+    void expectCellColors(WidgetTester tester, Color fg) {
       final ink = tester.widget<Ink>(find.byType(Ink));
-      expect(
-        (ink.decoration! as BoxDecoration).color,
-        TimetableTheme.courseColor(idx),
+      final pair = TimetableTheme.autoCoursePair(
+        coursePresetIndexForCourse(
+          Course(id: 'k', name: '测试课K', slots: const []),
+        ),
       );
+      expect((ink.decoration! as BoxDecoration).color, pair.bg);
       final dot = tester.widget<Container>(
         find.byKey(const Key('course_cell_conflict_dot')),
       );
@@ -607,15 +609,29 @@ void main() {
       expect(find.byType(Opacity), findsNothing);
     }
 
-    testWidgets('色号 2 → #1E6B3A', (tester) async {
+    testWidgets('角标/文字用 id 哈希自动色（忽略旧 colorIndex）', (tester) async {
       await pumpCell(tester, 2);
-      expectCellColors(tester, 2, const Color(0xFF1E6B3A));
+      expectCellColors(
+        tester,
+        TimetableTheme.autoCoursePair(
+          coursePresetIndexForCourse(
+            Course(id: 'k', name: '测试课K', slots: const []),
+          ),
+        ).fg,
+      );
       TimetableController.instance.debugReset();
     });
 
-    testWidgets('色号 10 → #A3282A', (tester) async {
+    testWidgets('另一旧色号仍同 id 同色', (tester) async {
       await pumpCell(tester, 10);
-      expectCellColors(tester, 10, const Color(0xFFA3282A));
+      expectCellColors(
+        tester,
+        TimetableTheme.autoCoursePair(
+          coursePresetIndexForCourse(
+            Course(id: 'k', name: '测试课K', slots: const []),
+          ),
+        ).fg,
+      );
       TimetableController.instance.debugReset();
     });
   });

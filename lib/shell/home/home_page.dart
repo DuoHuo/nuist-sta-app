@@ -38,7 +38,8 @@ class HomePage extends StatelessWidget {
               for (final app in appRegistry)
                 if (app.homeCard != null) ...[
                   Builder(builder: app.homeCard!),
-                  const SizedBox(height: 12),
+                  // 设计师 10/20：首页卡片间距 12→8。
+                  const SizedBox(height: 8),
                 ],
               Container(
                 padding: const EdgeInsets.symmetric(

@@ -155,9 +155,9 @@ void main() {
       final exam = find.byKey(const Key('home_event_row_ex'));
       final other = find.byKey(const Key('home_event_row_ot'));
       expect(exam, findsOneWidget);
-      // item 13：首页最多 2 项，19:00 的「其他」排第 3，收进「还有 1 项」。
+      // item 4：首页最多 2 项，19:00 的「其他」排第 3，截断且无「更多」。
       expect(other, findsNothing);
-      expect(find.text('还有 1 项'), findsOneWidget);
+      expect(find.textContaining('还有'), findsNothing);
       expect(find.text('测试课甲'), findsOneWidget);
       final examPill = find.byKey(const Key('home_event_exam_pill'));
       expect(
