@@ -80,20 +80,25 @@ class CourseCell extends StatelessWidget {
     final active = cell.activeThisWeek;
     final ctl = _ctl;
     final settings = ctl.settings;
-    final scheme = coursePaletteSchemeFor(ctl);
-    final colorIndex = courseColorIndex(ctl, cell.course);
     // 浅底 + 该色号文字色（spec §13.5/§13.7）。不透明度只作用于 bg（往页面底色混合）；
     // 文字、冲突圆点、角标都用不透明的 fg，不从 bg 派生（§13.6）。
     // 非本周格（§13.8）：白底 + 1px 描边 + offWeekText，不取配色、不受不透明度影响。
+    // 深色（item 12）：同色相「深底浅字」（[TimetableTheme.coursePair]），显示时换算；
+    // 不透明度往 #121316 混；非本周格取上游 [TimetableColors.dark] 的 offWeek*。
+    final colors = TimetableTheme.colorsOf(context);
+    // item 9：用户自选色优先（[coursePairFor]）。
+    final pair = coursePairFor(ctl, cell.course, dark: colors.isDark);
     final bg = active
         ? TimetableTheme.blendCellBg(
-            TimetableTheme.courseColor(colorIndex, scheme: scheme),
+            pair.bg,
             settings.cellOpacity,
+            dark: colors.isDark,
           )
-        : TimetableTheme.offWeekBg;
+        : colors.offWeekBg;
+    // item 14：白字 / 黑字强制；非本周格仍用 offWeekText。
     final fg = active
-        ? TimetableTheme.courseTextColor(colorIndex, scheme: scheme)
-        : TimetableTheme.offWeekText;
+        ? TimetableTheme.cellTextFor(pair.fg, settings.cellTextColor)
+        : colors.offWeekText;
     // 单/双周按教务原始周次（[SlotOrigin.original]，即调课记录的 origWeeks）判断：
     // 「只改本周」后新时段的位串只剩一周，不能据此显示/朗读「单周」「双周」。
     final source = slotOriginOf(cell.slot)?.original ?? cell.slot;
@@ -137,7 +142,7 @@ class CourseCell extends StatelessWidget {
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(radius),
                           border: Border.all(
-                            color: TimetableTheme.offWeekBorder,
+                            color: colors.offWeekBorder,
                             width: TimetableTheme.offWeekBorderWidth,
                           ),
                         ),
@@ -164,6 +169,23 @@ class CourseCell extends StatelessWidget {
                       decoration: BoxDecoration(
                         color: fg,
                         shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                // 第 1 条：这一格有单日修改，右上角 4dp 圆点（有冲突点时排在它左边）。
+                if (cell.dateEdit != null)
+                  Positioned(
+                    top: 4,
+                    right: stacked ? 4 + TimetableTheme.conflictDotSize + 2 : 4,
+                    child: IgnorePointer(
+                      child: Container(
+                        key: const Key('course_cell_date_edit_dot'),
+                        width: TimetableTheme.dateEditDotSize,
+                        height: TimetableTheme.dateEditDotSize,
+                        decoration: BoxDecoration(
+                          color: colors.warning,
+                          shape: BoxShape.circle,
+                        ),
                       ),
                     ),
                   ),

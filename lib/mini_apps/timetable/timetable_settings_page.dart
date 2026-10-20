@@ -1,7 +1,10 @@
+import 'timetable_day_swap_ui.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'timetable_color_picker.dart';
 import 'timetable_colors.dart';
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
@@ -70,6 +73,12 @@ class TimetableSettingsPage extends StatelessWidget {
   /// 「恢复教务课程」二次确认文案（§14.3，含考试覆盖）。
   static const restoreConfirmText = '恢复所有教务课程和考试？你的修改、删除和调课都会清除。';
 
+  static const cellTextColorLabels = {
+    CellTextColorMode.auto: '自动',
+    CellTextColorMode.white: '白字',
+    CellTextColorMode.black: '黑字',
+  };
+
   static const fontScaleLabels = {
     CellFontScale.small: '小',
     CellFontScale.standard: '标准',
@@ -84,7 +93,7 @@ class TimetableSettingsPage extends StatelessWidget {
         c.updateSettings(change(c.settings));
 
     return Scaffold(
-      backgroundColor: TimetableTheme.pageBg,
+      backgroundColor: TimetableTheme.colorsOf(context).pageBg,
       appBar: AppBar(title: const Text('设置')),
       body: ListenableBuilder(
         listenable: c,
@@ -166,12 +175,12 @@ class TimetableSettingsPage extends StatelessWidget {
                         Text(
                           coursePaletteSchemeLabel(scheme),
                           style: TimetableTheme.bodyStyle(
-                            color: TimetableTheme.hint,
+                            color: TimetableTheme.colorsOf(context).hint,
                           ),
                         ),
-                        const Icon(
+                        Icon(
                           Icons.chevron_right,
-                          color: TimetableTheme.hint,
+                          color: TimetableTheme.colorsOf(context).hint,
                         ),
                       ],
                     ),
@@ -186,6 +195,16 @@ class TimetableSettingsPage extends StatelessWidget {
                           update((x) => x.copyWith(fontScale: v)),
                     ),
                   ),
+                  _Row(
+                    title: '文字颜色',
+                    trailing: _Segments<CellTextColorMode>(
+                      key: const Key('tt_settings_cell_text_color'),
+                      options: cellTextColorLabels,
+                      selected: s.cellTextColor,
+                      onSelected: (v) =>
+                          update((x) => x.copyWith(cellTextColor: v)),
+                    ),
+                  ),
                   _SliderRow(
                     title: '不透明度',
                     valueLabel: '$opacity%',
@@ -196,7 +215,7 @@ class TimetableSettingsPage extends StatelessWidget {
                       max: opacityMax.toDouble(),
                       divisions: (opacityMax - opacityMin) ~/ opacityStep,
                       value: opacity.toDouble(),
-                      activeColor: TimetableTheme.accent,
+                      activeColor: TimetableTheme.colorsOf(context).accent,
                       label: '$opacity%',
                       onChanged: (v) {
                         final next = v.round();
@@ -220,7 +239,7 @@ class TimetableSettingsPage extends StatelessWidget {
                                   periodHeightStep)
                               .round(),
                       value: height,
-                      activeColor: TimetableTheme.accent,
+                      activeColor: TimetableTheme.colorsOf(context).accent,
                       label: '${height.round()}',
                       onChanged: (v) {
                         if (v == c.settings.periodHeight) return;
@@ -272,12 +291,12 @@ class TimetableSettingsPage extends StatelessWidget {
                           Text(
                             '${s.reminderLeadMinutes} 分钟',
                             style: TimetableTheme.bodyStyle(
-                              color: TimetableTheme.hint,
+                              color: TimetableTheme.colorsOf(context).hint,
                             ),
                           ),
-                          const Icon(
+                          Icon(
                             Icons.chevron_right,
-                            color: TimetableTheme.hint,
+                            color: TimetableTheme.colorsOf(context).hint,
                           ),
                         ],
                       ),
@@ -323,9 +342,44 @@ class TimetableSettingsPage extends StatelessWidget {
                             borderRadius: BorderRadius.circular(4),
                           ),
                         ),
-                        const Icon(
+                        Icon(
                           Icons.chevron_right,
-                          color: TimetableTheme.hint,
+                          color: TimetableTheme.colorsOf(context).hint,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              _Group(
+                key: const Key('tt_settings_group_swaps'),
+                title: '调课',
+                children: [
+                  _Row(
+                    key: const Key('tt_settings_day_swaps'),
+                    title: '调课记录',
+                    semanticsStatus: c.daySwaps.isEmpty
+                        ? '无'
+                        : '${c.daySwaps.length} 条',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => TimetableDaySwapsPage(controller: c),
+                      ),
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ExcludeSemantics(
+                          child: Text(
+                            c.daySwaps.isEmpty ? '无' : '${c.daySwaps.length} 条',
+                            style: TimetableTheme.bodyStyle(
+                              color: TimetableTheme.colorsOf(context).hint,
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          Icons.chevron_right,
+                          color: TimetableTheme.colorsOf(context).hint,
                         ),
                       ],
                     ),
@@ -358,14 +412,14 @@ class TimetableSettingsPage extends StatelessWidget {
                               color: c.portalSessionExpired
                                   ? TimetableTheme.sessionExpiredText
                                   : c.portalBound
-                                  ? TimetableTheme.hint
-                                  : TimetableTheme.accent,
+                                  ? TimetableTheme.colorsOf(context).hint
+                                  : TimetableTheme.colorsOf(context).accent,
                             ),
                           ),
                         ),
-                        const Icon(
+                        Icon(
                           Icons.chevron_right,
-                          color: TimetableTheme.hint,
+                          color: TimetableTheme.colorsOf(context).hint,
                         ),
                       ],
                     ),
@@ -422,7 +476,9 @@ class TimetableSettingsPage extends StatelessWidget {
           ),
           TextButton(
             key: const Key('tt_restore_jwxt_confirm'),
-            style: TextButton.styleFrom(foregroundColor: TimetableTheme.danger),
+            style: TextButton.styleFrom(
+              foregroundColor: TimetableTheme.colorsOf(context).danger,
+            ),
             onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text('恢复'),
           ),
@@ -454,7 +510,12 @@ class TimetableSettingsPage extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('颜色', style: TimetableTheme.titleStyle()),
+              Text(
+                '颜色',
+                style: TimetableTheme.titleStyle(
+                  color: TimetableTheme.colorsOf(context).titleText,
+                ),
+              ),
               const SizedBox(height: 16),
               Wrap(
                 spacing: 12,
@@ -487,13 +548,33 @@ class TimetableSettingsPage extends StatelessWidget {
                     ),
                 ],
               ),
+              const SizedBox(height: 8),
+              // item 9：同一个颜色面板（预设 + 自定义 HSV），教务 / 手动考试共用。
+              TextButton(
+                key: const Key('tt_exam_color_custom'),
+                onPressed: () =>
+                    Navigator.pop(sheetContext, const Color(0x00000000)),
+                child: const Text('自定义颜色…'),
+              ),
             ],
           ),
         ),
       ),
     );
     if (picked == null) return;
-    final argb = picked.toARGB32();
+    var chosen = picked;
+    if (picked.toARGB32() == 0) {
+      if (!context.mounted) return;
+      final pick = await showTimetableColorPicker(
+        context,
+        current: Color(c.settings.examColor),
+        presets: TimetableTheme.examColorOptions,
+        showReset: c.settings.examColor != kDefaultExamColor,
+      );
+      if (pick == null) return;
+      chosen = pick.reset ? const Color(kDefaultExamColor) : pick.color!;
+    }
+    final argb = chosen.toARGB32() | 0xFF000000;
     if (argb == c.settings.examColor) return;
     await c.updateSettings(c.settings.copyWith(examColor: argb));
   }
@@ -510,14 +591,22 @@ class TimetableSettingsPage extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text('提前时间', style: TimetableTheme.titleStyle()),
+              child: Text(
+                '提前时间',
+                style: TimetableTheme.titleStyle(
+                  color: TimetableTheme.colorsOf(context).titleText,
+                ),
+              ),
             ),
             for (final m in TimetableSettings.reminderLeadOptions)
               ListTile(
                 key: Key('tt_settings_lead_$m'),
                 title: Text('$m 分钟'),
                 trailing: m == c.settings.reminderLeadMinutes
-                    ? const Icon(Icons.check, color: TimetableTheme.accent)
+                    ? Icon(
+                        Icons.check,
+                        color: TimetableTheme.colorsOf(context).accent,
+                      )
                     : null,
                 onTap: () => Navigator.pop(sheetContext, m),
               ),
@@ -540,7 +629,7 @@ class TimetablePalettePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = controller ?? TimetableController.instance;
     return Scaffold(
-      backgroundColor: TimetableTheme.pageBg,
+      backgroundColor: TimetableTheme.colorsOf(context).pageBg,
       appBar: AppBar(title: const Text('配色')),
       body: ListenableBuilder(
         listenable: c,
@@ -583,8 +672,8 @@ class TimetablePalettePage extends StatelessWidget {
                                 ? Icons.radio_button_checked
                                 : Icons.radio_button_unchecked,
                             color: scheme == current
-                                ? TimetableTheme.accent
-                                : TimetableTheme.hint,
+                                ? TimetableTheme.colorsOf(context).accent
+                                : TimetableTheme.colorsOf(context).hint,
                             size: 20,
                           ),
                         ],
@@ -634,7 +723,7 @@ class _Group extends StatelessWidget {
             ),
           ),
           Material(
-            color: TimetableTheme.surface,
+            color: TimetableTheme.colorsOf(context).surface,
             borderRadius: BorderRadius.circular(
               TimetableSettingsPage.cardRadius,
             ),
@@ -711,7 +800,7 @@ class _Row extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TimetableTheme.bodyStyle(
-                    color: TimetableTheme.titleText,
+                    color: TimetableTheme.colorsOf(context).titleText,
                   ),
                 ),
               ),
@@ -749,7 +838,7 @@ class _SwitchRow extends StatelessWidget {
       onTap: () => onChanged(!value),
       trailing: Switch(
         value: value,
-        activeThumbColor: TimetableTheme.accent,
+        activeThumbColor: TimetableTheme.colorsOf(context).accent,
         onChanged: onChanged,
       ),
     );
@@ -788,7 +877,7 @@ class _SliderRow extends StatelessWidget {
                   maxLines: 1,
                   softWrap: false,
                   style: TimetableTheme.bodyStyle(
-                    color: TimetableTheme.titleText,
+                    color: TimetableTheme.colorsOf(context).titleText,
                   ),
                 ),
               ),
@@ -799,7 +888,9 @@ class _SliderRow extends StatelessWidget {
                   valueLabel,
                   key: valueKey,
                   textAlign: TextAlign.end,
-                  style: TimetableTheme.bodyStyle(color: TimetableTheme.hint),
+                  style: TimetableTheme.bodyStyle(
+                    color: TimetableTheme.colorsOf(context).hint,
+                  ),
                 ),
               ),
             ],
@@ -824,6 +915,7 @@ class _Segments<T> extends StatelessWidget {
   final ValueChanged<T> onSelected;
 
   /// 未选中项描边（中性灰）。
+  /// 浅色未选中描边；深色下改用 [TimetableColors.offWeekBorder]（PM 10/19）。
   static const Color unselectedBorder = Color(0xFFD0D4DC);
 
   @override
@@ -840,17 +932,21 @@ class _Segments<T> extends StatelessWidget {
               selected: e.key == selected,
               showCheckmark: false,
               visualDensity: VisualDensity.compact,
-              selectedColor: TimetableTheme.accentSoft,
+              selectedColor: TimetableTheme.colorsOf(context).accentSoft,
               surfaceTintColor: Colors.transparent,
               // 未选中：中性灰描边；选中维持原样（浅蓝底、无描边）。不用 M3 种子色描边。
               side: e.key == selected
                   ? const BorderSide(color: Colors.transparent)
-                  : const BorderSide(color: _Segments.unselectedBorder),
+                  : BorderSide(
+                      color: TimetableTheme.colorsOf(context).isDark
+                          ? TimetableTheme.colorsOf(context).offWeekBorder
+                          : _Segments.unselectedBorder,
+                    ),
               labelStyle: TextStyle(
                 fontSize: 13,
                 color: e.key == selected
-                    ? TimetableTheme.accent
-                    : TimetableTheme.labelText,
+                    ? TimetableTheme.colorsOf(context).accent
+                    : TimetableTheme.colorsOf(context).labelText,
               ),
               onSelected: (_) {
                 if (e.key != selected) onSelected(e.key);

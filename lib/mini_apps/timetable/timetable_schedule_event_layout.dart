@@ -139,24 +139,38 @@ int scheduleOtherColorIndex(TimetableController c, ScheduleEvent e) =>
     c.otherColorIndexOf(e);
 
 /// 周视图格底色（考试：设置 examColor，不受不透明度影响；其他：配色底色按不透明度混合）。
-Color scheduleCellBg(TimetableController c, ScheduleEvent e) {
-  if (e.isExam) return Color(c.settings.examColor);
+/// [dark]：深色下考试色往 #121316 混 25%，其他按课程格的深色规则（item 12）。
+Color scheduleCellBg(
+  TimetableController c,
+  ScheduleEvent e, {
+  bool dark = false,
+}) {
+  if (e.isExam) {
+    return TimetableTheme.examCellBg(Color(c.settings.examColor), dark: dark);
+  }
   return TimetableTheme.blendCellBg(
-    TimetableTheme.courseColor(
+    TimetableTheme.coursePair(
       scheduleOtherColorIndex(c, e),
       scheme: coursePaletteSchemeFor(c),
-    ),
+      dark: dark,
+    ).bg,
     c.settings.cellOpacity,
+    dark: dark,
   );
 }
 
 /// 周视图格文字 / 胶囊颜色（考试白字；其他取该色号文字色）。
-Color scheduleCellFg(TimetableController c, ScheduleEvent e) {
+Color scheduleCellFg(
+  TimetableController c,
+  ScheduleEvent e, {
+  bool dark = false,
+}) {
   if (e.isExam) return TimetableTheme.examText;
-  return TimetableTheme.courseTextColor(
+  return TimetableTheme.coursePair(
     scheduleOtherColorIndex(c, e),
     scheme: coursePaletteSchemeFor(c),
-  );
+    dark: dark,
+  ).fg;
 }
 
 /// 白底上（首页卡片色条、详情色条、首页胶囊）用的强调色：考试色 / 该色号文字色。

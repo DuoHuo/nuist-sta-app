@@ -6,8 +6,8 @@
 
 import 'timetable_models.dart';
 
-/// 拖动后的应用范围：只改本周 / 改以后所有周（含本周）。
-enum MoveScope { thisWeek, fromThisWeek }
+/// 拖动后的应用范围：只改本周 / 改以后所有周（含本周）/ 所有周（第 1 条「所有周」）。
+enum MoveScope { thisWeek, fromThisWeek, allWeeks }
 
 /// [MoveResult] 状态：已移动 / 落回原位（什么都不写）/ 出错。
 enum MoveStatus { moved, noChange, error }
@@ -197,9 +197,11 @@ class SlotOverride {
       origEnd: oe,
       origWeeks: m['origWeeks'] is String ? m['origWeeks'] as String : '',
       weeks: weeks,
-      scope: m['scope'] == MoveScope.fromThisWeek.name
-          ? MoveScope.fromThisWeek
-          : MoveScope.thisWeek,
+      scope: switch (m['scope']) {
+        'fromThisWeek' => MoveScope.fromThisWeek,
+        'allWeeks' => MoveScope.allWeeks,
+        _ => MoveScope.thisWeek,
+      },
       fromWeek: i('fromWeek') ?? weeks.first,
       toDay: td,
       toStart: ts,

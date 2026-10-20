@@ -155,7 +155,9 @@ void main() {
       final exam = find.byKey(const Key('home_event_row_ex'));
       final other = find.byKey(const Key('home_event_row_ot'));
       expect(exam, findsOneWidget);
-      expect(other, findsOneWidget);
+      // item 13：首页最多 2 项，19:00 的「其他」排第 3，收进「还有 1 项」。
+      expect(other, findsNothing);
+      expect(find.text('还有 1 项'), findsOneWidget);
       expect(find.text('测试课甲'), findsOneWidget);
       final examPill = find.byKey(const Key('home_event_exam_pill'));
       expect(
@@ -176,18 +178,9 @@ void main() {
         (pillBox.border! as Border).top.color,
         Color(_c.settings.examColor),
       );
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('home_event_other_pill')),
-          matching: find.text('日程'),
-        ),
-        findsOneWidget,
-      );
       final yExam = tester.getTopLeft(exam).dy;
       final yCourse = tester.getTopLeft(find.text('测试课甲')).dy;
-      final yOther = tester.getTopLeft(other).dy;
       expect(yExam, lessThan(yCourse));
-      expect(yCourse, lessThan(yOther));
     });
 
     testWidgets('EX07/EV12 「显示考试」关：首页不显示考试行，「其他」照常', (tester) async {

@@ -240,12 +240,13 @@ void main() {
       final lunch = find.byKey(const Key('home_event_row_lunch'));
       final late = find.byKey(const Key('home_event_row_late'));
       expect(lunch, findsOneWidget);
-      expect(late, findsOneWidget);
+      // item 13：首页最多 2 项（上课中的课 + 午间日程），21:30 考试收进「还有 1 项」。
+      expect(late, findsNothing);
+      expect(find.text('还有 1 项'), findsOneWidget);
       expect(
         tester.getTopLeft(find.text('测试课甲')).dy,
         lessThan(tester.getTopLeft(lunch).dy),
       );
-      expect(tester.getTopLeft(lunch).dy, lessThan(tester.getTopLeft(late).dy));
       // 「显示考试」关：考试行不显示，「其他」照常。
       _c.debugSetSnapshot(
         _c.snapshot.copyWith(settings: _c.settings.copyWith(showExams: false)),

@@ -436,7 +436,7 @@ void main() {
 
     final backToWeek = find.text('回到本周');
 
-    testWidgets('SW02 「回到本周」按钮：300ms easeOutCubic 翻页动画到本周，'
+    testWidgets('SW02 「回到本周」按钮：按跨周数时长 easeOutCubic 翻页动画到本周，'
         '动画结束后浏览周对齐本周', (tester) async {
       _load(manual: [_course('a', '测试课甲')], syncedAt: DateTime.now(), week: 9);
       await pumpWithMotion(tester, disableAnimations: false);

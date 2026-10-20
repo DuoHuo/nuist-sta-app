@@ -1,5 +1,6 @@
 // 深色模式：色板完整性、主题装配、以及页面在深色下真的取到深色色值。
 
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,18 @@ import 'package:nuist_sta_app/core/colors.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/shell/profile/profile_list_tile.dart';
 import 'package:nuist_sta_app/shell/profile/user_card.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_colors.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_color.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_home_card.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_grid.dart';
 
 /// WCAG 相对亮度。
 double _relativeLuminance(Color c) {
@@ -232,6 +245,328 @@ void main() {
       // 白色图标压在 accent 实心圆上，底色不随主题变，应保持白色。
       final icon = tester.widget<Icon>(find.byIcon(Icons.verified_user));
       expect(icon.color, Colors.white);
+    });
+  });
+
+  _timetableDarkTests();
+}
+
+// ---------------------------------------------------------------------------
+// 课表深色（spec-next-1019 item 12）：构造数据，不读真实样例。
+
+const _darkBase = Color(0xFF121316);
+final _tt = TimetableController.instance;
+
+Course _ttCourse(
+  String id,
+  String name, {
+  String weeks = '11111111111111111111',
+  int day = 1,
+}) => Course(
+  id: id,
+  name: name,
+  source: CourseSource.manual,
+  slots: [
+    CourseSlot(
+      day: day,
+      startNode: 1,
+      endNode: 2,
+      weeks: weeks,
+      location: '测试楼 A101',
+      teacher: '张老师',
+    ),
+  ],
+);
+
+void _ttLoad(List<Course> manual, {int cellOpacity = 100}) {
+  _tt.debugSetSnapshot(
+    TimetableSnapshot(
+      periods: TimetableController.defaultPeriods(),
+      settings: TimetableSettings(
+        termStartDate: DateTime(2026, 8, 31),
+        cellOpacity: cellOpacity,
+        showNonCurrentWeek: true,
+      ),
+    ),
+    viewingWeek: 7,
+    manualCourses: manual,
+  );
+}
+
+Future<void> _ttIo(WidgetTester tester) async {
+  for (var i = 0; i < 4; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+  }
+}
+
+Future<void> _pumpDark(
+  WidgetTester tester,
+  Widget home, {
+  double width = 400,
+  double scale = 1,
+}) async {
+  tester.view.physicalSize = Size(width * 3, 2400);
+  tester.view.devicePixelRatio = 3;
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: appDarkTheme(),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context)
+            .copyWith(textScaler: TextScaler.linear(scale)),
+        child: child!,
+      ),
+      home: home,
+    ),
+  );
+  await _ttIo(tester);
+}
+
+void _timetableDarkTests() {
+  group('课表深色（item 12）', () {
+    late Directory tmp;
+    final origClock = TimetableController.clock;
+    final origBinding = TimetableController.bindingCheck;
+    final origFetch = TimetableController.fetchSnapshot;
+    setUp(() {
+      tmp = Directory.systemTemp.createTempSync('tt_dark');
+      TimetableStore.debugDirectory = tmp;
+      _tt.debugReset();
+      TimetableController.bindingCheck = () async => false;
+      TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
+          throw const SocketException('offline (test)');
+      TimetableController.clock = () => DateTime(2026, 10, 12, 9);
+    });
+    tearDown(() {
+      TimetableController.clock = origClock;
+      TimetableController.bindingCheck = origBinding;
+      TimetableController.fetchSnapshot = origFetch;
+      TimetableStore.debugDirectory = null;
+      _tt.debugReset();
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
+
+    test('DK01 非本周 / 页面 / 卡片直接用上游 TimetableColors.dark', () {
+      final d = TimetableColors.dark;
+      expect(d.offWeekBg, const Color(0xFF22242A));
+      expect(d.offWeekBorder, const Color(0xFF3A3D45));
+      expect(d.offWeekText, const Color(0xFF9CA3AF));
+      expect(d.pageBg, _darkBase);
+    });
+
+    test('DK02 色板 A 16 色：深色格 = 深字色往 #121316 混 45%，字 = 浅底色，对比度 ≥ 4.5', () {
+      final pairs = TimetableTheme.pairsOf(CoursePaletteScheme.soft);
+      expect(pairs, hasLength(16));
+      for (var i = 0; i < pairs.length; i++) {
+        final p = pairs[i];
+        final d = TimetableTheme.coursePair(
+          i,
+          scheme: CoursePaletteScheme.soft,
+          dark: true,
+        );
+        expect(d.bg, Color.lerp(p.fg, _darkBase, 0.45));
+        expect(d.fg, p.bg);
+        expect(
+          _contrast(d.fg, d.bg),
+          greaterThanOrEqualTo(4.5),
+          reason: '色号 $i',
+        );
+        // 浅色不变。
+        final l = TimetableTheme.coursePair(
+          i,
+          scheme: CoursePaletteScheme.soft,
+        );
+        expect(
+          l.bg,
+          TimetableTheme.courseColor(i, scheme: CoursePaletteScheme.soft),
+        );
+        expect(
+          l.fg,
+          TimetableTheme.courseTextColor(i, scheme: CoursePaletteScheme.soft),
+        );
+      }
+    });
+
+    test('DK03 不透明度：深色往 #121316 混，浅色不变', () {
+      const c = Color(0xFF3366CC);
+      expect(
+        TimetableTheme.blendCellBg(c, 50, dark: true),
+        Color.lerp(_darkBase, c, 0.5),
+      );
+      expect(
+        TimetableTheme.blendCellBg(c, 50),
+        Color.lerp(TimetableTheme.pageBg, c, 0.5),
+      );
+      expect(TimetableTheme.blendCellBg(c, 100, dark: true), c);
+    });
+
+    test('DK04 考试格：深色往 #121316 混 25%（含自定义色），浅色原样', () {
+      for (final exam in [
+        TimetableTheme.examDefault,
+        const Color(0xFF00695C),
+      ]) {
+        expect(
+          TimetableTheme.examCellBg(exam, dark: true),
+          Color.lerp(exam, _darkBase, 0.25),
+        );
+        expect(TimetableTheme.examCellBg(exam), exam);
+        expect(
+          _contrast(
+            TimetableTheme.examText,
+            TimetableTheme.examCellBg(exam, dark: true),
+          ),
+          greaterThanOrEqualTo(4.5),
+        );
+      }
+    });
+
+    testWidgets('DK05 周视图深色：课程格深底浅字（按不透明度往 #121316 混）、非本周格用 offWeek 深色值', (
+      tester,
+    ) async {
+      final on = _ttCourse('a', '测试课甲');
+      final off = _ttCourse('b', '测试课乙', day: 2, weeks: '00000000100000000000');
+      _ttLoad([on, off], cellOpacity: 70);
+      await _pumpDark(
+        tester,
+        Scaffold(body: WeekGrid(week: 7, controller: _tt)),
+      );
+      expect(tester.takeException(), isNull);
+      final pair = TimetableTheme.coursePair(
+        courseColorIndex(_tt, on),
+        scheme: coursePaletteSchemeFor(_tt),
+        dark: true,
+      );
+      Color? cellBg(String name) =>
+          (tester
+                      .widget<Ink>(
+                        find.descendant(
+                          of: find.widgetWithText(CourseCell, name),
+                          matching: find.byType(Ink),
+                        ),
+                      )
+                      .decoration!
+                  as BoxDecoration)
+              .color;
+      expect(
+        cellBg('测试课甲'),
+        TimetableTheme.blendCellBg(pair.bg, 70, dark: true),
+      );
+      final texts = tester.widgetList<Text>(
+        find.descendant(
+          of: find.widgetWithText(CourseCell, '测试课甲'),
+          matching: find.byType(Text),
+        ),
+      );
+      expect(texts.any((t) => t.style?.color == pair.fg), isTrue);
+      expect(cellBg('测试课乙'), TimetableColors.dark.offWeekBg);
+    });
+
+    testWidgets('DK06 考试格深色：考试色往 #121316 混 25%、白字', (tester) async {
+      _ttLoad([_ttCourse('a', '测试课甲')]);
+      await tester.runAsync(
+        () => _tt.addScheduleEvent(
+          ScheduleEvent(
+            id: '',
+            kind: ScheduleKind.exam,
+            source: ScheduleSource.manual,
+            title: '测试考试',
+            date: DateTime(2026, 10, 13),
+            start: const TimeOfDayMinutes(10, 10),
+            end: const TimeOfDayMinutes(11, 50),
+            location: '测试楼 A101',
+          ),
+        ),
+      );
+      await _pumpDark(
+        tester,
+        Scaffold(body: WeekGrid(week: 7, controller: _tt)),
+      );
+      final id = _tt.scheduleEvents.first.id;
+      final ink = tester.widget<Ink>(
+        find.descendant(
+          of: find.byKey(Key('schedule_cell_$id')),
+          matching: find.byType(Ink),
+        ),
+      );
+      expect(
+        (ink.decoration! as BoxDecoration).color,
+        TimetableTheme.examCellBg(Color(_tt.settings.examColor), dark: true),
+      );
+    });
+
+    testWidgets('DK07 课表页 / 详情面板深色：页面底、面色取深色，不溢出', (tester) async {
+      _ttLoad([_ttCourse('a', '测试课甲')]);
+      await _pumpDark(tester, const TimetablePage());
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.widget<Scaffold>(find.byType(Scaffold).first).backgroundColor,
+        TimetableColors.dark.pageBg,
+      );
+      await tester.tap(find.widgetWithText(CourseCell, '测试课甲'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('测试楼 A101'), findsWidgets);
+      expect(
+        tester
+            .widgetList<DecoratedBox>(find.byType(DecoratedBox))
+            .any(
+              (d) =>
+                  d.decoration is BoxDecoration &&
+                  (d.decoration as BoxDecoration).color ==
+                      TimetableColors.dark.surface,
+            ),
+        isTrue,
+      );
+    });
+
+    testWidgets('DK08 设置页深色：页面底取深色、分组面色取深色，不溢出', (tester) async {
+      _ttLoad([_ttCourse('a', '测试课甲')]);
+      await _pumpDark(
+        tester,
+        TimetableSettingsPage(controller: _tt, onOpenAccount: () async {}),
+      );
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.widget<Scaffold>(find.byType(Scaffold).first).backgroundColor,
+        TimetableColors.dark.pageBg,
+      );
+      expect(
+        find
+            .byType(Text)
+            .evaluate()
+            .map((e) => (e.widget as Text).style?.color)
+            .contains(TimetableTheme.titleText),
+        isFalse,
+      );
+    });
+
+    testWidgets('DK09 首页卡片深色（上课中、320dp、textScaler 1.3）：面色深色、不溢出', (
+      tester,
+    ) async {
+      _ttLoad([_ttCourse('a', '测试课甲')]);
+      final now = DateTime(2026, 10, 12, 9);
+      await _pumpDark(
+        tester,
+        Scaffold(
+          body: SingleChildScrollView(child: TimetableHomeCard(now: () => now)),
+        ),
+        width: 320,
+        scale: 1.3,
+      );
+      expect(tester.takeException(), isNull);
+      final card = tester.widget<Material>(
+        find
+            .descendant(
+              of: find.byType(TimetableHomeCard),
+              matching: find.byType(Material),
+            )
+            .first,
+      );
+      expect(card.color, TimetableColors.dark.surface);
+      expect(find.byKey(const Key('home_course_remaining')), findsOneWidget);
     });
   });
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'timetable_color_picker.dart';
 import 'timetable_course_edit_page.dart';
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
@@ -45,11 +46,13 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     // 已修改 + 恢复原课程，只写本地覆盖层）。
     final readOnly = course.source == CourseSource.jwxt;
     final slot = widget.cell.slot;
-    // 4dp 色条在白底上用该色号文字色（A 柔和底色太浅，白底上看不出）。
-    final color = TimetableTheme.courseTextColor(
-      courseColorIndex(widget.controller, course),
-      scheme: coursePaletteSchemeFor(widget.controller),
-    );
+    // 4dp 色条在面色上用该色号文字色（A 柔和底色太浅，白底上看不出）；深色下取
+    // 深色格的浅字色（item 12），在深色面上才看得见。
+    final color = coursePairFor(
+      widget.controller,
+      course,
+      dark: TimetableTheme.colorsOf(context).isDark,
+    ).fg;
     // 调过的教务课：「已调课：原 周X 第 a–b 节」+「恢复原位置」（spec §13.2）。
     final slotIndex = _slotIndexOf(course, slot);
     final overrideInfo = slotIndex < 0
@@ -62,8 +65,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
         : '第 ${slot.startNode}–${slot.endNode} 节 $start–$end';
 
     return Container(
-      decoration: const BoxDecoration(
-        color: TimetableTheme.surface,
+      decoration: BoxDecoration(
+        color: TimetableTheme.colorsOf(context).surface,
         borderRadius: BorderRadius.vertical(
           top: Radius.circular(TimetableTheme.sheetTopRadius),
         ),
@@ -94,7 +97,9 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                     course.classId.isEmpty
                         ? course.name
                         : '${course.name}[${course.classId}]',
-                    style: TimetableTheme.titleStyle(),
+                    style: TimetableTheme.titleStyle(
+                      color: TimetableTheme.colorsOf(context).titleText,
+                    ),
                   ),
                 ),
                 if (course.isManual) ...[
@@ -118,16 +123,18 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.swap_horiz,
                     size: 20,
-                    color: TimetableTheme.hint,
+                    color: TimetableTheme.colorsOf(context).hint,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
                       _overrideText(overrideInfo),
-                      style: TimetableTheme.bodyStyle(),
+                      style: TimetableTheme.bodyStyle(
+                        color: TimetableTheme.colorsOf(context).labelText,
+                      ),
                     ),
                   ),
                   TextButton(
@@ -136,9 +143,40 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                         ? null
                         : () => _restore(course, slotIndex),
                     style: TextButton.styleFrom(
-                      foregroundColor: TimetableTheme.accent,
+                      foregroundColor: TimetableTheme.colorsOf(context).accent,
                     ),
                     child: const Text('恢复原位置'),
+                  ),
+                ],
+              ),
+            ),
+          if (widget.cell.dateEdit != null)
+            Padding(
+              key: const Key('course_detail_date_edit'),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.edit_calendar_outlined,
+                    size: 20,
+                    color: TimetableTheme.colorsOf(context).hint,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      '这一天已单独修改',
+                      style: TimetableTheme.bodyStyle(
+                        color: TimetableTheme.colorsOf(context).labelText,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    key: const Key('course_detail_restore_day'),
+                    onPressed: _restoring ? null : _restoreDay,
+                    style: TextButton.styleFrom(
+                      foregroundColor: TimetableTheme.colorsOf(context).accent,
+                    ),
+                    child: const Text('恢复这一天'),
                   ),
                 ],
               ),
@@ -158,6 +196,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
               text: slot.note.isEmpty ? '备注（选填）' : slot.note,
               muted: slot.note.isEmpty,
             ),
+          // item 9：课程颜色（12 预设 + 自定义 HSV + 恢复默认）。
+          CourseColorRow(controller: widget.controller, course: course),
           if (course.credit != null)
             _InfoRow(
               icon: Icons.school_outlined,
@@ -179,8 +219,10 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                       child: FilledButton(
                         onPressed: () => _edit(course),
                         style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFFF0F1F3),
-                          foregroundColor: TimetableTheme.titleText,
+                          backgroundColor: TimetableTheme.colorsOf(context)
+                              .chipBg,
+                          foregroundColor: TimetableTheme.colorsOf(context)
+                              .titleText,
                           elevation: 0,
                           shape: const StadiumBorder(),
                         ),
@@ -197,7 +239,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                       icon: const Icon(Icons.delete_outline, size: 20),
                       label: const Text('删除'),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.red.shade600,
+                        foregroundColor: TimetableTheme.colorsOf(context)
+                            .danger,
                         shape: const StadiumBorder(),
                       ),
                     ),
@@ -205,7 +248,61 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                 ],
               ),
             ),
+          if (widget.cell.date != null &&
+              widget.cell.activeThisWeek &&
+              widget.cell.dateEdit?.isDelete != true)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  key: const Key('course_detail_delete_day'),
+                  onPressed: _restoring ? null : _deleteDay,
+                  icon: const Icon(Icons.event_busy_outlined, size: 20),
+                  label: const Text('只删这一天'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: TimetableTheme.colorsOf(context).danger,
+                  ),
+                ),
+              ),
+            ),
         ],
+      ),
+    );
+  }
+
+  /// 第 1 条：撤销这一格的单日修改。
+  Future<void> _restoreDay() async {
+    final id = widget.cell.dateEdit?.id;
+    if (id == null) return;
+    setState(() => _restoring = true);
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final ok = await widget.controller.restoreDateEdit(id);
+    if (!mounted) return;
+    setState(() => _restoring = false);
+    if (navigator.canPop()) navigator.pop();
+    messenger?.showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(ok ? '已恢复这一天' : '恢复失败'),
+      ),
+    );
+  }
+
+  /// 第 1 条：只删这一天（可在「恢复这一天」撤销，不弹确认）。
+  Future<void> _deleteDay() async {
+    setState(() => _restoring = true);
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final rec = await widget.controller.deleteOccurrence(widget.cell);
+    if (!mounted) return;
+    setState(() => _restoring = false);
+    if (navigator.canPop()) navigator.pop();
+    messenger?.showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(rec == null ? '删除失败' : '已删除这一天的课'),
       ),
     );
   }
@@ -259,6 +356,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
       controller: widget.controller,
       initial: course,
       initialSlot: widget.cell.slot,
+      cell: widget.cell,
     );
     if (saved == null || !mounted) return;
     if (navigator.canPop()) navigator.pop();
@@ -321,7 +419,7 @@ class SheetDragHandle extends StatelessWidget {
       width: 36,
       height: 4,
       decoration: BoxDecoration(
-        color: TimetableTheme.divider,
+        color: TimetableTheme.colorsOf(context).divider,
         borderRadius: BorderRadius.circular(2),
       ),
     );
@@ -337,12 +435,15 @@ class _ManualTag extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: Colors.transparent,
-        border: Border.all(color: TimetableTheme.hint),
+        border: Border.all(color: TimetableTheme.colorsOf(context).hint),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: const Text(
+      child: Text(
         '手动添加',
-        style: TextStyle(fontSize: 11, color: TimetableTheme.hint),
+        style: TextStyle(
+          fontSize: 11,
+          color: TimetableTheme.colorsOf(context).hint,
+        ),
       ),
     );
   }
@@ -363,13 +464,15 @@ class _InfoRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Row(
           children: [
-            Icon(icon, size: 20, color: TimetableTheme.hint),
+            Icon(icon, size: 20, color: TimetableTheme.colorsOf(context).hint),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
                 text,
                 style: TimetableTheme.bodyStyle(
-                  color: muted ? TimetableTheme.hint : TimetableTheme.labelText,
+                  color: muted
+                      ? TimetableTheme.colorsOf(context).hint
+                      : TimetableTheme.colorsOf(context).labelText,
                 ),
               ),
             ),

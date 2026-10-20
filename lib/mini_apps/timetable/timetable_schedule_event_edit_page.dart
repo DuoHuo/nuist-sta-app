@@ -55,7 +55,9 @@ Future<bool> confirmDeleteScheduleEvent(
         TextButton(
           key: const Key('schedule_delete_confirm'),
           onPressed: () => Navigator.pop(ctx, true),
-          style: TextButton.styleFrom(foregroundColor: Colors.red.shade600),
+          style: TextButton.styleFrom(
+            foregroundColor: TimetableTheme.colorsOf(context).danger,
+          ),
           child: const Text('删除'),
         ),
       ],
@@ -231,10 +233,10 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
   Widget build(BuildContext context) {
     final canSave = !_saving && _title.text.trim().isNotEmpty;
     return Scaffold(
-      backgroundColor: TimetableTheme.pageBg,
+      backgroundColor: TimetableTheme.colorsOf(context).pageBg,
       appBar: AppBar(
         title: Text(_pageTitle),
-        backgroundColor: TimetableTheme.surface,
+        backgroundColor: TimetableTheme.colorsOf(context).surface,
         surfaceTintColor: Colors.transparent,
         actions: [
           TextButton(
@@ -295,7 +297,7 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
                   kOutsideTermHint,
                   key: const Key('schedule_form_outside_term_hint'),
                   style: TimetableTheme.captionStyle(
-                    color: TimetableTheme.hint,
+                    color: TimetableTheme.colorsOf(context).hint,
                   ),
                 ),
               ),
@@ -321,8 +323,8 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
                   key: const Key('schedule_form_time_error'),
                   style: TimetableTheme.captionStyle(
                     color: _triedSave
-                        ? TimetableTheme.danger
-                        : TimetableTheme.warning,
+                        ? TimetableTheme.colorsOf(context).danger
+                        : TimetableTheme.colorsOf(context).warning,
                   ),
                 ),
               ),
@@ -370,7 +372,7 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
                   icon: const Icon(Icons.delete_outline, size: 20),
                   label: const Text('删除'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.red.shade600,
+                    foregroundColor: TimetableTheme.colorsOf(context).danger,
                     shape: const StadiumBorder(),
                   ),
                 ),
@@ -401,11 +403,22 @@ class _PickerRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-      leading: Icon(icon, size: 20, color: TimetableTheme.hint),
-      title: Text(label, style: TimetableTheme.bodyStyle()),
+      leading: Icon(
+        icon,
+        size: 20,
+        color: TimetableTheme.colorsOf(context).hint,
+      ),
+      title: Text(
+        label,
+        style: TimetableTheme.bodyStyle(
+          color: TimetableTheme.colorsOf(context).labelText,
+        ),
+      ),
       trailing: Text(
         value,
-        style: TimetableTheme.bodyStyle(color: TimetableTheme.titleText),
+        style: TimetableTheme.bodyStyle(
+          color: TimetableTheme.colorsOf(context).titleText,
+        ),
       ),
       onTap: onTap,
     );

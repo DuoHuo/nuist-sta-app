@@ -2,6 +2,8 @@
 
 import 'dart:convert';
 
+import 'timetable_date_edits.dart';
+
 /// 一节课的上课时段。
 class CourseSlot {
   const CourseSlot({
@@ -323,6 +325,7 @@ class TimetableSettings {
     this.reminderLeadMinutes = 15,
     this.showExams = true,
     this.examColor = kDefaultExamColor,
+    this.cellTextColor = CellTextColorMode.auto,
   });
 
   final String scheduleName;
@@ -371,6 +374,9 @@ class TimetableSettings {
   /// 考试格子底色 ARGB（默认深红 0xFFC62828）。
   final int examColor;
 
+  /// item 14「文字颜色」：自动（色板字色 + 深色规则）/ 白字 / 黑字。缺省自动。
+  final CellTextColorMode cellTextColor;
+
   /// 每周第一天是周日（设置 9；只影响列顺序）。存储键仍是 `weekStartsOnMonday`。
   bool get weekStartsSunday => !weekStartsOnMonday;
 
@@ -402,6 +408,7 @@ class TimetableSettings {
     int? reminderLeadMinutes,
     bool? showExams,
     int? examColor,
+    CellTextColorMode? cellTextColor,
   }) => TimetableSettings(
     scheduleName: scheduleName ?? this.scheduleName,
     termCode: termCode ?? this.termCode,
@@ -430,6 +437,7 @@ class TimetableSettings {
     reminderLeadMinutes: reminderLeadMinutes ?? this.reminderLeadMinutes,
     showExams: showExams ?? this.showExams,
     examColor: examColor ?? this.examColor,
+    cellTextColor: cellTextColor ?? this.cellTextColor,
   );
 
   /// 用 [o] 的用户偏好（显示/外观/提醒/首页开关）覆盖本对象，学期字段不变。
@@ -451,6 +459,7 @@ class TimetableSettings {
     reminderLeadMinutes: o.reminderLeadMinutes,
     showExams: o.showExams,
     examColor: o.examColor,
+    cellTextColor: o.cellTextColor,
   );
 
   Map<String, dynamic> toJson() => {
@@ -477,6 +486,7 @@ class TimetableSettings {
     'reminderLeadMinutes': reminderLeadMinutes,
     'showExams': showExams,
     'examColor': examColor,
+    'cellTextColor': cellTextColor.name,
   };
 
   // ---- 宽松读取（只在内存纠正，不回写磁盘）----
@@ -503,6 +513,14 @@ class TimetableSettings {
   /// 考试颜色：整数 ARGB 原样用（补满不透明）；其他 → 默认深红。
   static int parseExamColor(Object? raw) =>
       raw is int ? (raw | 0xFF000000) : kDefaultExamColor;
+
+  /// 文字颜色：'auto'/'white'/'black'；缺失或其他 → 自动（旧文件无此键）。
+  static CellTextColorMode parseCellTextColor(Object? raw) {
+    for (final v in CellTextColorMode.values) {
+      if (raw == v.name) return v;
+    }
+    return CellTextColorMode.auto;
+  }
 
   /// 文字大小：'small'/'standard'/'large'；其他 → 标准。
   static CellFontScale parseFontScale(Object? raw) {
@@ -548,10 +566,14 @@ class TimetableSettings {
         reminderLeadMinutes: sanitizeLeadMinutes(json['reminderLeadMinutes']),
         showExams: _bool(json['showExams'], true),
         examColor: parseExamColor(json['examColor']),
+        cellTextColor: parseCellTextColor(json['cellTextColor']),
       );
 }
 
 /// 格子文字大小三档（§13.3）：系数乘以系统字号，最小 10sp（UI 负责）。
+/// 课程格 / 考试格文字颜色（item 14）。
+enum CellTextColorMode { auto, white, black }
+
 enum CellFontScale {
   small(0.9),
   standard(1.0),
@@ -630,12 +652,25 @@ class GridCell {
     required this.slot,
     required this.conflictCount,
     required this.activeThisWeek,
+    this.date,
+    this.dateEdit,
+    this.swappedFrom,
   });
 
   final Course course;
   final CourseSlot slot;
   final int conflictCount;
   final bool activeThisWeek;
+
+  /// 这一格所在列的日期（[TimetableController.cellsForDay] 填；手工构造可为 null，
+  /// 此时编辑 / 拖动只能按「所有周」处理）。
+  final DateTime? date;
+
+  /// 套用在这一格上的单日修改（第 1 条；格子右上角圆点、详情「已修改·恢复」）。
+  final CourseDateEdit? dateEdit;
+
+  /// 整天调课换过来的课：原本在这一天上课的日期（第 8 条）；否则 null。
+  final DateTime? swappedFrom;
 }
 
 /// 首页「今日课表」一行。

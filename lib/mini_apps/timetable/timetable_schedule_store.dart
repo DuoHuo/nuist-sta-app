@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'timetable_date_edits.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_overrides.dart';
 import 'timetable_store.dart';
@@ -13,7 +14,10 @@ import 'timetable_store.dart';
 /// - `schedule_events.json`：`{schemaVersion: 1, events: [ScheduleEvent.toJson()],
 ///   otherColors: {名称: 色号}}`（教务考试与手动日程都在这里；同步只批量替换
 ///   source=jwxt 的；`otherColors` 为「其他」日程按名称固定的颜色）。
-/// - `course_edits.json`：`{schemaVersion: 1, edits: [CourseEdit.toJson()]}`。
+/// - `course_edits.json`：`{schemaVersion: 1, version: 2, edits: [CourseEdit.toJson()],
+///   dateEdits: [CourseDateEdit.toJson()]}`。`version` 缺失（旧文件）照旧读 `edits`；
+///   `dateEdits` 缺失 = 没有单日修改。
+/// - `day_swaps.json`：`{schemaVersion: 1, swaps: [DaySwap.toJson()]}`（整天调课）。
 /// - `exam_overrides.json`：`{schemaVersion: 1, overrides: [ExamOverride.toJson()]}`。
 /// - `sync_state.json`：`{schemaVersion: 1, lastSuccessAt: ISO8601 | null,
 ///   portalSessionExpired: bool}`（后者缺失 = false）。
@@ -24,7 +28,11 @@ class ScheduleStore {
   static const courseEditsFile = 'course_edits.json';
   static const examOverridesFile = 'exam_overrides.json';
   static const syncStateFile = 'sync_state.json';
+  static const daySwapsFile = 'day_swaps.json';
   static const int schemaVersion = 1;
+
+  /// `course_edits.json` 的内容版本：2 = 含单日修改 `dateEdits`。
+  static const int courseEditsVersion = 2;
 
   static Future<Map<String, dynamic>> _read(String name) async {
     final file = await TimetableStore.fileFor(name);
@@ -124,7 +132,39 @@ class ScheduleStore {
 
   static Future<void> saveCourseEdits(Map<String, CourseEdit> edits) =>
       _write(courseEditsFile, {
+        'version': courseEditsVersion,
         'edits': [for (final e in edits.values) e.toJson()],
+      });
+
+  // ---- 单日修改（第 1 条）----
+
+  /// `course_edits.json` 的 `dateEdits`；缺失 / 类型不对 → 空，坏条目跳过。
+  static Future<List<CourseDateEdit>> readCourseDateEdits() async {
+    final raw = await _read(courseEditsFile);
+    return [
+      for (final item in _list(raw, 'dateEdits'))
+        ?CourseDateEdit.tryParse(item),
+    ];
+  }
+
+  /// 只写 `dateEdits`（合并写：`edits` 与未知顶层键保留）。
+  static Future<void> saveCourseDateEdits(List<CourseDateEdit> list) =>
+      _write(courseEditsFile, {
+        'version': courseEditsVersion,
+        'dateEdits': [for (final e in list) e.toJson()],
+      });
+
+  // ---- 整天调课（第 8 条）----
+
+  /// 读 `day_swaps.json`；坏文件按 [_read] 备份为 `.corrupt` 后按空，坏条目跳过。
+  static Future<List<DaySwap>> readDaySwaps() async {
+    final raw = await _read(daySwapsFile);
+    return [for (final item in _list(raw, 'swaps')) ?DaySwap.tryParse(item)];
+  }
+
+  static Future<void> saveDaySwaps(List<DaySwap> swaps) =>
+      _write(daySwapsFile, {
+        'swaps': [for (final s in swaps) s.toJson()],
       });
 
   // ---- 教务考试覆盖 ----

@@ -719,8 +719,9 @@ void main() {
       final l = find.byKey(const Key('home_event_row_lunch'));
       final t = find.byKey(const Key('home_event_row_late'));
       expect(l, findsOneWidget);
-      expect(t, findsOneWidget);
-      expect(tester.getTopLeft(l).dy, lessThan(tester.getTopLeft(t).dy));
+      // item 13：首页最多 2 项，最晚的一项收进「还有 1 项」。
+      expect(t, findsNothing);
+      expect(find.text('还有 1 项'), findsOneWidget);
     });
   });
 

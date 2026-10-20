@@ -301,7 +301,8 @@ class TimetableStore {
     return StoredCourseColors(scheme, out);
   }
 
-  /// 合并写：保留文件里的未知顶层键，替换 schemaVersion / scheme / map。
+  /// 合并写：保留文件里的未知顶层键（含 [userColorsKey]），替换 schemaVersion /
+  /// scheme / map。原子写（临时文件 + rename）。
   static Future<void> saveCourseColors(
     CoursePaletteScheme scheme,
     Map<String, int> map,
@@ -312,7 +313,49 @@ class TimetableStore {
     raw['schemaVersion'] = courseColorsSchemaVersion;
     raw['scheme'] = scheme.name;
     raw['map'] = Map<String, int>.of(map);
-    _writeRawSync(file, raw);
+    _writeRawAtomicSync(file, raw);
+  }
+
+  /// item 9：用户自选课程色，存在 course_colors.json 的顶层键
+  /// `userColors: {课程 id: {argb: <原始 ARGB>, user: true}}`。旧文件没有这个键 → 空表，
+  /// 无需迁移；深色色值显示时换算，不另存。
+  static const userColorsKey = 'userColors';
+
+  /// 读用户自选色（只认 user == true 且 argb 为 int 的项；坏项跳过）。不抛异常。
+  static Future<Map<String, int>> readUserCourseColors() async {
+    final file = await _file(courseColorsFile);
+    if (file == null) return {};
+    final raw = _readRawSync(file)[userColorsKey];
+    if (raw is! Map) return {};
+    final out = <String, int>{};
+    for (final e in raw.entries) {
+      final v = e.value;
+      if (e.key is String &&
+          v is Map &&
+          v['user'] == true &&
+          v['argb'] is int) {
+        out[e.key as String] = (v['argb'] as int) | 0xFF000000;
+      }
+    }
+    return out;
+  }
+
+  /// 合并写用户自选色（保留 scheme / map 等其他键），原子写。
+  static Future<void> saveUserCourseColors(Map<String, int> colors) async {
+    final file = await _file(courseColorsFile);
+    if (file == null) return;
+    final raw = _readRawSync(file);
+    raw[userColorsKey] = {
+      for (final e in colors.entries) e.key: {'argb': e.value, 'user': true},
+    };
+    _writeRawAtomicSync(file, raw);
+  }
+
+  /// 先写同目录临时文件再 rename，写到一半崩溃不会留下半个 JSON。
+  static void _writeRawAtomicSync(File file, Map<String, dynamic> raw) {
+    final tmp = File('${file.path}.tmp');
+    tmp.writeAsStringSync(jsonEncode(raw), flush: true);
+    tmp.renameSync(file.path);
   }
 
   /// 清除教务快照（保留手动课程与设置）。
