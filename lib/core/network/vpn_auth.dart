@@ -3,11 +3,11 @@ import 'dart:convert';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
-import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 
 import '../auth/aia_trust.dart';
 import '../auth/nuist_login.dart';
 import '../auth/passkey_store.dart';
+import '../auth/portal_cookie_manager.dart';
 import '../auth/portal_exceptions.dart';
 import '../auth/portal_http.dart';
 import '../config/campus_config.dart';
@@ -42,7 +42,7 @@ class VpnAuth {
     final trust = AiaTrust();
     // 这是建立 VPN 所必需的引导出口，不能使用 vpnDio。
     final dio = Dio(BaseOptions(connectTimeout: const Duration(seconds: 10)))
-      ..interceptors.add(CookieManager(_jar))
+      ..interceptors.add(PortalCookieManager(_jar))
       ..httpClientAdapter = IOHttpClientAdapter(
         createHttpClient: trust.createHttpClient,
       );

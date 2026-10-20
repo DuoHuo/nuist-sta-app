@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
-import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -16,6 +15,7 @@ import 'established_store.dart';
 import 'nuist_login.dart';
 import 'passkey_bundle.dart';
 import 'passkey_store.dart';
+import 'portal_cookie_manager.dart';
 import 'portal_exceptions.dart';
 import 'portal_http.dart';
 import 'secure_cookie_storage.dart';
@@ -278,7 +278,7 @@ class PortalSession {
       ),
       securityContext: trust.context,
       onBadCertificate: trust.onBadCertificate,
-    )..interceptors.add(CookieManager(_jar));
+    )..interceptors.add(PortalCookieManager(_jar));
     _http = PortalHttp(dio, trust: trust);
     _restored = EstablishedStore.read().then((entries) {
       // 只补本进程还没登过的：恢复是异步的，别把已经新鲜的条目覆盖成旧的。
