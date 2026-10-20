@@ -36,6 +36,7 @@ class CampusMapCanvas extends StatelessWidget {
     this.userPoint,
     this.focusToken = 0,
     this.viewportInsets = EdgeInsets.zero,
+    this.markerPlaces = const [],
   });
 
   final String styleUrl;
@@ -75,6 +76,10 @@ class CampusMapCanvas extends StatelessWidget {
   /// 让目标落在未被遮挡区域的正中，而不是整屏中心。
   final EdgeInsets viewportInsets;
 
+  /// 需要在地图上标注的地点（分类筛选或搜索结果），点击标注即选中。
+  /// 调用方应保持列表引用稳定：图层按引用判断是否需要重建。
+  final List<CampusPlace> markerPlaces;
+
   @override
   Widget build(BuildContext context) {
     final mobile =
@@ -86,6 +91,7 @@ class CampusMapCanvas extends StatelessWidget {
       // The containing page owns empty/configuration/unavailable messaging.
       return const ColoredBox(color: Color(0xFFF1F3F5));
     }
-    return CampusMapNative(key: ValueKey(styleUrl), configuration: this);
+    // 不按样式串加 key：样式变化由原生端原地 setStyle，避免整张地图销毁重建。
+    return CampusMapNative(configuration: this);
   }
 }

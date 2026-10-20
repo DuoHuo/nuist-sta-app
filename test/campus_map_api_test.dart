@@ -301,6 +301,47 @@ void main() {
     },
   );
 
+  test('bulk building geometry replaces per-building requests', () async {
+    final paths = <String>[];
+    setup((request) {
+      final path = request.uri.path;
+      paths.add(path);
+      if (path.endsWith('/buildings/geometry')) {
+        return response(
+          fc([
+            feature({'kind': 'footprint', 'building_id': 'b0', 'height_m': 17}),
+            feature({'kind': 'footprint', 'building_id': 'b1'}),
+          ]),
+          geo: true,
+        );
+      }
+      if (path.endsWith('/geometry')) fail('Unexpected per-building request');
+      if (path.endsWith('/map/config')) {
+        return ok({
+          'bounds': [118.6, 32.1, 118.8, 32.3],
+        });
+      }
+      if (path.endsWith('/buildings')) {
+        return ok({
+          'buildings': [
+            for (final id in ['b0', 'b1'])
+              building(id)
+                ..remove('floors')
+                ..remove('entrances'),
+          ],
+        });
+      }
+      if (path.endsWith('/pois')) return ok({'pois': []});
+      return ok({'features': []});
+    });
+    final snapshot = await api.loadCampus();
+    expect(paths.where((p) => p.endsWith('/geometry')), hasLength(1));
+    final features = snapshot.buildingGeoJson!['features'] as List;
+    expect(features, hasLength(2));
+    expect(features.first['properties']['building_id'], 'b0');
+    expect(features.first['properties']['height_m'], 17);
+  });
+
   test('loads parallel metadata and bounded real geometry without eager floor requests', () async {
     var active = 0;
     var maximum = 0;
@@ -308,6 +349,13 @@ void main() {
     final ready = Completer<void>();
     setup((request) async {
       final path = request.uri.path;
+      // 旧版服务端没有批量几何接口：404 后退回逐栋、限并发拉取。
+      if (path.endsWith('/buildings/geometry')) {
+        return response({
+          'code': 'not_found',
+          'message': 'not found',
+        }, status: 404);
+      }
       if (path.endsWith('/geometry')) {
         active++;
         if (active > maximum) maximum = active;
@@ -404,7 +452,8 @@ void main() {
       isFalse,
     );
     expect(snapshot.warning, isNull);
-    expect(adapter.requests, hasLength(23));
+    // 4 份元数据 + 1 次批量几何探测（404）+ 19 栋逐栋几何。
+    expect(adapter.requests, hasLength(24));
   });
 
   test(

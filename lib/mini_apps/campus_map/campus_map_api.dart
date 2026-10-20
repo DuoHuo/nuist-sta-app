@@ -198,6 +198,60 @@ class CampusMapApi
       for (final poi in _objects(results[2]['pois'])) _poi(poi),
       for (final feature in featureRows) _feature(feature),
     ];
+    final geometries = await _buildingGeometries(buildings);
+    final bounds = _bounds(config['bounds']);
+    final attribution = _text(config['attribution']);
+    final styleUrl = _text(config['style_url']);
+    String? preparedStyle;
+    String? warning;
+    try {
+      preparedStyle = await _resources.prepare(
+        styleUrl ?? _basicStyle(config, bounds, attribution),
+        bounds: bounds,
+        places: places,
+      );
+    } catch (_) {
+      warning = '底图资源加载失败，地点和路线仍可使用，请刷新重试';
+    }
+    return CampusMapSnapshot(
+      places: places,
+      buildingGeoJson: _collection(geometries),
+      featuresGeoJson: _collection([
+        for (final feature in featureRows)
+          _withProperties(
+            {
+              'type': 'Feature',
+              'geometry': feature['geometry'],
+              'properties': const <String, dynamic>{},
+            },
+            {
+              'feature_id': _integer(feature['feature_id']),
+              'kind': _text(feature['kind']) ?? '',
+              'name': _text(feature['name']) ?? '',
+            },
+          ),
+      ]),
+      styleString: preparedStyle,
+      attribution: attribution,
+      bounds: bounds,
+      warning: warning,
+    );
+  }
+
+  /// 全部建筑的轮廓与出入口要素（每个要素带 building_id，有高度时带 height_m）。
+  ///
+  /// 优先走批量接口 `/buildings/geometry`，一次请求拉齐。旧版服务端没有这个
+  /// 接口（路径落到 `/buildings/:id`，返回 404）或返回内容不可用时，
+  /// 退回逐栋拉取。
+  Future<List<Map<String, dynamic>>> _buildingGeometries(
+    List<Map<String, dynamic>> buildings,
+  ) async {
+    try {
+      final all = await _request('/buildings/geometry', raw: true);
+      return _features(all);
+    } on CampusMapApiException {
+      // 落到下面的逐栋拉取。
+    }
     final geometries = List<List<Map<String, dynamic>>?>.filled(
       buildings.length,
       null,
@@ -227,45 +281,7 @@ class CampusMapApi
     await Future.wait(
       List.generate(buildings.length.clamp(0, 6), (_) => worker()),
     );
-    final bounds = _bounds(config['bounds']);
-    final attribution = _text(config['attribution']);
-    final styleUrl = _text(config['style_url']);
-    String? preparedStyle;
-    String? warning;
-    try {
-      preparedStyle = await _resources.prepare(
-        styleUrl ?? _basicStyle(config, bounds, attribution),
-        bounds: bounds,
-        places: places,
-      );
-    } catch (_) {
-      warning = '底图资源加载失败，地点和路线仍可使用，请刷新重试';
-    }
-    return CampusMapSnapshot(
-      places: places,
-      buildingGeoJson: _collection([
-        for (final features in geometries) ...?features,
-      ]),
-      featuresGeoJson: _collection([
-        for (final feature in featureRows)
-          _withProperties(
-            {
-              'type': 'Feature',
-              'geometry': feature['geometry'],
-              'properties': const <String, dynamic>{},
-            },
-            {
-              'feature_id': _integer(feature['feature_id']),
-              'kind': _text(feature['kind']) ?? '',
-              'name': _text(feature['name']) ?? '',
-            },
-          ),
-      ]),
-      styleString: preparedStyle,
-      attribution: attribution,
-      bounds: bounds,
-      warning: warning,
-    );
+    return [for (final features in geometries) ...?features];
   }
 
   @override
@@ -412,6 +428,9 @@ class CampusMapApi
     String buildingId,
     String floorId,
   ) async {
+    // 同一会话内楼层几何不会变：切层、叠层托底都复用已加载的结果。
+    final cached = _floors[(buildingId, floorId)];
+    if (cached != null) return cached;
     final results = await Future.wait([
       _request('/floors/${Uri.encodeComponent(floorId)}/features', raw: true),
       _request('/pois', query: {'building_id': buildingId, 'limit': 100}),

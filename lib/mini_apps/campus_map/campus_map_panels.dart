@@ -4,10 +4,27 @@ import 'campus_map_data.dart';
 import 'campus_map_source.dart';
 import 'campus_map_widgets.dart';
 
+/// 按分类与关键词筛选地点（面板列表和地图标注共用同一套规则）。
+List<CampusPlace> filterPlaces(
+  List<CampusPlace> places,
+  PlaceCategory? category,
+  String query,
+) {
+  final q = query.trim().toLowerCase();
+  return places
+      .where(
+        (p) =>
+            (category == null || p.category == category) &&
+            (q.isEmpty || '${p.name} ${p.subtitle}'.toLowerCase().contains(q)),
+      )
+      .toList();
+}
+
 class CampusExplorePanel extends StatelessWidget {
   const CampusExplorePanel({
     super.key,
     required this.search,
+    this.searchFocus,
     required this.category,
     required this.places,
     required this.loading,
@@ -18,6 +35,7 @@ class CampusExplorePanel extends StatelessWidget {
     required this.onSelect,
   });
   final TextEditingController search;
+  final FocusNode? searchFocus;
   final PlaceCategory? category;
   final List<CampusPlace> places;
   final bool loading;
@@ -26,182 +44,204 @@ class CampusExplorePanel extends StatelessWidget {
   final ValueChanged<PlaceCategory?> onCategory;
   final ValueChanged<CampusPlace> onSelect;
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: children(),
+  );
+
+  /// 面板的各个列表项。放进 ListView 时逐项懒构建，地点再多也只布局可见部分。
+  List<Widget> children() {
     final query = search.text.trim().toLowerCase();
-    final results = places
-        .where(
-          (p) =>
-              (category == null || p.category == category) &&
-              (query.isEmpty ||
-                  '${p.name} ${p.subtitle}'.toLowerCase().contains(query)),
-        )
-        .toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextField(
-          controller: search,
-          onTap: onSearchFocus,
-          style: const TextStyle(fontSize: 15),
-          decoration: InputDecoration(
-            hintText: '搜索地点、楼宇',
-            hintStyle: const TextStyle(color: MapPalette.secondary),
-            prefixIcon: const Icon(
-              Icons.search_rounded,
-              color: MapPalette.secondary,
-              size: 22,
-            ),
-            suffixIcon: search.text.isEmpty
-                ? null
-                : IconButton(
-                    tooltip: '清除搜索',
-                    onPressed: search.clear,
-                    icon: const Icon(Icons.cancel_rounded, size: 20),
-                  ),
-            filled: true,
-            fillColor: MapPalette.field,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide.none,
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: MapPalette.blue),
-            ),
-            contentPadding: const EdgeInsets.symmetric(vertical: 15),
+    final results = filterPlaces(places, category, query);
+    return [
+      TextField(
+        controller: search,
+        focusNode: searchFocus,
+        onTap: onSearchFocus,
+        style: const TextStyle(fontSize: 15),
+        decoration: InputDecoration(
+          hintText: '搜索地点、楼宇',
+          hintStyle: const TextStyle(color: MapPalette.secondary),
+          prefixIcon: const Icon(
+            Icons.search_rounded,
+            color: MapPalette.secondary,
+            size: 22,
           ),
-        ),
-        const SizedBox(height: 16),
-        // 四个分类入口等宽铺满整行、内容居中（各占 1/4）。
-        // 原先靠左排 + 固定右间距，右侧会留出空白，看着像没对齐。
-        Row(
-          children: [
-            for (final item in PlaceCategory.values)
-              Expanded(
-                child: _CategoryBadge(
-                  category: item,
-                  selected: category == item,
-                  onTap: () => onCategory(category == item ? null : item),
+          suffixIcon: search.text.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: '清除搜索',
+                  onPressed: search.clear,
+                  icon: const Icon(Icons.cancel_rounded, size: 20),
                 ),
-              ),
-          ],
+          filled: true,
+          fillColor: MapPalette.field,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: MapPalette.blue),
+          ),
+          contentPadding: const EdgeInsets.symmetric(vertical: 15),
         ),
-        const SizedBox(height: 20),
-        MapSectionTitle(
-          query.isNotEmpty
-              ? '搜索结果'
-              : category == null
-              ? '探索校园'
-              : categoryName(category!),
-          trailing: MapIconButton(
-            icon: Icons.refresh_rounded,
-            label: '刷新地点',
-            onPressed: loading ? null : onRefresh,
+      ),
+      const SizedBox(height: 16),
+      // 四个分类入口等宽铺满整行、内容居中（各占 1/4）。
+      // 原先靠左排 + 固定右间距，右侧会留出空白，看着像没对齐。
+      Row(
+        children: [
+          for (final item in PlaceCategory.values)
+            Expanded(
+              child: _CategoryBadge(
+                category: item,
+                selected: category == item,
+                onTap: () => onCategory(category == item ? null : item),
+              ),
+            ),
+        ],
+      ),
+      const SizedBox(height: 20),
+      MapSectionTitle(
+        query.isNotEmpty
+            ? '搜索结果'
+            : category == null
+            ? '探索校园'
+            : categoryName(category!),
+        trailing: MapIconButton(
+          icon: Icons.refresh_rounded,
+          label: '刷新地点',
+          onPressed: loading ? null : onRefresh,
+          color: MapPalette.secondary,
+        ),
+      ),
+      const SizedBox(height: 10),
+      if (loading)
+        const Padding(
+          padding: EdgeInsets.all(28),
+          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        )
+      else if (error != null)
+        MapEmptyState(
+          icon: Icons.cloud_off_outlined,
+          title: error!,
+          description: '检查网络连接后，再试一次。',
+          action: TextButton(onPressed: onRefresh, child: const Text('重新加载')),
+        )
+      else if (results.isEmpty)
+        MapEmptyState(
+          icon: query.isNotEmpty
+              ? Icons.search_off_rounded
+              : Icons.place_outlined,
+          title: query.isNotEmpty ? '没有找到相关地点' : '暂无地点信息',
+          description: query.isNotEmpty ? '试试其他楼宇名称或清除分类。' : '地点信息接入后，将在这里显示。',
+        )
+      else
+        for (var i = 0; i < results.length; i++)
+          _PlaceRow(
+            place: results[i],
+            first: i == 0,
+            last: i == results.length - 1,
+            onTap: () => onSelect(results[i]),
+          ),
+      const SizedBox(height: 24),
+      const Row(
+        children: [
+          Icon(
+            Icons.info_outline_rounded,
+            size: 15,
             color: MapPalette.secondary,
           ),
-        ),
-        const SizedBox(height: 10),
-        if (loading)
-          const Padding(
-            padding: EdgeInsets.all(28),
-            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-          )
-        else if (error != null)
-          MapEmptyState(
-            icon: Icons.cloud_off_outlined,
-            title: error!,
-            description: '检查网络连接后，再试一次。',
-            action: TextButton(onPressed: onRefresh, child: const Text('重新加载')),
-          )
-        else if (results.isEmpty)
-          MapEmptyState(
-            icon: query.isNotEmpty
-                ? Icons.search_off_rounded
-                : Icons.place_outlined,
-            title: query.isNotEmpty ? '没有找到相关地点' : '暂无地点信息',
-            description: query.isNotEmpty
-                ? '试试其他楼宇名称或清除分类。'
-                : '地点信息接入后，将在这里显示。',
-          )
-        else
-          MapSurface(
-            radius: 18,
-            child: Column(
-              children: [
-                for (var i = 0; i < results.length; i++) ...[
-                  if (i > 0)
-                    const Padding(
-                      padding: EdgeInsets.only(left: 62),
-                      child: Divider(height: 1),
-                    ),
-                  ListTile(
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 4,
-                    ),
-                    leading: Container(
-                      width: 38,
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: categoryColor(results[i].category)
-                            .withValues(alpha: .10),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(
-                        categoryIcon(results[i].category),
-                        size: 21,
-                        color: categoryColor(results[i].category),
-                      ),
-                    ),
-                    title: Text(
-                      results[i].name,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    subtitle: results[i].subtitle.isEmpty
-                        ? null
-                        : Text(
-                            results[i].subtitle,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: MapPalette.secondary,
-                            ),
-                          ),
-                    trailing: const Icon(
-                      Icons.chevron_right_rounded,
-                      color: MapPalette.secondary,
-                      size: 20,
-                    ),
-                    onTap: () => onSelect(results[i]),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        const SizedBox(height: 24),
-        const Row(
-          children: [
-            Icon(
-              Icons.info_outline_rounded,
-              size: 15,
-              color: MapPalette.secondary,
-            ),
-            SizedBox(width: 7),
-            Expanded(
-              child: Text(
-                '选择楼宇后可查看室内地图与可用楼层',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: MapPalette.secondary,
-                  height: 1.5,
-                ),
+          SizedBox(width: 7),
+          Expanded(
+            child: Text(
+              '选择楼宇后可查看室内地图与可用楼层',
+              style: TextStyle(
+                fontSize: 12,
+                color: MapPalette.secondary,
+                height: 1.5,
               ),
             ),
-          ],
-        ),
-      ],
+          ),
+        ],
+      ),
+    ];
+  }
+}
+
+/// 地点列表的一行。每行自带所在分组的圆角与分隔线，
+/// 这样整组可以拆成独立列表项交给 ListView 懒构建。
+class _PlaceRow extends StatelessWidget {
+  const _PlaceRow({
+    required this.place,
+    required this.first,
+    required this.last,
+    required this.onTap,
+  });
+  final CampusPlace place;
+  final bool first, last;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = categoryColor(place.category);
+    final radius = BorderRadius.vertical(
+      top: Radius.circular(first ? 18 : 0),
+      bottom: Radius.circular(last ? 18 : 0),
+    );
+    return Material(
+      color: Colors.white,
+      borderRadius: radius,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!first)
+            const Padding(
+              padding: EdgeInsets.only(left: 66),
+              child: Divider(height: 1),
+            ),
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 2,
+            ),
+            leading: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: .10),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(categoryIcon(place.category), size: 21, color: color),
+            ),
+            title: Text(
+              place.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
+            subtitle: place.subtitle.isEmpty
+                ? null
+                : Text(
+                    place.subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: MapPalette.secondary,
+                    ),
+                  ),
+            trailing: const Icon(
+              Icons.chevron_right_rounded,
+              color: MapPalette.secondary,
+              size: 20,
+            ),
+            onTap: onTap,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -254,10 +294,12 @@ class CampusPlacePanel extends StatelessWidget {
               children: [
                 Text(
                   room?.name ?? place.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 27,
+                    fontSize: 22,
                     fontWeight: FontWeight.w700,
-                    letterSpacing: -.8,
+                    letterSpacing: -.5,
                   ),
                 ),
                 const SizedBox(height: 5),
@@ -282,10 +324,13 @@ class CampusPlacePanel extends StatelessWidget {
           ),
         ],
       ),
-      const SizedBox(height: 20),
+      const SizedBox(height: 16),
+      // 主操作一行排开：路线（主按钮）/ 室内 / 详情 / 街景，
+      // 不再单独占一整行「查看详情」。
       Row(
         children: [
           Expanded(
+            flex: 3,
             child: MapAction(
               icon: Icons.turn_right_rounded,
               label: routing ? '规划中' : '路线',
@@ -295,12 +340,24 @@ class CampusPlacePanel extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Expanded(
+            flex: 2,
             child: MapAction(
               icon: floor != null ? Icons.map_outlined : Icons.layers_outlined,
               label: floor != null ? '校园' : '室内',
               onPressed: onIndoor,
             ),
           ),
+          if (onDetail != null) ...[
+            const SizedBox(width: 8),
+            Expanded(
+              flex: 2,
+              child: MapAction(
+                icon: Icons.article_outlined,
+                label: '详情',
+                onPressed: onDetail,
+              ),
+            ),
+          ],
           const SizedBox(width: 8),
           MapSurface(
             radius: 15,
@@ -314,17 +371,6 @@ class CampusPlacePanel extends StatelessWidget {
         ],
       ),
       const SizedBox(height: 16),
-      if (onDetail != null) ...[
-        SizedBox(
-          width: double.infinity,
-          child: MapAction(
-            icon: Icons.article_outlined,
-            label: '查看详情',
-            onPressed: onDetail,
-          ),
-        ),
-        const SizedBox(height: 16),
-      ],
       if (mediaEntry != null) ...[mediaEntry!, const SizedBox(height: 16)],
       if (route != null) ...[
         MapSectionTitle(
@@ -456,26 +502,6 @@ class CampusPlacePanel extends StatelessWidget {
             title: '室内地图尚未开放',
             description: '该楼宇暂未提供室内数据。',
           ),
-        const SizedBox(height: 12),
-        MapSurface(
-          radius: 18,
-          child: ListTile(
-            leading: const Icon(
-              Icons.streetview_rounded,
-              color: MapPalette.blue,
-            ),
-            title: const Text(
-              '走进实景',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-            ),
-            subtitle: const Text(
-              '街景暂未开放',
-              style: TextStyle(fontSize: 12, color: MapPalette.secondary),
-            ),
-            trailing: const Icon(Icons.chevron_right_rounded, size: 20),
-            onTap: onStreet,
-          ),
-        ),
       ],
     ],
   );
