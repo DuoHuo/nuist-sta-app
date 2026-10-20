@@ -49,7 +49,9 @@ class TimetableAppearancePage extends StatelessWidget {
           final headerSize = s.headerTextSize
               .clamp(kHeaderTextSizeMin, kHeaderTextSizeMax)
               .toDouble();
-          final week = c.currentWeek.clamp(1, math.max(1, c.totalWeeks)).toInt();
+          final week = c.currentWeek
+              .clamp(1, math.max(1, c.totalWeeks))
+              .toInt();
           return Column(
             children: [
               Expanded(
