@@ -112,7 +112,7 @@ fix(electricity): 修复只有一条记录时折线图不显示
 - 注释和文档用中文，公开的类和方法应当写 `///` 文档注释；`lib/` 内部用相对路径 import。
 - 校内主机名一律从 `lib/core/config/campus_config.dart` 的 `CampusHosts` 派生；只模板化 host，路径、大小写、尾斜杠保持服务端原样（CAS 精确匹配 service）。
 - 日志只在 debug 构建输出，禁止打印 Cookie、ticket、私钥、学号等敏感值。
-- 禁止引入遥测、崩溃上报、统计类 SDK；除学校自己的系统外，禁止新增网络出口，确有需要先问用户。
+- 禁止引入遥测、崩溃上报、统计类 SDK。网络出口限于学校自己的系统和现有的非学校出口：社团自有服务（`lib/core/config/api_endpoints.dart`）、校园地图后端、小公交公开页面与状态服务。新增出口前必须先问用户；非学校出口禁止携带门户凭据、Cookie、学号等个人数据。
 - 以下内容只在用户明确要求时改动：`pubspec.yaml` 的 `version`、Flutter 版本、`.github/workflows/`、Android 签名配置、`assets/js/vconsole.min.js`。
 - 新增或升级依赖前必须先问；改了依赖要一并提交 `pubspec.lock`。
 

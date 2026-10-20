@@ -8,7 +8,8 @@
 
 ## 方式一：最小原生小程序
 
-参考 `lib/mini_apps/campus_map/`，**总共两个文件**。
+最小形态**只需两个文件**：一个页面、一个 manifest。现有小程序都已长成多文件结构，
+下面的骨架可以直接照抄。
 
 **1. 建页面** `lib/mini_apps/<name>/<name>_page.dart`：
 
@@ -53,9 +54,11 @@ Widget _myEntry(BuildContext context) => const MyPage();
 
 ```dart
 final List<AppManifest> appRegistry = [
+  bulletinManifest,
   electricityManifest,
   freeClassroomManifest,
   campusMapManifest,
+  timetableManifest,
   myManifest,          // ← 加这一行
 ];
 ```

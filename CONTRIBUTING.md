@@ -100,9 +100,11 @@ CI 要求以下检查通过：
 dart format lib test
 flutter analyze
 flutter test
+cd native/vpn && cargo test --locked --target-dir ../../build/rust-host && cd ../..
 ```
 
-此外，CI 还会检查小程序依赖方向、commit 格式，并编译 Android arm64 debug APK。
+此外，CI 还会检查小程序依赖方向、敏感字面量、启动图标是否与源图一致、commit 格式，
+运行加载本机 VPN 动态库的 FFI 测试（见上文「Rust 和 FFI」），并编译 Android arm64 debug APK。
 提交前本地跑完这些命令，可以尽早发现问题。
 
 ## 代码约定
@@ -110,11 +112,13 @@ flutter test
 - 遵循 `dart format` 默认风格
 - 注释和公开 API 文档使用中文；公开的类和方法写 `///` 文档注释
 - `lib/` 内部使用相对路径 import
-- 品牌色使用 `AppColors`，不要把 Material 3 默认的 `colorScheme.primary` 当作品牌色
+- 取色一律用 `AppPalette.of(context)`，它随当前主题明暗返回对应色值；`AppColors` /
+  `AppColorsDark` 只用于构造主题，业务代码不要直接引用。明暗可由用户手动切换，不要假定浅色
 - Controller 使用 `ChangeNotifier` 单例和幂等的 `ensureStarted()`
 - API 层负责网络和解析，Store 层负责本地 JSON，页面层不直接处理这些细节
 - 日志只允许在 debug 构建输出，不得打印 Cookie、ticket、私钥、学号等敏感信息
-- 不新增遥测、崩溃上报、统计 SDK 或学校业务系统之外的网络出口
+- 不新增遥测、崩溃上报、统计 SDK；除学校业务系统和现有的社团自有服务、校园地图后端、
+  小公交接口外，新增网络出口需先与维护者确认，且非学校出口不得携带凭据、Cookie 或学号
 
 新增或升级第三方依赖前，先在 PR 中说明理由，并同时提交 `pubspec.yaml` 和 `pubspec.lock`。
 不要顺手执行 `flutter pub upgrade`。
