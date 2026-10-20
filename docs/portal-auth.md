@@ -61,6 +61,11 @@ ignoreExpires: true,    // 忽略过期时间
 
 CASTGC 和 JSESSIONID 都是**没有 `expires` 的会话 Cookie**，不开等于什么都没存。
 
+Cookie 拦截器用的是 `PortalCookieManager`（`portal_cookie_manager.dart`），门户会话与
+VPN 认证（`core/network/vpn_auth.dart`）共用。`dio_cookie_manager` 默认会把重定向响应的
+Cookie 另存到 `Location` 目标上，导致 host-only Cookie 跨域混用、无 Path 的 Cookie
+被复制到别的路径，进而出现偶发的无限重定向；这里改为每一跳只按响应来源保存自己的 Cookie。
+
 service → 落地 URL 表（`_established`）也经 `EstablishedStore` 落到同一安全存储，
 冷启动读回。落地 URL 里有 icard 的 JWT，不落盘的话电费每次启动都得重新过 CAS。
 条目信任期 12 小时（`establishedTtl`），超过后当作未命中，重新走一次 SSO 快路径确认。
@@ -145,14 +150,17 @@ service → 落地 URL 表（`_established`）也经 `EstablishedStore` 落到�
   版本（V6 41×41 而不是 V8 49×49）
 - 会话 Cookie 用 `FlutterSecureStorage` 存，**没有**用 `cookie_jar` 默认的明文文件存储 ——
   门户会话 Cookie 等同于登录态，值得和私钥享受同一层保护
-- **没有任何遥测 / 崩溃上报 / 上传**。网络出口只有学校自己的域名，外加补全证书链时
-  拉取证书里自带的 CA Issuers 地址
+- **没有任何遥测 / 崩溃上报 / 上传**。门户登录链路只访问学校自己的域名，外加补全证书链时
+  拉取证书里自带的 CA Issuers 地址。App 整体还有几个非学校出口，都不携带门户凭据或会话：
+  社团自有服务 `app.duohuo.org.cn`（公告、贡献者名单）、校园地图后端（`duohuo.org.cn`
+  子域）、第三方小公交页面与状态服务
 - 日志在 release 构建下完全静默；URL 打印前会去掉 query（顺带避免 ticket 落进日志）；
   Cookie 调试接口只返回名字不返回值
 
 ## 已知缺口
 
-- **webvpn 模式未移植**。`NuistLogin.login()` 已经预留了 `base` 参数（webvpn 的代理前缀
-  可以直接顶替 authserver 根地址，流程一个字都不用改），但 **VPN Cookie 的获取与失效
-  重试还没做**
-- **`lib/core/auth/` 暂无单元测试**
+- **webvpn 模式未移植**，也不再计划移植：校外访问改由内置 VPN 承担（`core/network/`，
+  用法见 [架构文档](architecture.md#校园-vpn-网络请求)），VPN 认证复用 `NuistLogin` 与本机
+  Passkey。`NuistLogin.login()` 的 `base` 参数仍保留为扩展位
+- **`lib/core/auth/` 测试覆盖不全**：`NuistLogin`、`PortalCookieManager` 和学号掩码有单元测试，
+  `PortalSession`、`PasskeyTransfer` 等还没有

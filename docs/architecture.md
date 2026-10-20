@@ -12,21 +12,29 @@
 
 ```
 lib/
-├── app.dart            # NuistApp：MaterialApp.router + 主题（主题内联在这里，没抽出来）
+├── app.dart            # NuistApp：MaterialApp.router，监听 AppThemeMode 切换明暗
 ├── router.dart         # go_router 路由表
 ├── core/               # 壳与所有小程序共用（尽量少放，别让它变成垃圾场）
 │   ├── auth/           # 统一门户登录 —— 见 portal-auth.md
-│   ├── config/         # 校园地址与密钥（hex 编码）—— 见 configuration.md
+│   ├── config/         # campus_config.dart 校园地址与密钥（hex 编码）—— 见 configuration.md；
+│   │                   # api_endpoints.dart 社团自有服务地址（明文）
+│   ├── network/        # 校园 VPN：vpnDio() 与 Rust 原生库的 FFI 封装
+│   ├── schedule/       # WeeklyClasses：「本周课程」跨小程序接口（课表提供，地图读取）
 │   ├── app_manifest.dart   # AppManifest：小程序描述
 │   ├── app_info.dart       # kAppName
-│   ├── colors.dart         # AppColors 设计稿色板
+│   ├── colors.dart         # AppPalette 与 AppColors / AppColorsDark 色板
+│   ├── theme.dart          # appLightTheme() / appDarkTheme()
+│   ├── theme_mode.dart     # AppThemeMode：明暗模式选择与持久化
 │   ├── html_table.dart     # 教务 HTML 表格解析
+│   ├── pull_to_refresh.dart # 可取消的下拉刷新
 │   ├── time_format.dart    # 时间格式化
 │   └── wip.dart            # showWipSnackBar「开发中」占位反馈
 ├── shell/              # 大 APP 的壳（社团一般不用动）
+│   ├── root_page.dart  # 底部三页签
+│   ├── announcement/   # 应用公告（拉取社团自有服务）
 │   ├── home/           # 首页宫格
 │   ├── study/          # 学习页
-│   └── profile/        # 我的页（含 portal_bind/ 绑定统一门户）
+│   └── profile/        # 我的页（portal_bind/ 统一门户、settings/ 设置、about/ 关于）
 └── mini_apps/          # 所有小程序，每个一个目录
     ├── registry.dart   # ★ 全量注册表
     └── …
@@ -41,7 +49,10 @@ lib/
 | `/` `/study` `/profile` | 三个页签，包在 `StatefulShellRoute.indexedStack` 里 |
 | `/apps/:appId` | 全屏小程序；按 id 查注册表，查不到显示「小程序不存在或已下线」 |
 | `/portal-bind`、`/portal-bind/register` | 统一门户绑定与状态页 |
-| `/innovation-credit`、`/labor-score` | 两个详情页，硬编码在路由表里 |
+| `/portal-bind/export`、`/portal-bind/import`、`/portal-bind/import/scan` | 通行密钥导出、导入与扫码导入 |
+| `/innovation-credit`、`/labor-score`、`/scores` | 学习页卡片的详情页，硬编码在路由表里 |
+| `/place/:placeId` | 校园地图地物详情页，可深链 |
+| `/about`、`/settings` | 关于页、App 级设置页 |
 
 小程序路由与壳路由**平级**，所以进小程序后不带底部页签，系统返回键自然退回宫格。
 
@@ -95,10 +106,14 @@ lib/
 **现状**（写文档时点名的两处，别照抄约定当现实）：
 
 - ✅ `mini_apps/*` 侧完全合规：没有任何一处 import `shell/*` 或兄弟小程序
-- ⚠️ `shell/*` 侧**有三处合法例外**：
-  - `shell/study/study_page.dart` 直接 import 了四个小程序模块 —— 因为学习页卡片没有注册表机制
-  - `shell/profile/portal_bind/portal_status_page.dart` import 了 `student_info` 的模型与存储，用于展示学生身份
+- ⚠️ 壳侧**有四处合法例外**：
+  - `shell/study/study_page.dart` 直接 import 了五个小程序模块（`student_info` / `academic` /
+    `score` / `innovation_credit` / `labor_score`）—— 因为学习页卡片没有注册表机制
+  - `shell/profile/portal_bind/portal_status_page.dart` import 了 `student_info` 的模型与存储，
+    用于展示学生身份；还 import 了 `TimetableController`，在登录成功、解绑时通知课表
   - `router.dart` 直接 import 了几个小程序页面
+  - `app.dart` import 了课表的 `TimetableWeeklyClasses` 与 `TimetableLifecycleScope`，
+    启动时登记为 `WeeklyClasses.source` 并挂上课表生命周期
 
   真正「只认注册表」的壳页面只有 `shell/home/home_page.dart`。
 
@@ -225,9 +240,10 @@ final response = await client.get<String>(
 1. **学习页卡片没有注册表化**。新增学习页卡片必须改壳的两个地方（卡片列表 + `_refreshAll`），
    与「小程序独立增删」的设计目标相悖。
 2. **依赖方向只有部分工具强制**。CI 只检查了 `mini_apps/*` 一侧；`shell/*` 的约定和 `core/` 的准入仍靠 review 把关。
-3. **`_RefreshButton` 在四个卡片文件里各写了一份私有同名类**（`academic` / `student_info` /
-   `innovation_credit` / `labor_score`），没有上收到 `core/`。
-4. **`lib/core/auth/` 没有单元测试**。
+3. **`_RefreshButton` 在七个卡片文件里各写了一份私有同名类**（`academic` / `student_info` /
+   `score` / `innovation_credit` / `labor_score` / `timetable` / `electricity`），没有上收到 `core/`。
+4. **`lib/core/auth/` 测试覆盖不全**。目前只有 `NuistLogin`、`PortalCookieManager` 和学号掩码有单元测试，
+   `PortalSession`、`PasskeyTransfer` 等仍没有。
 
 ## 测试
 
@@ -236,10 +252,11 @@ final response = await client.get<String>(
 - 注册表 `id` 全局唯一（重复会导致 `/apps/:id` 路由冲突）
 - 每个 manifest 恰好提供 `entry` 或 `url` 之一
 
-另外它还用 `findsOneWidget` 断言了若干界面文案。**副作用：新增小程序的 `label` 不能与
-现有重名**，否则这些断言会挂。
+另外它还用 `findsOneWidget` 断言了若干界面文案（首页宫格、学习页五张卡片标题、我的页
+「设置」「关于」等）。**副作用：新增小程序的 `label` 不能与现有重名**，否则这些断言会挂。
 
-CI 要求 `dart format` 无差异、依赖方向检查通过、`flutter analyze` 零警告、`flutter test` 全绿，没有覆盖率门槛。
+CI 要求依赖方向与敏感字面量检查通过、启动图标与源图一致、`cargo test` 通过、`dart format` 无差异、
+`flutter analyze` 零警告、`flutter test`（含加载本机 VPN 动态库的 FFI 测试）全绿，没有覆盖率门槛。
 
 ## 相关文档
 
