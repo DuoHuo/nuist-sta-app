@@ -284,18 +284,65 @@ void main() {
   });
 
   group('自动色板 hueStepped', () {
-    test('无 userColors 时 coursePairFor 走 autoCoursePair', () {
+    test('12 预设为设计 §A 冷暖色板', () {
+      expect(TimetableTheme.coursePresetColors, hasLength(12));
+      expect(
+        [for (final c in TimetableTheme.coursePresetColors) c.toARGB32()],
+        [
+          0xFFEC407A,
+          0xFF42A5F5,
+          0xFFFF7043,
+          0xFF26A69A,
+          0xFFEF5350,
+          0xFF5C6BC0,
+          0xFFFFB74D,
+          0xFF66BB6A,
+          0xFFAB47BC,
+          0xFF4FC3F7,
+          0xFFFFD54F,
+          0xFF4DB6AC,
+        ],
+      );
+      expect(
+        TimetableTheme.examColorOptions,
+        TimetableTheme.coursePresetColors,
+      );
+    });
+
+    test('hueStepped 冷暖交错且无连续 ≥3 冷色', () {
+      final list = TimetableTheme.hueSteppedColors(kCoursePaletteSize);
+      expect(list, hasLength(kCoursePaletteSize));
+      var streak = 0;
+      for (final c in list) {
+        final cool = TimetableTheme.isCoolHue(HSVColor.fromColor(c).hue);
+        streak = cool ? streak + 1 : 0;
+        expect(streak, lessThan(3), reason: '无连续 ≥3 个冷色');
+        final hsv = HSVColor.fromColor(c);
+        expect(hsv.saturation, greaterThanOrEqualTo(0.30));
+        final lum = c.computeLuminance();
+        expect(lum, greaterThanOrEqualTo(0.18));
+        expect(lum, lessThanOrEqualTo(0.90));
+      }
+    });
+
+    test('无 userColors 时 coursePairFor 按课名哈希进 12 预设', () {
       c.debugSetSnapshot(_snap([_jwxt('MATH|01', '高数')]), viewingWeek: 2);
       expect(c.userColorOf(c.courses.single), isNull);
       final pair = coursePairFor(c, c.courses.single);
-      final auto = TimetableTheme.autoCoursePair(
-        c.colorIndexOf(c.courses.single),
-      );
+      final auto = TimetableTheme.autoCoursePairForName('高数');
       expect(pair.bg.toARGB32(), auto.bg.toARGB32());
       expect(pair.fg.toARGB32(), auto.fg.toARGB32());
-      // 与 A 柔和色板第 0 号不同（色相步进必与旧 soft 分离）。
+      // 同名同色；与 id 无关
+      c.debugSetSnapshot(_snap([_jwxt('OTHER|99', '高数')]), viewingWeek: 2);
+      expect(
+        coursePairFor(c, c.courses.single).bg.toARGB32(),
+        auto.bg.toARGB32(),
+      );
+      // 与 A 柔和色板第 0 号不同
       final soft0 = TimetableTheme.coursePair(0).bg.toARGB32();
-      expect(TimetableTheme.autoCoursePair(0).bg.toARGB32() == soft0, isFalse);
+      expect(auto.bg.toARGB32() == soft0, isFalse);
+      // 下标落在 0..11
+      expect(coursePresetIndexForName('高数'), inInclusiveRange(0, 11));
     });
   });
 

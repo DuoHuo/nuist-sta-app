@@ -579,12 +579,10 @@ void main() {
       );
     }
 
-    void expectCellColors(WidgetTester tester, int idx, Color fg) {
+    void expectCellColors(WidgetTester tester, Color fg) {
       final ink = tester.widget<Ink>(find.byType(Ink));
-      expect(
-        (ink.decoration! as BoxDecoration).color,
-        TimetableTheme.autoCoursePair(idx).bg,
-      );
+      final pair = TimetableTheme.autoCoursePairForName('测试课K');
+      expect((ink.decoration! as BoxDecoration).color, pair.bg);
       final dot = tester.widget<Container>(
         find.byKey(const Key('course_cell_conflict_dot')),
       );
@@ -607,15 +605,15 @@ void main() {
       expect(find.byType(Opacity), findsNothing);
     }
 
-    testWidgets('色号 2 → autoCoursePair.fg', (tester) async {
+    testWidgets('角标/文字用课名哈希自动色（忽略旧 colorIndex）', (tester) async {
       await pumpCell(tester, 2);
-      expectCellColors(tester, 2, TimetableTheme.autoCoursePair(2).fg);
+      expectCellColors(tester, TimetableTheme.autoCoursePairForName('测试课K').fg);
       TimetableController.instance.debugReset();
     });
 
-    testWidgets('色号 10 → autoCoursePair.fg', (tester) async {
+    testWidgets('另一旧色号仍同名同色', (tester) async {
       await pumpCell(tester, 10);
-      expectCellColors(tester, 10, TimetableTheme.autoCoursePair(10).fg);
+      expectCellColors(tester, TimetableTheme.autoCoursePairForName('测试课K').fg);
       TimetableController.instance.debugReset();
     });
   });

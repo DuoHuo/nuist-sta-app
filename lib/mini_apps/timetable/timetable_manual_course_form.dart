@@ -344,15 +344,11 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     (i) => _weeks.contains(i + 1) ? '1' : '0',
   ).join();
 
-  /// 预览色号：用户自选优先，否则按 [courseColorIndex] 的默认规则。
+  /// 预览自动色下标：按课名哈希进 12 预设（与 [coursePairFor] 一致）。
   int get _previewColorIndex {
     final name = _name.text.trim();
-    final base = (widget.initial ?? const Course(id: '', name: '')).copyWith(
-      name: name,
-      colorIndex: _colorIndex,
-      clearColor: _colorIndex == null,
-    );
-    return courseColorIndex(widget.controller, base);
+    if (name.isEmpty) return 0;
+    return coursePresetIndexForName(name);
   }
 
   Future<void> _pickColor() async {

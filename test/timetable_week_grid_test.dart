@@ -237,9 +237,9 @@ void main() {
           expect(on.border, isNull);
           expect(_cellBorder(tester, '测试课乙'), isNull);
           if (opacity < 100) {
-            // 未自选时本周格走 hueStepped 自动色，与 A/B/C 无关。
+            // 未自选时本周格走 12 预设自动色，与 A/B/C 无关。
             final bgs = [
-              for (var i = 0; i < kCoursePaletteSize; i++)
+              for (var i = 0; i < kCoursePresetCount; i++)
                 TimetableTheme.blendCellBg(
                   TimetableTheme.autoCoursePair(i).bg,
                   opacity,

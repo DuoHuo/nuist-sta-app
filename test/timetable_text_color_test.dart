@@ -145,11 +145,8 @@ void main() {
             ),
           );
           await _io(tester);
-          // 未自选时格子走 hueStepped 自动色（非 A/B/C）。
-          final pair = TimetableTheme.autoCoursePair(
-            courseColorIndex(_c, _course),
-            dark: dark,
-          );
+          // 未自选时格子走课名哈希 12 预设（非 A/B/C）。
+          final pair = coursePairFor(_c, _course, dark: dark);
           final expected = switch (mode) {
             CellTextColorMode.auto => pair.fg,
             CellTextColorMode.white => const Color(0xFFFFFFFF),

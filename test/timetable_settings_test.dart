@@ -11,6 +11,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_color.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_grid.dart';
 
@@ -524,7 +525,6 @@ void main() {
       );
       await pumpGrid(tester);
       final cell = tester.widget<CourseCell>(find.byType(CourseCell));
-      final idx = _c.colorIndexOf(cell.cell.course);
       final ink = tester.widget<Ink>(
         find.descendant(
           of: find.byType(CourseCell),
@@ -532,7 +532,7 @@ void main() {
         ),
       );
       final bg = (ink.decoration! as BoxDecoration).color!;
-      final pair = TimetableTheme.autoCoursePair(idx);
+      final pair = coursePairFor(_c, cell.cell.course);
       expect(bg, Color.lerp(TimetableTheme.pageBg, pair.bg, 0.3));
       expect(bg.a, 1.0);
       final fg = pair.fg;
@@ -553,7 +553,6 @@ void main() {
       await pumpGrid(tester);
       expect(_c.settings.cellOpacity, 55);
       final cell = tester.widget<CourseCell>(find.byType(CourseCell));
-      final idx = _c.colorIndexOf(cell.cell.course);
       final ink = tester.widget<Ink>(
         find.descendant(
           of: find.byType(CourseCell),
@@ -561,7 +560,7 @@ void main() {
         ),
       );
       final bg = (ink.decoration! as BoxDecoration).color!;
-      final raw = TimetableTheme.autoCoursePair(idx).bg;
+      final raw = coursePairFor(_c, cell.cell.course).bg;
       expect(bg, TimetableTheme.blendCellBg(raw, 55));
       expect(bg, Color.lerp(TimetableTheme.pageBg, raw, 0.55));
       expect(bg, isNot(TimetableTheme.blendCellBg(raw, 50)));
@@ -569,13 +568,13 @@ void main() {
       expect(bg.a, 1.0);
     });
 
-    testWidgets('换配色 B：未自选时格子仍走 hueStepped 自动色（忽略 A/B/C）', (tester) async {
+    testWidgets('换配色 B：未自选时格子仍走课名哈希 12 预设（忽略 A/B/C）', (tester) async {
       load(
         settings: base().copyWith(paletteScheme: 'B'),
         manual: [_course('a', '测试课甲', colorIndex: 12)],
       );
       await pumpGrid(tester);
-      final pair = TimetableTheme.autoCoursePair(12);
+      final pair = TimetableTheme.autoCoursePairForName('测试课甲');
       final ink = tester.widget<Ink>(
         find.descendant(
           of: find.byType(CourseCell),

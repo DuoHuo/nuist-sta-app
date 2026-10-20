@@ -10,6 +10,9 @@ import 'timetable_theme.dart';
 /// 不可拖动（不挂长按识别器）。考试：底色 = 设置 examColor、白字、「考试」胶囊；
 /// 其他：按名称取配色、「日程」胶囊。胶囊样式与课程格「单周」胶囊一致。
 /// [stackCount] > 1（同时段还有别的日程）时显示冲突圆点与「N 门」。
+///
+/// [activeThisWeek]：考试在「查看周 ≠ 本周」时为 false → 非本周灰显，同时显示
+/// 「考试」与「非本周」两个胶囊（互不覆盖）。
 class ScheduleEventCell extends StatelessWidget {
   const ScheduleEventCell({
     super.key,
@@ -19,6 +22,7 @@ class ScheduleEventCell extends StatelessWidget {
     required this.height,
     required this.radius,
     this.stackCount = 1,
+    this.activeThisWeek = true,
     this.onTap,
   });
 
@@ -28,15 +32,34 @@ class ScheduleEventCell extends StatelessWidget {
   final double height;
   final double radius;
   final int stackCount;
+
+  /// 考试：查看周是否为本周。false → 灰显 + 双胶囊。
+  final bool activeThisWeek;
   final VoidCallback? onTap;
+
+  static const String offWeekLabel = '非本周';
 
   @override
   Widget build(BuildContext context) {
-    final dark = TimetableTheme.colorsOf(context).isDark;
-    final bg = scheduleCellBg(controller, event, dark: dark);
-    final autoFg = scheduleCellFg(controller, event, dark: dark);
-    // item 14：考试格也受「文字颜色」白字 / 黑字强制。
-    final fg = event.isExam
+    final colors = TimetableTheme.colorsOf(context);
+    final dark = colors.isDark;
+    final offWeek = event.isExam && !activeThisWeek;
+    final bg = scheduleCellBg(
+      controller,
+      event,
+      dark: dark,
+      activeThisWeek: activeThisWeek,
+    );
+    final autoFg = scheduleCellFg(
+      controller,
+      event,
+      dark: dark,
+      activeThisWeek: activeThisWeek,
+    );
+    // item 14：考试格也受「文字颜色」白字 / 黑字强制；非本周灰显仍用 offWeekText。
+    final fg = offWeek
+        ? autoFg
+        : event.isExam
         ? TimetableTheme.cellTextFor(autoFg, controller.settings.cellTextColor)
         : autoFg;
     final stacked = stackCount > 1;
@@ -45,6 +68,7 @@ class ScheduleEventCell extends StatelessWidget {
     return Semantics(
       button: true,
       label: [
+        if (offWeek) offWeekLabel,
         schedulePillLabel(event),
         event.title,
         scheduleTimeText(event),
@@ -64,6 +88,12 @@ class ScheduleEventCell extends StatelessWidget {
             decoration: BoxDecoration(
               color: bg,
               borderRadius: BorderRadius.circular(radius),
+              border: offWeek
+                  ? Border.all(
+                      color: colors.offWeekBorder,
+                      width: TimetableTheme.offWeekBorderWidth,
+                    )
+                  : null,
             ),
             child: Stack(
               children: [
@@ -129,14 +159,31 @@ class ScheduleEventCell extends StatelessWidget {
                             text: '$stackCount 门',
                             color: fg,
                           )
-                        : SchedulePill(
-                            key: Key(
-                              event.isExam
-                                  ? 'schedule_cell_exam_pill'
-                                  : 'schedule_cell_other_pill',
-                            ),
-                            text: schedulePillLabel(event),
-                            color: fg,
+                        : Wrap(
+                            spacing: 2,
+                            alignment: WrapAlignment.center,
+                            children: [
+                              SchedulePill(
+                                key: Key(
+                                  event.isExam
+                                      ? 'schedule_cell_exam_pill'
+                                      : 'schedule_cell_other_pill',
+                                ),
+                                text: schedulePillLabel(event),
+                                color: fg,
+                              ),
+                              if (offWeek)
+                                // 「非本周」已在语义标签念过，胶囊不再重复。
+                                ExcludeSemantics(
+                                  child: SchedulePill(
+                                    key: const Key(
+                                      'schedule_cell_off_week_pill',
+                                    ),
+                                    text: offWeekLabel,
+                                    color: fg,
+                                  ),
+                                ),
+                            ],
                           ),
                   ),
                 ),

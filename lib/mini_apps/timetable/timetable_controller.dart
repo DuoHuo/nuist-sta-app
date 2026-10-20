@@ -386,6 +386,9 @@ class TimetableController extends ChangeNotifier {
       c.resolvedColorIndex;
 
   /// 配色用课名：教务课总用教务原课名（改名 / 单日改名不换色），手动课用存储的课名。
+  /// 配色用课名（教务用原课名，手动用存储名）。自动色哈希用此名。
+  String colorNameOf(Course c) => _colorNameOf(c);
+
   String _colorNameOf(Course c) {
     if (c.isManual) return manualCourseById(c.id)?.name ?? c.name;
     return _jwxtCourseById(c.id)?.name ?? c.name;

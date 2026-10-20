@@ -179,7 +179,7 @@ void main() {
       );
       expect(
         (preview.decoration! as BoxDecoration).color,
-        TimetableTheme.autoCoursePair(TimetableTheme.colorIndexFor('体育')).bg,
+        TimetableTheme.autoCoursePairForName('体育').bg,
       );
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settle(tester);

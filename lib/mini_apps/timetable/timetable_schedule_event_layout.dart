@@ -55,11 +55,16 @@ class ScheduleGridItem {
     required this.event,
     required this.startNode,
     required this.endNode,
+    this.activeThisWeek = true,
   });
 
   final ScheduleEvent event;
   final int startNode;
   final int endNode;
+
+  /// 考试：查看周 == 本周为 true；查看周 ≠ 本周时为 false（灰显 + 双胶囊）。
+  /// 「其他」日程始终 true（不走考试非本周规则）。
+  final bool activeThisWeek;
 
   bool overlapsNodes(int start, int end) =>
       startNode <= end && start <= endNode;
@@ -67,16 +72,31 @@ class ScheduleGridItem {
 
 /// 第 [week] 周第 [day] 列要画的日程（只取该列日期；考试受 showExams 控制，
 /// 由 [TimetableController.scheduleEventsOn] 过滤）。
+///
+/// 考试规则（PM 1020）：
+/// 1. 日期落在查看周内的考试必画（不因「非本周」被滤掉）；
+/// 2. 查看周 ≠ [TimetableController.currentWeek] 时 [ScheduleGridItem.activeThisWeek]
+///    为 false → 灰显 +「考试」「非本周」双胶囊；
+/// 4. showExams=false 仍隐藏全部考试（见 scheduleEventsOn）。
+///
+/// #3（未做）：本周视图下，「显示非本周」打开时把未来周考试幽灵到同星期列——待产品确认。
 List<ScheduleGridItem> scheduleItemsForColumn(
   TimetableController controller,
   int week,
   int day,
 ) {
   final date = controller.dateOfColumn(week, day);
+  // 查看周是否为本周：仅影响考试灰显，不影响「其他」日程。
+  final viewingCurrent = week == controller.currentWeek;
   return [
     for (final e in controller.scheduleEventsOn(date))
       if (scheduleNodeRange(controller.periods, e.start, e.end) case final r?)
-        ScheduleGridItem(event: e, startNode: r.startNode, endNode: r.endNode),
+        ScheduleGridItem(
+          event: e,
+          startNode: r.startNode,
+          endNode: r.endNode,
+          activeThisWeek: e.isExam ? viewingCurrent : true,
+        ),
   ];
 }
 
@@ -140,11 +160,16 @@ int scheduleOtherColorIndex(TimetableController c, ScheduleEvent e) =>
 
 /// 周视图格底色（考试：设置 examColor，不受不透明度影响；其他：配色底色按不透明度混合）。
 /// [dark]：深色下考试色往 #121316 混 25%，其他按课程格的深色规则（item 12）。
+/// [activeThisWeek] false（查看周≠本周的考试）→ 非本周灰底，不取 examColor。
 Color scheduleCellBg(
   TimetableController c,
   ScheduleEvent e, {
   bool dark = false,
+  bool activeThisWeek = true,
 }) {
+  if (e.isExam && !activeThisWeek) {
+    return dark ? TimetableTheme.offWeekBgDark : TimetableTheme.offWeekBg;
+  }
   if (e.isExam) {
     return TimetableTheme.examCellBg(Color(c.settings.examColor), dark: dark);
   }
@@ -160,11 +185,16 @@ Color scheduleCellBg(
 }
 
 /// 周视图格文字 / 胶囊颜色（考试白字；其他取该色号文字色）。
+/// [activeThisWeek] false 的考试 → [TimetableTheme.offWeekText]。
 Color scheduleCellFg(
   TimetableController c,
   ScheduleEvent e, {
   bool dark = false,
+  bool activeThisWeek = true,
 }) {
+  if (e.isExam && !activeThisWeek) {
+    return dark ? TimetableTheme.offWeekTextDark : TimetableTheme.offWeekText;
+  }
   if (e.isExam) return TimetableTheme.examText;
   return TimetableTheme.coursePair(
     scheduleOtherColorIndex(c, e),

@@ -377,6 +377,7 @@ class _WeekGridState extends State<WeekGrid> {
           event: e.event,
           startNode: e.startNode.clamp(1, nodes),
           endNode: e.endNode.clamp(1, nodes),
+          activeThisWeek: e.activeThisWeek,
         ),
     ];
     final absorbed = <String>{};
@@ -543,6 +544,8 @@ class _WeekGridState extends State<WeekGrid> {
               height: height,
               radius: radius,
               stackCount: cluster.length,
+              // 叠放时以主格为准；考试查看周≠本周 → 灰显双胶囊。
+              activeThisWeek: cluster.first.activeThisWeek,
               onTap: cluster.length > 1
                   ? () => _showStackSheet(
                       context,

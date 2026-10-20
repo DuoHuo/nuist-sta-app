@@ -208,27 +208,97 @@ abstract final class TimetableTheme {
     return dark ? darkCoursePair(p) : p;
   }
 
-  /// spec-next-1020 item 3：课程 / 考试共用的 12 个预设（避开灰棕土黄，色相拉开）。
+  /// 课程 / 考试共用的 12 个预设（对齐 WakeUp 自动色板采样 + 冷暖交错）。
+  ///
+  /// 核心 8 色来自 WakeUp `_defaultColor`（见 notes/wakeup-auto-palette-sample.md），
+  /// 补齐至 12 并冷暖交错；B 的大色块 / 选色器 / 考试色共用此列表。
   static const List<Color> coursePresetColors = [
-    Color(0xFF4C8BF5), // 蓝
-    Color(0xFF2EC4B6), // 青
-    Color(0xFF3DDC97), // 绿
-    Color(0xFF7C5CFF), // 紫
-    Color(0xFFFF6B9A), // 粉
-    Color(0xFFFF8A3D), // 橙
-    Color(0xFFFF5A5A), // 珊瑚
-    Color(0xFF00A3A1), // 薄荷
-    Color(0xFF5B6CFF), // 靛
-    Color(0xFFC44DFF), // 品红
-    Color(0xFF22C55E), // 翠绿
-    Color(0xFFF59E0B), // 琥珀
+    Color(0xFFEC407A), // 1 粉 warm（WakeUp）
+    Color(0xFF42A5F5), // 2 蓝 cool（WakeUp）
+    Color(0xFFFF7043), // 3 橙 warm（WakeUp）
+    Color(0xFF26A69A), // 4 青/薄荷 cool（WakeUp）
+    Color(0xFFEF5350), // 5 红 warm（WakeUp）
+    Color(0xFF5C6BC0), // 6 靛 cool（WakeUp）
+    Color(0xFFFFB74D), // 7 橙黄 warm（Material/schedule）
+    Color(0xFF66BB6A), // 8 绿 cool（WakeUp）
+    Color(0xFFAB47BC), // 9 紫 warm（WakeUp）
+    Color(0xFF4FC3F7), // 10 天蓝 cool（schedule）
+    Color(0xFFFFD54F), // 11 黄 warm（扩展）
+    Color(0xFF4DB6AC), // 12 青绿 cool（schedule）
   ];
 
-  /// 自动补色：按色相步进生成 [count] 个可用色，过滤过灰（S&lt;30%）或过暗/过亮。
-  static List<Color> hueSteppedColors(int count) {
+  /// 冷色相带：约青绿–靛蓝（100°–260°）。其余视为暖色（红橙黄粉紫等）。
+  static bool isCoolHue(double hue) {
+    final h = hue % 360.0;
+    return h > 100 && h < 260;
+  }
+
+  /// 冷暖交错排列，保证无连续 ≥3 个冷色。
+  static List<Color> interleaveWarmCool(List<Color> colors) {
+    final warm = <Color>[];
+    final cool = <Color>[];
+    for (final c in colors) {
+      if (isCoolHue(HSVColor.fromColor(c).hue)) {
+        cool.add(c);
+      } else {
+        warm.add(c);
+      }
+    }
     final out = <Color>[];
-    // 细步进扫一圈，够用为止。
-    for (var step = 0; step < 72 && out.length < count; step++) {
+    var wi = 0, ci = 0, consecutiveCool = 0;
+    while (wi < warm.length || ci < cool.length) {
+      final canCool = ci < cool.length && consecutiveCool < 2;
+      final preferCool =
+          canCool &&
+          (wi >= warm.length || (out.isNotEmpty && consecutiveCool == 0));
+      if (preferCool) {
+        out.add(cool[ci++]);
+        consecutiveCool++;
+      } else if (wi < warm.length) {
+        out.add(warm[wi++]);
+        consecutiveCool = 0;
+      } else if (canCool) {
+        out.add(cool[ci++]);
+        consecutiveCool++;
+      } else {
+        break;
+      }
+    }
+    return out;
+  }
+
+  static List<Color>? _hueSteppedCache;
+  static int _hueSteppedCacheCount = -1;
+
+  /// 自动补色列表：优先 [coursePresetColors]（已冷暖交错）；count>12 时再步进补齐。
+  /// 过滤过灰（S<30%）或过暗/过亮；无连续 ≥3 个冷色。
+  /// 显示自动色请用 [autoCoursePair] / [autoCoursePairForName]，勿再对 16 色号映射。
+  static List<Color> hueSteppedColors(int count) {
+    if (count <= 0) return const [];
+    if (_hueSteppedCache != null &&
+        _hueSteppedCacheCount == count &&
+        _hueSteppedCache!.length >= count) {
+      return _hueSteppedCache!.sublist(0, count);
+    }
+    final seed = interleaveWarmCool(coursePresetColors);
+    final out = <Color>[for (final c in seed) c];
+    if (out.length >= count) {
+      _hueSteppedCache = out;
+      _hueSteppedCacheCount = count;
+      return out.sublist(0, count);
+    }
+
+    bool tooClose(Color c, double hue) {
+      return out.any((o) {
+        final dh = (HSVColor.fromColor(o).hue - hue).abs();
+        final d = dh > 180 ? 360 - dh : dh;
+        return d < 12;
+      });
+    }
+
+    final warmExtra = <Color>[];
+    final coolExtra = <Color>[];
+    for (var step = 0; step < 72; step++) {
       final hue = (step * 5.0) % 360.0;
       for (final s in const [0.70, 0.55, 0.85]) {
         for (final v in const [0.92, 0.80, 0.70]) {
@@ -236,28 +306,59 @@ abstract final class TimetableTheme {
           final c = HSVColor.fromAHSV(1, hue, s, v).toColor();
           final lum = c.computeLuminance();
           if (lum < 0.18 || lum > 0.90) continue;
-          // 与已选色相距太近则跳过。
-          final tooClose = out.any((o) {
-            final dh = (HSVColor.fromColor(o).hue - hue).abs();
-            final d = dh > 180 ? 360 - dh : dh;
-            return d < 12;
-          });
-          if (tooClose) continue;
-          out.add(c);
-          if (out.length >= count) return out;
+          if (tooClose(c, hue)) continue;
+          if (isCoolHue(hue)) {
+            coolExtra.add(c);
+          } else {
+            warmExtra.add(c);
+          }
         }
       }
     }
-    return out;
+    out.addAll(interleaveWarmCool([...warmExtra, ...coolExtra]));
+    // 去重保序（步进候选可能与 seed 近似已滤，但同列表内仍可能重复引用）。
+    final seen = <int>{};
+    final unique = <Color>[];
+    for (final c in out) {
+      final key = c.toARGB32();
+      if (seen.add(key)) unique.add(c);
+      if (unique.length >= count) break;
+    }
+    // 若仍不足，放宽色相间距再扫一轮。
+    if (unique.length < count) {
+      for (var step = 0; step < 72 && unique.length < count; step++) {
+        final hue = (step * 7.0 + 3.0) % 360.0;
+        final c = HSVColor.fromAHSV(1, hue, 0.65, 0.88).toColor();
+        final lum = c.computeLuminance();
+        if (lum < 0.18 || lum > 0.90) continue;
+        if (!seen.add(c.toARGB32())) continue;
+        // 追加时仍遵守「无连续 3 冷」。
+        final lastCool =
+            unique.length >= 2 &&
+            isCoolHue(HSVColor.fromColor(unique[unique.length - 1]).hue) &&
+            isCoolHue(HSVColor.fromColor(unique[unique.length - 2]).hue);
+        if (lastCool && isCoolHue(hue)) continue;
+        unique.add(c);
+      }
+    }
+    _hueSteppedCache = unique;
+    _hueSteppedCacheCount = count;
+    return unique.length > count ? unique.sublist(0, count) : unique;
   }
 
-  /// spec-next-1020 item 3：未自选 [userColors] 的课用色相步进自动色板（非 A/B/C 柔和）。
-  /// 色号仍走 [assignCourseColors] 的 0..15；显示时映射到 [hueSteppedColors]。
+  /// 未自选 [userColors] 的课：按下标取 [coursePresetColors]（冷暖交错 12 色）。
+  /// 自动配色下标应为 [coursePresetIndexForName]（课名哈希 % 12），不是 Course.id。
   static CourseColorPair autoCoursePair(int index, {bool dark = false}) {
-    final list = hueSteppedColors(kCoursePaletteSize);
+    final list = coursePresetColors;
     final bg = list[index < 0 ? 0 : index % list.length];
     return userCoursePair(bg, dark: dark);
   }
+
+  /// 课名 → 自动色对：稳定哈希进 12 预设（同名同色）。
+  static CourseColorPair autoCoursePairForName(
+    String name, {
+    bool dark = false,
+  }) => autoCoursePair(coursePresetIndexForName(name), dark: dark);
 
   /// item 9：用户自选色 [c]（原始 ARGB）在当前明暗下的（底色, 文字色），显示时换算：
   /// 浅色系（亮度 > 0.4）按色板规则「浅底 + 同色相深字」，深色下走 [darkCoursePair]；

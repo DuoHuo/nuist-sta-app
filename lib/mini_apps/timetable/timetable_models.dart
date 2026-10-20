@@ -1164,25 +1164,38 @@ _WeeksNorm? _normalizeWeeks(String raw, int maxWeeks) {
   return _WeeksNorm(raw);
 }
 
-/// 课程色板大小（[Course.colorIndex] 取值 0..15）。
+/// 课程色板大小（[Course.colorIndex] / A/B/C 方案取值 0..15）。
 const int kCoursePaletteSize = 16;
+
+/// 自动色板预设个数（[TimetableTheme.coursePresetColors]；课名哈希取模）。
+const int kCoursePresetCount = 12;
 
 /// 课名归一化（仅用于配色哈希）：去首尾空白，半角括号转全角。
 String normalizeCourseName(String name) =>
     name.trim().replaceAll('(', '（').replaceAll(')', '）');
 
-/// 课名 → 默认色号：FNV-1a 32 位哈希（UTF-8 字节）对 16 取模。
-///
-/// 不用 String.hashCode（不保证跨版本/平台稳定）；教务课与手动课同名同色。
-/// 先经 [normalizeCourseName]，「学术英语(1)」与「 学术英语（1） 」同色。
-int courseColorIndexForName(String name) {
+/// FNV-1a 32 位（UTF-8）；不用 String.hashCode（跨版本/平台不稳）。
+int _fnv1a32CourseName(String name) {
   var hash = 0x811c9dc5;
   for (final b in utf8.encode(normalizeCourseName(name))) {
     hash ^= b;
     hash = (hash * 0x01000193) & 0xffffffff;
   }
-  return hash % kCoursePaletteSize;
+  return hash;
 }
+
+/// 课名 → A/B/C / 旧 16 色号：FNV-1a 对 [kCoursePaletteSize] 取模。
+///
+/// 教务课与手动课同名同色。先经 [normalizeCourseName]。
+int courseColorIndexForName(String name) =>
+    _fnv1a32CourseName(name) % kCoursePaletteSize;
+
+/// 课名 → 自动色板下标（0..11）：FNV-1a 对 [kCoursePresetCount] 取模。
+///
+/// 自动配色只看课名、不看 [Course.id]；同名同色、刷新稳定。
+/// 用户自选色仍按课程 id 存在 userColors，见 [TimetableController.userColorOf]。
+int coursePresetIndexForName(String name) =>
+    _fnv1a32CourseName(name) % kCoursePresetCount;
 
 int? _asColorIndex(Object? v) {
   final i = _asInt(v);
