@@ -237,10 +237,13 @@ void main() {
           expect(on.border, isNull);
           expect(_cellBorder(tester, '测试课乙'), isNull);
           if (opacity < 100) {
-            final scheme0 = coursePaletteSchemeOf(scheme);
+            // 未自选时本周格走 hueStepped 自动色，与 A/B/C 无关。
             final bgs = [
-              for (final p in TimetableTheme.pairsOf(scheme0))
-                TimetableTheme.blendCellBg(p.bg, opacity),
+              for (var i = 0; i < kCoursePaletteSize; i++)
+                TimetableTheme.blendCellBg(
+                  TimetableTheme.autoCoursePair(i).bg,
+                  opacity,
+                ),
             ];
             expect(bgs, contains(on.color));
           }

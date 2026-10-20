@@ -268,7 +268,9 @@ void main() {
       await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
       await tester.pumpAndSettle();
       expect(find.text('60%'), findsOneWidget);
-      expect(find.textContaining('马卡龙'), findsOneWidget);
+      // A/B/C 入口已隐藏；存储仍保留 paletteScheme=B（见下方 after 断言）。
+      expect(find.textContaining('马卡龙'), findsNothing);
+      expect(_c.settings.paletteScheme, 'B');
       expect(
         (tester
                     .widget<Container>(

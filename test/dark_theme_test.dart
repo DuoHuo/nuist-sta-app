@@ -434,9 +434,8 @@ void _timetableDarkTests() {
         Scaffold(body: WeekGrid(week: 7, controller: _tt)),
       );
       expect(tester.takeException(), isNull);
-      final pair = TimetableTheme.coursePair(
+      final pair = TimetableTheme.autoCoursePair(
         courseColorIndex(_tt, on),
-        scheme: coursePaletteSchemeFor(_tt),
         dark: true,
       );
       Color? cellBg(String name) =>

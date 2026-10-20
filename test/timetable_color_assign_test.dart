@@ -583,7 +583,7 @@ void main() {
       final ink = tester.widget<Ink>(find.byType(Ink));
       expect(
         (ink.decoration! as BoxDecoration).color,
-        TimetableTheme.courseColor(idx),
+        TimetableTheme.autoCoursePair(idx).bg,
       );
       final dot = tester.widget<Container>(
         find.byKey(const Key('course_cell_conflict_dot')),
@@ -607,15 +607,15 @@ void main() {
       expect(find.byType(Opacity), findsNothing);
     }
 
-    testWidgets('色号 2 → #1E6B3A', (tester) async {
+    testWidgets('色号 2 → autoCoursePair.fg', (tester) async {
       await pumpCell(tester, 2);
-      expectCellColors(tester, 2, const Color(0xFF1E6B3A));
+      expectCellColors(tester, 2, TimetableTheme.autoCoursePair(2).fg);
       TimetableController.instance.debugReset();
     });
 
-    testWidgets('色号 10 → #A3282A', (tester) async {
+    testWidgets('色号 10 → autoCoursePair.fg', (tester) async {
       await pumpCell(tester, 10);
-      expectCellColors(tester, 10, const Color(0xFFA3282A));
+      expectCellColors(tester, 10, TimetableTheme.autoCoursePair(10).fg);
       TimetableController.instance.debugReset();
     });
   });

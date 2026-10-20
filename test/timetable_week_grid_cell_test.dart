@@ -157,17 +157,20 @@ void main() {
       }
     });
 
-    testWidgets('「不透明度」「格子高度」两个滑块左右边缘对齐', (tester) async {
+    testWidgets('格子高度滑块可见；不透明度在外观页且宽度合理', (tester) async {
+      // 不透明度已迁到外观独立页，不再与「格子高度」同页对齐。
       await pumpPage(tester);
-      final a = find.byKey(const Key('tt_settings_opacity'));
-      final b = find.byKey(const Key('tt_settings_period_height'));
-      await tester.ensureVisible(b);
+      final height = find.byKey(const Key('tt_settings_period_height'));
+      await tester.ensureVisible(height);
       await tester.pumpAndSettle();
-      final ra = tester.getRect(a);
-      final rb = tester.getRect(b);
-      expect(ra.left, closeTo(rb.left, 0.01));
-      expect(ra.right, closeTo(rb.right, 0.01));
-      expect(ra.width, greaterThan(100));
+      expect(tester.getRect(height).width, greaterThan(100));
+
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      await tester.pumpAndSettle();
+      final opacity = find.byKey(const Key('tt_settings_opacity'));
+      await tester.ensureVisible(opacity);
+      await tester.pumpAndSettle();
+      expect(tester.getRect(opacity).width, greaterThan(100));
     });
   });
 

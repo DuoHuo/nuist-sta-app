@@ -240,9 +240,9 @@ void main() {
       final lunch = find.byKey(const Key('home_event_row_lunch'));
       final late = find.byKey(const Key('home_event_row_late'));
       expect(lunch, findsOneWidget);
-      // item 13：首页最多 2 项（上课中的课 + 午间日程），21:30 考试收进「还有 1 项」。
+      // design item 4：首页最多 homeMaxItems（默认 2）项，截断且无「还有 N 项」。
       expect(late, findsNothing);
-      expect(find.text('还有 1 项'), findsOneWidget);
+      expect(find.textContaining('还有'), findsNothing);
       expect(
         tester.getTopLeft(find.text('测试课甲')).dy,
         lessThan(tester.getTopLeft(lunch).dy),

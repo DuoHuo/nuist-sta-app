@@ -149,7 +149,9 @@ void main() {
             .data,
         '100%',
       );
-      expect(find.text('A 柔和'), findsOneWidget);
+      // A/B/C 入口已隐藏（ST19）；默认方案仍为 A（存储）。
+      expect(find.text('A 柔和'), findsNothing);
+      expect(_c.settings.paletteScheme, 'A');
       await tester.pageBack();
       await tester.pumpAndSettle();
       expect(switchValue(tester, 'tt_settings_reminder'), isFalse);
@@ -528,12 +530,13 @@ void main() {
         ),
       );
       final bg = (ink.decoration! as BoxDecoration).color!;
+      final pair = TimetableTheme.autoCoursePair(idx);
       expect(
         bg,
-        Color.lerp(TimetableTheme.pageBg, TimetableTheme.courseColor(idx), 0.3),
+        Color.lerp(TimetableTheme.pageBg, pair.bg, 0.3),
       );
       expect(bg.a, 1.0);
-      final fg = TimetableTheme.courseTextColor(idx);
+      final fg = pair.fg;
       final name = tester.widget<CourseNameText>(find.byType(CourseNameText));
       expect(name.style.color, fg);
       final dot = tester.widget<Container>(
@@ -559,7 +562,7 @@ void main() {
         ),
       );
       final bg = (ink.decoration! as BoxDecoration).color!;
-      final raw = TimetableTheme.courseColor(idx);
+      final raw = TimetableTheme.autoCoursePair(idx).bg;
       expect(bg, TimetableTheme.blendCellBg(raw, 55));
       expect(bg, Color.lerp(TimetableTheme.pageBg, raw, 0.55));
       expect(bg, isNot(TimetableTheme.blendCellBg(raw, 50)));
@@ -567,21 +570,24 @@ void main() {
       expect(bg.a, 1.0);
     });
 
-    testWidgets('换配色 B：格子底色/文字色取 B 方案', (tester) async {
+    testWidgets('换配色 B：未自选时格子仍走 hueStepped 自动色（忽略 A/B/C）', (tester) async {
       load(
         settings: base().copyWith(paletteScheme: 'B'),
         manual: [_course('a', '测试课甲', colorIndex: 12)],
       );
       await pumpGrid(tester);
+      final pair = TimetableTheme.autoCoursePair(12);
       final ink = tester.widget<Ink>(
         find.descendant(
           of: find.byType(CourseCell),
           matching: find.byType(Ink),
         ),
       );
-      expect((ink.decoration! as BoxDecoration).color, _hex('F2CFA8'));
+      expect((ink.decoration! as BoxDecoration).color, pair.bg);
       final name = tester.widget<CourseNameText>(find.byType(CourseNameText));
-      expect(name.style.color, _hex('1F2430'));
+      expect(name.style.color, pair.fg);
+      // 不再等于旧 B 柔和色板。
+      expect(pair.bg, isNot(_hex('F2CFA8')));
     });
 
     testWidgets('每周第一天=周日：周日放第一列，日期 10/18，月份按周一', (tester) async {

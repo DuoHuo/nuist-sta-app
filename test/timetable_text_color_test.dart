@@ -145,9 +145,9 @@ void main() {
             ),
           );
           await _io(tester);
-          final pair = TimetableTheme.coursePair(
+          // 未自选时格子走 hueStepped 自动色（非 A/B/C）。
+          final pair = TimetableTheme.autoCoursePair(
             courseColorIndex(_c, _course),
-            scheme: coursePaletteSchemeFor(_c),
             dark: dark,
           );
           final expected = switch (mode) {

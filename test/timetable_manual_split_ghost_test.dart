@@ -98,9 +98,9 @@ void main() {
     // 第 7 周：原位置（周一 1-2）不画「[非本周]」；新位置本周有课。
     expect(cells(_week, 1), isEmpty);
     expect(cells(_week, 3), [(9, true)]);
-    // 第 8 周：原位置照常有课；拆出的时段是非本周灰格。
+    // 第 8 周：原位置照常有课；拆出时段仅第 7 周有课 → §15 之后无安排，不画灰格。
     expect(cells(8, 1), [(1, true)]);
-    expect(cells(8, 3), [(9, false)]);
+    expect(cells(8, 3), isEmpty);
     // 关掉「显示非本周」：本来就没有灰格。
     await c.updateSettings(c.settings.copyWith(showNonCurrentWeek: false));
     expect(cells(_week, 1), isEmpty);
@@ -128,8 +128,8 @@ void main() {
     await move('m1', 0, toDay: 3, toStart: 9, scope: MoveScope.fromThisWeek);
     expect(cells(_week, 1), isEmpty); // 7 周移走
     expect(cells(_week, 3), [(9, true)]);
-    // 第 8 周（双周）：拆出时段本周也没课 → 原位置与新位置都是普通灰格。
-    expect(cells(8, 1), [(1, false)]);
+    // 第 8 周（双周）：原位置已无后续周 → §15 隐藏；拆出时段之后还有单周 → 灰格。
+    expect(cells(8, 1), isEmpty);
     expect(cells(8, 3), [(9, false)]);
     expect(cells(5, 1), [(1, true)]);
     expect(cells(5, 3), [(9, false)]);
@@ -149,7 +149,8 @@ void main() {
     expect(cells(9, 3), isEmpty);
     expect(cells(9, 5), [(3, true)]);
     expect(cells(10, 3), [(9, true)]);
-    expect(cells(10, 5), [(3, false)]);
+    // 第 9 周拆出的时段仅该周有课 → §15 在第 10 周不画灰格。
+    expect(cells(10, 5), isEmpty);
   });
 
   test('V05j 拖回原位置：并回原时段，无重复格、无虚影', () async {
@@ -209,7 +210,7 @@ void main() {
     expect(c.settings.showNonCurrentWeek, isTrue);
     expect(c.manualCourseById('m1')!.slots[1].splitFrom, _orig);
     expect(cells(_week, 1), isEmpty);
-    expect(cells(8, 3), [(9, false)]);
+    expect(cells(8, 3), isEmpty); // 仅第 7 周的拆出时段，§15 不画灰格
     expect(c.colorIndexOf(c.manualCourseById('m1')!), colour);
   });
 
@@ -356,9 +357,8 @@ void main() {
     expect(find.byType(CourseCell), findsOneWidget);
     expect(find.textContaining('非本周'), findsNothing);
     await pump(8);
-    expect(find.byType(CourseCell), findsNWidgets(2));
-    // §13.8：非本周格课名无前缀，带「非本周」胶囊。
-    expect(find.text('非本周'), findsOneWidget);
-    expect(find.textContaining('[非本周]'), findsNothing);
+    // §15：仅第 7 周的拆出时段之后无课，不画灰格；只剩周一原课。
+    expect(find.byType(CourseCell), findsOneWidget);
+    expect(find.text('非本周'), findsNothing);
   });
 }
