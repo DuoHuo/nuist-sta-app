@@ -39,6 +39,27 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        ndk {
+            // 清空 Flutter Gradle Plugin 默认注入的三个架构
+            abiFilters.clear()
+            // 仅保留 arm64-v8a，剥离 armeabi-v7a 和 x86_64 库
+            abiFilters.add("arm64-v8a")
+        }
+    }
+
+    // 强行排除非 arm64-v8a 的所有 .so 库
+    packaging {
+        jniLibs {
+            excludes += listOf(
+                "lib/armeabi-v7a/**",
+                "lib/x86/**",
+                "lib/x86_64/**",
+                "**/armeabi-v7a/**",
+                "**/x86/**",
+                "**/x86_64/**"
+            )
+        }
     }
 
     buildTypes {
