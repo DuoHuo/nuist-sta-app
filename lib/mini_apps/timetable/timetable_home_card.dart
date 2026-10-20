@@ -310,17 +310,18 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
           color: colors.surface,
           borderRadius: BorderRadius.circular(TimetableTheme.cardRadius),
           child: Padding(
+            // 设计师 10/20：顶仍 12；底内边距 12→8；标题到第一项见下方 SizedBox。
             padding: const EdgeInsets.fromLTRB(
               TimetableTheme.cardPaddingH,
               TimetableTheme.cardPaddingV,
               TimetableTheme.cardPaddingH,
-              TimetableTheme.cardPaddingV,
+              8,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 header,
-                const SizedBox(height: 10),
+                const SizedBox(height: 6),
                 ...body,
                 if (_controller.syncedAt != null &&
                     _controller.snapshot.lastError != null)
@@ -588,10 +589,9 @@ class _CourseRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
-    // 4dp 色条在卡片面色上用该色号文字色（A 柔和底色太浅，卡片底上看不出）。
-    // 深色下取深色格的浅字色（item 12），在深色卡片上才看得见。
+    // 3dp 竖条：与周课表同课 [coursePairFor] 底色（cell fill），全 App 一套底+字配对。
     final ctl = TimetableController.instance;
-    final color = coursePairFor(ctl, item.course, dark: colors.isDark).fg;
+    final color = coursePairFor(ctl, item.course, dark: colors.isDark).bg;
     final done = item.status == TodayCourseStatus.done;
     final fg = done ? colors.hint : colors.titleText;
     final start = item.slot.startNode;
@@ -623,11 +623,11 @@ class _CourseRow extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Container(
-                width: 4,
+                width: 3,
                 margin: const EdgeInsets.symmetric(vertical: 2),
                 decoration: BoxDecoration(
                   color: done ? colors.divider : color,
-                  borderRadius: BorderRadius.circular(2),
+                  borderRadius: BorderRadius.circular(1.5),
                 ),
               ),
               const SizedBox(width: 8),
