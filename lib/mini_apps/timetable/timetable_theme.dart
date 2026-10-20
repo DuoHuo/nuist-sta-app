@@ -280,8 +280,8 @@ abstract final class TimetableTheme {
         _hueSteppedCache!.length >= count) {
       return _hueSteppedCache!.sublist(0, count);
     }
-    final seed = interleaveWarmCool(coursePresetColors);
-    final out = <Color>[for (final c in seed) c];
+    // 预设本身已冷暖交错，直接作自动色底，避免再交错打乱与选色器一致的顺序。
+    final out = <Color>[for (final c in coursePresetColors) c];
     if (out.length >= count) {
       _hueSteppedCache = out;
       _hueSteppedCacheCount = count;

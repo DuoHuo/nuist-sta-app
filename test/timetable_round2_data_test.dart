@@ -309,9 +309,11 @@ void main() {
       );
     });
 
-    test('hueStepped 冷暖交错且无连续 ≥3 冷色', () {
-      final list = TimetableTheme.hueSteppedColors(kCoursePaletteSize);
-      expect(list, hasLength(kCoursePaletteSize));
+    test('12 预设冷暖交错且无连续 ≥3 冷色', () {
+      // 自动色只用 coursePresetColors（课名哈希 % 12）；hueStepped 补色不再作显示。
+      final list = TimetableTheme.coursePresetColors;
+      expect(list, hasLength(kCoursePresetCount));
+      expect(TimetableTheme.hueSteppedColors(kCoursePresetCount), list);
       var streak = 0;
       for (final c in list) {
         final cool = TimetableTheme.isCoolHue(HSVColor.fromColor(c).hue);
@@ -319,8 +321,9 @@ void main() {
         expect(streak, lessThan(3), reason: '无连续 ≥3 个冷色');
         final hsv = HSVColor.fromColor(c);
         expect(hsv.saturation, greaterThanOrEqualTo(0.30));
+        // WakeUp 靛/紫（5C6BC0 / AB47BC）亮度略低于 0.18，仍保留原色。
         final lum = c.computeLuminance();
-        expect(lum, greaterThanOrEqualTo(0.18));
+        expect(lum, greaterThanOrEqualTo(0.15));
         expect(lum, lessThanOrEqualTo(0.90));
       }
     });
