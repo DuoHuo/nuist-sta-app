@@ -91,6 +91,7 @@ class WeekGrid extends StatefulWidget {
     this.onCourseTap,
     this.onEventTap,
     this.enableDrag = true,
+    this.previewMode = false,
   });
 
   final int week;
@@ -102,6 +103,9 @@ class WeekGrid extends StatefulWidget {
 
   /// 是否允许长按拖动调课。
   final bool enableDrag;
+
+  /// 外观页缩略预览：禁点击/长按/拖动，只随设置即时重绘。
+  final bool previewMode;
 
   @override
   State<WeekGrid> createState() => _WeekGridState();
@@ -214,12 +218,13 @@ class _WeekGridState extends State<WeekGrid> {
                               date.year == todayDate.year &&
                               date.month == todayDate.month &&
                               date.day == todayDate.day,
+                          headerTextSize: settings.headerTextSize,
                           dotColor: unplaced.isEmpty
                               ? null
                               : scheduleUnplacedDotColor(controller, unplaced),
                           swapped: controller.isSwappedDate(date),
                         );
-                        if (unplaced.isNotEmpty) {
+                        if (!widget.previewMode && unplaced.isNotEmpty) {
                           header = Semantics(
                             button: true,
                             excludeSemantics: true,
@@ -240,13 +245,20 @@ class _WeekGridState extends State<WeekGrid> {
                           );
                         }
                         // 第 8 条：长按表头整天调课 / 撤销调课。
-                        header = GestureDetector(
-                          key: ValueKey('day_header_${days[i]}'),
-                          behavior: HitTestBehavior.opaque,
-                          onLongPress: () =>
-                              showDaySwapSheet(context, controller, date),
-                          child: header,
-                        );
+                        if (!widget.previewMode) {
+                          header = GestureDetector(
+                            key: ValueKey('day_header_${days[i]}'),
+                            behavior: HitTestBehavior.opaque,
+                            onLongPress: () =>
+                                showDaySwapSheet(context, controller, date),
+                            child: header,
+                          );
+                        } else {
+                          header = KeyedSubtree(
+                            key: ValueKey('day_header_${days[i]}'),
+                            child: header,
+                          );
+                        }
                         return SizedBox(width: dayW, child: header);
                       },
                     ),
@@ -273,6 +285,7 @@ class _WeekGridState extends State<WeekGrid> {
                                     child: _PeriodLabel(
                                       node: n,
                                       period: controller.periodAt(n),
+                                      showTimes: settings.showPeriodTimes,
                                     ),
                                   ),
                               ],
@@ -317,7 +330,9 @@ class _WeekGridState extends State<WeekGrid> {
                       _OtherCoursesRow(
                         courses: others,
                         periodW: periodW,
-                        onTap: (c) => _showOtherCourseSheet(context, c),
+                        onTap: widget.previewMode
+                            ? (_) {}
+                            : (c) => _showOtherCourseSheet(context, c),
                       ),
                   ],
                 ),
@@ -415,6 +430,7 @@ class _WeekGridState extends State<WeekGrid> {
       final width = dayW - TimetableTheme.cellMargin * 2;
       final draggable =
           widget.enableDrag &&
+          !widget.previewMode &&
           dragCell.activeThisWeek &&
           dragCell.slot.hasFixedTime;
       widgets.add(
@@ -467,6 +483,7 @@ class _WeekGridState extends State<WeekGrid> {
   }
 
   void _openEvent(BuildContext context, ScheduleEvent e) {
+    if (widget.previewMode) return;
     final cb = widget.onEventTap;
     if (cb != null) {
       cb(e);
@@ -1193,6 +1210,7 @@ class _DayHeader extends StatelessWidget {
     required this.label,
     required this.day,
     required this.isToday,
+    this.headerTextSize = kDefaultHeaderTextSize,
     this.dotColor,
     this.swapped = false,
   });
@@ -1204,12 +1222,18 @@ class _DayHeader extends StatelessWidget {
   final int day;
   final bool isToday;
 
+  /// 表头文字大小（sp）；来自 [TimetableSettings.headerTextSize]。
+  final double headerTextSize;
+
   /// 非空：当天有不在节次内的日程，日期下画 4dp 圆点（EV-2）。
   final Color? dotColor;
 
   @override
   Widget build(BuildContext context) {
     // 大字号下缩放而非溢出（表头高度固定，与网格对齐）。
+    final labelColor = isToday
+        ? TimetableTheme.colorsOf(context).accent
+        : TimetableTheme.colorsOf(context).labelText;
     final child = Center(
       child: FittedBox(
         fit: BoxFit.scaleDown,
@@ -1221,10 +1245,11 @@ class _DayHeader extends StatelessWidget {
               children: [
                 Text(
                   label,
-                  style: TimetableTheme.captionStyle(
-                    color: isToday
-                        ? TimetableTheme.colorsOf(context).accent
-                        : TimetableTheme.colorsOf(context).labelText,
+                  style: TextStyle(
+                    fontSize: headerTextSize,
+                    fontWeight: FontWeight.w500,
+                    color: labelColor,
+                    height: 1.1,
                   ),
                 ),
                 if (swapped)
@@ -1278,10 +1303,15 @@ class _DayHeader extends StatelessWidget {
 }
 
 class _PeriodLabel extends StatelessWidget {
-  const _PeriodLabel({required this.node, required this.period});
+  const _PeriodLabel({
+    required this.node,
+    required this.period,
+    this.showTimes = true,
+  });
 
   final int node;
   final PeriodTime? period;
+  final bool showTimes;
 
   @override
   Widget build(BuildContext context) {
@@ -1300,7 +1330,7 @@ class _PeriodLabel extends StatelessWidget {
                 color: TimetableTheme.colorsOf(context).titleText,
               ),
             ),
-            if (period != null)
+            if (showTimes && period != null)
               Text(
                 '${period!.start}\n${period!.end}',
                 textAlign: TextAlign.center,

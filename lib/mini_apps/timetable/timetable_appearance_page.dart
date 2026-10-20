@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import 'timetable_color_picker.dart';
@@ -5,9 +7,13 @@ import 'timetable_colors.dart';
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
+import 'timetable_week_grid.dart';
 
-/// spec-next-1020 item 8：外观独立页——顶部预览格 + 配色/字色/不透明度/
-/// 今日最多显示/考试颜色。
+/// spec-next-1020b：外观页——上半 ~48% 为本周真实课表缩略，下半为可滚动设置；
+/// 设置改完上半即时变。周六/日、非本周、表头字号、节数时间等只在此页入口。
+///
+/// 预览复用 [WeekGrid]（含 `scheduleItemsForColumn` / [ScheduleEventCell]），
+/// 与周视图一致；非本周考试双胶囊等由数据侧落地后自动出现。
 class TimetableAppearancePage extends StatelessWidget {
   const TimetableAppearancePage({super.key, this.controller});
 
@@ -40,91 +46,165 @@ class TimetableAppearancePage extends StatelessWidget {
           final s = c.settings;
           final colors = TimetableTheme.colorsOf(context);
           final opacity = s.cellOpacity.clamp(opacityMin, opacityMax);
-          return ListView(
-            padding: const EdgeInsets.only(bottom: 24),
+          final headerSize = s.headerTextSize
+              .clamp(kHeaderTextSizeMin, kHeaderTextSizeMax)
+              .toDouble();
+          final week = c.currentWeek.clamp(1, math.max(1, c.totalWeeks)).toInt();
+          return Column(
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  TimetableTheme.pagePaddingH,
-                  12,
-                  TimetableTheme.pagePaddingH,
-                  0,
-                ),
-                child: _AppearancePreview(
-                  key: const Key('tt_appearance_preview'),
-                  settings: s,
-                  colors: colors,
+              Expanded(
+                flex: 48,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    TimetableTheme.pagePaddingH,
+                    8,
+                    TimetableTheme.pagePaddingH,
+                    0,
+                  ),
+                  child: Material(
+                    key: const Key('tt_appearance_preview'),
+                    color: colors.surface,
+                    borderRadius: BorderRadius.circular(
+                      TimetableTheme.cardRadius,
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: WeekGrid(
+                      key: const Key('tt_appearance_preview_grid'),
+                      week: week,
+                      controller: c,
+                      enableDrag: false,
+                      previewMode: true,
+                    ),
+                  ),
                 ),
               ),
-              _ApGroup(
-                key: const Key('tt_appearance_group'),
-                title: '外观',
-                children: [
-                  // 暂时隐藏配色方案 A/B/C 入口；storage/enum/读路径保留。
-                  _ApRow(
-                    title: '文字颜色',
-                    trailing: _ApSegments<CellTextColorMode>(
-                      key: const Key('tt_settings_cell_text_color'),
-                      options: cellTextColorLabels,
-                      selected: s.cellTextColor,
-                      onSelected: (v) =>
-                          update((x) => x.copyWith(cellTextColor: v)),
-                    ),
-                  ),
-                  _ApSliderRow(
-                    title: '不透明度',
-                    valueLabel: '$opacity%',
-                    valueKey: const Key('tt_settings_opacity_value'),
-                    slider: Slider(
-                      key: const Key('tt_settings_opacity'),
-                      min: opacityMin.toDouble(),
-                      max: opacityMax.toDouble(),
-                      divisions: (opacityMax - opacityMin) ~/ opacityStep,
-                      value: opacity.toDouble(),
-                      activeColor: colors.accent,
-                      label: '$opacity%',
-                      onChanged: (v) {
-                        final next = v.round();
-                        if (next == c.settings.cellOpacity) return;
-                        update((x) => x.copyWith(cellOpacity: next));
-                      },
-                    ),
-                  ),
-                  _ApRow(
-                    key: const Key('tt_settings_home_max_items'),
-                    title: '今日课表最多显示',
-                    trailing: _ApSegments<int>(
-                      key: const Key('tt_settings_home_max_segments'),
-                      options: homeMaxLabels,
-                      selected: s.homeMaxItems,
-                      onSelected: (v) =>
-                          update((x) => x.copyWith(homeMaxItems: v)),
-                    ),
-                  ),
-                  _ApRow(
-                    key: const Key('tt_settings_exam_color'),
-                    title: '考试颜色',
-                    onTap: () => _pickExamColor(context, c),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
+              Expanded(
+                flex: 52,
+                child: ListView(
+                  padding: const EdgeInsets.only(bottom: 24),
+                  children: [
+                    _ApGroup(
+                      key: const Key('tt_appearance_group'),
+                      title: '外观',
                       children: [
-                        Container(
-                          key: const Key('tt_settings_exam_color_swatch'),
-                          width: 18,
-                          height: 18,
-                          decoration: BoxDecoration(
-                            color: TimetableTheme.examCellBg(
-                              Color(s.examColor),
-                              dark: colors.isDark,
-                            ),
-                            borderRadius: BorderRadius.circular(4),
+                        _ApRow(
+                          title: '文字颜色',
+                          trailing: _ApSegments<CellTextColorMode>(
+                            key: const Key('tt_settings_cell_text_color'),
+                            options: cellTextColorLabels,
+                            selected: s.cellTextColor,
+                            onSelected: (v) =>
+                                update((x) => x.copyWith(cellTextColor: v)),
                           ),
                         ),
-                        Icon(Icons.chevron_right, color: colors.hint),
+                        _ApSliderRow(
+                          title: '不透明度',
+                          valueLabel: '$opacity%',
+                          valueKey: const Key('tt_settings_opacity_value'),
+                          slider: Slider(
+                            key: const Key('tt_settings_opacity'),
+                            min: opacityMin.toDouble(),
+                            max: opacityMax.toDouble(),
+                            divisions: (opacityMax - opacityMin) ~/ opacityStep,
+                            value: opacity.toDouble(),
+                            activeColor: colors.accent,
+                            label: '$opacity%',
+                            onChanged: (v) {
+                              final next = v.round();
+                              if (next == c.settings.cellOpacity) return;
+                              update((x) => x.copyWith(cellOpacity: next));
+                            },
+                          ),
+                        ),
+                        _ApRow(
+                          key: const Key('tt_settings_home_max_items'),
+                          title: '今日课表最多显示',
+                          trailing: _ApSegments<int>(
+                            key: const Key('tt_settings_home_max_segments'),
+                            options: homeMaxLabels,
+                            selected: s.homeMaxItems,
+                            onSelected: (v) =>
+                                update((x) => x.copyWith(homeMaxItems: v)),
+                          ),
+                        ),
+                        _ApSliderRow(
+                          title: '表头文字大小',
+                          valueLabel: '${headerSize.round()}',
+                          valueKey: const Key(
+                            'tt_settings_header_text_size_value',
+                          ),
+                          slider: Slider(
+                            key: const Key('tt_settings_header_text_size'),
+                            min: kHeaderTextSizeMin,
+                            max: kHeaderTextSizeMax,
+                            divisions: (kHeaderTextSizeMax - kHeaderTextSizeMin)
+                                .round(),
+                            value: headerSize,
+                            activeColor: colors.accent,
+                            label: '${headerSize.round()}',
+                            onChanged: (v) {
+                              final next = v.roundToDouble();
+                              if (next == c.settings.headerTextSize) return;
+                              update((x) => x.copyWith(headerTextSize: next));
+                            },
+                          ),
+                        ),
+                        _ApSwitchRow(
+                          key: const Key('tt_settings_show_period_times'),
+                          title: '节数栏显示时间',
+                          value: s.showPeriodTimes,
+                          onChanged: (v) =>
+                              update((x) => x.copyWith(showPeriodTimes: v)),
+                        ),
+                        _ApSwitchRow(
+                          key: const Key('tt_settings_saturday'),
+                          title: '周六',
+                          value: s.showSaturday,
+                          onChanged: (v) =>
+                              update((x) => x.copyWith(showSaturday: v)),
+                        ),
+                        _ApSwitchRow(
+                          key: const Key('tt_settings_sunday'),
+                          title: '周日',
+                          value: s.showSunday,
+                          onChanged: (v) =>
+                              update((x) => x.copyWith(showSunday: v)),
+                        ),
+                        _ApSwitchRow(
+                          key: const Key('tt_settings_non_current'),
+                          title: '非本周课程',
+                          value: s.showNonCurrentWeek,
+                          onChanged: (v) =>
+                              update((x) => x.copyWith(showNonCurrentWeek: v)),
+                        ),
+                        _ApRow(
+                          key: const Key('tt_settings_exam_color'),
+                          title: '考试颜色',
+                          onTap: () => _pickExamColor(context, c),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                key: const Key('tt_settings_exam_color_swatch'),
+                                width: 18,
+                                height: 18,
+                                decoration: BoxDecoration(
+                                  color: TimetableTheme.examCellBg(
+                                    Color(s.examColor),
+                                    dark: colors.isDark,
+                                  ),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: colors.divider),
+                                ),
+                              ),
+                              Icon(Icons.chevron_right, color: colors.hint),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ],
           );
@@ -151,87 +231,6 @@ class TimetableAppearancePage extends StatelessWidget {
         : (pick.color!.toARGB32() | 0xFF000000);
     if (argb == c.settings.examColor) return;
     await c.updateSettings(c.settings.copyWith(examColor: argb));
-  }
-}
-
-/// 页顶固定预览：模拟课程格，随字色 / 不透明度 / 明暗即时变。
-class _AppearancePreview extends StatelessWidget {
-  const _AppearancePreview({
-    super.key,
-    required this.settings,
-    required this.colors,
-  });
-
-  final TimetableSettings settings;
-  final TimetableColors colors;
-
-  @override
-  Widget build(BuildContext context) {
-    // item 3：预览格与未自选课一致，走色相步进自动色板（非 A/B/C）。
-    final pair = TimetableTheme.autoCoursePair(0, dark: colors.isDark);
-    final bg = TimetableTheme.blendCellBg(
-      pair.bg,
-      settings.cellOpacity,
-      dark: colors.isDark,
-    );
-    final fg = TimetableTheme.cellTextFor(pair.fg, settings.cellTextColor);
-    return Material(
-      color: colors.surface,
-      borderRadius: BorderRadius.circular(TimetableTheme.cardRadius),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '预览',
-              style: TimetableTheme.captionStyle(color: colors.labelText),
-            ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Container(
-                key: const Key('tt_appearance_preview_cell'),
-                width: 96,
-                height: 72,
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: bg,
-                  borderRadius: BorderRadius.circular(settings.cellRadius),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '示例课程',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12 * settings.fontScale.factor,
-                        fontWeight: FontWeight.w600,
-                        height: 1.15,
-                        color: fg,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '@示例地点',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 10 * settings.fontScale.factor,
-                        height: 1.1,
-                        color: fg,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
 
@@ -304,6 +303,32 @@ class _ApRow extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ApSwitchRow extends StatelessWidget {
+  const _ApSwitchRow({
+    super.key,
+    required this.title,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String title;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ApRow(
+      title: title,
+      onTap: () => onChanged(!value),
+      trailing: Switch(
+        value: value,
+        activeThumbColor: TimetableTheme.colorsOf(context).accent,
+        onChanged: onChanged,
       ),
     );
   }

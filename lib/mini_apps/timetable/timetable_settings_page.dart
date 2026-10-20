@@ -100,26 +100,7 @@ class TimetableSettingsPage extends StatelessWidget {
                 key: const Key('tt_settings_group_display'),
                 title: '显示',
                 children: [
-                  _SwitchRow(
-                    key: const Key('tt_settings_saturday'),
-                    title: '周六',
-                    value: s.showSaturday,
-                    onChanged: (v) =>
-                        update((x) => x.copyWith(showSaturday: v)),
-                  ),
-                  _SwitchRow(
-                    key: const Key('tt_settings_sunday'),
-                    title: '周日',
-                    value: s.showSunday,
-                    onChanged: (v) => update((x) => x.copyWith(showSunday: v)),
-                  ),
-                  _SwitchRow(
-                    key: const Key('tt_settings_non_current'),
-                    title: '非本周课程',
-                    value: s.showNonCurrentWeek,
-                    onChanged: (v) =>
-                        update((x) => x.copyWith(showNonCurrentWeek: v)),
-                  ),
+                  // 周六 / 周日 / 非本周课程：迁入外观页（spec-next-1020b）。
                   _SwitchRow(
                     key: const Key('tt_settings_show_location'),
                     title: '地点',

@@ -302,6 +302,13 @@ const int kDefaultExamColor = 0xFFC62828;
 /// 首页今日课表最多显示条数默认值（spec-next-1020 item 4）。
 const int kDefaultHomeMaxItems = 2;
 
+/// 周视图表头文字大小默认值（spec-next-1020b：约 11sp，范围 10–14）。
+const double kDefaultHeaderTextSize = 11;
+
+/// 表头文字大小下限 / 上限。
+const double kHeaderTextSizeMin = 10;
+const double kHeaderTextSizeMax = 14;
+
 /// 外观与学期设置（本地）。
 class TimetableSettings {
   const TimetableSettings({
@@ -330,6 +337,8 @@ class TimetableSettings {
     this.examColor = kDefaultExamColor,
     this.cellTextColor = CellTextColorMode.auto,
     this.homeMaxItems = kDefaultHomeMaxItems,
+    this.headerTextSize = kDefaultHeaderTextSize,
+    this.showPeriodTimes = true,
   });
 
   final String scheduleName;
@@ -384,6 +393,12 @@ class TimetableSettings {
   /// spec-next-1020 item 4：首页今日课表最多显示条数（1–4，默认 2）。
   final int homeMaxItems;
 
+  /// spec-next-1020b：周视图表头文字大小（sp，10–14，默认 11）。
+  final double headerTextSize;
+
+  /// spec-next-1020b：节数栏是否显示作息时间（默认开）。
+  final bool showPeriodTimes;
+
   /// 每周第一天是周日（设置 9；只影响列顺序）。存储键仍是 `weekStartsOnMonday`。
   bool get weekStartsSunday => !weekStartsOnMonday;
 
@@ -417,6 +432,8 @@ class TimetableSettings {
     int? examColor,
     CellTextColorMode? cellTextColor,
     int? homeMaxItems,
+    double? headerTextSize,
+    bool? showPeriodTimes,
   }) => TimetableSettings(
     scheduleName: scheduleName ?? this.scheduleName,
     termCode: termCode ?? this.termCode,
@@ -447,6 +464,8 @@ class TimetableSettings {
     examColor: examColor ?? this.examColor,
     cellTextColor: cellTextColor ?? this.cellTextColor,
     homeMaxItems: homeMaxItems ?? this.homeMaxItems,
+    headerTextSize: headerTextSize ?? this.headerTextSize,
+    showPeriodTimes: showPeriodTimes ?? this.showPeriodTimes,
   );
 
   /// 用 [o] 的用户偏好（显示/外观/提醒/首页开关）覆盖本对象，学期字段不变。
@@ -470,6 +489,8 @@ class TimetableSettings {
     examColor: o.examColor,
     cellTextColor: o.cellTextColor,
     homeMaxItems: o.homeMaxItems,
+    headerTextSize: o.headerTextSize,
+    showPeriodTimes: o.showPeriodTimes,
   );
 
   Map<String, dynamic> toJson() => {
@@ -498,6 +519,8 @@ class TimetableSettings {
     'examColor': examColor,
     'cellTextColor': cellTextColor.name,
     'homeMaxItems': homeMaxItems,
+    'headerTextSize': headerTextSize,
+    'showPeriodTimes': showPeriodTimes,
   };
 
   // ---- 宽松读取（只在内存纠正，不回写磁盘）----
@@ -531,6 +554,12 @@ class TimetableSettings {
     final v = raw.round();
     if (v < 1 || v > 4) return kDefaultHomeMaxItems;
     return v;
+  }
+
+  /// 表头文字大小：数字钳到 10–14；非数字/非有限值 → 11。
+  static double sanitizeHeaderTextSize(Object? raw) {
+    if (raw is! num || !raw.isFinite) return kDefaultHeaderTextSize;
+    return raw.toDouble().clamp(kHeaderTextSizeMin, kHeaderTextSizeMax);
   }
 
   /// 文字颜色：'auto'/'white'/'black'；缺失或其他 → 自动（旧文件无此键）。
@@ -587,6 +616,8 @@ class TimetableSettings {
         examColor: parseExamColor(json['examColor']),
         cellTextColor: parseCellTextColor(json['cellTextColor']),
         homeMaxItems: sanitizeHomeMaxItems(json['homeMaxItems']),
+        headerTextSize: sanitizeHeaderTextSize(json['headerTextSize']),
+        showPeriodTimes: _bool(json['showPeriodTimes'], true),
       );
 }
 

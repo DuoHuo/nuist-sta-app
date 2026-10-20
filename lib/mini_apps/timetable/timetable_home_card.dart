@@ -615,8 +615,8 @@ class _CourseRow extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Padding(
-        // spec-next-1020 item 2：项内上下 8、项间距 4（bottom 含间距）。
-        padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
+        // spec-next-1020b：项内上下 8、项间距 2（bottom 含间距）。
+        padding: const EdgeInsets.fromLTRB(0, 8, 0, 2),
         // 色条随内容高度伸缩（不固定高度）：课名 / 地点换行时整行变高。
         child: IntrinsicHeight(
           child: Row(

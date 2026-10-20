@@ -91,8 +91,8 @@ class ScheduleHomeRow extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Padding(
-        // 与课程行一致：项内上下 8、项间距 4。
-        padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
+        // 与课程行一致：项内上下 8、项间距 2（spec-next-1020b）。
+        padding: const EdgeInsets.fromLTRB(0, 8, 0, 2),
         // 色条随内容高度伸缩（不固定高度）：课名 / 地点换行时整行变高。
         child: IntrinsicHeight(
           child: Row(
