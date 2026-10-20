@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/schedule/weekly_classes.dart';
+import 'shuttle_api.dart';
+import 'shuttle_controller.dart';
+import 'shuttle_stations.dart';
 import 'campus_map_photos.dart';
 import 'campus_photo_gallery_page.dart';
 import 'campus_map_api.dart';
@@ -29,6 +32,7 @@ class CampusMapPage extends StatefulWidget {
     this.useNativeMap = true,
     this.location = const DeviceUserLocation(),
     this.heading = const DeviceHeading(),
+    this.shuttleSource,
   });
   final String styleUrl;
   final CampusMapSource source;
@@ -38,11 +42,17 @@ class CampusMapPage extends StatefulWidget {
   /// 手机朝向（画蓝点的方向光束）；只在持续定位开着时订阅。
   final HeadingSource heading;
 
+  /// 当前公交服务，可由测试注入。
+  final ShuttleSource? shuttleSource;
   @override
   State<CampusMapPage> createState() => _CampusMapPageState();
 }
 
-class _CampusMapPageState extends State<CampusMapPage> {
+class _CampusMapPageState extends State<CampusMapPage>
+    with WidgetsBindingObserver {
+  late final ShuttleController _shuttle;
+  OverlayEntry? _shuttleToast;
+  Timer? _shuttleToastTimer;
   final _search = TextEditingController();
   final _searchFocus = FocusNode();
   // 总览面板内容的实际高度（逻辑像素）：面板最多只能拉到正好露出全部内容，
@@ -116,6 +126,10 @@ class _CampusMapPageState extends State<CampusMapPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _shuttle = ShuttleController(widget.shuttleSource ?? ShuttleApi())
+      ..addListener(_shuttleChanged)
+      ..onFirstFailure = _showShuttleToast;
     _search.addListener(_searchChanged);
     _sheet.addListener(_sheetChanged);
     unawaited(_loadCampus());
@@ -286,6 +300,57 @@ class _CampusMapPageState extends State<CampusMapPage> {
     }
   }
 
+  void _shuttleChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _syncShuttleLifecycle() {
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _shuttle.setActive(
+      _layer == CampusMapLayer.transit &&
+          (lifecycle == null || lifecycle == AppLifecycleState.resumed),
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) =>
+      _syncShuttleLifecycle();
+
+  void _showShuttleToast() {
+    if (!mounted) return;
+    final palette = colors;
+    _shuttleToast = OverlayEntry(
+      builder: (context) => Positioned(
+        left: 32,
+        right: 32,
+        bottom: MediaQuery.paddingOf(context).bottom + 88,
+        child: IgnorePointer(
+          child: Center(
+            child: Material(
+              color: palette.ink,
+              borderRadius: BorderRadius.circular(20),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 10,
+                ),
+                child: Text(
+                  '车辆位置暂时无法更新',
+                  style: TextStyle(color: palette.surface, fontSize: 13),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    Overlay.of(context).insert(_shuttleToast!);
+    _shuttleToastTimer = Timer(const Duration(seconds: 2), () {
+      _shuttleToast?.remove();
+      _shuttleToast = null;
+    });
+  }
+
   /// 界面配色，随系统明暗切换；地图底图不受影响。
   MapPalette get colors => MapPalette.of(context);
 
@@ -350,6 +415,10 @@ class _CampusMapPageState extends State<CampusMapPage> {
       error is CampusMapApiException ? error.toString() : fallback;
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _shuttle.dispose();
+    _shuttleToastTimer?.cancel();
+    _shuttleToast?.remove();
     _searchTimer?.cancel();
     _sheetTimer?.cancel();
     unawaited(_locationSub?.cancel());
@@ -786,6 +855,8 @@ class _CampusMapPageState extends State<CampusMapPage> {
                             styleUrl: _style,
                             useNativeMap: widget.useNativeMap,
                             places: _campus.places,
+                            shuttleVehicles: _shuttle.vehicles,
+                            shuttleDirections: _shuttle.directions,
                             selectedPlace: _place,
                             floor: _floor,
                             selectedRoom: _room,
@@ -1507,9 +1578,11 @@ class _CampusMapPageState extends State<CampusMapPage> {
     );
   }
 
-  bool _hasTransitStops() => _campus.places.any(
-    (p) => const {'bus_stop', '公交站', '轨道交通'}.contains(p.kind),
-  );
+  bool _hasTransitStops() =>
+      shuttleStations.isNotEmpty ||
+      _campus.places.any(
+        (p) => const {'bus_stop', '公交站', '轨道交通'}.contains(p.kind),
+      );
 
   Future<void> _showLayers() async {
     await showModalBottomSheet<void>(
@@ -1542,6 +1615,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
                 ).showSnackBar(const SnackBar(content: Text('校园暂无公共交通覆盖数据')));
               }
               setState(() => _layer = layer);
+              _syncShuttleLifecycle();
               Navigator.pop(context);
             },
             child: Opacity(

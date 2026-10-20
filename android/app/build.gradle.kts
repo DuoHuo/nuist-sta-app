@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -119,9 +121,19 @@ val campusMapHost: String = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://([^/:]+)")
     ?.get(1)
     .orEmpty()
 
+val campusShuttleHosts: List<String> = listOf("_shuttlePageUrlHex", "_shuttleApiHostHex").map { key ->
+    val hex = Regex("${key}\\s*=\\s*'([0-9a-fA-F]+)'")
+        .find(campusConfigFile.readText())?.groupValues?.get(1).orEmpty()
+    val value = hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
+    if (value.contains("://")) URI(value).host else value
+}.filter { it.isNotEmpty() }
+
 abstract class GenerateNetworkSecurityConfig : DefaultTask() {
     @get:Input
     abstract val mapHost: Property<String>
+
+    @get:Input
+    abstract val shuttleHosts: ListProperty<String>
 
     @get:Input
     abstract val debugConfig: Property<Boolean>
@@ -133,6 +145,9 @@ abstract class GenerateNetworkSecurityConfig : DefaultTask() {
     fun generate() {
         val host = mapHost.get()
         val debug = debugConfig.get()
+        val shuttleDomains = shuttleHosts.get().joinToString("\n                    ") {
+            "<domain includeSubdomains=\"false\">$it</domain>"
+        }
         val mapDomain = when {
             host.isEmpty() -> ""
             debug -> "        <domain>$host</domain>"
@@ -152,6 +167,7 @@ abstract class GenerateNetworkSecurityConfig : DefaultTask() {
                 </base-config>
                 <domain-config cleartextTrafficPermitted="true">
             $mapDomain
+                    $shuttleDomains
                     <domain>duohuo.org.cn</domain>
                     <domain>127.0.0.1</domain>
                     <domain>localhost</domain>
@@ -172,6 +188,7 @@ abstract class GenerateNetworkSecurityConfig : DefaultTask() {
                 </base-config>
                 <domain-config cleartextTrafficPermitted="true">
             $mapDomain
+                    $shuttleDomains
                     <domain includeSubdomains="false">duohuo.org.cn</domain>
                 </domain-config>
             </network-security-config>
@@ -190,6 +207,7 @@ androidComponents.onVariants { variant ->
     ) {
         inputs.file(campusConfigFile)
         mapHost.set(campusMapHost)
+        shuttleHosts.set(campusShuttleHosts)
         debugConfig.set(debug)
         outputDirectory.set(layout.buildDirectory.dir("generated/nsc/${variant.name}"))
     }

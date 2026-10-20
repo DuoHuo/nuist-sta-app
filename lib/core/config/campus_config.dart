@@ -21,6 +21,11 @@ const String _rootHex = '6e756973742e6564752e636e';
 const String _mapBaseUrlHex =
     '68747470733a2f2f6d61702e64756f68756f2e6f72672e636e';
 
+// 公交公开页面与状态服务主机
+const String _shuttlePageUrlHex =
+    '687474703a2f2f7777772e6e732d7265732e636e2f68796478666c61742f696e646578656c63742e68746d6c';
+const String _shuttleApiHostHex = '34372e39362e31362e3233';
+
 // 通行密钥导出用的内置 AES 密钥（16 个 ASCII 字符）
 const String _passkeyExportKeyHex = '4855575173365856766c72736b41577a';
 
@@ -33,6 +38,9 @@ final String kCampusRootDomain = _decodeHex(_rootHex);
 /// 校园地图后端地址；空串表示未配置。
 final String kCampusMapBaseUrl = _decodeHex(_mapBaseUrlHex);
 
+/// 公交公开页面，用于发现当前登录接口。
+final String kCampusShuttlePageUrl = _decodeHex(_shuttlePageUrlHex);
+
 /// 通行密钥导出用的内置 AES 密钥。
 final String kPasskeyExportKey = _decodeHex(_passkeyExportKeyHex);
 
@@ -44,6 +52,8 @@ final String kVpnSpaKey = _decodeHex(_vpnSpaKeyHex);
 /// 只模板化主机名，路径、大小写、尾斜杠都必须保持服务端原样（CAS 精确匹配
 /// service 字符串）。
 abstract final class CampusHosts {
+  /// 公交网页当前使用的状态服务主机。
+  static final shuttleApi = _decodeHex(_shuttleApiHostHex);
   static final authserver = 'authserver.$kCampusRootDomain';
   static final jwxt = 'jwxt.$kCampusRootDomain';
   static final icard = 'icard.$kCampusRootDomain';

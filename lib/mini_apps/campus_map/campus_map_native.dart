@@ -11,6 +11,8 @@ import 'campus_map_canvas.dart';
 import 'campus_map_data.dart';
 import 'campus_map_heading.dart';
 import 'campus_map_panels.dart';
+import 'shuttle_stations.dart';
+import 'shuttle_map_layer.dart';
 
 /// 赤道周长（米），Web Mercator 的标准常量。
 const double _equatorCircumferenceM = 40075016.686;
@@ -71,7 +73,14 @@ class CampusMapNative extends StatefulWidget {
   State<CampusMapNative> createState() => _CampusMapNativeState();
 }
 
-class _CampusMapNativeState extends State<CampusMapNative> {
+class _CampusMapNativeState extends State<CampusMapNative>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _shuttleAnimation;
+  Map<String, GeoPoint> _shuttleOrigins = {};
+  bool _shuttleUpdateQueued = false;
+  bool _shuttleStationsDirty = true;
+  int _shuttleStyleEpoch = 0;
+  Timer? _shuttleCameraTimer;
   MapLibreMapController? _controller;
   CameraPosition? _overviewCamera;
   bool _ready = false;
@@ -97,6 +106,13 @@ class _CampusMapNativeState extends State<CampusMapNative> {
   @override
   void initState() {
     super.initState();
+    _shuttleAnimation =
+        AnimationController(
+            vsync: this,
+            duration: const Duration(milliseconds: 500),
+          )
+          ..value = 1
+          ..addListener(_scheduleShuttleUpdate);
     _startTimeout();
   }
 
@@ -111,6 +127,30 @@ class _CampusMapNativeState extends State<CampusMapNative> {
   void didUpdateWidget(covariant CampusMapNative oldWidget) {
     super.didUpdateWidget(oldWidget);
     final old = oldWidget.configuration;
+    if (!identical(old.shuttleVehicles, config.shuttleVehicles)) {
+      final t = _shuttleAnimation.value;
+      _shuttleOrigins = {
+        for (final v in old.shuttleVehicles)
+          v.id: GeoPoint(
+            longitude:
+                (_shuttleOrigins[v.id]?.longitude ?? v.point.longitude) *
+                    (1 - t) +
+                v.point.longitude * t,
+            latitude:
+                (_shuttleOrigins[v.id]?.latitude ?? v.point.latitude) *
+                    (1 - t) +
+                v.point.latitude * t,
+          ),
+      };
+      if (config.mapLayer == CampusMapLayer.transit) {
+        _shuttleAnimation.forward(from: 0);
+      }
+    }
+    if (old.mapLayer != config.mapLayer) {
+      _shuttleAnimation.stop();
+      _shuttleAnimation.value = 1;
+      _shuttleStationsDirty = true;
+    }
     _cameraPending =
         _cameraPending ||
         old.selectedPlace?.id != config.selectedPlace?.id ||
@@ -128,6 +168,7 @@ class _CampusMapNativeState extends State<CampusMapNative> {
     // 样式串变了：插件会原地 setStyle，旧样式上的自绘图层全部失效，
     // 等新样式的 onStyleLoaded 再从头同步（不销毁原生地图视图）。
     if (old.styleUrl != config.styleUrl) {
+      _shuttleStyleEpoch++;
       _generation++;
       _ready = false;
       _startTimeout();
@@ -153,6 +194,7 @@ class _CampusMapNativeState extends State<CampusMapNative> {
       try {
         if (sync) {
           await _sync(c, config);
+          _scheduleShuttleUpdate();
           if (!mounted || generation != _generation) return;
         }
         if (_cameraPending) {
@@ -241,6 +283,7 @@ class _CampusMapNativeState extends State<CampusMapNative> {
       [v.markerPlaces, indoor, v.selectedPlace?.id],
       // 朝向只看「有没有」：角度变化走 _syncHeading，不重建图层。
       [user?.latitude, user?.longitude, v.userHeading != null],
+      [v.mapLayer == CampusMapLayer.transit],
     ];
   }
 
@@ -307,7 +350,8 @@ class _CampusMapNativeState extends State<CampusMapNative> {
     7 => _addRoute(c, value),
     8 => _addStreet(c, value),
     9 => _addMarkers(c, value),
-    _ => _addUser(c, value),
+    10 => _addUser(c, value),
+    _ => _addShuttle(c, value),
   };
 
   Future<void> _addBuildingHits(
@@ -465,6 +509,145 @@ class _CampusMapNativeState extends State<CampusMapNative> {
         _layer('campus-transit-stops');
       }
     }
+  }
+
+  Future<void> _addShuttle(
+    MapLibreMapController c,
+    CampusMapCanvas value,
+  ) async {
+    if (value.mapLayer != CampusMapLayer.transit) return;
+    final epoch = _shuttleStyleEpoch;
+    final ratio = MediaQuery.devicePixelRatioOf(context);
+    final iconScale = Theme.of(context).platform == TargetPlatform.android
+        ? 1 / ratio
+        : 1.0;
+    // 图标是地图上的固定设计素材，沿用已审核的天蓝与离线灰。
+    final online = await ShuttleMapLayer.icon(const Color(0xFF409CE8), ratio);
+    final offline = await ShuttleMapLayer.icon(const Color(0xFF929AA3), ratio);
+    if (!mounted || epoch != _shuttleStyleEpoch) return;
+    await c.addImage('shuttle-online', online);
+    await c.addImage('shuttle-offline', offline);
+    await _source(
+      c,
+      'shuttle-stations',
+      ShuttleMapLayer.stations(List.filled(shuttleStations.length, 0)),
+    );
+    await c.addCircleLayer(
+      'shuttle-stations',
+      'shuttle-stop-dots',
+      const CircleLayerProperties(
+        circleColor: '#E67E22',
+        circleRadius: 5,
+        circleStrokeColor: '#FFFFFF',
+        circleStrokeWidth: 2,
+      ),
+      enableInteraction: false,
+    );
+    _layer('shuttle-stop-dots');
+    await c.addSymbolLayer(
+      'shuttle-stations',
+      'shuttle-stop-labels',
+      const SymbolLayerProperties(
+        textField: ['get', 'name'],
+        textFont: ['Noto Sans Regular'],
+        textSize: 12,
+        textColor: '#20252D',
+        textHaloColor: '#FFFFFF',
+        textHaloWidth: 1.5,
+        textAnchor: 'top',
+        textOffset: [0, .8],
+        textAllowOverlap: false,
+        textIgnorePlacement: false,
+      ),
+      enableInteraction: false,
+    );
+    _layer('shuttle-stop-labels');
+    await _source(
+      c,
+      'shuttle-vehicles',
+      ShuttleMapLayer.vehicles(
+        config.shuttleVehicles,
+        config.shuttleDirections,
+        _shuttleOrigins,
+        _shuttleAnimation.value,
+      ),
+    );
+    await c.addSymbolLayer(
+      'shuttle-vehicles',
+      'shuttle-vehicle-icons',
+      SymbolLayerProperties(
+        iconImage: ['get', 'icon'],
+        iconRotate: ['get', 'heading'],
+        iconRotationAlignment: 'map',
+        iconPitchAlignment: 'map',
+        iconAnchor: 'center',
+        iconAllowOverlap: true,
+        iconIgnorePlacement: true,
+        iconSize: iconScale,
+      ),
+      enableInteraction: false,
+    );
+    _layer('shuttle-vehicle-icons');
+    _shuttleStationsDirty = true;
+  }
+
+  // 与既有图层同步共用串行队列，每帧合并为至多一个待处理的 source 更新。
+  void _scheduleShuttleUpdate() {
+    if (!mounted ||
+        !_ready ||
+        config.mapLayer != CampusMapLayer.transit ||
+        _shuttleUpdateQueued) {
+      return;
+    }
+    _shuttleUpdateQueued = true;
+    final epoch = _shuttleStyleEpoch;
+    _queue = _queue.then((_) async {
+      _shuttleUpdateQueued = false;
+      final c = _controller;
+      if (!mounted ||
+          !_ready ||
+          c == null ||
+          epoch != _shuttleStyleEpoch ||
+          config.mapLayer != CampusMapLayer.transit ||
+          !_hasLayer('shuttle-vehicle-icons')) {
+        return;
+      }
+      try {
+        if (_shuttleStationsDirty) {
+          _shuttleStationsDirty = false;
+          final pixels = await c.toScreenLocationBatch([
+            for (final station in shuttleStations) ...[
+              LatLng(station.first.latitude, station.first.longitude),
+              LatLng(station.second.latitude, station.second.longitude),
+            ],
+          ]);
+          if (!mounted || epoch != _shuttleStyleEpoch || !_ready) return;
+          final scale = Theme.of(context).platform == TargetPlatform.android
+              ? MediaQuery.devicePixelRatioOf(context)
+              : 1.0;
+          final distances = [
+            for (var i = 0; i < pixels.length; i += 2)
+              ShuttleMapLayer.screenDistance(pixels[i], pixels[i + 1], scale),
+          ];
+          await c.setGeoJsonSource(
+            'shuttle-stations',
+            ShuttleMapLayer.stations(distances),
+          );
+        }
+        await c.setGeoJsonSource(
+          'shuttle-vehicles',
+          ShuttleMapLayer.vehicles(
+            config.shuttleVehicles,
+            config.shuttleDirections,
+            _shuttleOrigins,
+            _shuttleAnimation.value,
+          ),
+        );
+      } catch (_) {
+        // 样式切换期间原生 source 可能已释放，下一次同步恢复当前状态。
+        _shuttleStationsDirty = true;
+      }
+    });
   }
 
   Future<void> _addFeatureHits(
@@ -1381,6 +1564,9 @@ class _CampusMapNativeState extends State<CampusMapNative> {
   @override
   void dispose() {
     _generation++;
+    _shuttleStyleEpoch++;
+    _shuttleCameraTimer?.cancel();
+    _shuttleAnimation.dispose();
     _loadTimeout?.cancel();
     _controller = null;
     super.dispose();
@@ -1396,6 +1582,8 @@ class _CampusMapNativeState extends State<CampusMapNative> {
           initialCameraPosition: null,
           onMapCreated: (c) => _controller = c,
           onStyleLoadedCallback: () {
+            _shuttleStyleEpoch++;
+            _shuttleStationsDirty = true;
             _loadTimeout?.cancel();
             // 新样式不含任何自绘图层：清空登记，整组重新挂载。排进队列执行，
             // 让旧样式上还没跑完的同步先收尾，避免它在清空后又登记旧图层。
@@ -1415,6 +1603,14 @@ class _CampusMapNativeState extends State<CampusMapNative> {
           onCameraMove: (position) {
             _camera = position;
             _syncLabelOffset();
+            _shuttleStationsDirty = true;
+            _shuttleCameraTimer ??= Timer(
+              const Duration(milliseconds: 100),
+              () {
+                _shuttleCameraTimer = null;
+                _scheduleShuttleUpdate();
+              },
+            );
           },
           compassEnabled: false,
           logoEnabled: false,

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'campus_map_data.dart';
 import 'campus_map_native.dart';
+import 'shuttle_models.dart';
 
 /// A renderer for the unified basemap and backend-owned campus overlays.
 ///
@@ -18,6 +19,8 @@ class CampusMapCanvas extends StatelessWidget {
     required this.onPlaceSelected,
     required this.onRoomSelected,
     this.places = const [],
+    this.shuttleVehicles = const [],
+    this.shuttleDirections = const {},
     this.rooms = const [],
     this.buildingGeoJson,
     this.featuresGeoJson,
@@ -39,6 +42,12 @@ class CampusMapCanvas extends StatelessWidget {
     this.viewportInsets = EdgeInsets.zero,
     this.markerPlaces = const [],
   });
+
+  /// 当前完整车辆列表，仅由公共交通图层消费。
+  final List<ShuttleVehicle> shuttleVehicles;
+
+  /// 已应用迟滞的四向车头方向。
+  final Map<String, ShuttleDirection> shuttleDirections;
 
   final String styleUrl;
   final CampusPlace? selectedPlace;
