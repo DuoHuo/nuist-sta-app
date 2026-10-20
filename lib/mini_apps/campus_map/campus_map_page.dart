@@ -1,17 +1,21 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/schedule/weekly_classes.dart';
 import 'campus_map_photos.dart';
 import 'campus_photo_gallery_page.dart';
 import 'campus_map_api.dart';
 import 'campus_map_cache.dart';
 import 'campus_map_canvas.dart';
 import 'campus_map_data.dart';
+import 'campus_map_heading.dart';
 import 'campus_map_location.dart';
 import 'campus_map_panels.dart';
+import 'campus_map_schedule.dart';
 import 'campus_map_source.dart';
 import 'campus_map_widgets.dart';
 import 'campus_place_detail_page.dart';
@@ -24,11 +28,16 @@ class CampusMapPage extends StatefulWidget {
     this.source = const UnconfiguredCampusMapSource(),
     this.useNativeMap = true,
     this.location = const DeviceUserLocation(),
+    this.heading = const DeviceHeading(),
   });
   final String styleUrl;
   final CampusMapSource source;
   final bool useNativeMap;
   final UserLocationSource location;
+
+  /// 手机朝向（画蓝点的方向光束）；只在持续定位开着时订阅。
+  final HeadingSource heading;
+
   @override
   State<CampusMapPage> createState() => _CampusMapPageState();
 }
@@ -36,6 +45,13 @@ class CampusMapPage extends StatefulWidget {
 class _CampusMapPageState extends State<CampusMapPage> {
   final _search = TextEditingController();
   final _searchFocus = FocusNode();
+  // 总览面板内容的实际高度（逻辑像素）：面板最多只能拉到正好露出全部内容，
+  // 不再拉出一大片空白。搜索、分类列表这类可能很长的内容不受限。
+  double? _homeContentHeight;
+  double _sheetMaxSize = .88;
+  // 课表联动：本周全部有地点的课（打开地图时读一次），以及正在查找教室的那节。
+  List<WeeklyClass> _weekClasses = const [];
+  WeeklyClass? _locatingClass;
   // 上次处理过的搜索词：控制器在光标/选区变化时也会通知，只有文字变了才重新搜索。
   String _lastQuery = '';
   Timer? _sheetTimer;
@@ -85,6 +101,13 @@ class _CampusMapPageState extends State<CampusMapPage> {
       : null;
   int _zoomDelta = 0;
   GeoPoint? _userPoint;
+  // 最近一次定位精度（米）：只用来过滤小幅抖动，地图上不画精度圈。
+  double? _userAccuracy;
+  // 地图打开期间的持续定位订阅（有权限才开）。
+  StreamSubscription<LocationFix>? _locationSub;
+  // 朝向订阅与当前朝向（度，0 = 正北）。
+  StreamSubscription<double>? _headingSub;
+  double? _userHeading;
   int _focusToken = 0;
   bool _locating = false;
   // 面板实际遮挡的高度（逻辑像素，按 24px 量化以减少重建）。
@@ -96,6 +119,171 @@ class _CampusMapPageState extends State<CampusMapPage> {
     _search.addListener(_searchChanged);
     _sheet.addListener(_sheetChanged);
     unawaited(_loadCampus());
+    unawaited(_loadWeekClasses());
+    // 已经授过权就直接显示蓝点，不弹权限框、不挪相机。
+    unawaited(_startLiveLocation());
+  }
+
+  /// 随机去一个有名字、有坐标的地方（骰子按钮）。
+  void _randomPlace() {
+    final pool = [
+      for (final place in _campus.places)
+        if (place.center != null &&
+            place.center!.isValid &&
+            place.name.trim().isNotEmpty &&
+            !place.name.startsWith('未命名'))
+          place,
+    ];
+    if (pool.isEmpty) {
+      _message('地点还没加载出来，稍后再试');
+      return;
+    }
+    final place = pool[_random.nextInt(pool.length)];
+    unawaited(_selectPlace(place));
+    _message('就去这儿看看：${place.name}');
+  }
+
+  LiveUserLocationSource? get _live => widget.location is LiveUserLocationSource
+      ? widget.location as LiveUserLocationSource
+      : null;
+
+  /// 订阅手机朝向；没有传感器（或测试环境）时静默不画光束。
+  void _startHeading() {
+    if (_headingSub != null) return;
+    try {
+      _headingSub = widget.heading.watch().listen(
+        (degrees) {
+          final current = _userHeading;
+          // 转动 3° 以上才重建，地图端还会再节流一次。
+          if (!mounted ||
+              (current != null && headingDelta(current, degrees).abs() < 3)) {
+            return;
+          }
+          setState(() => _userHeading = degrees);
+        },
+        onError: (Object _) {
+          unawaited(_headingSub?.cancel());
+          _headingSub = null;
+          if (mounted) setState(() => _userHeading = null);
+        },
+        cancelOnError: true,
+      );
+    } catch (_) {
+      _headingSub = null;
+    }
+  }
+
+  void _applyFix(LocationFix fix, {bool focus = false}) {
+    final previous = _userPoint;
+    final accuracy = _userAccuracy;
+    // 小幅抖动不重建定位图层：移动 2 米以上或精度变化 5 米以上才更新。
+    if (!focus &&
+        previous != null &&
+        metersBetween(previous, fix.point) < 2 &&
+        accuracy != null &&
+        (accuracy - fix.accuracyM).abs() < 5) {
+      return;
+    }
+    setState(() {
+      _userPoint = fix.point;
+      _userAccuracy = fix.accuracyM;
+      if (focus) _focusToken++;
+    });
+  }
+
+  /// 有权限时订阅持续定位；[requireReady] 为 false 表示刚刚已确认过权限。
+  Future<void> _startLiveLocation({bool requireReady = true}) async {
+    final live = _live;
+    if (live == null || _locationSub != null) return;
+    try {
+      if (requireReady && !await live.ready()) return;
+      if (!mounted || _locationSub != null) return;
+      if (_userPoint == null) {
+        final last = await live.lastKnown();
+        if (mounted && last != null && _userPoint == null) _applyFix(last);
+      }
+      if (!mounted || _locationSub != null) return;
+      _locationSub = live.watch().listen(
+        (fix) {
+          if (mounted) _applyFix(fix);
+        },
+        // 中途出错（如关掉了定位服务）就停掉，下次点定位再开。
+        onError: (Object _) {
+          unawaited(_locationSub?.cancel());
+          unawaited(_headingSub?.cancel());
+          _locationSub = null;
+        },
+        cancelOnError: true,
+      );
+      _startHeading();
+    } catch (_) {
+      // 测试环境没有定位插件，或系统定位异常：静默跳过，点定位按钮时再提示。
+    }
+  }
+
+  /// 读本周课程（课表没登记或读取失败时当作没有课，不打扰用户）。
+  Future<void> _loadWeekClasses() async {
+    final source = WeeklyClasses.source;
+    if (source == null) return;
+    try {
+      final classes = await source.thisWeek();
+      if (!mounted) return;
+      if (kDebugMode) {
+        // 只打数量，不打课程与地点（日志规范）。
+        debugPrint('[campus-map] 本周有地点的课 ${classes.length} 节');
+      }
+      setState(() => _weekClasses = classes);
+    } catch (_) {
+      // 课表不可用不影响地图。
+    }
+  }
+
+  /// 点楼宇卡片里的一节课：按门牌号逐层查找教室，找到就进室内并选中它。
+  Future<void> _openClass(WeeklyClass item) async {
+    final place = _place;
+    if (place == null || _locatingClass != null) return;
+    final code = roomCodeIn(item.location, place.name);
+    if (code == null) return;
+    if (place.floors.isEmpty) {
+      _message('这栋楼暂无室内图，教室在 $code');
+      return;
+    }
+    setState(() => _locatingClass = item);
+    final buildingId = place.buildingId ?? place.id;
+    try {
+      for (final floor in floorsToSearch(place.floors, code)) {
+        final data = await widget.source.loadFloor(buildingId, floor.id);
+        if (!mounted || _place?.id != place.id) return;
+        CampusRoom? match;
+        for (final room in data.rooms) {
+          if (roomCodeMatches(room.roomCode ?? room.name, code)) {
+            match = room;
+            break;
+          }
+        }
+        if (match == null) continue;
+        await _selectFloor(floor);
+        if (!mounted || _floor?.id != floor.id) return;
+        final found = match;
+        final room = _floorData.rooms.firstWhere(
+          (r) => r.id == found.id,
+          orElse: () => found,
+        );
+        _routeRevision++;
+        setState(() {
+          _room = room;
+          _route = null;
+          _routing = false;
+        });
+        _expandSheet(.43);
+        return;
+      }
+      _message('室内图里还没有 $code');
+    } catch (_) {
+      if (mounted) _message('教室查找失败，请稍后重试');
+    } finally {
+      if (mounted) setState(() => _locatingClass = null);
+    }
   }
 
   /// 界面配色，随系统明暗切换；地图底图不受影响。
@@ -127,7 +315,10 @@ class _CampusMapPageState extends State<CampusMapPage> {
   void _searchChanged() {
     final query = _search.text.trim();
     if (query == _lastQuery) return;
+    final startedTyping = _lastQuery.isEmpty && query.isNotEmpty;
     _lastQuery = query;
+    // 开始输入后面板不再按总览内容限高：等这一帧放开上限后再展开。
+    if (startedTyping) _expandSheetAfterFrame(.88);
     _searchTimer?.cancel();
     final revision = ++_searchRevision;
     final remote = _remote;
@@ -161,6 +352,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
   void dispose() {
     _searchTimer?.cancel();
     _sheetTimer?.cancel();
+    unawaited(_locationSub?.cancel());
     _searchRevision++;
     _sheet.removeListener(_sheetChanged);
     _placeRevision++;
@@ -182,7 +374,13 @@ class _CampusMapPageState extends State<CampusMapPage> {
     bool loading = false,
     bool resample = false,
   }) {
-    final byId = {for (final place in data.places) place.id: place};
+    // 后端给没登记名称的楼宇填「未命名建筑 <编号>」占位名，不放进探索推荐。
+    final named = [
+      for (final place in data.places)
+        if (place.name.trim().isNotEmpty && !place.name.startsWith('未命名'))
+          place,
+    ];
+    final byId = {for (final place in named) place.id: place};
     final kept = [
       for (final place in _explore)
         if (byId[place.id] != null) byId[place.id]!,
@@ -191,13 +389,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
       _campus = data;
       _loading = loading;
       _explore =
-          !resample &&
-              kept.isNotEmpty &&
-              kept.length >= min(10, data.places.length)
+          !resample && kept.isNotEmpty && kept.length >= min(10, named.length)
           ? kept
-          : (List<CampusPlace>.of(
-              data.places,
-            )..shuffle(_random)).take(10).toList();
+          : (List<CampusPlace>.of(named)..shuffle(_random)).take(10).toList();
     });
   }
 
@@ -248,6 +442,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
     _floorRevision++;
     _routeRevision++;
     FocusManager.instance.primaryFocus?.unfocus();
+    if (place.poiId == null && place.featureId == null) {
+      unawaited(_loadWeekClasses());
+    }
     setState(() {
       _place = place;
       _placeLoading = remote != null;
@@ -379,14 +576,24 @@ class _CampusMapPageState extends State<CampusMapPage> {
     });
   }
 
-  void _expandSheet(double size) {
+  /// 先让这一帧按新状态算出面板上限，再展开（状态变化会放开总览限高时用）。
+  void _expandSheetAfterFrame(double target) =>
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _expandSheet(target);
+      });
+
+  void _expandSheet(double target) {
     if (!_sheet.isAttached) return;
+    final size = min(target, _sheetMaxSize);
+    // 系统关闭动画时直接跳到位：animateTo 不接受零时长（会断言失败）。
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _sheet.jumpTo(size);
+      return;
+    }
     unawaited(
       _sheet.animateTo(
         size,
-        duration: MediaQuery.disableAnimationsOf(context)
-            ? Duration.zero
-            : const Duration(milliseconds: 280),
+        duration: const Duration(milliseconds: 280),
         curve: Curves.easeOutCubic,
       ),
     );
@@ -430,6 +637,11 @@ class _CampusMapPageState extends State<CampusMapPage> {
   Future<void> _locate() async {
     if (_locating) return;
     setState(() => _locating = true);
+    final live = _live;
+    if (live != null) {
+      await _locateLive(live);
+      return;
+    }
     try {
       final point = await widget.location.current();
       if (!mounted) return;
@@ -438,6 +650,31 @@ class _CampusMapPageState extends State<CampusMapPage> {
         _focusToken++;
         _locating = false;
       });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _locating = false);
+      _message(error.toString());
+    }
+  }
+
+  /// 定位按钮（真机）：先用最近位置立刻回中，再拿精确位置校正，最后开持续定位。
+  Future<void> _locateLive(LiveUserLocationSource live) async {
+    var centered = false;
+    try {
+      final last = await live.lastKnown();
+      if (mounted && last != null) {
+        _applyFix(last, focus: true);
+        centered = true;
+      }
+      final fix = await live.currentFix();
+      if (!mounted) return;
+      final moved = _userPoint == null
+          ? double.infinity
+          : metersBetween(_userPoint!, fix.point);
+      // 先前已经回中，且这次没偏多少：只更新点，不再拽相机。
+      _applyFix(fix, focus: !centered || moved > max(30, fix.accuracyM));
+      setState(() => _locating = false);
+      unawaited(_startLiveLocation(requireReady: false));
     } catch (error) {
       if (!mounted) return;
       setState(() => _locating = false);
@@ -567,6 +804,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
                             resetToken: _resetToken,
                             zoomDelta: _zoomDelta,
                             userPoint: _userPoint,
+                            userHeading: _userPoint == null
+                                ? null
+                                : _userHeading,
                             focusToken: _focusToken,
                             markerPlaces: _markerPlaces(),
                             viewportInsets: wide
@@ -631,10 +871,26 @@ class _CampusMapPageState extends State<CampusMapPage> {
                       right: 16,
                       top: safe.top + 120,
                       bottom: (wide ? 24.0 : constraints.maxHeight * .43) + 16,
-                      child: LayoutBuilder(
-                        builder: (context, band) => Align(
-                          alignment: Alignment.center,
-                          child: _floorSelector(band.maxHeight),
+                      child: AnimatedBuilder(
+                        animation: _sheet,
+                        builder: (context, child) {
+                          // 面板拉高时楼层用面板里的页签切换，侧边楼层条让位。
+                          final hidden =
+                              !wide && _sheet.isAttached && _sheet.size >= .2;
+                          return IgnorePointer(
+                            ignoring: hidden,
+                            child: AnimatedOpacity(
+                              opacity: hidden ? 0 : 1,
+                              duration: const Duration(milliseconds: 150),
+                              child: hidden ? const SizedBox.shrink() : child,
+                            ),
+                          );
+                        },
+                        child: LayoutBuilder(
+                          builder: (context, band) => Align(
+                            alignment: Alignment.center,
+                            child: _floorSelector(band.maxHeight),
+                          ),
                         ),
                       ),
                     ),
@@ -688,9 +944,15 @@ class _CampusMapPageState extends State<CampusMapPage> {
                       controller: _sheet,
                       initialChildSize: .33,
                       minChildSize: 0,
-                      maxChildSize: .88,
+                      maxChildSize: _sheetMaxSize = _maxSheetSize(
+                        constraints.maxHeight,
+                        safe.bottom,
+                      ),
                       snap: true,
-                      snapSizes: const [.33, .55, .88],
+                      snapSizes: [
+                        for (final size in const [.33, .55, .88])
+                          if (size <= _sheetMaxSize) size,
+                      ],
                       builder: (context, controller) => Container(
                         decoration: BoxDecoration(
                           color: colors.surface,
@@ -748,7 +1010,26 @@ class _CampusMapPageState extends State<CampusMapPage> {
                                     ),
                                   ),
                                 ),
-                                ..._panelChildren(),
+                                if (_isHomePanel)
+                                  _SizeReporter(
+                                    onHeight: (height) {
+                                      if ((height - (_homeContentHeight ?? 0))
+                                              .abs() <
+                                          1) {
+                                        return;
+                                      }
+                                      setState(
+                                        () => _homeContentHeight = height,
+                                      );
+                                    },
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: _panelChildren(),
+                                    ),
+                                  )
+                                else
+                                  ..._panelChildren(),
                               ],
                             ),
                           ),
@@ -766,6 +1047,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
                       animation: _sheet,
                       builder: (context, _) {
                         final size = _sheet.isAttached ? _sheet.size : .33;
+                        if (size > .5) return const SizedBox.shrink();
                         return Positioned(
                           left: 16,
                           bottom:
@@ -891,6 +1173,25 @@ class _CampusMapPageState extends State<CampusMapPage> {
     _expandSheet(_place == null ? .33 : .43);
   }
 
+  /// 是否是校园总览的「发现」面板（未选地点、无路线、未搜索、未选分类）。
+  /// 这时内容很短，面板高度按内容来。
+  bool get _isHomePanel =>
+      _place == null &&
+      _route == null &&
+      _category == null &&
+      _search.text.trim().isEmpty;
+
+  /// 面板最大高度（占屏比例）：总览时 = 拖动条 + 内容 + 底部留白，
+  /// 夹在 [.33, .88] 之间；其余情况保持 .88。
+  double _maxSheetSize(double screenHeight, double bottomInset) {
+    final content = _homeContentHeight;
+    if (!_isHomePanel || content == null || screenHeight <= 0) return .88;
+    const handle = 28.0, bottomPadding = 24.0;
+    final fraction =
+        (handle + content + bottomPadding + bottomInset) / screenHeight;
+    return fraction.clamp(.33, .88);
+  }
+
   /// 面板内容拆成列表项交给 ListView 懒构建：分类列表可能有几百个地点，
   /// 不能塞进一个 Column 一次性全部布局。
   List<Widget> _panelChildren() {
@@ -901,17 +1202,19 @@ class _CampusMapPageState extends State<CampusMapPage> {
   }
 
   CampusExplorePanel _explorePanel() => CampusExplorePanel(
-    search: _search,
-    searchFocus: _searchFocus,
+    query: _search.text,
     category: _category,
     // 未搜索且未选分类时只展示随机抽样的 10 个地点。
     places: _searchResults ?? (_category == null ? _explore : _campus.places),
+    allPlaces: _campus.places,
+    userPoint: _userPoint,
+    weekClasses: _weekClasses,
+    onShuffle: _randomPlace,
     loading: _loading || _searchLoading,
     error: _searchError ?? _error,
-    onSearchFocus: () => _expandSheet(.88),
     onCategory: (value) {
       setState(() => _category = value);
-      _expandSheet(.55);
+      _expandSheetAfterFrame(.55);
     },
     onRefresh: _refreshCampus,
     onSelect: _selectPlace,
@@ -988,6 +1291,18 @@ class _CampusMapPageState extends State<CampusMapPage> {
                     : null,
                 onStreet: () => _openStreet(_place!),
                 onRetryFloor: () => _selectFloor(_floor!),
+                onFloor: _selectFloor,
+                // 只有楼宇（不是 POI / 通用地物）才和课表联动。
+                weekClasses: _place!.poiId == null && _place!.featureId == null
+                    ? classesInBuilding(_weekClasses, _place!)
+                    : const [],
+                // 本周有课但不在这栋楼：卡片显示一句提示，而不是整块消失。
+                hasWeekClasses:
+                    _place!.poiId == null &&
+                    _place!.featureId == null &&
+                    _weekClasses.isNotEmpty,
+                onClass: _openClass,
+                locatingClass: _locatingClass,
                 onRoom: (room) {
                   _routeRevision++;
                   setState(() {
@@ -1052,42 +1367,43 @@ class _CampusMapPageState extends State<CampusMapPage> {
     ),
   );
 
-  /// 地图顶部常驻的搜索入口（仿主流地图 App）：点一下展开面板并聚焦搜索框。
-  /// 已输入关键词时显示当前关键词，方便确认地图上标注的是哪次搜索。
-  Widget _topSearchBar() {
-    final query = _search.text.trim();
-    return MapSurface(
-      radius: 16,
-      child: InkWell(
-        onTap: () {
-          _expandSheet(.88);
-          _searchFocus.requestFocus();
-        },
-        child: SizedBox(
-          height: 48,
-          child: Row(
-            children: [
-              const SizedBox(width: 14),
-              Icon(Icons.search_rounded, size: 21, color: colors.secondary),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  query.isEmpty ? '搜索地点、楼宇' : query,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: query.isEmpty ? colors.secondary : colors.ink,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-            ],
+  /// 地图顶部常驻的搜索框（全页唯一）：点一下就地变成输入框，结果出现在下方面板，
+  /// 地图同步标出结果。
+  Widget _topSearchBar() => MapSurface(
+    radius: 16,
+    child: SizedBox(
+      height: 48,
+      child: TextField(
+        controller: _search,
+        focusNode: _searchFocus,
+        onTap: () => _expandSheet(.88),
+        textInputAction: TextInputAction.search,
+        onSubmitted: (_) => _expandSheet(.55),
+        style: TextStyle(fontSize: 15, color: colors.ink),
+        decoration: InputDecoration(
+          hintText: '搜索地点、楼宇',
+          hintStyle: TextStyle(color: colors.secondary, fontSize: 14),
+          prefixIcon: Icon(
+            Icons.search_rounded,
+            size: 21,
+            color: colors.secondary,
           ),
+          suffixIcon: _search.text.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: '清除搜索',
+                  onPressed: () {
+                    _search.clear();
+                    _searchFocus.unfocus();
+                  },
+                  icon: const Icon(Icons.cancel_rounded, size: 20),
+                ),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 14),
         ),
       ),
-    );
-  }
+    ),
+  );
 
   /// 地图上的结果标注：有搜索词或选了分类时，把面板列表里的地点同步标到图上。
   /// 输入不变时返回同一个列表引用，避免原生端重复重建标注图层。
@@ -1354,5 +1670,31 @@ class _CampusMapPageState extends State<CampusMapPage> {
         );
       },
     );
+  }
+}
+
+/// 布局后把子组件高度报给 [onHeight]（高度变化才回调）。
+class _SizeReporter extends StatefulWidget {
+  const _SizeReporter({required this.onHeight, required this.child});
+  final ValueChanged<double> onHeight;
+  final Widget child;
+
+  @override
+  State<_SizeReporter> createState() => _SizeReporterState();
+}
+
+class _SizeReporterState extends State<_SizeReporter> {
+  double? _reported;
+
+  @override
+  Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final height = context.size?.height;
+      if (height == null || height == _reported) return;
+      _reported = height;
+      widget.onHeight(height);
+    });
+    return widget.child;
   }
 }

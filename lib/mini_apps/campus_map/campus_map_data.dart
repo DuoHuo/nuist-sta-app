@@ -1,3 +1,5 @@
+import 'dart:math';
+
 /// Categories assigned by the campus data service.
 enum PlaceCategory { study, food, sports, services }
 
@@ -58,6 +60,26 @@ class GeoPoint {
       longitude <= 180 &&
       latitude >= -90 &&
       latitude <= 90;
+}
+
+/// 两点的近似距离（米）。校园尺度下等距投影足够准。
+double metersBetween(GeoPoint a, GeoPoint b) {
+  const metersPerDegree = 111320.0;
+  final dLat = (a.latitude - b.latitude) * metersPerDegree;
+  final dLng =
+      (a.longitude - b.longitude) *
+      metersPerDegree *
+      cos(a.latitude * pi / 180);
+  return sqrt(dLat * dLat + dLng * dLng);
+}
+
+/// 步行时间文案：按直线距离、每分钟约 80 米估算，所以带「约」。
+String walkingLabel(double meters) {
+  if (meters < 60) return '就在附近';
+  final minutes = (meters / 80).ceil();
+  return minutes > 60
+      ? '约 ${(meters / 1000).toStringAsFixed(1)} 公里'
+      : '约步行 $minutes 分钟';
 }
 
 /// Place metadata supplied by the backend. No local campus records are seeded.
@@ -224,10 +246,19 @@ class CampusRoom {
     this.isFacility = false,
     this.poiId,
     this.navNodeId,
+    this.category,
+    this.roomCode,
   });
 
   final int? poiId;
   final int? navNodeId;
+
+  /// 后端室内要素的 category（classroom / toilet / stair / service…），
+  /// 面板按它给房间分组；缺失时为 null，不按名称猜。
+  final String? category;
+
+  /// 门牌号（如 N101），没有时为 null。
+  final String? roomCode;
 
   final String id;
   final String name;

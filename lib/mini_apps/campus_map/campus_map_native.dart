@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'campus_map_canvas.dart';
 import 'campus_map_data.dart';
+import 'campus_map_heading.dart';
 import 'campus_map_panels.dart';
 
 /// 赤道周长（米），Web Mercator 的标准常量。
@@ -131,6 +135,7 @@ class _CampusMapNativeState extends State<CampusMapNative> {
     }
     // 图层按组比对签名，只有输入真正变化的组才会重建（见 _sync）。
     final layersChanged = !_sameKeys(_keysFor(old), _keysFor(config));
+    if (old.userHeading != config.userHeading) _syncHeading();
     // 面板拖动只调整相机内缩，不必重建图层。
     if (layersChanged) {
       _enqueue(sync: true);
@@ -234,7 +239,8 @@ class _CampusMapNativeState extends State<CampusMapNative> {
       [v.showRoute, v.routeGeoJson, v.floor?.id, _selectedBuildingId(v)],
       [v.streetCoverage, v.streetCoverageGeoJson],
       [v.markerPlaces, indoor, v.selectedPlace?.id],
-      [user?.latitude, user?.longitude],
+      // 朝向只看「有没有」：角度变化走 _syncHeading，不重建图层。
+      [user?.latitude, user?.longitude, v.userHeading != null],
     ];
   }
 
@@ -328,6 +334,34 @@ class _CampusMapNativeState extends State<CampusMapNative> {
     }
   }
 
+  String? _symbolStyle;
+  String? _symbolLayerId;
+
+  /// 底图样式里第一个 symbol（文字/图标）图层的 id，按样式串缓存。
+  /// 样式是地址而非内联 JSON、或没有文字图层时返回 null（照旧叠在最上层）。
+  String? _firstSymbolLayerId(String style) {
+    if (style == _symbolStyle) return _symbolLayerId;
+    _symbolStyle = style;
+    _symbolLayerId = null;
+    try {
+      final parsed = jsonDecode(style);
+      final layers = parsed is Map ? parsed['layers'] : null;
+      if (layers is List) {
+        for (final layer in layers) {
+          if (layer is Map &&
+              layer['type'] == 'symbol' &&
+              layer['id'] is String) {
+            _symbolLayerId = layer['id'] as String;
+            break;
+          }
+        }
+      }
+    } catch (_) {
+      // 非 JSON（样式地址）：无从得知图层顺序。
+    }
+    return _symbolLayerId;
+  }
+
   Future<void> _addCity3d(
     MapLibreMapController c,
     CampusMapCanvas value,
@@ -380,6 +414,9 @@ class _CampusMapNativeState extends State<CampusMapNative> {
           fillExtrusionHeight: const ['get', 'height_m'],
         ),
         enableInteraction: false,
+        // 插在底图第一个文字图层下面：自绘图层默认叠在整套样式最上层，
+        // 体块会把楼名、道路名等底图标注盖住。
+        belowLayerId: _firstSymbolLayerId(value.styleUrl),
       );
       _layer('campus-city3d-volume');
     }
@@ -498,6 +535,18 @@ class _CampusMapNativeState extends State<CampusMapNative> {
           },
         ],
       });
+      // 朝向光束：画在蓝点下面，随手机朝向转动（相对正北，地图旋转时自动跟着转）。
+      if (value.userHeading != null) {
+        await c.addImage(_headingImage, await _headingBeam());
+        await c.addSymbolLayer(
+          'campus-user',
+          'campus-user-heading',
+          _headingProps(value.userHeading!),
+          enableInteraction: false,
+        );
+        _layer('campus-user-heading');
+        _appliedHeading = value.userHeading;
+      }
       await c.addCircleLayer(
         'campus-user',
         'campus-user-halo',
@@ -522,6 +571,88 @@ class _CampusMapNativeState extends State<CampusMapNative> {
       );
       _layer('campus-user-dot');
     }
+  }
+
+  static const _headingImage = 'campus-user-heading-beam';
+
+  /// 光束图标的逻辑尺寸（dp），蓝点在正中，扇形朝上。
+  static const double _beamSize = 76;
+  Uint8List? _beamBytes;
+  double? _beamRatio;
+  double? _appliedHeading;
+  DateTime _headingSentAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// 朝向光束图：按屏幕像素密度绘制，插件按设备密度解码，显示出来就是 [_beamSize] dp。
+  Future<Uint8List> _headingBeam() async {
+    final ratio = MediaQuery.devicePixelRatioOf(context);
+    final cached = _beamBytes;
+    if (cached != null && _beamRatio == ratio) return cached;
+    final size = _beamSize * ratio;
+    final center = Offset(size / 2, size / 2);
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final radius = size / 2;
+    final beam = Path()
+      ..moveTo(center.dx, center.dy)
+      ..arcTo(
+        Rect.fromCircle(center: center, radius: radius),
+        -pi / 2 - pi / 5,
+        2 * pi / 5,
+        false,
+      )
+      ..close();
+    canvas.drawPath(
+      beam,
+      Paint()
+        ..shader = ui.Gradient.radial(center, radius, const [
+          Color(0x991475F5),
+          Color(0x001475F5),
+        ]),
+    );
+    final image = await recorder.endRecording().toImage(
+      size.ceil(),
+      size.ceil(),
+    );
+    final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    final bytes = data!.buffer.asUint8List();
+    _beamBytes = bytes;
+    _beamRatio = ratio;
+    return bytes;
+  }
+
+  SymbolLayerProperties _headingProps(double heading) => SymbolLayerProperties(
+    iconImage: _headingImage,
+    iconRotate: heading,
+    iconRotationAlignment: 'map',
+    iconPitchAlignment: 'map',
+    iconAllowOverlap: true,
+    iconIgnorePlacement: true,
+    iconAnchor: 'center',
+  );
+
+  /// 朝向变化只改图层的旋转角，不重建定位图层；转动不足 3° 或间隔不足 80ms 时跳过。
+  void _syncHeading() {
+    final c = _controller;
+    final heading = config.userHeading;
+    if (c == null || heading == null || !_hasLayer('campus-user-heading')) {
+      return;
+    }
+    final applied = _appliedHeading;
+    final now = DateTime.now();
+    if (applied != null &&
+        (headingDelta(applied, heading).abs() < 3 ||
+            now.difference(_headingSentAt) <
+                const Duration(milliseconds: 80))) {
+      return;
+    }
+    _appliedHeading = heading;
+    _headingSentAt = now;
+    unawaited(
+      c
+          .setLayerProperties('campus-user-heading', _headingProps(heading))
+          .catchError((Object _) {}),
+    );
   }
 
   Future<void> _addCurrentFloor(
@@ -781,6 +912,16 @@ class _CampusMapNativeState extends State<CampusMapNative> {
       );
       _layer('campus-selected-feature');
     }
+    // 楼宇/地物已有轮廓高亮（3D 下体块染色）时不再落图钉，免得盖住楼名；
+    // 只有 POI 这类没有轮廓的点位才用图钉标出。
+    final outlined =
+        _hasLayer('campus-selected-fill') ||
+        _hasLayer('campus-selected-feature') ||
+        (city3d &&
+            place.poiId == null &&
+            featureId == null &&
+            _hasLayer('campus-city3d-volume'));
+    if (outlined) return;
     final center = place.center ?? place.entrance;
     if (center == null || !center.isValid) return;
     await _source(c, 'campus-selected-pin', {

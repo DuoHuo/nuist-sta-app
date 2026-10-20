@@ -53,6 +53,8 @@ dependencies:
   # 课表：网络恢复后补同步。7.3.2 起依赖 dbus ^0.8，与 geolocator_linux 0.2.6 冲突。
   connectivity_plus: ^7.3.1
   package_info_plus: ^10.2.2
+  # 校园地图：加速度计 + 磁力计算朝向，画定位蓝点的方向箭头。
+  sensors_plus: ^7.1.1
 
 dev_dependencies:
   flutter_test:

@@ -34,6 +34,7 @@ class CampusMapCanvas extends StatelessWidget {
     this.zoomDelta = 0,
     this.useNativeMap = true,
     this.userPoint,
+    this.userHeading,
     this.focusToken = 0,
     this.viewportInsets = EdgeInsets.zero,
     this.markerPlaces = const [],
@@ -70,6 +71,9 @@ class CampusMapCanvas extends StatelessWidget {
   final int zoomDelta;
   final bool useNativeMap;
   final GeoPoint? userPoint;
+
+  /// 手机朝向（度，0 = 正北，顺时针）；为空时蓝点不画朝向光束。
+  final double? userHeading;
   final int focusToken;
 
   /// 被面板/卡片遮挡的区域（逻辑像素）。选中楼宇时相机按此内缩，

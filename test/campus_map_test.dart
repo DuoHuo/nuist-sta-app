@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/colors.dart';
+import 'package:nuist_sta_app/core/schedule/weekly_classes.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_location.dart';
@@ -150,7 +151,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('室内'));
       await tester.pump();
-      await tester.tap(find.text('L2'));
+      // 宽屏下右侧楼层条和面板里的楼层页签同时存在，点面板页签（后渲染的那个）。
+      expect(find.text('L2'), findsNWidgets(2));
+      await tester.tap(find.text('L2').last);
       await tester.pumpAndSettle();
       expect(find.text('upper 房间'), findsOneWidget);
       source.slowFloor!.complete(
@@ -237,6 +240,47 @@ void main() {
     expect(materialColors(), isNot(contains(Colors.white)));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('楼宇卡片显示本周在这栋楼的课，别的楼的课不算', (tester) async {
+    WeeklyClasses.source = const _FixedWeek([
+      WeeklyClass(
+        courseName: '高等数学',
+        location: '测试楼宇A101',
+        weekday: 2,
+        startNode: 3,
+        endNode: 4,
+      ),
+      WeeklyClass(
+        courseName: '大学英语',
+        location: '其他楼B202',
+        weekday: 3,
+        startNode: 1,
+        endNode: 2,
+      ),
+    ]);
+    addTearDown(() => WeeklyClasses.source = null);
+    await mount(tester, source: TestSource());
+    // 总览面板：「你本周常去」只算在测试楼宇的那节课。
+    expect(find.text('测试楼宇 · 1 节'), findsOneWidget);
+    // 手机尺寸下面板只露出三分之一，先点拖动条把面板展开。
+    await tester.tap(find.bySemanticsLabel('展开地图面板'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('随机去个地方'), findsOneWidget);
+    await tester.tap(find.text('测试楼宇'));
+    await tester.pumpAndSettle();
+    expect(find.text('本周在这里有 1 节课'), findsOneWidget);
+    expect(find.text('高等数学'), findsOneWidget);
+    expect(find.text('A101'), findsOneWidget);
+    expect(find.text('大学英语'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+}
+
+class _FixedWeek implements WeeklyClassSource {
+  const _FixedWeek(this.classes);
+  final List<WeeklyClass> classes;
+  @override
+  Future<List<WeeklyClass>> thisWeek() async => classes;
 }
 
 class _FailingLocation implements UserLocationSource {

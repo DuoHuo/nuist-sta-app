@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/schedule/weekly_classes.dart';
 import 'campus_map_data.dart';
+import 'campus_map_schedule.dart';
 import 'campus_map_source.dart';
 import 'campus_map_widgets.dart';
 
@@ -20,101 +22,182 @@ List<CampusPlace> filterPlaces(
       .toList();
 }
 
+/// 本周上课的楼宇及节数（课表联动，按节数从多到少）。
+List<({CampusPlace place, int count})> weekBuildings(
+  List<WeeklyClass> classes,
+  List<CampusPlace> places,
+) {
+  final buildings = [
+    for (final place in places)
+      if (place.poiId == null &&
+          place.featureId == null &&
+          place.name.trim().length >= 2 &&
+          !place.name.startsWith('未命名'))
+        place,
+  ];
+  final counts = <String, int>{};
+  final byId = <String, CampusPlace>{};
+  for (final item in classes) {
+    // 同一地点可能同时以多个楼名开头（如「理科楼」「理科楼东」），取最长的那个。
+    CampusPlace? best;
+    for (final place in buildings) {
+      if (!locationInBuilding(item.location, place.name)) continue;
+      if (best == null || place.name.length > best.name.length) best = place;
+    }
+    if (best == null) continue;
+    counts[best.id] = (counts[best.id] ?? 0) + 1;
+    byId[best.id] = best;
+  }
+  final result = [
+    for (final entry in counts.entries)
+      (place: byId[entry.key]!, count: entry.value),
+  ]..sort((a, b) => b.count.compareTo(a.count));
+  return result;
+}
+
+/// 「离你最近」：有位置时按直线距离取最近的 [limit] 栋建筑（不含 POI 和
+/// 道路、绿地等通用地物），只要有名字、有坐标的。
+List<CampusPlace> nearestPlaces(
+  List<CampusPlace> places,
+  GeoPoint from, {
+  int limit = 10,
+}) {
+  final candidates = [
+    for (final place in places)
+      if (place.poiId == null &&
+          place.featureId == null &&
+          place.center != null &&
+          place.center!.isValid &&
+          place.name.trim().isNotEmpty &&
+          !place.name.startsWith('未命名'))
+        place,
+  ];
+  candidates.sort(
+    (a, b) => metersBetween(
+      from,
+      a.center!,
+    ).compareTo(metersBetween(from, b.center!)),
+  );
+  return candidates.take(limit).toList();
+}
+
+/// 校园总览面板。搜索框在地图顶部（只有一个），这里放推荐、本周上课的楼、
+/// 分类、附近 / 随机地点卡片和结果列表。
 class CampusExplorePanel extends StatelessWidget {
   const CampusExplorePanel({
     super.key,
-    required this.search,
-    this.searchFocus,
+    required this.query,
     required this.category,
     required this.places,
     required this.loading,
     required this.error,
-    required this.onSearchFocus,
     required this.onCategory,
     required this.onRefresh,
     required this.onSelect,
+    this.allPlaces = const [],
+    this.userPoint,
+    this.weekClasses = const [],
+    this.onShuffle,
   });
-  final TextEditingController search;
-  final FocusNode? searchFocus;
+
+  /// 顶部搜索栏当前的关键词。
+  final String query;
   final PlaceCategory? category;
   final List<CampusPlace> places;
+
+  /// 全部地点：附近排序、本周上课的楼都从这里算。
+  final List<CampusPlace> allPlaces;
   final bool loading;
   final String? error;
-  final VoidCallback onSearchFocus, onRefresh;
+  final VoidCallback onRefresh;
   final ValueChanged<PlaceCategory?> onCategory;
   final ValueChanged<CampusPlace> onSelect;
+
+  /// 当前位置；有它时卡片按距离排序并显示步行时间。
+  final GeoPoint? userPoint;
+
+  /// 本周课程（课表联动）。
+  final List<WeeklyClass> weekClasses;
+
+  /// 「随机去个地方」（骰子按钮）。
+  final VoidCallback? onShuffle;
+
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: children(context),
   );
 
+  String? _walking(CampusPlace place) {
+    final from = userPoint;
+    final to = place.center;
+    if (from == null || to == null || !to.isValid) return null;
+    return walkingLabel(metersBetween(from, to));
+  }
+
   /// 面板的各个列表项。放进 ListView 时逐项懒构建，地点再多也只布局可见部分。
   List<Widget> children(BuildContext context) {
     final colors = MapPalette.of(context);
-    final query = search.text.trim().toLowerCase();
-    final results = filterPlaces(places, category, query);
+    final q = query.trim().toLowerCase();
+    final searching = q.isNotEmpty;
+    // 未搜索、未选分类时是「发现」模式：卡片横排；否则是结果列表。
+    final discover = !searching && category == null;
+    final located = userPoint != null && userPoint!.isValid;
+    final cards = discover
+        ? (located ? nearestPlaces(allPlaces, userPoint!) : places)
+        : const <CampusPlace>[];
+    final results = discover
+        ? const <CampusPlace>[]
+        : filterPlaces(places, category, q);
+    final buildings = searching
+        ? const <({CampusPlace place, int count})>[]
+        : weekBuildings(weekClasses, allPlaces);
     return [
-      TextField(
-        controller: search,
-        focusNode: searchFocus,
-        onTap: onSearchFocus,
-        style: const TextStyle(fontSize: 15),
-        decoration: InputDecoration(
-          hintText: '搜索地点、楼宇',
-          hintStyle: TextStyle(color: colors.secondary),
-          prefixIcon: Icon(
-            Icons.search_rounded,
-            color: colors.secondary,
-            size: 22,
-          ),
-          suffixIcon: search.text.isEmpty
-              ? null
-              : IconButton(
-                  tooltip: '清除搜索',
-                  onPressed: search.clear,
-                  icon: const Icon(Icons.cancel_rounded, size: 20),
-                ),
-          filled: true,
-          fillColor: colors.field,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide.none,
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide(color: colors.blue),
-          ),
-          contentPadding: const EdgeInsets.symmetric(vertical: 15),
-        ),
-      ),
-      const SizedBox(height: 16),
-      // 四个分类入口等宽铺满整行、内容居中（各占 1/4）。
-      // 原先靠左排 + 固定右间距，右侧会留出空白，看着像没对齐。
-      Row(
-        children: [
-          for (final item in PlaceCategory.values)
-            Expanded(
-              child: _CategoryBadge(
-                category: item,
-                selected: category == item,
-                onTap: () => onCategory(category == item ? null : item),
-              ),
-            ),
+      if (!searching) ...[
+        if (buildings.isNotEmpty) ...[
+          _WeekBuildings(buildings: buildings, onSelect: onSelect),
+          const SizedBox(height: 14),
         ],
-      ),
-      const SizedBox(height: 20),
+        // 四个分类入口等宽铺满整行、内容居中（各占 1/4）。
+        Row(
+          children: [
+            for (final item in PlaceCategory.values)
+              Expanded(
+                child: _CategoryBadge(
+                  category: item,
+                  selected: category == item,
+                  onTap: () => onCategory(category == item ? null : item),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 20),
+      ],
       MapSectionTitle(
-        query.isNotEmpty
+        searching
             ? '搜索结果'
-            : category == null
-            ? '探索校园'
-            : categoryName(category!),
-        trailing: MapIconButton(
-          icon: Icons.refresh_rounded,
-          label: '刷新地点',
-          onPressed: loading ? null : onRefresh,
-          color: colors.secondary,
+            : category != null
+            ? categoryName(category!)
+            : located
+            ? '离你最近'
+            : '随便逛逛',
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (onShuffle != null && !searching)
+              MapIconButton(
+                icon: Icons.casino_rounded,
+                label: '随机去个地方',
+                onPressed: loading || allPlaces.isEmpty ? null : onShuffle,
+                color: colors.blue,
+              ),
+            MapIconButton(
+              icon: Icons.refresh_rounded,
+              label: discover && !located ? '换一批' : '刷新地点',
+              onPressed: loading ? null : onRefresh,
+              color: colors.secondary,
+            ),
+          ],
         ),
       ),
       const SizedBox(height: 10),
@@ -130,22 +213,23 @@ class CampusExplorePanel extends StatelessWidget {
           description: '检查网络连接后，再试一次。',
           action: TextButton(onPressed: onRefresh, child: const Text('重新加载')),
         )
-      else if (results.isEmpty)
-        MapEmptyState(
-          icon: query.isNotEmpty
-              ? Icons.search_off_rounded
-              : Icons.place_outlined,
-          title: query.isNotEmpty ? '没有找到相关地点' : '暂无地点信息',
-          description: query.isNotEmpty ? '试试其他楼宇名称或清除分类。' : '地点信息接入后，将在这里显示。',
-        )
-      else
+      else if (discover && cards.isNotEmpty)
+        _ExploreCarousel(places: cards, walking: _walking, onSelect: onSelect)
+      else if (!discover && results.isNotEmpty)
         for (var i = 0; i < results.length; i++)
           _PlaceRow(
             place: results[i],
             first: i == 0,
             last: i == results.length - 1,
+            trailingLabel: _walking(results[i]),
             onTap: () => onSelect(results[i]),
-          ),
+          )
+      else
+        MapEmptyState(
+          icon: searching ? Icons.search_off_rounded : Icons.place_outlined,
+          title: searching ? '没有找到相关地点' : '暂无地点信息',
+          description: searching ? '试试其他楼宇名称或清除分类。' : '地点信息接入后，将在这里显示。',
+        ),
       const SizedBox(height: 24),
       Row(
         children: [
@@ -153,7 +237,7 @@ class CampusExplorePanel extends StatelessWidget {
           const SizedBox(width: 7),
           Expanded(
             child: Text(
-              '选择楼宇后可查看室内地图与可用楼层',
+              located ? '步行时间按直线距离估算' : '选择楼宇后可查看室内地图与可用楼层',
               style: TextStyle(
                 fontSize: 12,
                 color: colors.secondary,
@@ -167,6 +251,228 @@ class CampusExplorePanel extends StatelessWidget {
   }
 }
 
+/// 「你本周常去」：本周上课的楼，按节数排；点一下直接选中这栋楼。
+class _WeekBuildings extends StatelessWidget {
+  const _WeekBuildings({required this.buildings, required this.onSelect});
+  final List<({CampusPlace place, int count})> buildings;
+  final ValueChanged<CampusPlace> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    final total = buildings.fold<int>(0, (sum, b) => sum + b.count);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.event_note_rounded, size: 16, color: colors.blue),
+            const SizedBox(width: 6),
+            Text(
+              '你本周常去 · 共 $total 节课',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: colors.secondary,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final item in buildings.take(6))
+              Material(
+                color: colors.blue.withValues(alpha: .10),
+                borderRadius: BorderRadius.circular(20),
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: () => onSelect(item.place),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    child: Text(
+                      '${item.place.name} · ${item.count} 节',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: colors.blue,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// 地点卡片横排：分类色顶栏 + 名称 + 步行时间 / 分类，左右滑动浏览。
+class _ExploreCarousel extends StatelessWidget {
+  const _ExploreCarousel({
+    required this.places,
+    required this.walking,
+    required this.onSelect,
+  });
+  final List<CampusPlace> places;
+  final String? Function(CampusPlace) walking;
+  final ValueChanged<CampusPlace> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
+    // 卡片高度随字号放大，大字体下也不溢出。
+    final height =
+        56 + scaler.scale(15) * 1.35 * 2 + scaler.scale(12) * 1.4 + 34;
+    return SizedBox(
+      height: height,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        clipBehavior: Clip.none,
+        itemCount: places.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 10),
+        itemBuilder: (context, index) => _ExploreCard(
+          place: places[index],
+          walking: walking(places[index]),
+          onTap: () => onSelect(places[index]),
+        ),
+      ),
+    );
+  }
+}
+
+class _ExploreCard extends StatelessWidget {
+  const _ExploreCard({
+    required this.place,
+    required this.walking,
+    required this.onTap,
+  });
+  final CampusPlace place;
+  final String? walking;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    final color = categoryColor(place.category);
+    final indoor = place.hasIndoor && place.floors.isNotEmpty;
+    return SizedBox(
+      width: 148,
+      child: Material(
+        color: colors.panel,
+        borderRadius: BorderRadius.circular(18),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                height: 56,
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(12, 10, 10, 0),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [color, Color.lerp(color, Colors.black, .25)!],
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      categoryIcon(place.category),
+                      color: Colors.white,
+                      size: 26,
+                    ),
+                    const Spacer(),
+                    if (indoor)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: .25),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          '室内图',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 9, 12, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        place.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          height: 1.3,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Spacer(),
+                      Row(
+                        children: [
+                          Icon(
+                            walking != null
+                                ? Icons.directions_walk_rounded
+                                : Icons.place_outlined,
+                            size: 14,
+                            color: walking != null ? colors.blue : colors.muted,
+                          ),
+                          const SizedBox(width: 3),
+                          Expanded(
+                            child: Text(
+                              walking ??
+                                  (place.subtitle.isNotEmpty
+                                      ? place.subtitle
+                                      : categoryName(place.category)),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: walking != null
+                                    ? colors.blue
+                                    : colors.secondary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 地点列表的一行。每行自带所在分组的圆角与分隔线，
 /// 这样整组可以拆成独立列表项交给 ListView 懒构建。
 class _PlaceRow extends StatelessWidget {
@@ -175,10 +481,14 @@ class _PlaceRow extends StatelessWidget {
     required this.first,
     required this.last,
     required this.onTap,
+    this.trailingLabel,
   });
   final CampusPlace place;
   final bool first, last;
   final VoidCallback onTap;
+
+  /// 行尾的步行时间（有定位时）；为空只显示箭头。
+  final String? trailingLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -228,11 +538,20 @@ class _PlaceRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12, color: colors.secondary),
                   ),
-            trailing: Icon(
-              Icons.chevron_right_rounded,
-              color: colors.secondary,
-              size: 20,
-            ),
+            trailing: trailingLabel == null
+                ? Icon(
+                    Icons.chevron_right_rounded,
+                    color: colors.secondary,
+                    size: 20,
+                  )
+                : Text(
+                    trailingLabel!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: colors.blue,
+                    ),
+                  ),
             onTap: onTap,
           ),
         ],
@@ -259,8 +578,13 @@ class CampusPlacePanel extends StatelessWidget {
     required this.onRetryFloor,
     required this.onRoom,
     required this.onCloseRoute,
+    this.onFloor,
     this.mediaEntry,
     this.onDetail,
+    this.weekClasses = const [],
+    this.hasWeekClasses = false,
+    this.onClass,
+    this.locatingClass,
   });
   final CampusPlace place;
   final CampusFloor? floor;
@@ -272,43 +596,91 @@ class CampusPlacePanel extends StatelessWidget {
   final VoidCallback onClose, onStreet, onRetryFloor, onCloseRoute;
   final VoidCallback? onRoute, onIndoor;
   final ValueChanged<CampusRoom> onRoom;
+
+  /// 室内模式下切换楼层（面板里的楼层页签）。
+  final ValueChanged<CampusFloor>? onFloor;
+
+  /// 媒体入口（实拍图片）。没有内容时它自己不占位，间距也由它负责。
   final Widget? mediaEntry;
 
   /// 打开该地物的完整详情页；为空时不显示入口（例如房间预览）。
   final VoidCallback? onDetail;
+
+  /// 本周在这栋楼里的课（课表联动）；为空时不显示卡片。
+  final List<WeeklyClass> weekClasses;
+
+  /// 课表本周是否有任何课（决定这栋楼没课时是否显示「这里没有你的课」）。
+  final bool hasWeekClasses;
+
+  /// 点一节课：进室内并定位到教室。
+  final ValueChanged<WeeklyClass>? onClass;
+
+  /// 正在查找教室的那节课。
+  final WeeklyClass? locatingClass;
+
   @override
   Widget build(BuildContext context) {
     final colors = MapPalette.of(context);
+    final indoor = floor != null;
+    final color = categoryColor(place.category);
+    // 信息标签：只放真实字段，不重复楼名。
+    final chips = <Widget>[
+      if (place.category != null || place.kind != null)
+        _InfoChip(
+          icon: categoryIcon(place.category),
+          label: place.category != null
+              ? categoryName(place.category)
+              : featureKindLabel(place.kind),
+          color: color,
+        ),
+      if (room != null && floor != null)
+        _InfoChip(
+          icon: Icons.apartment_rounded,
+          label: '${place.name} · ${floor!.label}',
+        ),
+      if (room == null && place.floors.isNotEmpty)
+        _InfoChip(
+          icon: Icons.stacked_bar_chart_rounded,
+          label: '${place.floors.length} 层',
+        ),
+      if (room == null && place.hasIndoor && place.floors.isNotEmpty)
+        _InfoChip(
+          icon: Icons.layers_rounded,
+          label: '有室内图',
+          color: colors.green,
+        ),
+      if (room == null &&
+          place.subtitle.isNotEmpty &&
+          place.subtitle != place.name &&
+          place.subtitle != categoryName(place.category))
+        _InfoChip(icon: Icons.place_outlined, label: place.subtitle),
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 分类色竖条：一眼区分教学 / 餐饮 / 运动 / 服务。
+            Container(
+              width: 5,
+              height: 30,
+              margin: const EdgeInsets.only(top: 4, right: 12),
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    room?.name ?? place.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -.5,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    floor != null
-                        ? '${place.name} · ${floor!.label}'
-                        : place.subtitle.isEmpty
-                        ? categoryName(place.category)
-                        : place.subtitle,
-                    style: TextStyle(fontSize: 13, color: colors.secondary),
-                  ),
-                ],
+              child: Text(
+                room?.name ?? place.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -.5,
+                ),
               ),
             ),
             MapIconButton(
@@ -318,56 +690,84 @@ class CampusPlacePanel extends StatelessWidget {
             ),
           ],
         ),
+        if (chips.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Wrap(spacing: 6, runSpacing: 6, children: chips),
+        ],
         const SizedBox(height: 16),
-        // 主操作一行排开：路线（主按钮）/ 室内 / 详情 / 街景，
-        // 不再单独占一整行「查看详情」。
-        Row(
-          children: [
-            Expanded(
-              flex: 3,
-              child: MapAction(
-                icon: Icons.turn_right_rounded,
-                label: routing ? '规划中' : '路线',
-                primary: true,
-                onPressed: routing ? null : onRoute,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              flex: 2,
-              child: MapAction(
-                icon: floor != null
-                    ? Icons.map_outlined
-                    : Icons.layers_outlined,
-                label: floor != null ? '校园' : '室内',
-                onPressed: onIndoor,
-              ),
-            ),
-            if (onDetail != null) ...[
-              const SizedBox(width: 8),
+        // 主操作：路线是主按钮，其余三个「图标 + 文字」小方块，全部带文字。
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
               Expanded(
                 flex: 2,
                 child: MapAction(
-                  icon: Icons.article_outlined,
-                  label: '详情',
-                  onPressed: onDetail,
+                  icon: Icons.turn_right_rounded,
+                  label: routing ? '规划中' : '路线',
+                  primary: true,
+                  onPressed: routing ? null : onRoute,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _ActionTile(
+                  icon: indoor ? Icons.logout_rounded : Icons.layers_outlined,
+                  label: indoor ? '退出室内' : '室内',
+                  onPressed: onIndoor,
+                ),
+              ),
+              if (onDetail != null) ...[
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _ActionTile(
+                    icon: Icons.article_outlined,
+                    label: '详情',
+                    onPressed: onDetail,
+                  ),
+                ),
+              ],
+              const SizedBox(width: 8),
+              Expanded(
+                child: _ActionTile(
+                  icon: Icons.streetview_rounded,
+                  label: '街景',
+                  tooltip: '查看街景',
+                  onPressed: onStreet,
                 ),
               ),
             ],
-            const SizedBox(width: 8),
-            MapSurface(
-              radius: 15,
-              child: MapIconButton(
-                icon: Icons.streetview_rounded,
-                label: '查看街景',
-                color: colors.blue,
-                onPressed: onStreet,
-              ),
-            ),
-          ],
+          ),
         ),
         const SizedBox(height: 16),
-        if (mediaEntry != null) ...[mediaEntry!, const SizedBox(height: 16)],
+        if (!indoor && route == null && room == null && weekClasses.isNotEmpty)
+          _WeekClassesCard(
+            place: place,
+            classes: weekClasses,
+            onClass: onClass,
+            locatingClass: locatingClass,
+          )
+        else if (!indoor && route == null && room == null && hasWeekClasses)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.event_available_rounded,
+                  size: 17,
+                  color: colors.secondary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '本周课表里没有在这栋楼的课',
+                    style: TextStyle(fontSize: 13, color: colors.secondary),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ?mediaEntry,
         if (route != null) ...[
           MapSectionTitle(
             '路线指引',
@@ -386,6 +786,8 @@ class CampusPlacePanel extends StatelessWidget {
               title: Text(instruction),
             ),
         ] else if (floor != null) ...[
+          _FloorTabs(floors: place.floors, current: floor!, onFloor: onFloor),
+          const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
@@ -412,7 +814,7 @@ class CampusPlacePanel extends StatelessWidget {
                 style: TextStyle(color: colors.secondary, fontSize: 13),
               ),
             ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           if (floorLoading)
             const Center(
               child: Padding(
@@ -437,32 +839,7 @@ class CampusPlacePanel extends StatelessWidget {
               description: '楼层图与房间数据接入后显示。',
             )
           else
-            MapSurface(
-              radius: 18,
-              child: Column(
-                children: [
-                  for (final item in floorData.rooms)
-                    ListTile(
-                      leading: Icon(
-                        item.id == room?.id
-                            ? Icons.room_rounded
-                            : Icons.meeting_room_outlined,
-                        color: colors.blue,
-                      ),
-                      title: Text(
-                        item.name,
-                        style: const TextStyle(fontSize: 14),
-                      ),
-                      trailing: const Icon(
-                        Icons.chevron_right_rounded,
-                        size: 18,
-                      ),
-                      selected: item.id == room?.id,
-                      onTap: () => onRoom(item),
-                    ),
-                ],
-              ),
-            ),
+            _FloorRooms(rooms: floorData.rooms, selected: room, onRoom: onRoom),
         ] else ...[
           const MapSectionTitle('楼宇信息'),
           const SizedBox(height: 14),
@@ -491,6 +868,672 @@ class CampusPlacePanel extends StatelessWidget {
             ),
         ],
       ],
+    );
+  }
+}
+
+/// 楼宇卡片里的「本周在这里的课」：和课表联动，点一节课直接进室内定位到教室。
+class _WeekClassesCard extends StatefulWidget {
+  const _WeekClassesCard({
+    required this.place,
+    required this.classes,
+    required this.onClass,
+    this.locatingClass,
+  });
+  final CampusPlace place;
+  final List<WeeklyClass> classes;
+  final ValueChanged<WeeklyClass>? onClass;
+
+  /// 正在查找教室的那节课（显示进度）。
+  final WeeklyClass? locatingClass;
+
+  @override
+  State<_WeekClassesCard> createState() => _WeekClassesCardState();
+}
+
+class _WeekClassesCardState extends State<_WeekClassesCard> {
+  static const _collapsed = 3;
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    final classes = widget.classes;
+    final today = DateTime.now().weekday;
+    final visible = _expanded || classes.length <= _collapsed + 1
+        ? classes
+        : classes.take(_collapsed).toList();
+    final todayCount = classes.where((c) => c.weekday == today).length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Material(
+        color: colors.panel,
+        borderRadius: BorderRadius.circular(18),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: colors.blue.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: Icon(
+                      Icons.event_note_rounded,
+                      size: 20,
+                      color: colors.blue,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '本周在这里有 ${classes.length} 节课',
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          todayCount > 0
+                              ? '今天 $todayCount 节 · 点课程直达教室'
+                              : '点课程直达教室',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: colors.secondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            for (final item in visible) _classRow(context, item, today),
+            if (classes.length > visible.length || _expanded)
+              if (classes.length > _collapsed + 1)
+                TextButton(
+                  onPressed: () => setState(() => _expanded = !_expanded),
+                  child: Text(_expanded ? '收起' : '展开全部 ${classes.length} 节'),
+                ),
+            const SizedBox(height: 6),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _classRow(BuildContext context, WeeklyClass item, int today) {
+    final colors = MapPalette.of(context);
+    final code = roomCodeIn(item.location, widget.place.name);
+    final isToday = item.weekday == today;
+    final locating = identical(item, widget.locatingClass);
+    final canJump = code != null && widget.onClass != null;
+    return InkWell(
+      onTap: canJump && !locating ? () => widget.onClass!(item) : null,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 9, 12, 9),
+        child: Row(
+          children: [
+            Container(
+              width: 66,
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: isToday ? colors.blue : colors.field,
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Text(
+                classTimeLabel(item),
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: isToday ? Colors.white : colors.secondary,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                item.courseName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (locating)
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else ...[
+              Text(
+                code ?? item.location,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: canJump ? colors.blue : colors.secondary,
+                ),
+              ),
+              if (canJump)
+                Icon(Icons.chevron_right_rounded, size: 18, color: colors.blue),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 标题下的信息标签（分类、层数、是否有室内图…）。
+class _InfoChip extends StatelessWidget {
+  const _InfoChip({required this.icon, required this.label, this.color});
+  final IconData icon;
+  final String label;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    final fg = color ?? colors.secondary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: color == null ? colors.field : fg.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: fg),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: color ?? colors.ink,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 次要操作：图标在上、文字在下的小方块，和主按钮等高。
+class _ActionTile extends StatelessWidget {
+  const _ActionTile({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    this.tooltip,
+  });
+  final IconData icon;
+  final String label;
+  final String? tooltip;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    final enabled = onPressed != null;
+    final fg = enabled ? colors.blue : colors.muted;
+    final tile = Material(
+      color: colors.blue.withValues(alpha: enabled ? .10 : .04),
+      borderRadius: BorderRadius.circular(15),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onPressed,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 56),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 21, color: fg),
+                const SizedBox(height: 3),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: fg,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return tooltip == null ? tile : Tooltip(message: tooltip!, child: tile);
+  }
+}
+
+/// 面板里的楼层页签：一排 1F 2F 3F…，点一下切层，不用再去找右侧的楼层条。
+class _FloorTabs extends StatelessWidget {
+  const _FloorTabs({
+    required this.floors,
+    required this.current,
+    required this.onFloor,
+  });
+  final List<CampusFloor> floors;
+  final CampusFloor current;
+  final ValueChanged<CampusFloor>? onFloor;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    final sorted = [...floors]..sort((a, b) => a.number.compareTo(b.number));
+    return SizedBox(
+      height: 40,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: sorted.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final floor = sorted[index];
+          final selected = floor.id == current.id;
+          return Semantics(
+            button: true,
+            selected: selected,
+            label: '${floor.label}${selected ? '，当前楼层' : ''}',
+            excludeSemantics: true,
+            child: Material(
+              color: selected ? colors.blue : colors.panel,
+              borderRadius: BorderRadius.circular(12),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: selected || onFloor == null
+                    ? null
+                    : () => onFloor!(floor),
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 52),
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: Text(
+                    floor.label,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                      color: selected ? Colors.white : colors.ink,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// 房间分组：按后端 category / kind 归类，不按名称猜。
+enum _RoomGroup {
+  room('房间', Icons.class_outlined, Color(0xFF4C8BF5)),
+  toilet('卫生间', Icons.wc_rounded, Color(0xFF13A8A8)),
+  stair('楼梯电梯', Icons.stairs_rounded, Color(0xFFF2994A)),
+  other('其他', Icons.widgets_outlined, Color(0xFF8A94A6));
+
+  const _RoomGroup(this.label, this.icon, this.color);
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  static _RoomGroup of(CampusRoom room) {
+    switch (room.category?.trim().toLowerCase()) {
+      case 'toilet' || 'restroom' || 'wc' || 'washroom':
+        return _RoomGroup.toilet;
+      case 'stair' || 'stairs' || 'elevator' || 'lift' || 'escalator':
+        return _RoomGroup.stair;
+      case 'classroom' || 'lab' || 'lecture' || 'office' || 'meeting':
+        return _RoomGroup.room;
+    }
+    // 没有可识别 category 时按要素类型：房间要素归「房间」，设施归「其他」。
+    return room.isFacility ? _RoomGroup.other : _RoomGroup.room;
+  }
+
+  IconData iconFor(CampusRoom room) =>
+      this == _RoomGroup.stair &&
+          const {'elevator', 'lift'}.contains(room.category?.toLowerCase())
+      ? Icons.elevator_rounded
+      : icon;
+}
+
+/// 本层房间：顶部按类型筛选，房间用门牌方块网格，其余设施用带图标的列表。
+class _FloorRooms extends StatefulWidget {
+  const _FloorRooms({
+    required this.rooms,
+    required this.selected,
+    required this.onRoom,
+  });
+  final List<CampusRoom> rooms;
+  final CampusRoom? selected;
+  final ValueChanged<CampusRoom> onRoom;
+
+  @override
+  State<_FloorRooms> createState() => _FloorRoomsState();
+}
+
+class _FloorRoomsState extends State<_FloorRooms> {
+  // null = 全部。切层时保留筛选（同一栋楼找卫生间往往要连着看几层）。
+  _RoomGroup? _filter;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    final groups = <_RoomGroup, List<CampusRoom>>{};
+    for (final room in widget.rooms) {
+      groups.putIfAbsent(_RoomGroup.of(room), () => []).add(room);
+    }
+    final present = [
+      for (final group in _RoomGroup.values)
+        if (groups[group] != null) group,
+    ];
+    final filter = present.contains(_filter) ? _filter : null;
+    final shown = filter == null ? present : [filter];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (present.length > 1) ...[
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _GroupChip(
+                label: '全部 ${widget.rooms.length}',
+                selected: filter == null,
+                color: colors.blue,
+                onTap: () => setState(() => _filter = null),
+              ),
+              for (final group in present)
+                _GroupChip(
+                  label: '${group.label} ${groups[group]!.length}',
+                  icon: group.icon,
+                  selected: filter == group,
+                  color: group.color,
+                  onTap: () =>
+                      setState(() => _filter = filter == group ? null : group),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+        ],
+        for (final group in shown) ...[
+          if (filter == null && present.length > 1)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8, left: 2),
+              child: Row(
+                children: [
+                  Icon(group.icon, size: 16, color: group.color),
+                  const SizedBox(width: 6),
+                  Text(
+                    group.label,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: colors.secondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (group == _RoomGroup.room)
+            _RoomGrid(
+              rooms: groups[group]!,
+              selected: widget.selected,
+              onRoom: widget.onRoom,
+            )
+          else
+            _FacilityList(
+              group: group,
+              rooms: groups[group]!,
+              selected: widget.selected,
+              onRoom: widget.onRoom,
+            ),
+          const SizedBox(height: 14),
+        ],
+      ],
+    );
+  }
+}
+
+class _GroupChip extends StatelessWidget {
+  const _GroupChip({
+    required this.label,
+    required this.selected,
+    required this.color,
+    required this.onTap,
+    this.icon,
+  });
+  final String label;
+  final bool selected;
+  final Color color;
+  final IconData? icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: Material(
+        color: selected ? color : colors.panel,
+        borderRadius: BorderRadius.circular(20),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (icon != null) ...[
+                  Icon(icon, size: 15, color: selected ? Colors.white : color),
+                  const SizedBox(width: 4),
+                ],
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: selected ? Colors.white : colors.ink,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 房间门牌网格：一行三块，门牌号大字；名称和门牌不同时在下面补一行名称。
+class _RoomGrid extends StatelessWidget {
+  const _RoomGrid({
+    required this.rooms,
+    required this.selected,
+    required this.onRoom,
+  });
+  final List<CampusRoom> rooms;
+  final CampusRoom? selected;
+  final ValueChanged<CampusRoom> onRoom;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    return LayoutBuilder(
+      builder: (context, box) {
+        const gap = 8.0;
+        final columns = box.maxWidth >= 420 ? 4 : 3;
+        final width = (box.maxWidth - gap * (columns - 1)) / columns;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final room in rooms)
+              SizedBox(
+                width: width,
+                child: Builder(
+                  builder: (context) {
+                    final active = room.id == selected?.id;
+                    final code = room.roomCode ?? room.name;
+                    final showName =
+                        room.roomCode != null &&
+                        room.name.isNotEmpty &&
+                        room.name != room.roomCode;
+                    return Semantics(
+                      button: true,
+                      selected: active,
+                      child: Material(
+                        color: active ? colors.blue : colors.panel,
+                        borderRadius: BorderRadius.circular(14),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: () => onRoom(room),
+                          child: Container(
+                            constraints: const BoxConstraints(minHeight: 58),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 9,
+                            ),
+                            alignment: Alignment.center,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  code,
+                                  textAlign: TextAlign.center,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: active ? Colors.white : colors.ink,
+                                  ),
+                                ),
+                                if (showName) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    room.name,
+                                    textAlign: TextAlign.center,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: active
+                                          ? Colors.white.withValues(alpha: .85)
+                                          : colors.secondary,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// 卫生间、楼梯等设施：带类型图标的紧凑列表。
+class _FacilityList extends StatelessWidget {
+  const _FacilityList({
+    required this.group,
+    required this.rooms,
+    required this.selected,
+    required this.onRoom,
+  });
+  final _RoomGroup group;
+  final List<CampusRoom> rooms;
+  final CampusRoom? selected;
+  final ValueChanged<CampusRoom> onRoom;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    return Material(
+      color: colors.panel,
+      borderRadius: BorderRadius.circular(16),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          for (var i = 0; i < rooms.length; i++) ...[
+            if (i > 0)
+              const Padding(
+                padding: EdgeInsets.only(left: 58),
+                child: Divider(height: 1),
+              ),
+            ListTile(
+              dense: true,
+              selected: rooms[i].id == selected?.id,
+              leading: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: group.color.withValues(alpha: .14),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  group.iconFor(rooms[i]),
+                  size: 19,
+                  color: group.color,
+                ),
+              ),
+              title: Text(
+                rooms[i].name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 14),
+              ),
+              trailing: Icon(
+                rooms[i].id == selected?.id
+                    ? Icons.room_rounded
+                    : Icons.chevron_right_rounded,
+                size: 18,
+                color: rooms[i].id == selected?.id
+                    ? colors.blue
+                    : colors.secondary,
+              ),
+              onTap: () => onRoom(rooms[i]),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

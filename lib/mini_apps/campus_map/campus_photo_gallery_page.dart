@@ -391,7 +391,17 @@ class _CampusBuildingPhotosEntryState extends State<CampusBuildingPhotosEntry> {
   }
 
   @override
-  Widget build(BuildContext context) => MapSurface(
+  Widget build(BuildContext context) {
+    // 没有照片（加载中或确认为空）时整块不占位，免得空卡片挤占面板；
+    // 加载失败仍显示，让用户能看到原因并重试。
+    if (_error == null && _photos.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: _card(context),
+    );
+  }
+
+  Widget _card(BuildContext context) => MapSurface(
     radius: 18,
     child: InkWell(
       onTap: _photos.isEmpty ? null : _open,

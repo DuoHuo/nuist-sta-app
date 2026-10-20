@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/app_info.dart';
+import 'core/schedule/weekly_classes.dart';
 import 'core/theme.dart';
 import 'mini_apps/timetable/timetable_lifecycle.dart';
+import 'mini_apps/timetable/timetable_week_classes.dart';
 import 'router.dart';
 
 class NuistApp extends StatefulWidget {
@@ -15,6 +17,13 @@ class NuistApp extends StatefulWidget {
 
 class _NuistAppState extends State<NuistApp> {
   late final GoRouter _router = buildRouter();
+
+  @override
+  void initState() {
+    super.initState();
+    // 校园地图等通过 core 接口读本周课程，由壳把课表的实现登记进去。
+    WeeklyClasses.source ??= const TimetableWeeklyClasses();
+  }
 
   @override
   Widget build(BuildContext context) {

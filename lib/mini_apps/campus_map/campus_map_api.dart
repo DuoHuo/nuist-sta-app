@@ -472,6 +472,8 @@ class CampusMapApi
             isFacility: kind == 'facility',
             poiId: poiId,
             navNodeId: nodeId,
+            category: _text(properties['category']),
+            roomCode: _text(properties['room_code']),
           ),
         );
         properties['room_id'] = id;
