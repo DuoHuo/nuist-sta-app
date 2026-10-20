@@ -135,4 +135,25 @@ void main() {
     await settleIo(tester);
     expect(_c.settings.examColor, isNot(kDefaultExamColor));
   });
+
+  testWidgets('AW05 预览左右滑切周，不改 viewingWeek', (tester) async {
+    await pumpAppearance(tester);
+    await settleIo(tester);
+    final beforeView = _c.viewingWeek;
+    final pager = find.byKey(const Key('tt_appearance_preview_pager'));
+    expect(pager, findsOneWidget);
+    final grid = tester.widget<WeekGrid>(
+      find.byKey(const Key('tt_appearance_preview_grid')),
+    );
+    final startWeek = grid.week;
+    await tester.fling(pager, const Offset(-400, 0), 1000);
+    await tester.pumpAndSettle();
+    final after = tester.widget<WeekGrid>(
+      find.byKey(const Key('tt_appearance_preview_grid')),
+    );
+    if (startWeek < _c.totalWeeks) {
+      expect(after.week, startWeek + 1);
+    }
+    expect(_c.viewingWeek, beforeView);
+  });
 }

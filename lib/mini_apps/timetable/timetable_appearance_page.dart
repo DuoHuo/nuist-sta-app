@@ -14,7 +14,10 @@ import 'timetable_week_grid.dart';
 ///
 /// 预览复用 [WeekGrid]（含 `scheduleItemsForColumn` / [ScheduleEventCell]），
 /// 与周视图一致；非本周考试双胶囊等由数据侧落地后自动出现。
-class TimetableAppearancePage extends StatelessWidget {
+///
+/// +9 hotfix：上半预览支持左右滑切周（[PageView]，手感同主周视图），
+/// 预览周为页内本地状态，不改 [TimetableController.viewingWeek]。
+class TimetableAppearancePage extends StatefulWidget {
   const TimetableAppearancePage({super.key, this.controller});
 
   final TimetableController? controller;
@@ -32,11 +35,77 @@ class TimetableAppearancePage extends StatelessWidget {
   static const homeMaxLabels = {1: '1', 2: '2', 3: '3', 4: '4'};
 
   @override
-  Widget build(BuildContext context) {
-    final c = controller ?? TimetableController.instance;
-    void update(TimetableSettings Function(TimetableSettings s) change) =>
-        c.updateSettings(change(c.settings));
+  State<TimetableAppearancePage> createState() =>
+      _TimetableAppearancePageState();
+}
 
+class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
+  late final TimetableController _c =
+      widget.controller ?? TimetableController.instance;
+  PageController? _pageController;
+  late int _previewWeek;
+
+  int get _totalWeeks => math.max(1, _c.totalWeeks);
+
+  @override
+  void initState() {
+    super.initState();
+    _previewWeek = _c.currentWeek.clamp(1, _totalWeeks).toInt();
+    _pageController = PageController(initialPage: _previewWeek - 1);
+    _c.addListener(_onControllerChanged);
+  }
+
+  @override
+  void dispose() {
+    _c.removeListener(_onControllerChanged);
+    _pageController?.dispose();
+    super.dispose();
+  }
+
+  /// 总周数缩小时钳制预览周并 jump；设置变更由 ListenableBuilder 同帧刷新。
+  void _onControllerChanged() {
+    final total = _totalWeeks;
+    final clamped = _previewWeek.clamp(1, total).toInt();
+    if (clamped == _previewWeek) return;
+    _previewWeek = clamped;
+    final pc = _pageController;
+    if (pc != null && pc.hasClients) {
+      final target = clamped - 1;
+      final page = pc.page?.round() ?? pc.initialPage;
+      if (page != target) pc.jumpToPage(target);
+    }
+  }
+
+  void _onPreviewPageChanged(int index) {
+    final week = (index + 1).clamp(1, _totalWeeks).toInt();
+    if (week == _previewWeek) return;
+    setState(() => _previewWeek = week);
+  }
+
+  void _update(TimetableSettings Function(TimetableSettings s) change) =>
+      _c.updateSettings(change(_c.settings));
+
+  Future<void> _pickExamColor(BuildContext context) async {
+    final pick = await showTimetableColorPicker(
+      context,
+      current: Color(_c.settings.examColor),
+      presets: TimetableTheme.examColorOptions,
+      showReset: _c.settings.examColor != kDefaultExamColor,
+      forExam: true,
+      title: '考试颜色',
+    );
+    if (pick == null) return;
+    final argb = pick.reset
+        ? kDefaultExamColor
+        : (pick.color!.toARGB32() | 0xFF000000);
+    if (argb == _c.settings.examColor) return;
+    await _c.updateSettings(_c.settings.copyWith(examColor: argb));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = _c;
+    final pc = _pageController;
     return Scaffold(
       backgroundColor: TimetableTheme.colorsOf(context).pageBg,
       appBar: AppBar(title: const Text('外观')),
@@ -45,13 +114,14 @@ class TimetableAppearancePage extends StatelessWidget {
         builder: (context, _) {
           final s = c.settings;
           final colors = TimetableTheme.colorsOf(context);
-          final opacity = s.cellOpacity.clamp(opacityMin, opacityMax);
+          final opacity = s.cellOpacity.clamp(
+            TimetableAppearancePage.opacityMin,
+            TimetableAppearancePage.opacityMax,
+          );
           final headerSize = s.headerTextSize
               .clamp(kHeaderTextSizeMin, kHeaderTextSizeMax)
               .toDouble();
-          final week = c.currentWeek
-              .clamp(1, math.max(1, c.totalWeeks))
-              .toInt();
+          final total = _totalWeeks;
           return Column(
             children: [
               Expanded(
@@ -70,13 +140,28 @@ class TimetableAppearancePage extends StatelessWidget {
                       TimetableTheme.cardRadius,
                     ),
                     clipBehavior: Clip.antiAlias,
-                    child: WeekGrid(
-                      key: const Key('tt_appearance_preview_grid'),
-                      week: week,
-                      controller: c,
-                      enableDrag: false,
-                      previewMode: true,
-                    ),
+                    child: pc == null
+                        ? const SizedBox.shrink()
+                        : PageView.builder(
+                            key: const Key('tt_appearance_preview_pager'),
+                            controller: pc,
+                            itemCount: total,
+                            onPageChanged: _onPreviewPageChanged,
+                            itemBuilder: (context, index) {
+                              final week = index + 1;
+                              return WeekGrid(
+                                key: week == _previewWeek
+                                    ? const Key('tt_appearance_preview_grid')
+                                    : ValueKey(
+                                        'tt_appearance_preview_grid_$week',
+                                      ),
+                                week: week,
+                                controller: c,
+                                enableDrag: false,
+                                previewMode: true,
+                              );
+                            },
+                          ),
                   ),
                 ),
               ),
@@ -93,10 +178,11 @@ class TimetableAppearancePage extends StatelessWidget {
                           title: '文字颜色',
                           trailing: _ApSegments<CellTextColorMode>(
                             key: const Key('tt_settings_cell_text_color'),
-                            options: cellTextColorLabels,
+                            options:
+                                TimetableAppearancePage.cellTextColorLabels,
                             selected: s.cellTextColor,
                             onSelected: (v) =>
-                                update((x) => x.copyWith(cellTextColor: v)),
+                                _update((x) => x.copyWith(cellTextColor: v)),
                           ),
                         ),
                         _ApSliderRow(
@@ -105,16 +191,19 @@ class TimetableAppearancePage extends StatelessWidget {
                           valueKey: const Key('tt_settings_opacity_value'),
                           slider: Slider(
                             key: const Key('tt_settings_opacity'),
-                            min: opacityMin.toDouble(),
-                            max: opacityMax.toDouble(),
-                            divisions: (opacityMax - opacityMin) ~/ opacityStep,
+                            min: TimetableAppearancePage.opacityMin.toDouble(),
+                            max: TimetableAppearancePage.opacityMax.toDouble(),
+                            divisions:
+                                (TimetableAppearancePage.opacityMax -
+                                    TimetableAppearancePage.opacityMin) ~/
+                                TimetableAppearancePage.opacityStep,
                             value: opacity.toDouble(),
                             activeColor: colors.accent,
                             label: '$opacity%',
                             onChanged: (v) {
                               final next = v.round();
                               if (next == c.settings.cellOpacity) return;
-                              update((x) => x.copyWith(cellOpacity: next));
+                              _update((x) => x.copyWith(cellOpacity: next));
                             },
                           ),
                         ),
@@ -123,10 +212,10 @@ class TimetableAppearancePage extends StatelessWidget {
                           title: '今日课表最多显示',
                           trailing: _ApSegments<int>(
                             key: const Key('tt_settings_home_max_segments'),
-                            options: homeMaxLabels,
+                            options: TimetableAppearancePage.homeMaxLabels,
                             selected: s.homeMaxItems,
                             onSelected: (v) =>
-                                update((x) => x.copyWith(homeMaxItems: v)),
+                                _update((x) => x.copyWith(homeMaxItems: v)),
                           ),
                         ),
                         _ApSliderRow(
@@ -147,7 +236,7 @@ class TimetableAppearancePage extends StatelessWidget {
                             onChanged: (v) {
                               final next = v.roundToDouble();
                               if (next == c.settings.headerTextSize) return;
-                              update((x) => x.copyWith(headerTextSize: next));
+                              _update((x) => x.copyWith(headerTextSize: next));
                             },
                           ),
                         ),
@@ -156,33 +245,33 @@ class TimetableAppearancePage extends StatelessWidget {
                           title: '节数栏显示时间',
                           value: s.showPeriodTimes,
                           onChanged: (v) =>
-                              update((x) => x.copyWith(showPeriodTimes: v)),
+                              _update((x) => x.copyWith(showPeriodTimes: v)),
                         ),
                         _ApSwitchRow(
                           key: const Key('tt_settings_saturday'),
                           title: '周六',
                           value: s.showSaturday,
                           onChanged: (v) =>
-                              update((x) => x.copyWith(showSaturday: v)),
+                              _update((x) => x.copyWith(showSaturday: v)),
                         ),
                         _ApSwitchRow(
                           key: const Key('tt_settings_sunday'),
                           title: '周日',
                           value: s.showSunday,
                           onChanged: (v) =>
-                              update((x) => x.copyWith(showSunday: v)),
+                              _update((x) => x.copyWith(showSunday: v)),
                         ),
                         _ApSwitchRow(
                           key: const Key('tt_settings_non_current'),
                           title: '非本周课程',
                           value: s.showNonCurrentWeek,
                           onChanged: (v) =>
-                              update((x) => x.copyWith(showNonCurrentWeek: v)),
+                              _update((x) => x.copyWith(showNonCurrentWeek: v)),
                         ),
                         _ApRow(
                           key: const Key('tt_settings_exam_color'),
                           title: '考试颜色',
-                          onTap: () => _pickExamColor(context, c),
+                          onTap: () => _pickExamColor(context),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -213,26 +302,6 @@ class TimetableAppearancePage extends StatelessWidget {
         },
       ),
     );
-  }
-
-  Future<void> _pickExamColor(
-    BuildContext context,
-    TimetableController c,
-  ) async {
-    final pick = await showTimetableColorPicker(
-      context,
-      current: Color(c.settings.examColor),
-      presets: TimetableTheme.examColorOptions,
-      showReset: c.settings.examColor != kDefaultExamColor,
-      forExam: true,
-      title: '考试颜色',
-    );
-    if (pick == null) return;
-    final argb = pick.reset
-        ? kDefaultExamColor
-        : (pick.color!.toARGB32() | 0xFF000000);
-    if (argb == c.settings.examColor) return;
-    await c.updateSettings(c.settings.copyWith(examColor: argb));
   }
 }
 
