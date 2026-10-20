@@ -208,23 +208,23 @@ abstract final class TimetableTheme {
     return dark ? darkCoursePair(p) : p;
   }
 
-  /// 课程 / 考试共用的 12 个预设（对齐 WakeUp 自动色板采样 + 冷暖交错）。
+  /// 课程 / 考试共用的 12 个预设（PM 1020 终稿 + 设计给定棕）。
   ///
-  /// 核心 8 色来自 WakeUp `_defaultColor`（见 notes/wakeup-auto-palette-sample.md），
-  /// 补齐至 12 并冷暖交错；B 的大色块 / 选色器 / 考试色共用此列表。
+  /// 冷暖交错排布；B 的大色块 / 选色器 / 考试色共用此列表。
+  /// 显示一律走 [userCoursePair]（浅底深字 / 深色 [darkCoursePair]），不再按亮度分叉白字。
   static const List<Color> coursePresetColors = [
-    Color(0xFFEC407A), // 1 粉 warm（WakeUp）
-    Color(0xFF42A5F5), // 2 蓝 cool（WakeUp）
-    Color(0xFFFF7043), // 3 橙 warm（WakeUp）
-    Color(0xFF26A69A), // 4 青/薄荷 cool（WakeUp）
-    Color(0xFFEF5350), // 5 红 warm（WakeUp）
-    Color(0xFF5C6BC0), // 6 靛 cool（WakeUp）
-    Color(0xFFFFB74D), // 7 橙黄 warm（Material/schedule）
-    Color(0xFF66BB6A), // 8 绿 cool（WakeUp）
-    Color(0xFFAB47BC), // 9 紫 warm（WakeUp）
-    Color(0xFF4FC3F7), // 10 天蓝 cool（schedule）
-    Color(0xFFFFD54F), // 11 黄 warm（扩展）
-    Color(0xFF4DB6AC), // 12 青绿 cool（schedule）
+    Color(0xFFE91E63), // 1 粉 warm
+    Color(0xFF2196F3), // 2 蓝 cool
+    Color(0xFFFF5722), // 3 深橙 warm
+    Color(0xFF009688), // 4 青绿 cool
+    Color(0xFFF44336), // 5 红 warm
+    Color(0xFF3F51B5), // 6 靛 cool
+    Color(0xFFFF9800), // 7 橙 warm
+    Color(0xFF4CAF50), // 8 绿 cool
+    Color(0xFF9C27B0), // 9 紫 warm
+    Color(0xFF00BCD4), // 10 青 cool
+    Color(0xFFFFC107), // 11 琥珀 warm
+    Color(0xFF795548), // 12 棕 warm（设计给定）
   ];
 
   /// 冷色相带：约青绿–靛蓝（100°–260°）。其余视为暖色（红橙黄粉紫等）。
@@ -360,20 +360,28 @@ abstract final class TimetableTheme {
     bool dark = false,
   }) => autoCoursePair(coursePresetIndexForName(name), dark: dark);
 
-  /// item 9：用户自选色 [c]（原始 ARGB）在当前明暗下的（底色, 文字色），显示时换算：
-  /// 浅色系（亮度 > 0.4）按色板规则「浅底 + 同色相深字」，深色下走 [darkCoursePair]；
-  /// 深色系按考试格规则「白字」，深色下往 #121316 混 25%（[examCellBg]）。
+  /// item 9：用户自选色 / 自动预设 [c]（原始 ARGB）在当前明暗下的（底色, 文字色）。
+  ///
+  /// **唯一显示方案**（周视图 / 首页 / 外观 / 选色预览共用）：浅色「浅底 + 同色相深字」，
+  /// 深色走 [darkCoursePair]（深底浅字）。种子过暗时先抬成柔和浅底，避免再走考试格白字分叉。
+  /// 考试格仍用 [examCellBg] + [examText]，不经本函数。
   static CourseColorPair userCoursePair(Color c, {bool dark = false}) {
+    final hsl = HSLColor.fromColor(c);
+    final Color lightBg;
     if (c.computeLuminance() > 0.4) {
-      final hsl = HSLColor.fromColor(c);
-      final fg = hsl
-          .withLightness(0.25)
-          .withSaturation(hsl.saturation.clamp(0.0, 0.7))
+      lightBg = c;
+    } else {
+      lightBg = hsl
+          .withLightness(0.82)
+          .withSaturation(hsl.saturation.clamp(0.20, 0.45))
           .toColor();
-      final p = CourseColorPair(c, fg);
-      return dark ? darkCoursePair(p) : p;
     }
-    return CourseColorPair(examCellBg(c, dark: dark), examText);
+    final lightFg = hsl
+        .withLightness(0.28)
+        .withSaturation(hsl.saturation.clamp(0.35, 0.75))
+        .toColor();
+    final p = CourseColorPair(lightBg, lightFg);
+    return dark ? darkCoursePair(p) : p;
   }
 
   /// item 14「文字颜色」强制白字 / 黑字（明暗都一样）。

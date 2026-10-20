@@ -6,14 +6,15 @@ import 'timetable_controller.dart';
 import 'timetable_models.dart';
 
 /// UI 侧课程色号入口（0..15，A/B/C / 旧撞色顺延用）。
-/// 自动显示色请用 [coursePairFor]（课名哈希进 12 预设）。
+/// 自动显示色请用 [coursePairFor]（id 优先 / 课名哈希进 12 预设）。
 int courseColorIndex(TimetableController controller, Course course) =>
     controller.colorIndexOf(course);
 
-/// 课程在当前明暗下的（底色, 文字色）：
+/// 课程在当前明暗下的（底色, 文字色）——周视图 / 首页 / 外观 / 选色预览的**唯一**入口：
 /// - 用户自选色优先（[TimetableController.userColorOf]，键为 Course.id）；
-/// - 否则按**课名**哈希进 [TimetableTheme.coursePresetColors]（同名同色，稳定）。
-/// 不走 Course.id，不走 A/B/C 柔和色板。
+/// - 否则 [coursePresetIndexForCourse]（id 优先，否则配色用名）进 12 预设，
+///   再经 [TimetableTheme.userCoursePair] 统一为浅底深字 / 深色 darkCoursePair。
+/// 不走 A/B/C 柔和色板，不按亮度分叉白字。
 CourseColorPair coursePairFor(
   TimetableController controller,
   Course course, {
@@ -23,9 +24,9 @@ CourseColorPair coursePairFor(
   if (user != null) {
     return TimetableTheme.userCoursePair(Color(user), dark: dark);
   }
-  // 教务改名不换色：与 colorIndexOf 相同，用控制器解析后的配色用名。
   final name = controller.colorNameOf(course);
-  return TimetableTheme.autoCoursePairForName(name, dark: dark);
+  final index = coursePresetIndexForCourse(course, colorName: name);
+  return TimetableTheme.autoCoursePair(index, dark: dark);
 }
 
 /// 当前设置里的配色方案（`paletteScheme` 'A'/'B'/'C'）。

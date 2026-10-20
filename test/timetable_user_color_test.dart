@@ -225,10 +225,9 @@ void main() {
       expect(_c.courseColorMap.keys.any((k) => k.contains('乙')), isTrue);
     });
 
-    testWidgets('UC06 深色：自选色显示时换算（浅色系走色板深色规则，深色系混 25% 白字）', (tester) async {
+    testWidgets('UC06 深色：自选色一律走 darkCoursePair（不再按亮度白字分叉）', (tester) async {
       _load();
       const strong = Color(0xFF1565C0);
-      // 亮度 > 0.4 才走「浅底深字」深色换算；新预设 0 号偏深，改用明确浅色。
       const light = Color(0xFFDCE8FB);
       await tester.runAsync(() async {
         await _c.setUserCourseColor('a', light.toARGB32());
@@ -236,12 +235,11 @@ void main() {
       });
       await _pumpGrid(tester, dark: true);
       final pa = TimetableTheme.userCoursePair(light, dark: true);
+      final pb = TimetableTheme.userCoursePair(strong, dark: true);
       expect(_cellBg(tester, '测试课甲'), pa.bg);
-      expect(pa.fg, light);
-      expect(
-        _cellBg(tester, '测试课乙'),
-        Color.lerp(strong, const Color(0xFF121316), 0.25),
-      );
+      expect(pa.fg, TimetableTheme.userCoursePair(light).bg);
+      expect(_cellBg(tester, '测试课乙'), pb.bg);
+      expect(pb.fg, TimetableTheme.userCoursePair(strong).bg);
       // 只存原始值，没有第二份深色色值。
       expect(await tester.runAsync(TimetableStore.readUserCourseColors), {
         'a': light.toARGB32(),

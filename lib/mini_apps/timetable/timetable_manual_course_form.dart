@@ -344,8 +344,12 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     (i) => _weeks.contains(i + 1) ? '1' : '0',
   ).join();
 
-  /// 预览自动色下标：按课名哈希进 12 预设（与 [coursePairFor] 一致）。
+  /// 预览自动色下标：与 [coursePairFor] 一致（已有课优先 id，新建按课名）。
   int get _previewColorIndex {
+    final existing = widget.cell?.course;
+    if (existing != null && existing.id.trim().isNotEmpty) {
+      return coursePresetIndexForCourse(existing);
+    }
     final name = _name.text.trim();
     if (name.isEmpty) return 0;
     return coursePresetIndexForName(name);

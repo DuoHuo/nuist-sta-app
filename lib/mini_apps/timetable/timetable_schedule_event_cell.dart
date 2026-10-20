@@ -11,8 +11,8 @@ import 'timetable_theme.dart';
 /// 其他：按名称取配色、「日程」胶囊。胶囊样式与课程格「单周」胶囊一致。
 /// [stackCount] > 1（同时段还有别的日程）时显示冲突圆点与「N 门」。
 ///
-/// [activeThisWeek]：考试在「查看周 ≠ 本周」时为 false → 非本周灰显，同时显示
-/// 「考试」与「非本周」两个胶囊（互不覆盖）。
+/// [activeThisWeek]：考试所在周为 true；更早周幽灵为 false → 灰显 +
+/// 「考试」与「非本周」双胶囊（互不覆盖）。
 class ScheduleEventCell extends StatelessWidget {
   const ScheduleEventCell({
     super.key,
@@ -33,7 +33,7 @@ class ScheduleEventCell extends StatelessWidget {
   final double radius;
   final int stackCount;
 
-  /// 考试：查看周是否为本周。false → 灰显 + 双胶囊。
+  /// 考试：是否为所在周。false（更早周幽灵）→ 灰显 + 双胶囊。
   final bool activeThisWeek;
   final VoidCallback? onTap;
 

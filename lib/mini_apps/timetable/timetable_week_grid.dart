@@ -544,7 +544,7 @@ class _WeekGridState extends State<WeekGrid> {
               height: height,
               radius: radius,
               stackCount: cluster.length,
-              // 叠放时以主格为准；考试查看周≠本周 → 灰显双胶囊。
+              // 叠放时以主格为准；考试更早周幽灵 → 灰显双胶囊。
               activeThisWeek: cluster.first.activeThisWeek,
               onTap: cluster.length > 1
                   ? () => _showStackSheet(

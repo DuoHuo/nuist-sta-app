@@ -100,6 +100,15 @@ void _setShowExams(bool on) {
   );
 }
 
+void _setShowNonCurrentWeek(bool on) {
+  _c.debugSetSnapshot(
+    _c.snapshot.copyWith(
+      settings: _c.settings.copyWith(showNonCurrentWeek: on),
+    ),
+    viewingWeek: _c.viewingWeek,
+  );
+}
+
 /// 让真实文件 IO 走完：controller 先改内存、写完盘才 notify，写盘有多个 await，
 /// 每个都要一轮 runAsync + pump。
 Future<void> _settleIo(WidgetTester tester) async {
@@ -510,17 +519,17 @@ void main() {
       expect(scheduleItemsForColumn(_c, _week, 2), isEmpty);
     });
 
-    testWidgets('EX-offweek-2 查看周≠本周：灰底 +「考试」「非本周」双胶囊', (tester) async {
+    testWidgets('EX-offweek-2 考试所在周：即使查看周≠本周也正常色 + 仅「考试」', (tester) async {
       final orig = TimetableController.clock;
       addTearDown(() => TimetableController.clock = orig);
-      // 本周固定第 5 周；查看第 8 周（考试所在周）。
+      // 本周固定第 5 周；查看第 8 周（考试所在周）→ 仍正常色。
       TimetableController.clock = () => DateTime(2026, 9, 28, 10);
       _load(manual: [_course('m1', '测试课甲')]);
       await tester.runAsync(() => _c.addScheduleEvent(_event('')));
       expect(_c.currentWeek, 5);
       expect(_c.viewingWeek, _week);
       final item = scheduleItemsForColumn(_c, _week, 2).single;
-      expect(item.activeThisWeek, isFalse);
+      expect(item.activeThisWeek, isTrue);
 
       await _pumpGrid(tester);
       final cell = _eventCell('测试考试甲');
@@ -537,22 +546,60 @@ void main() {
           of: cell,
           matching: find.byKey(const Key('schedule_cell_off_week_pill')),
         ),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: cell, matching: find.text('考试')),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
         find.descendant(of: cell, matching: find.text('非本周')),
-        findsOneWidget,
+        findsNothing,
       );
       final ink = tester.widget<Ink>(
         find.descendant(of: cell, matching: find.byType(Ink)),
       );
       final deco = ink.decoration! as BoxDecoration;
-      expect(deco.color, TimetableTheme.offWeekBg);
-      expect(deco.border, isNotNull);
+      expect(
+        deco.color,
+        TimetableTheme.examCellBg(Color(_c.settings.examColor)),
+      );
+      expect(deco.border, isNull);
+    });
+
+    testWidgets('EX-offweek-3 更早周 + 显示非本周：幽灵灰底双胶囊；更晚周不画', (tester) async {
+      _load(manual: [_course('m1', '测试课甲')]);
+      await tester.runAsync(() => _c.addScheduleEvent(_event('')));
+      // 默认关：第 5 周不幽灵
+      expect(scheduleItemsForColumn(_c, 5, 2), isEmpty);
+      _setShowNonCurrentWeek(true);
+      final ghosts = scheduleItemsForColumn(_c, 5, 2);
+      expect(ghosts, hasLength(1));
+      expect(ghosts.single.activeThisWeek, isFalse);
+      expect(ghosts.single.event.title, '测试考试甲');
+      // 更晚周不画
+      expect(scheduleItemsForColumn(_c, 9, 2), isEmpty);
+
+      await _pumpGrid(tester, week: 5);
+      final cell = _eventCell('测试考试甲');
+      expect(cell, findsOneWidget);
+      expect(
+        find.descendant(
+          of: cell,
+          matching: find.byKey(const Key('schedule_cell_exam_pill')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: cell,
+          matching: find.byKey(const Key('schedule_cell_off_week_pill')),
+        ),
+        findsOneWidget,
+      );
+      final ink = tester.widget<Ink>(
+        find.descendant(of: cell, matching: find.byType(Ink)),
+      );
+      expect(
+        (ink.decoration! as BoxDecoration).color,
+        TimetableTheme.offWeekBg,
+      );
     });
 
     testWidgets('EV10/EX06 与课程重叠显示冲突圆点和「2 门」；考试隐藏时不计冲突', (tester) async {

@@ -284,23 +284,23 @@ void main() {
   });
 
   group('自动色板 hueStepped', () {
-    test('12 预设为设计 §A 冷暖色板', () {
+    test('12 预设为 PM 终稿色板', () {
       expect(TimetableTheme.coursePresetColors, hasLength(12));
       expect(
         [for (final c in TimetableTheme.coursePresetColors) c.toARGB32()],
         [
-          0xFFEC407A,
-          0xFF42A5F5,
-          0xFFFF7043,
-          0xFF26A69A,
-          0xFFEF5350,
-          0xFF5C6BC0,
-          0xFFFFB74D,
-          0xFF66BB6A,
-          0xFFAB47BC,
-          0xFF4FC3F7,
-          0xFFFFD54F,
-          0xFF4DB6AC,
+          0xFFE91E63,
+          0xFF2196F3,
+          0xFFFF5722,
+          0xFF009688,
+          0xFFF44336,
+          0xFF3F51B5,
+          0xFFFF9800,
+          0xFF4CAF50,
+          0xFF9C27B0,
+          0xFF00BCD4,
+          0xFFFFC107,
+          0xFF795548,
         ],
       );
       expect(
@@ -321,30 +321,41 @@ void main() {
         expect(streak, lessThan(3), reason: '无连续 ≥3 个冷色');
         final hsv = HSVColor.fromColor(c);
         expect(hsv.saturation, greaterThanOrEqualTo(0.30));
-        // WakeUp 靛/紫（5C6BC0 / AB47BC）亮度略低于 0.18，仍保留原色。
+        // 设计给定靛/棕等可低于 0.18；仍保留原色，显示时经 userCoursePair 抬浅底。
         final lum = c.computeLuminance();
-        expect(lum, greaterThanOrEqualTo(0.15));
+        expect(lum, greaterThanOrEqualTo(0.08));
         expect(lum, lessThanOrEqualTo(0.90));
       }
     });
 
-    test('无 userColors 时 coursePairFor 按课名哈希进 12 预设', () {
+    test('无 userColors 时 coursePairFor 优先 Course.id 哈希进 12 预设', () {
       c.debugSetSnapshot(_snap([_jwxt('MATH|01', '高数')]), viewingWeek: 2);
       expect(c.userColorOf(c.courses.single), isNull);
       final pair = coursePairFor(c, c.courses.single);
-      final auto = TimetableTheme.autoCoursePairForName('高数');
-      expect(pair.bg.toARGB32(), auto.bg.toARGB32());
-      expect(pair.fg.toARGB32(), auto.fg.toARGB32());
-      // 同名同色；与 id 无关
-      c.debugSetSnapshot(_snap([_jwxt('OTHER|99', '高数')]), viewingWeek: 2);
-      expect(
-        coursePairFor(c, c.courses.single).bg.toARGB32(),
-        auto.bg.toARGB32(),
+      final byId = TimetableTheme.autoCoursePair(
+        coursePresetIndexForCourse(c.courses.single),
       );
-      // 与 A 柔和色板第 0 号不同
-      final soft0 = TimetableTheme.coursePair(0).bg.toARGB32();
-      expect(auto.bg.toARGB32() == soft0, isFalse);
-      // 下标落在 0..11
+      expect(pair.bg.toARGB32(), byId.bg.toARGB32());
+      expect(pair.fg.toARGB32(), byId.fg.toARGB32());
+      // 同名不同 id → 可不同色（id 优先）
+      c.debugSetSnapshot(_snap([_jwxt('OTHER|99', '高数')]), viewingWeek: 2);
+      final other = coursePairFor(c, c.courses.single).bg.toARGB32();
+      // 不强制异色（哈希可能撞），但路径必须走 id
+      expect(
+        other,
+        TimetableTheme.autoCoursePair(
+          coursePresetIndexForCourse(c.courses.single),
+        ).bg.toARGB32(),
+      );
+      // 统一方案：任意预设经 userCoursePair 后不再出现「白字分叉」
+      for (final raw in TimetableTheme.coursePresetColors) {
+        final light = TimetableTheme.userCoursePair(raw);
+        final dark = TimetableTheme.userCoursePair(raw, dark: true);
+        expect(light.fg.toARGB32(), isNot(TimetableTheme.examText.toARGB32()));
+        expect(dark.fg.toARGB32(), isNot(TimetableTheme.examText.toARGB32()));
+        // 深色为 darkCoursePair：字 = 浅色底
+        expect(dark.fg.toARGB32(), light.bg.toARGB32());
+      }
       expect(coursePresetIndexForName('高数'), inInclusiveRange(0, 11));
     });
   });

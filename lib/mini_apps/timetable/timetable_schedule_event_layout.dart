@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'timetable_schedule_event.dart';
 import 'timetable_controller.dart';
+import 'timetable_remaining_weeks.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
 import 'timetable_week_layout.dart';
@@ -62,7 +63,7 @@ class ScheduleGridItem {
   final int startNode;
   final int endNode;
 
-  /// 考试：查看周 == 本周为 true；查看周 ≠ 本周时为 false（灰显 + 双胶囊）。
+  /// 考试：所在周为 true；更早周幽灵为 false（灰显 + 双胶囊）。
   /// 「其他」日程始终 true（不走考试非本周规则）。
   final bool activeThisWeek;
 
@@ -70,34 +71,52 @@ class ScheduleGridItem {
       startNode <= end && start <= endNode;
 }
 
-/// 第 [week] 周第 [day] 列要画的日程（只取该列日期；考试受 showExams 控制，
-/// 由 [TimetableController.scheduleEventsOn] 过滤）。
+/// 第 [week] 周第 [day] 列要画的日程（考试受 showExams 控制）。
 ///
-/// 考试规则（PM 1020）：
-/// 1. 日期落在查看周内的考试必画（不因「非本周」被滤掉）；
-/// 2. 查看周 ≠ [TimetableController.currentWeek] 时 [ScheduleGridItem.activeThisWeek]
-///    为 false → 灰显 +「考试」「非本周」双胶囊；
-/// 4. showExams=false 仍隐藏全部考试（见 scheduleEventsOn）。
-///
-/// #3（未做）：本周视图下，「显示非本周」打开时把未来周考试幽灵到同星期列——待产品确认。
+/// 考试规则（PM 1020 终稿）：
+/// 1. **考试所在周**：正常色 +「考试」胶囊（不灰、无「非本周」）；
+/// 2. **更早的周**且「显示非本周课程」开：同星期列幽灵灰显 +「考试」「非本周」双胶囊；
+/// 3. **更晚的周**：不画；
+/// 4. showExams=false 隐藏全部考试（见 scheduleEventsOn / 幽灵循环）。
 List<ScheduleGridItem> scheduleItemsForColumn(
   TimetableController controller,
   int week,
   int day,
 ) {
   final date = controller.dateOfColumn(week, day);
-  // 查看周是否为本周：仅影响考试灰显，不影响「其他」日程。
-  final viewingCurrent = week == controller.currentWeek;
-  return [
+  final items = <ScheduleGridItem>[
     for (final e in controller.scheduleEventsOn(date))
       if (scheduleNodeRange(controller.periods, e.start, e.end) case final r?)
         ScheduleGridItem(
           event: e,
           startNode: r.startNode,
           endNode: r.endNode,
-          activeThisWeek: e.isExam ? viewingCurrent : true,
+          // 落在本列日期的考试 = 考试所在周 → 始终正常色。
+          activeThisWeek: true,
         ),
   ];
+  // 幽灵：仅考试、仅更早周、仅 showNonCurrentWeek + showExams。
+  if (controller.settings.showNonCurrentWeek && controller.settings.showExams) {
+    final seen = {for (final i in items) i.event.id};
+    for (final e in controller.scheduleEvents) {
+      if (!e.isExam) continue;
+      if (seen.contains(e.id)) continue;
+      if (e.date.weekday != day) continue;
+      final examWeek = controller.weekOfDate(e.date);
+      if (!examHasRemainingWeeks(examWeek, week)) continue;
+      if (scheduleNodeRange(controller.periods, e.start, e.end) case final r?) {
+        items.add(
+          ScheduleGridItem(
+            event: e,
+            startNode: r.startNode,
+            endNode: r.endNode,
+            activeThisWeek: false,
+          ),
+        );
+      }
+    }
+  }
+  return items;
 }
 
 /// 第 [week] 周第 [day] 列「不在节次内」的日程（与任何节次都不重叠，见
@@ -160,7 +179,7 @@ int scheduleOtherColorIndex(TimetableController c, ScheduleEvent e) =>
 
 /// 周视图格底色（考试：设置 examColor，不受不透明度影响；其他：配色底色按不透明度混合）。
 /// [dark]：深色下考试色往 #121316 混 25%，其他按课程格的深色规则（item 12）。
-/// [activeThisWeek] false（查看周≠本周的考试）→ 非本周灰底，不取 examColor。
+/// [activeThisWeek] false（更早周幽灵考试）→ 非本周灰底，不取 examColor。
 Color scheduleCellBg(
   TimetableController c,
   ScheduleEvent e, {
@@ -185,7 +204,7 @@ Color scheduleCellBg(
 }
 
 /// 周视图格文字 / 胶囊颜色（考试白字；其他取该色号文字色）。
-/// [activeThisWeek] false 的考试 → [TimetableTheme.offWeekText]。
+/// [activeThisWeek] false（幽灵）→ [TimetableTheme.offWeekText]。
 Color scheduleCellFg(
   TimetableController c,
   ScheduleEvent e, {

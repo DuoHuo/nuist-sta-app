@@ -1167,7 +1167,7 @@ _WeeksNorm? _normalizeWeeks(String raw, int maxWeeks) {
 /// 课程色板大小（[Course.colorIndex] / A/B/C 方案取值 0..15）。
 const int kCoursePaletteSize = 16;
 
-/// 自动色板预设个数（[TimetableTheme.coursePresetColors]；课名哈希取模）。
+/// 自动色板预设个数（[TimetableTheme.coursePresetColors]；id 优先、否则课名哈希取模）。
 const int kCoursePresetCount = 12;
 
 /// 课名归一化（仅用于配色哈希）：去首尾空白，半角括号转全角。
@@ -1192,10 +1192,17 @@ int courseColorIndexForName(String name) =>
 
 /// 课名 → 自动色板下标（0..11）：FNV-1a 对 [kCoursePresetCount] 取模。
 ///
-/// 自动配色只看课名、不看 [Course.id]；同名同色、刷新稳定。
+/// 无 id 时的回退；有 [Course.id] 时请用 [coursePresetIndexForCourse]。
 /// 用户自选色仍按课程 id 存在 userColors，见 [TimetableController.userColorOf]。
 int coursePresetIndexForName(String name) =>
     _fnv1a32CourseName(name) % kCoursePresetCount;
+
+/// 自动色板下标：优先非空 [Course.id]（稳定、改名不换色），否则 [colorName] / 课名。
+int coursePresetIndexForCourse(Course course, {String? colorName}) {
+  final id = course.id.trim();
+  if (id.isNotEmpty) return _fnv1a32CourseName(id) % kCoursePresetCount;
+  return coursePresetIndexForName(colorName ?? course.name);
+}
 
 int? _asColorIndex(Object? v) {
   final i = _asInt(v);
