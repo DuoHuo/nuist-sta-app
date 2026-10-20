@@ -8,7 +8,6 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_colors.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_color.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
 
