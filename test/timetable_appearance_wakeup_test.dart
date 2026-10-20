@@ -102,14 +102,19 @@ void main() {
     expect(_c.settings.headerTextSize, 11);
     expect(_c.settings.showPeriodTimes, isTrue);
 
-    await tester.drag(
-      find.byKey(const Key('tt_settings_header_text_size')),
-      const Offset(2000, 0),
-    );
+    // 滑块与开关位于下半滚动区靠下位置，CI 字体度量不同会被部分裁出视口，
+    // 先滚入可见区并直接驱动 Slider.onChanged，不依赖像素拖动。
+    final headerSlider = find.byKey(const Key('tt_settings_header_text_size'));
+    await tester.ensureVisible(headerSlider);
+    await tester.pumpAndSettle();
+    tester.widget<Slider>(headerSlider).onChanged!(kHeaderTextSizeMax);
     await settleIo(tester);
     expect(_c.settings.headerTextSize, 14);
 
-    await tester.tap(find.byKey(const Key('tt_settings_show_period_times')));
+    final periodTimes = find.byKey(const Key('tt_settings_show_period_times'));
+    await tester.ensureVisible(periodTimes);
+    await tester.pumpAndSettle();
+    await tester.tap(periodTimes);
     await settleIo(tester);
     expect(_c.settings.showPeriodTimes, isFalse);
 
