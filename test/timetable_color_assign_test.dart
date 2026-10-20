@@ -8,6 +8,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_colors.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_color.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
 
@@ -581,7 +582,11 @@ void main() {
 
     void expectCellColors(WidgetTester tester, Color fg) {
       final ink = tester.widget<Ink>(find.byType(Ink));
-      final pair = TimetableTheme.autoCoursePairForName('测试课K');
+      final pair = TimetableTheme.autoCoursePair(
+        coursePresetIndexForCourse(
+          Course(id: 'k', name: '测试课K', slots: const []),
+        ),
+      );
       expect((ink.decoration! as BoxDecoration).color, pair.bg);
       final dot = tester.widget<Container>(
         find.byKey(const Key('course_cell_conflict_dot')),
@@ -605,15 +610,29 @@ void main() {
       expect(find.byType(Opacity), findsNothing);
     }
 
-    testWidgets('角标/文字用课名哈希自动色（忽略旧 colorIndex）', (tester) async {
+    testWidgets('角标/文字用 id 哈希自动色（忽略旧 colorIndex）', (tester) async {
       await pumpCell(tester, 2);
-      expectCellColors(tester, TimetableTheme.autoCoursePairForName('测试课K').fg);
+      expectCellColors(
+        tester,
+        TimetableTheme.autoCoursePair(
+          coursePresetIndexForCourse(
+            Course(id: 'k', name: '测试课K', slots: const []),
+          ),
+        ).fg,
+      );
       TimetableController.instance.debugReset();
     });
 
-    testWidgets('另一旧色号仍同名同色', (tester) async {
+    testWidgets('另一旧色号仍同 id 同色', (tester) async {
       await pumpCell(tester, 10);
-      expectCellColors(tester, TimetableTheme.autoCoursePairForName('测试课K').fg);
+      expectCellColors(
+        tester,
+        TimetableTheme.autoCoursePair(
+          coursePresetIndexForCourse(
+            Course(id: 'k', name: '测试课K', slots: const []),
+          ),
+        ).fg,
+      );
       TimetableController.instance.debugReset();
     });
   });

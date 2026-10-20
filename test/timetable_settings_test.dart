@@ -568,13 +568,14 @@ void main() {
       expect(bg.a, 1.0);
     });
 
-    testWidgets('换配色 B：未自选时格子仍走课名哈希 12 预设（忽略 A/B/C）', (tester) async {
+    testWidgets('换配色 B：未自选时格子仍走 id 哈希 12 预设（忽略 A/B/C）', (tester) async {
       load(
         settings: base().copyWith(paletteScheme: 'B'),
         manual: [_course('a', '测试课甲', colorIndex: 12)],
       );
       await pumpGrid(tester);
-      final pair = TimetableTheme.autoCoursePairForName('测试课甲');
+      final cell = tester.widget<CourseCell>(find.byType(CourseCell));
+      final pair = coursePairFor(_c, cell.cell.course);
       final ink = tester.widget<Ink>(
         find.descendant(
           of: find.byType(CourseCell),
