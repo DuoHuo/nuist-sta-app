@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/images/app_icon.png" alt="NUIST++ Logo" width="160" />
+</p>
+
 # NUIST++
 
 面向南京信息工程大学学生的校园服务 App。
