@@ -192,11 +192,13 @@ void main() {
         matching: find.text(text),
       );
       // §13.16 新名。
-      for (final t in ['周六', '非本周课程', '地点', '老师', '一周起始']) {
+      for (final t in ['地点', '老师', '一周起始']) {
         expect(inGroup('display', t), findsOneWidget, reason: t);
       }
-      // 「周日」既是行名又是「一周起始」的选项。
-      expect(inGroup('display', '周日'), findsNWidgets(2));
+      // 「周日」仅剩「一周起始」选项；周六/非本周已迁入外观页。
+      expect(inGroup('display', '周日'), findsOneWidget);
+      expect(inGroup('display', '周六'), findsNothing);
+      expect(inGroup('display', '非本周课程'), findsNothing);
       for (final t in ['配色与预览', '字号', '格子高度']) {
         expect(inGroup('appearance', t), findsOneWidget, reason: t);
       }

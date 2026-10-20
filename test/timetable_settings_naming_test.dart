@@ -132,11 +132,14 @@ void main() {
       _load();
       await pumpSettings(tester);
       expect(find.widgetWithText(AppBar, '设置'), findsOneWidget);
-      for (final t in ['周六', '非本周课程', '地点', '老师', '一周起始']) {
+      for (final t in ['地点', '老师', '一周起始']) {
         expect(inGroup('display', t), findsOneWidget, reason: t);
       }
       expect(inGroup('display', '周一'), findsOneWidget);
-      expect(inGroup('display', '周日'), findsNWidgets(2));
+      expect(inGroup('display', '周日'), findsOneWidget); // 一周起始选项
+      // 周六 / 非本周已迁入外观页，设置「显示」组不再有。
+      expect(inGroup('display', '周六'), findsNothing);
+      expect(inGroup('display', '非本周课程'), findsNothing);
       for (final t in ['配色与预览', '字号', '小', '标准', '大', '格子高度']) {
         expect(inGroup('appearance', t), findsOneWidget, reason: t);
       }
@@ -164,9 +167,23 @@ void main() {
       await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
       await tester.pumpAndSettle();
       expect(find.widgetWithText(AppBar, '外观'), findsOneWidget);
-      for (final t in ['文字颜色', '不透明度', '今日课表最多显示', '考试颜色']) {
+      for (final t in [
+        '文字颜色',
+        '不透明度',
+        '今日课表最多显示',
+        '表头文字大小',
+        '节数栏显示时间',
+        '周六',
+        '周日',
+        '非本周课程',
+        '考试颜色',
+      ]) {
         expect(find.text(t), findsWidgets, reason: t);
       }
+      expect(
+        find.byKey(const Key('tt_appearance_preview_grid')),
+        findsOneWidget,
+      );
       // 配色方案 A/B/C 入口暂时隐藏。
       expect(find.byKey(const Key('tt_settings_palette')), findsNothing);
       expect(find.widgetWithText(AppBar, '配色'), findsNothing);
@@ -202,9 +219,6 @@ void main() {
       _load();
       await pumpSettings(tester);
       for (final l in [
-        '显示，周六',
-        '显示，周日',
-        '显示，非本周课程',
         '显示，地点',
         '显示，老师',
         '显示，一周起始',
@@ -257,9 +271,6 @@ void main() {
             ),
           )
           .value;
-      expect(sw('tt_settings_saturday'), isFalse);
-      expect(sw('tt_settings_sunday'), isFalse);
-      expect(sw('tt_settings_non_current'), isTrue);
       expect(sw('tt_settings_show_location'), isFalse);
       expect(sw('tt_settings_show_teacher'), isTrue);
       expect(sw('tt_settings_show_tomorrow'), isFalse);
@@ -267,6 +278,9 @@ void main() {
       expect(find.text('80'), findsOneWidget);
       await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
       await tester.pumpAndSettle();
+      expect(sw('tt_settings_saturday'), isFalse);
+      expect(sw('tt_settings_sunday'), isFalse);
+      expect(sw('tt_settings_non_current'), isTrue);
       expect(find.text('60%'), findsOneWidget);
       // A/B/C 入口已隐藏；存储仍保留 paletteScheme=B（见下方 after 断言）。
       expect(find.textContaining('马卡龙'), findsNothing);

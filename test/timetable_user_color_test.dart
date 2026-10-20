@@ -176,10 +176,14 @@ void main() {
       });
     });
 
-    testWidgets('UC03 自定义颜色：拖色相滑条后「使用自定义颜色」', (tester) async {
+    testWidgets('UC03 自定义颜色：点「+」后拖色相滑条再「使用自定义颜色」', (tester) async {
       _load();
       await _pumpGrid(tester);
       await _openColorPicker(tester, '测试课甲');
+      if (find.byKey(const Key('tt_color_hue')).evaluate().isEmpty) {
+        await tester.tap(find.byKey(const Key('tt_color_custom_plus')));
+        await tester.pumpAndSettle();
+      }
       await tester.drag(
         find.byKey(const Key('tt_color_hue')),
         const Offset(200, 0),

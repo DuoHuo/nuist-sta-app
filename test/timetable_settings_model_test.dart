@@ -39,6 +39,33 @@ void main() {
       expect(f(double.infinity), 100);
     });
 
+    test('headerTextSize / showPeriodTimes：缺省与钳制', () {
+      expect(TimetableSettings().headerTextSize, 11);
+      expect(TimetableSettings().showPeriodTimes, isTrue);
+      expect(TimetableSettings.sanitizeHeaderTextSize(null), 11);
+      expect(TimetableSettings.sanitizeHeaderTextSize(9), 10);
+      expect(TimetableSettings.sanitizeHeaderTextSize(15), 14);
+      expect(TimetableSettings.sanitizeHeaderTextSize(12.4), 12.4);
+      expect(
+        TimetableSettings.fromJson({'headerTextSize': 13}).headerTextSize,
+        13,
+      );
+      expect(
+        TimetableSettings.fromJson({'showPeriodTimes': false}).showPeriodTimes,
+        isFalse,
+      );
+      expect(TimetableSettings.fromJson(const {}).showPeriodTimes, isTrue);
+      final round = TimetableSettings(
+        headerTextSize: 12,
+        showPeriodTimes: false,
+      );
+      expect(TimetableSettings.fromJson(round.toJson()).headerTextSize, 12);
+      expect(
+        TimetableSettings.fromJson(round.toJson()).showPeriodTimes,
+        isFalse,
+      );
+    });
+
     test('homeMaxItems：缺省/非法回落 2，1–4 保留', () {
       expect(TimetableSettings().homeMaxItems, 2);
       expect(TimetableSettings.sanitizeHomeMaxItems(null), 2);
