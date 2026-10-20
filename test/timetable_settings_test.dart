@@ -531,10 +531,7 @@ void main() {
       );
       final bg = (ink.decoration! as BoxDecoration).color!;
       final pair = TimetableTheme.autoCoursePair(idx);
-      expect(
-        bg,
-        Color.lerp(TimetableTheme.pageBg, pair.bg, 0.3),
-      );
+      expect(bg, Color.lerp(TimetableTheme.pageBg, pair.bg, 0.3));
       expect(bg.a, 1.0);
       final fg = pair.fg;
       final name = tester.widget<CourseNameText>(find.byType(CourseNameText));

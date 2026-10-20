@@ -179,9 +179,7 @@ void main() {
       );
       expect(
         (preview.decoration! as BoxDecoration).color,
-        TimetableTheme.autoCoursePair(
-          TimetableTheme.colorIndexFor('体育'),
-        ).bg,
+        TimetableTheme.autoCoursePair(TimetableTheme.colorIndexFor('体育')).bg,
       );
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settle(tester);
@@ -216,7 +214,10 @@ void main() {
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settle(tester);
       expect(_c.manualCourses.single.colorIndex, isNull);
-      expect(_c.userColorOf(_c.manualCourses.single), preset.toARGB32() | 0xFF000000);
+      expect(
+        _c.userColorOf(_c.manualCourses.single),
+        preset.toARGB32() | 0xFF000000,
+      );
     });
   });
 
