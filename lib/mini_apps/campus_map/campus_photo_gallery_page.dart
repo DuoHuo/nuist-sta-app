@@ -25,6 +25,8 @@ class CampusPhotoGalleryPage extends StatefulWidget {
 }
 
 class _CampusPhotoGalleryPageState extends State<CampusPhotoGalleryPage> {
+  MapPalette get colors => MapPalette.of(context);
+
   late List<CampusPhoto> _photos = widget.initialPhotos;
   bool _loading = false;
   String? _error;
@@ -75,10 +77,10 @@ class _CampusPhotoGalleryPageState extends State<CampusPhotoGalleryPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    backgroundColor: MapPalette.surface,
+    backgroundColor: colors.surface,
     appBar: AppBar(
       title: Text('${widget.buildingName} · 实拍图片'),
-      backgroundColor: MapPalette.surface,
+      backgroundColor: colors.surface,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       actions: [
@@ -103,16 +105,16 @@ class _CampusPhotoGalleryPageState extends State<CampusPhotoGalleryPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.image_not_supported_outlined,
                 size: 34,
-                color: MapPalette.secondary,
+                color: colors.secondary,
               ),
               const SizedBox(height: 12),
               Text(
                 _error!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 14, color: MapPalette.ink),
+                style: TextStyle(fontSize: 14, color: colors.ink),
               ),
               const SizedBox(height: 12),
               TextButton(onPressed: _load, child: const Text('重新加载')),
@@ -122,27 +124,27 @@ class _CampusPhotoGalleryPageState extends State<CampusPhotoGalleryPage> {
       );
     }
     if (_photos.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
+          padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 Icons.photo_library_outlined,
                 size: 34,
-                color: MapPalette.secondary,
+                color: colors.secondary,
               ),
-              SizedBox(height: 12),
-              Text(
+              const SizedBox(height: 12),
+              const Text(
                 '暂无实拍图片',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
               ),
-              SizedBox(height: 6),
+              const SizedBox(height: 6),
               Text(
                 '采集并上传后，这里会显示建筑实景。',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: MapPalette.secondary),
+                style: TextStyle(fontSize: 12, color: colors.secondary),
               ),
             ],
           ),
@@ -275,34 +277,37 @@ class _PhotoImage extends StatelessWidget {
   final BoxFit fit;
 
   @override
-  Widget build(BuildContext context) => Image.network(
-    photo.url,
-    fit: fit,
-    width: double.infinity,
-    height: double.infinity,
-    loadingBuilder: (context, child, progress) => progress == null
-        ? child
-        : const ColoredBox(
-            color: Color(0xFFE9EDF1),
-            child: Center(
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    return Image.network(
+      photo.url,
+      fit: fit,
+      width: double.infinity,
+      height: double.infinity,
+      loadingBuilder: (context, child, progress) => progress == null
+          ? child
+          : ColoredBox(
+              color: colors.field,
+              child: const Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
               ),
             ),
+      errorBuilder: (context, error, stack) => ColoredBox(
+        color: colors.field,
+        child: Center(
+          child: Icon(
+            Icons.broken_image_outlined,
+            color: colors.secondary,
+            size: 26,
           ),
-    errorBuilder: (context, error, stack) => const ColoredBox(
-      color: Color(0xFFE9EDF1),
-      child: Center(
-        child: Icon(
-          Icons.broken_image_outlined,
-          color: MapPalette.secondary,
-          size: 26,
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// 详情卡片里的实拍图片入口：有图时显示缩略图条与张数，点击进入浏览页。
@@ -324,6 +329,8 @@ class CampusBuildingPhotosEntry extends StatefulWidget {
 }
 
 class _CampusBuildingPhotosEntryState extends State<CampusBuildingPhotosEntry> {
+  MapPalette get colors => MapPalette.of(context);
+
   List<CampusPhoto> _photos = const [];
   bool _loading = false;
   String? _error;
@@ -396,9 +403,9 @@ class _CampusBuildingPhotosEntryState extends State<CampusBuildingPhotosEntry> {
           children: [
             Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.photo_library_outlined,
-                  color: MapPalette.blue,
+                  color: colors.blue,
                   size: 22,
                 ),
                 const SizedBox(width: 12),
@@ -423,9 +430,9 @@ class _CampusBuildingPhotosEntryState extends State<CampusBuildingPhotosEntry> {
                                     (_photos.isEmpty
                                         ? '暂无实拍图片'
                                         : '${_photos.length} 张实景照片'),
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
-                            color: MapPalette.secondary,
+                            color: colors.secondary,
                           ),
                         ),
                       ),

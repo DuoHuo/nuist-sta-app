@@ -38,8 +38,6 @@ class _CampusMapPageState extends State<CampusMapPage> {
   final _searchFocus = FocusNode();
   // 上次处理过的搜索词：控制器在光标/选区变化时也会通知，只有文字变了才重新搜索。
   String _lastQuery = '';
-  // 页面主题只在依赖变化时构建一次（fromSeed 要算整套色板，不能每帧都算）。
-  ThemeData? _theme;
   Timer? _sheetTimer;
   // 地图标注缓存：输入不变时保持同一个列表引用，原生端据此跳过图层重建。
   List<CampusPlace> _markers = const [];
@@ -100,20 +98,8 @@ class _CampusMapPageState extends State<CampusMapPage> {
     unawaited(_loadCampus());
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _theme = ThemeData.light(useMaterial3: true).copyWith(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: MapPalette.blue,
-        brightness: Brightness.light,
-      ),
-      scaffoldBackgroundColor: MapPalette.surface,
-      textTheme: Theme.of(context).textTheme
-          .apply(bodyColor: MapPalette.ink, displayColor: MapPalette.ink),
-      dividerColor: MapPalette.line,
-    );
-  }
+  /// 界面配色，随系统明暗切换；地图底图不受影响。
+  MapPalette get colors => MapPalette.of(context);
 
   /// 面板拖动时不重建整页：等面板停稳（约 160ms 无变化）再把遮挡高度交给
   /// 地图做相机内缩，避免拖动过程中相机跟着反复动画、整页逐帧重建。
@@ -477,7 +463,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
       request = await showModalBottomSheet<CampusRouteRequest>(
         context: context,
         isScrollControlled: true,
-        backgroundColor: MapPalette.surface,
+        backgroundColor: colors.surface,
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
@@ -519,362 +505,356 @@ class _CampusMapPageState extends State<CampusMapPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Theme(
-      data: _theme!,
-      child: AnnotatedRegion<SystemUiOverlayStyle>(
-        value: SystemUiOverlayStyle.dark,
-        child: PopScope<Object?>(
-          canPop: _place == null,
-          onPopInvokedWithResult: (didPop, _) {
-            if (!didPop) {
-              if (_floor != null) {
-                _leaveIndoor();
-              } else {
-                _clearSelection();
-              }
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      // 状态栏压在地图底图上，底图目前只有浅色素材，所以深色模式下也用深色图标。
+      value: SystemUiOverlayStyle.dark,
+      child: PopScope<Object?>(
+        canPop: _place == null,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) {
+            if (_floor != null) {
+              _leaveIndoor();
+            } else {
+              _clearSelection();
             }
-          },
-          child: Scaffold(
-            resizeToAvoidBottomInset: false,
-            body: LayoutBuilder(
-              builder: (context, constraints) {
-                final wide = constraints.maxWidth >= 700;
-                final safe = MediaQuery.paddingOf(context);
-                return Stack(
-                  children: [
-                    Positioned.fill(
-                      child: _style.trim().isEmpty
-                          ? (_loading
-                                ? const MapLoadingView()
-                                : _error != null
-                                ? MapUnconfiguredView(
-                                    wide: wide,
-                                    title: _error!,
-                                    message: '检查网络连接后，再试一次。',
-                                    action: TextButton(
-                                      onPressed: _loadCampus,
-                                      child: const Text('重新加载'),
-                                    ),
-                                  )
-                                : MapUnconfiguredView(
-                                    wide: wide,
-                                    message: _campus.warning,
-                                  ))
-                          : CampusMapCanvas(
-                              styleUrl: _style,
-                              useNativeMap: widget.useNativeMap,
-                              places: _campus.places,
-                              selectedPlace: _place,
-                              floor: _floor,
-                              selectedRoom: _room,
-                              rooms: _floorData.rooms,
-                              buildingGeoJson: _campus.buildingGeoJson,
-                              featuresGeoJson: _campus.featuresGeoJson,
-                              floorGeoJson: _floorData.geoJson,
-                              ghostFloorsGeoJson: _ghostFloors,
-                              streetCoverageGeoJson:
-                                  _campus.streetCoverageGeoJson,
-                              routeGeoJson: _route?.geoJson,
-                              streetCoverage:
-                                  _layer == CampusMapLayer.streetView,
-                              mapLayer: _layer,
-                              showRoute: _route != null,
-                              category: _category,
-                              resetToken: _resetToken,
-                              zoomDelta: _zoomDelta,
-                              userPoint: _userPoint,
-                              focusToken: _focusToken,
-                              markerPlaces: _markerPlaces(),
-                              viewportInsets: wide
-                                  ? const EdgeInsets.only(left: 352 + 32)
-                                  : EdgeInsets.only(
-                                      bottom: _place == null ? 0 : _sheetInset,
-                                    ),
-                              onPlaceSelected: _selectPlace,
-                              onRoomSelected: (room) {
-                                _routeRevision++;
-                                setState(() {
-                                  _room = room;
-                                  _route = null;
-                                  _routing = false;
-                                });
-                                _expandSheet(.43);
-                              },
-                              onStreetEntry: _openStreet,
-                            ),
-                    ),
-                    Positioned(
-                      top: safe.top + 16,
-                      left: 16,
-                      right: 80,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          MapSurface(
-                            radius: 16,
-                            child: MapIconButton(
-                              icon: Icons.chevron_left_rounded,
-                              label: _floor != null
-                                  ? '退出室内'
-                                  : _place != null
-                                  ? '返回校园总览'
-                                  : '返回应用',
-                              onPressed: () {
-                                if (_floor != null) {
-                                  _leaveIndoor();
-                                } else if (_place != null) {
-                                  _clearSelection();
-                                } else {
-                                  Navigator.of(context).maybePop();
-                                }
-                              },
-                            ),
-                          ),
-                          if (_place == null && _route == null) ...[
-                            const SizedBox(width: 10),
-                            Expanded(child: _topSearchBar()),
-                          ],
-                        ],
-                      ),
-                    ),
-                    Positioned(
-                      top: safe.top + 16,
-                      right: 16,
-                      child: _tools(wide),
-                    ),
-                    if (_floor != null)
-                      Positioned(
-                        right: 16,
-                        top: safe.top + 120,
-                        bottom:
-                            (wide ? 24.0 : constraints.maxHeight * .43) + 16,
-                        child: LayoutBuilder(
-                          builder: (context, band) => Align(
-                            alignment: Alignment.center,
-                            child: _floorSelector(band.maxHeight),
-                          ),
-                        ),
-                      ),
-                    if (_layer == CampusMapLayer.streetView)
-                      Positioned(
-                        top: safe.top + 94,
-                        left: wide ? 392 : 16,
-                        right: 80,
-                        child: MapSurface(
-                          radius: 14,
-                          padding: const EdgeInsets.all(12),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.streetview_rounded,
-                                size: 19,
-                                color: MapPalette.blue,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  _campus.streetCoverageGeoJson == null
-                                      ? '街景暂未开放'
-                                      : '点击蓝色覆盖点，进入街景',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: MapPalette.secondary,
+          }
+        },
+        child: Scaffold(
+          resizeToAvoidBottomInset: false,
+          body: LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 700;
+              final safe = MediaQuery.paddingOf(context);
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    child: _style.trim().isEmpty
+                        ? (_loading
+                              ? const MapLoadingView()
+                              : _error != null
+                              ? MapUnconfiguredView(
+                                  wide: wide,
+                                  title: _error!,
+                                  message: '检查网络连接后，再试一次。',
+                                  action: TextButton(
+                                    onPressed: _loadCampus,
+                                    child: const Text('重新加载'),
                                   ),
-                                ),
-                              ),
-                            ],
+                                )
+                              : MapUnconfiguredView(
+                                  wide: wide,
+                                  message: _campus.warning,
+                                ))
+                        : CampusMapCanvas(
+                            styleUrl: _style,
+                            useNativeMap: widget.useNativeMap,
+                            places: _campus.places,
+                            selectedPlace: _place,
+                            floor: _floor,
+                            selectedRoom: _room,
+                            rooms: _floorData.rooms,
+                            buildingGeoJson: _campus.buildingGeoJson,
+                            featuresGeoJson: _campus.featuresGeoJson,
+                            floorGeoJson: _floorData.geoJson,
+                            ghostFloorsGeoJson: _ghostFloors,
+                            streetCoverageGeoJson:
+                                _campus.streetCoverageGeoJson,
+                            routeGeoJson: _route?.geoJson,
+                            streetCoverage: _layer == CampusMapLayer.streetView,
+                            mapLayer: _layer,
+                            showRoute: _route != null,
+                            category: _category,
+                            resetToken: _resetToken,
+                            zoomDelta: _zoomDelta,
+                            userPoint: _userPoint,
+                            focusToken: _focusToken,
+                            markerPlaces: _markerPlaces(),
+                            viewportInsets: wide
+                                ? const EdgeInsets.only(left: 352 + 32)
+                                : EdgeInsets.only(
+                                    bottom: _place == null ? 0 : _sheetInset,
+                                  ),
+                            onPlaceSelected: _selectPlace,
+                            onRoomSelected: (room) {
+                              _routeRevision++;
+                              setState(() {
+                                _room = room;
+                                _route = null;
+                                _routing = false;
+                              });
+                              _expandSheet(.43);
+                            },
+                            onStreetEntry: _openStreet,
                           ),
+                  ),
+                  Positioned(
+                    top: safe.top + 16,
+                    left: 16,
+                    right: 80,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        MapSurface(
+                          radius: 16,
+                          child: MapIconButton(
+                            icon: Icons.chevron_left_rounded,
+                            label: _floor != null
+                                ? '退出室内'
+                                : _place != null
+                                ? '返回校园总览'
+                                : '返回应用',
+                            onPressed: () {
+                              if (_floor != null) {
+                                _leaveIndoor();
+                              } else if (_place != null) {
+                                _clearSelection();
+                              } else {
+                                Navigator.of(context).maybePop();
+                              }
+                            },
+                          ),
+                        ),
+                        if (_place == null && _route == null) ...[
+                          const SizedBox(width: 10),
+                          Expanded(child: _topSearchBar()),
+                        ],
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    top: safe.top + 16,
+                    right: 16,
+                    child: _tools(wide),
+                  ),
+                  if (_floor != null)
+                    Positioned(
+                      right: 16,
+                      top: safe.top + 120,
+                      bottom: (wide ? 24.0 : constraints.maxHeight * .43) + 16,
+                      child: LayoutBuilder(
+                        builder: (context, band) => Align(
+                          alignment: Alignment.center,
+                          child: _floorSelector(band.maxHeight),
                         ),
                       ),
-                    if (wide)
-                      Positioned(
-                        left: 16,
-                        top: safe.top + 100,
-                        bottom: safe.bottom + 24,
-                        width: 352,
-                        child: MapSurface(
-                          radius: 26,
-                          child: ListView(
-                            padding: const EdgeInsets.all(20),
-                            children: _panelChildren(),
-                          ),
-                        ),
-                      )
-                    else
-                      DraggableScrollableSheet(
-                        controller: _sheet,
-                        initialChildSize: .33,
-                        minChildSize: 0,
-                        maxChildSize: .88,
-                        snap: true,
-                        snapSizes: const [.33, .55, .88],
-                        builder: (context, controller) => Container(
-                          decoration: const BoxDecoration(
-                            color: MapPalette.surface,
-                            borderRadius: BorderRadius.vertical(
-                              top: Radius.circular(28),
+                    ),
+                  if (_layer == CampusMapLayer.streetView)
+                    Positioned(
+                      top: safe.top + 94,
+                      left: wide ? 392 : 16,
+                      right: 80,
+                      child: MapSurface(
+                        radius: 14,
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.streetview_rounded,
+                              size: 19,
+                              color: colors.blue,
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Color(0x1A243447),
-                                blurRadius: 32,
-                                offset: Offset(0, -4),
-                              ),
-                            ],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: const BorderRadius.vertical(
-                              top: Radius.circular(28),
-                            ),
-                            child: Material(
-                              color: MapPalette.surface,
-                              child: ListView(
-                                controller: controller,
-                                padding: EdgeInsets.fromLTRB(
-                                  20,
-                                  0,
-                                  20,
-                                  safe.bottom +
-                                      MediaQuery.viewInsetsOf(context).bottom +
-                                      24,
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _campus.streetCoverageGeoJson == null
+                                    ? '街景暂未开放'
+                                    : '点击蓝色覆盖点，进入街景',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: colors.secondary,
                                 ),
-                                children: [
-                                  Center(
-                                    child: Semantics(
-                                      label: '展开地图面板',
-                                      button: true,
-                                      child: InkWell(
-                                        onTap: () => _expandSheet(
-                                          _sheet.size < .5 ? .88 : .33,
-                                        ),
-                                        child: SizedBox(
-                                          width: 64,
-                                          height: 28,
-                                          child: Center(
-                                            child: Container(
-                                              width: 36,
-                                              height: 5,
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFFC8CBD0),
-                                                borderRadius:
-                                                    BorderRadius.circular(4),
-                                              ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  if (wide)
+                    Positioned(
+                      left: 16,
+                      top: safe.top + 100,
+                      bottom: safe.bottom + 24,
+                      width: 352,
+                      child: MapSurface(
+                        radius: 26,
+                        child: ListView(
+                          padding: const EdgeInsets.all(20),
+                          children: _panelChildren(),
+                        ),
+                      ),
+                    )
+                  else
+                    DraggableScrollableSheet(
+                      controller: _sheet,
+                      initialChildSize: .33,
+                      minChildSize: 0,
+                      maxChildSize: .88,
+                      snap: true,
+                      snapSizes: const [.33, .55, .88],
+                      builder: (context, controller) => Container(
+                        decoration: BoxDecoration(
+                          color: colors.surface,
+                          borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(28),
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: colors.shadow,
+                              blurRadius: 32,
+                              offset: const Offset(0, -4),
+                            ),
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(28),
+                          ),
+                          child: Material(
+                            color: colors.surface,
+                            child: ListView(
+                              controller: controller,
+                              padding: EdgeInsets.fromLTRB(
+                                20,
+                                0,
+                                20,
+                                safe.bottom +
+                                    MediaQuery.viewInsetsOf(context).bottom +
+                                    24,
+                              ),
+                              children: [
+                                Center(
+                                  child: Semantics(
+                                    label: '展开地图面板',
+                                    button: true,
+                                    child: InkWell(
+                                      onTap: () => _expandSheet(
+                                        _sheet.size < .5 ? .88 : .33,
+                                      ),
+                                      child: SizedBox(
+                                        width: 64,
+                                        height: 28,
+                                        child: Center(
+                                          child: Container(
+                                            width: 36,
+                                            height: 5,
+                                            decoration: BoxDecoration(
+                                              color: colors.handle,
+                                              borderRadius:
+                                                  BorderRadius.circular(4),
                                             ),
                                           ),
                                         ),
                                       ),
                                     ),
                                   ),
-                                  ..._panelChildren(),
+                                ),
+                                ..._panelChildren(),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (wide)
+                    Positioned(
+                      left: 384,
+                      bottom: safe.bottom + 24,
+                      child: _locateButton(),
+                    )
+                  else
+                    AnimatedBuilder(
+                      animation: _sheet,
+                      builder: (context, _) {
+                        final size = _sheet.isAttached ? _sheet.size : .33;
+                        return Positioned(
+                          left: 16,
+                          bottom:
+                              safe.bottom +
+                              12 +
+                              (size < .02 ? 0 : size * constraints.maxHeight),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [_locateButton()],
+                          ),
+                        );
+                      },
+                    ),
+                  // 导航中/预览时的顶部起终点条（仿百度导航页顶栏）。
+                  if (_route != null)
+                    Positioned(
+                      top: safe.top + 12,
+                      left: wide ? 384 : 16,
+                      right: 16,
+                      child: MapSurface(
+                        radius: 18,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 10,
+                        ),
+                        child: Row(
+                          children: [
+                            MapIconButton(
+                              icon: Icons.arrow_back_rounded,
+                              label: '结束路线',
+                              onPressed: _endRoute,
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.circle,
+                                        size: 10,
+                                        color: Color(0xFF34A853),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          _routeOriginLabel,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: colors.secondary,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.place_rounded,
+                                        size: 14,
+                                        color: Color(0xFFE15A4E),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          _room?.name ?? _place?.name ?? '目的地',
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ],
                               ),
                             ),
-                          ),
+                          ],
                         ),
                       ),
-                    if (wide)
-                      Positioned(
-                        left: 384,
-                        bottom: safe.bottom + 24,
-                        child: _locateButton(),
-                      )
-                    else
-                      AnimatedBuilder(
-                        animation: _sheet,
-                        builder: (context, _) {
-                          final size = _sheet.isAttached ? _sheet.size : .33;
-                          return Positioned(
-                            left: 16,
-                            bottom:
-                                safe.bottom +
-                                12 +
-                                (size < .02 ? 0 : size * constraints.maxHeight),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [_locateButton()],
-                            ),
-                          );
-                        },
-                      ),
-                    // 导航中/预览时的顶部起终点条（仿百度导航页顶栏）。
-                    if (_route != null)
-                      Positioned(
-                        top: safe.top + 12,
-                        left: wide ? 384 : 16,
-                        right: 16,
-                        child: MapSurface(
-                          radius: 18,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 10,
-                          ),
-                          child: Row(
-                            children: [
-                              MapIconButton(
-                                icon: Icons.arrow_back_rounded,
-                                label: '结束路线',
-                                onPressed: _endRoute,
-                              ),
-                              const SizedBox(width: 4),
-                              Expanded(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        const Icon(
-                                          Icons.circle,
-                                          size: 10,
-                                          color: Color(0xFF34A853),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Text(
-                                            _routeOriginLabel,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                              fontSize: 13,
-                                              color: MapPalette.secondary,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Row(
-                                      children: [
-                                        const Icon(
-                                          Icons.place_rounded,
-                                          size: 14,
-                                          color: Color(0xFFE15A4E),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        Expanded(
-                                          child: Text(
-                                            _room?.name ??
-                                                _place?.name ??
-                                                '目的地',
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
+                    ),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -914,7 +894,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
   /// 面板内容拆成列表项交给 ListView 懒构建：分类列表可能有几百个地点，
   /// 不能塞进一个 Column 一次性全部布局。
   List<Widget> _panelChildren() {
-    if (_route == null && _place == null) return _explorePanel().children();
+    if (_route == null && _place == null) {
+      return _explorePanel().children(context);
+    }
     return [_panel()];
   }
 
@@ -1086,11 +1068,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
           child: Row(
             children: [
               const SizedBox(width: 14),
-              const Icon(
-                Icons.search_rounded,
-                size: 21,
-                color: MapPalette.secondary,
-              ),
+              Icon(Icons.search_rounded, size: 21, color: colors.secondary),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -1099,9 +1077,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 14,
-                    color: query.isEmpty
-                        ? MapPalette.secondary
-                        : MapPalette.ink,
+                    color: query.isEmpty ? colors.secondary : colors.ink,
                   ),
                 ),
               ),
@@ -1146,12 +1122,12 @@ class _CampusMapPageState extends State<CampusMapPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Padding(
-                padding: EdgeInsets.only(top: 6, bottom: 3),
+              Padding(
+                padding: const EdgeInsets.only(top: 6, bottom: 3),
                 child: Icon(
                   Icons.layers_outlined,
                   size: 15,
-                  color: MapPalette.secondary,
+                  color: colors.secondary,
                 ),
               ),
               const Divider(height: 1, indent: 8, endIndent: 8),
@@ -1181,11 +1157,11 @@ class _CampusMapPageState extends State<CampusMapPage> {
                               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               visualDensity: VisualDensity.compact,
                               backgroundColor: selected
-                                  ? MapPalette.blue
+                                  ? colors.blue
                                   : Colors.transparent,
                               foregroundColor: selected
                                   ? Colors.white
-                                  : MapPalette.ink,
+                                  : colors.ink,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10),
                               ),
@@ -1222,7 +1198,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
   Future<void> _showLayers() async {
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: MapPalette.surface,
+      backgroundColor: colors.surface,
       showDragHandle: true,
       builder: (context) {
         // 图层卡片：百度地图式缩略图 + 名称；选中项蓝色描边，卫星图预留（灰置）。
@@ -1234,8 +1210,8 @@ class _CampusMapPageState extends State<CampusMapPage> {
         }) {
           final selected = _layer == layer && !reserved;
           final fg = reserved
-              ? MapPalette.secondary
-              : (selected ? MapPalette.blue : MapPalette.ink);
+              ? colors.secondary
+              : (selected ? colors.blue : colors.ink);
           return GestureDetector(
             onTap: () {
               if (reserved) {
@@ -1264,7 +1240,7 @@ class _CampusMapPageState extends State<CampusMapPage> {
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
-                        color: selected ? MapPalette.blue : MapPalette.line,
+                        color: selected ? colors.blue : colors.line,
                         width: selected ? 2 : 1,
                       ),
                     ),
@@ -1360,9 +1336,9 @@ class _CampusMapPageState extends State<CampusMapPage> {
                 const Divider(),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: const Icon(
+                  leading: Icon(
                     Icons.center_focus_strong_outlined,
-                    color: MapPalette.blue,
+                    color: colors.blue,
                   ),
                   title: const Text('重置地图视角'),
                   onTap: _style.isEmpty

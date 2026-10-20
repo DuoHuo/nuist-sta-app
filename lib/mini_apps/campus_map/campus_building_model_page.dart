@@ -30,6 +30,8 @@ class CampusBuildingModelEntry extends StatefulWidget {
 }
 
 class _CampusBuildingModelEntryState extends State<CampusBuildingModelEntry> {
+  MapPalette get colors => MapPalette.of(context);
+
   CampusBuildingModel? _model;
   String? _error;
   bool _loading = false;
@@ -96,7 +98,7 @@ class _CampusBuildingModelEntryState extends State<CampusBuildingModelEntry> {
     radius: 18,
     child: ListTile(
       minVerticalPadding: 12,
-      leading: const Icon(Icons.view_in_ar_outlined, color: MapPalette.blue),
+      leading: Icon(Icons.view_in_ar_outlined, color: colors.blue),
       title: const Text('三维模型', style: TextStyle(fontWeight: FontWeight.w600)),
       subtitle: Semantics(
         liveRegion: true,
@@ -151,6 +153,8 @@ class CampusBuildingModelPage extends StatefulWidget {
 }
 
 class _CampusBuildingModelPageState extends State<CampusBuildingModelPage> {
+  MapPalette get colors => MapPalette.of(context);
+
   int? _levelIndex;
   int _attempt = 0;
 
@@ -174,85 +178,79 @@ class _CampusBuildingModelPageState extends State<CampusBuildingModelPage> {
         !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS);
-    final theme = ThemeData.light(useMaterial3: true).copyWith(
-      colorScheme: ColorScheme.fromSeed(seedColor: MapPalette.blue),
-      scaffoldBackgroundColor: MapPalette.surface,
-    );
-    return Theme(
-      data: theme,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text('${widget.buildingName} · 三维模型'),
-          actions: [
-            IconButton(
-              tooltip: '重新加载模型',
-              onPressed: () => setState(() => _attempt++),
-              icon: const Icon(Icons.refresh_rounded),
-            ),
-          ],
-        ),
-        body: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                child: DropdownButtonFormField<int>(
-                  key: ValueKey(_levelIndex),
-                  initialValue: _levelIndex ?? _wholeBuilding,
-                  isExpanded: true,
-                  itemHeight: null,
-                  decoration: const InputDecoration(
-                    labelText: '查看范围',
-                    border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 16,
+    return Scaffold(
+      backgroundColor: colors.surface,
+      appBar: AppBar(
+        title: Text('${widget.buildingName} · 三维模型'),
+        actions: [
+          IconButton(
+            tooltip: '重新加载模型',
+            onPressed: () => setState(() => _attempt++),
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: DropdownButtonFormField<int>(
+                key: ValueKey(_levelIndex),
+                initialValue: _levelIndex ?? _wholeBuilding,
+                isExpanded: true,
+                itemHeight: null,
+                decoration: const InputDecoration(
+                  labelText: '查看范围',
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 16,
+                  ),
+                ),
+                items: [
+                  const DropdownMenuItem(
+                    value: _wholeBuilding,
+                    child: SizedBox(
+                      height: 48,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('完整模型'),
+                      ),
                     ),
                   ),
-                  items: [
-                    const DropdownMenuItem(
-                      value: _wholeBuilding,
-                      child: SizedBox(
-                        height: 48,
+                  for (final floor in widget.model.floors)
+                    DropdownMenuItem(
+                      value: floor.levelIndex,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(minHeight: 48),
                         child: Align(
                           alignment: Alignment.centerLeft,
-                          child: Text('完整模型'),
+                          child: Text(floor.displayName),
                         ),
                       ),
                     ),
-                    for (final floor in widget.model.floors)
-                      DropdownMenuItem(
-                        value: floor.levelIndex,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(minHeight: 48),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(floor.displayName),
-                          ),
-                        ),
-                      ),
-                  ],
-                  onChanged: (value) => setState(() {
-                    _levelIndex = value == _wholeBuilding ? null : value;
-                  }),
-                ),
+                ],
+                onChanged: (value) => setState(() {
+                  _levelIndex = value == _wholeBuilding ? null : value;
+                }),
               ),
-              Expanded(
-                child: supported
-                    ? _ModelWebView(
-                        key: ValueKey('$uri#$_attempt'),
-                        uri: uri,
-                        onRetry: () => setState(() => _attempt++),
-                      )
-                    : _ViewerMessage(
-                        title: '当前平台暂不支持内嵌三维查看',
-                        message: '可在 Android 或 iOS 应用中查看，也可复制下方链接到浏览器打开。',
-                        uri: uri,
-                      ),
-              ),
-            ],
-          ),
+            ),
+            Expanded(
+              child: supported
+                  ? _ModelWebView(
+                      key: ValueKey('$uri#$_attempt'),
+                      uri: uri,
+                      onRetry: () => setState(() => _attempt++),
+                    )
+                  : _ViewerMessage(
+                      title: '当前平台暂不支持内嵌三维查看',
+                      message: '可在 Android 或 iOS 应用中查看，也可复制下方链接到浏览器打开。',
+                      uri: uri,
+                    ),
+            ),
+          ],
         ),
       ),
     );
@@ -405,75 +403,74 @@ class _ViewerMessage extends StatelessWidget {
   final VoidCallback? onRetry;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.view_in_ar_outlined,
-              size: 40,
-              color: MapPalette.blue,
-            ),
-            const SizedBox(height: 16),
-            Semantics(
-              liveRegion: true,
-              child: Text(
-                title,
-                style: Theme.of(context).textTheme.titleLarge,
-                textAlign: TextAlign.center,
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.view_in_ar_outlined, size: 40, color: colors.blue),
+              const SizedBox(height: 16),
+              Semantics(
+                liveRegion: true,
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleLarge,
+                  textAlign: TextAlign.center,
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            Text(message, textAlign: TextAlign.center),
-            const SizedBox(height: 16),
-            SelectableText(uri.toString()),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              alignment: WrapAlignment.center,
-              children: [
-                if (onRetry != null)
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(
+              const SizedBox(height: 12),
+              Text(message, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              SelectableText(uri.toString()),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  if (onRetry != null)
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(48, 48),
+                      ),
+                      onPressed: onRetry,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('重试'),
+                    ),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
                       minimumSize: const Size(48, 48),
                     ),
-                    onPressed: onRetry,
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('重试'),
+                    onPressed: () async {
+                      try {
+                        await Clipboard.setData(
+                          ClipboardData(text: uri.toString()),
+                        );
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('查看链接已复制')),
+                        );
+                      } catch (_) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('复制失败，请长按上方链接手动复制')),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.copy_outlined),
+                    label: const Text('复制查看链接'),
                   ),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(48, 48),
-                  ),
-                  onPressed: () async {
-                    try {
-                      await Clipboard.setData(
-                        ClipboardData(text: uri.toString()),
-                      );
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(
-                        context,
-                      ).showSnackBar(const SnackBar(content: Text('查看链接已复制')));
-                    } catch (_) {
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('复制失败，请长按上方链接手动复制')),
-                      );
-                    }
-                  },
-                  icon: const Icon(Icons.copy_outlined),
-                  label: const Text('复制查看链接'),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

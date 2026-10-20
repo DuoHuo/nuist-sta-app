@@ -146,7 +146,7 @@ UI 侧用 `ListenableBuilder(listenable: controller, builder: …)` 订阅。跨
   **只用于构造主题**，业务代码不要直接引用
 - 小程序私有配色同样按明暗取值：课表用 `TimetableTheme.colorsOf(context)`
   （返回 `TimetableColors`），电费用 `ElecColors.of(palette)`，空教室用
-  `ClassroomFillColors`
+  `ClassroomFillColors`，校园地图用 `MapPalette.of(context)`
 - 没有自定义字体
 
 主题在 `lib/core/theme.dart` 里，`appLightTheme()` / `appDarkTheme()` 两个函数，
@@ -157,8 +157,9 @@ UI 侧用 `ListenableBuilder(listenable: controller, builder: …)` 订阅。跨
 - 贴在品牌色实心块上的白字白图标（底色本身不随主题变）
 - 导出页的二维码（必须浅底深码才扫得出）、扫码页（相机取景框固定深色）
 - 电费折线图的 tooltip（固定深底白字）
-- 校园地图：底图 tile 与 `assets/map_layers/*.png` 图例都是浅色素材，
-  深色底图需服务端提供，目前整个小程序维持浅色
+- 校园地图：底图 tile、`campus_map_native.dart` 里的自绘图层色与
+  `assets/map_layers/*.png` 图例都是浅色素材，深色底图需服务端提供，
+  所以底图和压在底图上的状态栏图标维持浅色；面板、浮层、弹层等界面外壳跟随主题
 - WebView 承载的网页（H5 小程序、公告详情、门户登录绑定）是学校自己的页面，
   只适配容器层（顶栏、进度条、加载态、错误页），不注入 CSS / JS 反色
 

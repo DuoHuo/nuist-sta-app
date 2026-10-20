@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/colors.dart';
+import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_location.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_page.dart';
@@ -57,6 +59,7 @@ void main() {
     UserLocationSource location = const DeviceUserLocation(),
     Size size = const Size(390, 844),
     double textScale = 1,
+    ThemeData? theme,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
@@ -64,7 +67,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
       MaterialApp(
-        theme: ThemeData(fontFamily: 'MapTestFont'),
+        theme: theme ?? ThemeData(fontFamily: 'MapTestFont'),
         builder: (context, child) => MediaQuery(
           data: MediaQuery.of(context).copyWith(
             textScaler: TextScaler.linear(textScale),
@@ -219,6 +222,19 @@ void main() {
     await mount(tester, textScale: 2);
     await tester.tap(find.byTooltip('地图图层'));
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('dark theme renders dark map chrome', (tester) async {
+    await mount(tester, theme: appDarkTheme());
+    Iterable<Color?> materialColors() =>
+        tester.widgetList<Material>(find.byType(Material)).map((m) => m.color);
+    expect(materialColors(), contains(AppPalette.dark.pageBg));
+    expect(materialColors(), isNot(contains(Colors.white)));
+
+    await tester.tap(find.byTooltip('地图图层'));
+    await tester.pumpAndSettle();
+    expect(materialColors(), isNot(contains(Colors.white)));
     expect(tester.takeException(), isNull);
   });
 }

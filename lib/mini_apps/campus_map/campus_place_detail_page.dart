@@ -33,6 +33,8 @@ class CampusPlaceDetailPage extends StatefulWidget {
 }
 
 class _CampusPlaceDetailPageState extends State<CampusPlaceDetailPage> {
+  MapPalette get colors => MapPalette.of(context);
+
   CampusMapApi? _owned;
   late final CampusMapSource _source;
   CampusPlace? _place;
@@ -96,13 +98,13 @@ class _CampusPlaceDetailPageState extends State<CampusPlaceDetailPage> {
   Widget build(BuildContext context) {
     final place = _place;
     return Scaffold(
-      backgroundColor: MapPalette.surface,
+      backgroundColor: colors.surface,
       appBar: AppBar(
         title: Text(
           place != null && place.name.isNotEmpty ? place.name : '地物详情',
         ),
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
+        backgroundColor: colors.panel,
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
       ),
       body: _loading
@@ -125,11 +127,7 @@ class _CampusPlaceDetailPageState extends State<CampusPlaceDetailPage> {
           padding: const EdgeInsets.all(16),
           child: Text(
             place.description,
-            style: const TextStyle(
-              fontSize: 14.5,
-              height: 1.65,
-              color: MapPalette.ink,
-            ),
+            style: TextStyle(fontSize: 14.5, height: 1.65, color: colors.ink),
           ),
         ),
       ],
@@ -160,8 +158,8 @@ class _CampusPlaceDetailPageState extends State<CampusPlaceDetailPage> {
         spacing: 8,
         runSpacing: 8,
         children: [
-          _chip(_kindLabel(place), MapPalette.blue),
-          if (place.hasIndoor) _chip('有室内图', MapPalette.green),
+          _chip(_kindLabel(place), colors.blue),
+          if (place.hasIndoor) _chip('有室内图', colors.green),
         ],
       ),
     ],
@@ -212,15 +210,15 @@ class _CampusPlaceDetailPageState extends State<CampusPlaceDetailPage> {
           width: 72,
           child: Text(
             label,
-            style: const TextStyle(fontSize: 13.5, color: MapPalette.secondary),
+            style: TextStyle(fontSize: 13.5, color: colors.secondary),
           ),
         ),
         Expanded(
           child: Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13.5,
-              color: MapPalette.ink,
+              color: colors.ink,
               fontWeight: FontWeight.w500,
             ),
           ),
@@ -271,32 +269,31 @@ class _ErrorView extends StatelessWidget {
   final VoidCallback onRetry;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: Padding(
-      padding: const EdgeInsets.all(32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(
-            Icons.error_outline,
-            size: 40,
-            color: MapPalette.secondary,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: MapPalette.secondary, height: 1.6),
-          ),
-          const SizedBox(height: 16),
-          MapAction(
-            icon: Icons.refresh_rounded,
-            label: '重试',
-            primary: true,
-            onPressed: onRetry,
-          ),
-        ],
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, size: 40, color: colors.secondary),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: colors.secondary, height: 1.6),
+            ),
+            const SizedBox(height: 16),
+            MapAction(
+              icon: Icons.refresh_rounded,
+              label: '重试',
+              primary: true,
+              onPressed: onRetry,
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
