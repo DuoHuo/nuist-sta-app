@@ -66,6 +66,11 @@ NUIST++ 使用学校统一门户获取需要登录的数据。登录和绑定在
 - 学校系统可能随时调整，项目不保证接口持续可用
 - 使用本软件产生的任何后果由使用者自行承担
 
+## Acknowledgements
+<p align="center">
+  <a href="https://github.com/DuoHuo/nuist-sta-app/graphs/contributors"><img src="https://contrib.rocks/image?repo=DuoHuo/nuist-sta-app" alt="Contributors" /></a>
+</p>
+
 ## License
 
 To be determined.
