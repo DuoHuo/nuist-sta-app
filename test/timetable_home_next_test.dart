@@ -284,6 +284,34 @@ void main() {
       expect(t.overflow, isNot(TextOverflow.ellipsis));
     });
 
+    testWidgets('HN12b 刷新钮 48dp 热区叠放，不撑高标题行；更新失败静默', (tester) async {
+      TimetableController.bindingCheck = () async => true;
+      _load(manual: [a]);
+      _c.debugSetSnapshot(
+        _c.snapshot.copyWith(
+          syncedAt: DateTime(2026, 10, 12, 6),
+          lastError: 'offline (test)',
+        ),
+      );
+      await pumpHome(tester, DateTime(2026, 10, 12, 7));
+      expect(
+        tester.getSize(find.byKey(const Key('home_card_refresh'))),
+        const Size(48, 48),
+      );
+      // 标题上方只留卡片内边距 12：刷新钮叠放后不再撑出额外的上下白。
+      final card = tester.getRect(find.byType(TimetableHomeCard));
+      final title = tester.getRect(find.byKey(const Key('home_card_title')));
+      expect(title.top - card.top, lessThan(16));
+      // 有缓存且上次失败：不显示「缓存于 …」。
+      expect(find.textContaining('缓存于'), findsNothing);
+      // 手动刷新失败同样静默：不弹 SnackBar。
+      await tester.tap(find.byKey(const Key('home_card_refresh')));
+      await _io(tester, 5);
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byKey(const Key('home_card_sync_snackbar')), findsNothing);
+      expect(find.textContaining('同步失败'), findsNothing);
+    });
+
     testWidgets('HN13 点刷新走 manualSync：同步中图标旋转，结束后停止', (tester) async {
       _load(manual: [a]);
       final gate = Completer<void>();

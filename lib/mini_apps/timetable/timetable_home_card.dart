@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -12,6 +10,9 @@ import 'timetable_week_layout.dart';
 import 'timetable_course_color.dart';
 
 const _weekdayCn = ['一', '二', '三', '四', '五', '六', '日'];
+
+/// 标题行右侧箭头宽度（[_CardHeader] 与叠放的 [_RefreshButton] 共用同一数值）。
+const double _chevronSize = 20;
 
 /// 明天跨周（如今天周日）时附带周次：「明天（周一·第 7 周）」；否则「明天（周X）」。
 String tomorrowLabel(DateTime tomorrow, DateTime? termStart) {
@@ -80,74 +81,19 @@ class TimetableHomeCard extends StatefulWidget {
 class _TimetableHomeCardState extends State<TimetableHomeCard> {
   final _controller = TimetableController.instance;
 
-  /// item 2：本卡片发起的手动同步还没出结果（只为它弹失败提示）。
-  bool _homeSyncPending = false;
-  StreamSubscription<TimetableSyncOutcome>? _outcomeSub;
-
   @override
   void initState() {
     super.initState();
     _controller.ensureStarted();
-    _outcomeSub = _controller.syncOutcomes.listen(_onSyncOutcome);
-  }
-
-  @override
-  void dispose() {
-    _outcomeSub?.cancel();
-    super.dispose();
   }
 
   /// item 2：标题行刷新按钮，与课表顶栏同步图标同一个 [TimetableController.manualSync]；
-  /// 未绑定门户时去登录。
+  /// 未绑定门户时去登录。同步失败静默处理（不弹提示、不显示缓存时间）。
   Future<void> _manualSync() async {
     if (_controller.syncStatus == TimetableSyncStatus.syncing) return;
-    _homeSyncPending = true;
     final started = await _controller.manualSync();
     if (started) return;
-    _homeSyncPending = false;
     if (!_controller.portalBound && mounted) await _openLogin();
-  }
-
-  /// 手动同步失败的提示与课表页 AS-1 一致（登录过期由课表页 / 设置处理，不在这里弹）。
-  void _onSyncOutcome(TimetableSyncOutcome outcome) {
-    if (!_homeSyncPending || outcome.automatic || !mounted) return;
-    _homeSyncPending = false;
-    if (outcome.success ||
-        outcome.failure == TimetableSyncFailure.sessionExpired) {
-      return;
-    }
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    if (messenger == null) return;
-    final network =
-        outcome.failure == TimetableSyncFailure.network ||
-        outcome.failure == TimetableSyncFailure.server;
-    final text = !network
-        ? '同步失败，请稍后再试'
-        : (outcome.failure == TimetableSyncFailure.network && outcome.offline
-              ? '同步失败，请检查网络'
-              : '同步超时，请稍后再试');
-    var fired = false;
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(
-        key: const Key('home_card_sync_snackbar'),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 4),
-        persist: false,
-        content: Text(text),
-        action: network
-            ? SnackBarAction(
-                label: '重试',
-                onPressed: () {
-                  if (fired) return;
-                  fired = true;
-                  messenger.hideCurrentSnackBar();
-                  _manualSync();
-                },
-              )
-            : null,
-      ),
-    );
   }
 
   void _openTimetable() => context.push('/apps/timetable');
@@ -225,8 +171,6 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
             title: tomorrow.title ?? '明天',
             subtitle: items.isEmpty ? '今天没有课' : '今天的课已上完',
             onTap: _openTimetable,
-            syncing: _controller.syncStatus == TimetableSyncStatus.syncing,
-            onRefresh: _manualSync,
           );
           final all = mergeHomeEntries(
             _controller,
@@ -252,8 +196,6 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
                 ? '周$weekday · 第 $week 周'
                 : '周$weekday',
             onTap: _openTimetable,
-            syncing: _controller.syncStatus == TimetableSyncStatus.syncing,
-            onRefresh: _manualSync,
           );
           // 今天还有没结束的可见日程时照常列出（EV-1：学期外 / 没有课程的日子也显示）。
           final allDone = entries.every((e) => e.isDone(now));
@@ -309,31 +251,34 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
         return Material(
           color: colors.surface,
           borderRadius: BorderRadius.circular(TimetableTheme.cardRadius),
-          child: Padding(
-            // 设计师 10/20：顶仍 12；底内边距 12→8；标题到第一项见下方 SizedBox。
-            padding: const EdgeInsets.fromLTRB(
-              TimetableTheme.cardPaddingH,
-              TimetableTheme.cardPaddingV,
-              TimetableTheme.cardPaddingH,
-              8,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                header,
-                const SizedBox(height: 6),
-                ...body,
-                if (_controller.syncedAt != null &&
-                    _controller.snapshot.lastError != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Text(
-                      '缓存于 ${_formatTime(_controller.syncedAt!)}',
-                      style: TimetableTheme.microStyle(color: colors.warning),
-                    ),
-                  ),
-              ],
-            ),
+          child: Stack(
+            children: [
+              Padding(
+                // 设计师 10/20：顶仍 12；底内边距 12→8；标题到第一项见下方 SizedBox。
+                padding: const EdgeInsets.fromLTRB(
+                  TimetableTheme.cardPaddingH,
+                  TimetableTheme.cardPaddingV,
+                  TimetableTheme.cardPaddingH,
+                  8,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [header, const SizedBox(height: 6), ...body],
+                ),
+              ),
+              // item 2：刷新按钮 48dp 热区；叠在标题行右侧而不参与行高。
+              // 否则 48dp 的按钮会把只有 21dp 高的标题行撑高，标题上下各多出约
+              // 13.5dp 白；同步失败静默处理，不显示缓存时间。
+              Positioned(
+                top: 0,
+                right: TimetableTheme.cardPaddingH + _chevronSize,
+                child: _RefreshButton(
+                  syncing:
+                      _controller.syncStatus == TimetableSyncStatus.syncing,
+                  onTap: _manualSync,
+                ),
+              ),
+            ],
           ),
         );
       },
@@ -392,29 +337,23 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
       ),
     );
   }
-
-  String _formatTime(DateTime t) =>
-      '${t.month}/${t.day} ${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 }
 
-/// 卡片标题行（今天 / 明天共用，保证样式一致）：图标 + 标题 + 副标题 + 刷新 + 箭头。
+/// 卡片标题行（今天 / 明天共用，保证样式一致）：图标 + 标题 + 副标题 + 箭头。
+///
+/// 刷新按钮不在这一行里，由外层卡片 Stack 叠在右侧预留的 48dp 宽区域内
+/// （[_chevronSize] 左侧），见 [TimetableHomeCard] 的 build。
 class _CardHeader extends StatelessWidget {
   const _CardHeader({
     super.key,
     required this.title,
     required this.subtitle,
     required this.onTap,
-    required this.syncing,
-    required this.onRefresh,
   });
 
   final String title;
   final String subtitle;
   final VoidCallback onTap;
-
-  /// item 2：同步中（刷新图标旋转）。
-  final bool syncing;
-  final VoidCallback onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -450,8 +389,9 @@ class _CardHeader extends StatelessWidget {
               ],
             ),
           ),
-          _RefreshButton(syncing: syncing, onTap: onRefresh),
-          Icon(Icons.chevron_right, color: colors.chevron, size: 20),
+          // 给叠放的刷新按钮留位，文字不会钻到按钮下面。
+          const SizedBox(width: TimetableTheme.iconTapSize),
+          Icon(Icons.chevron_right, color: colors.chevron, size: _chevronSize),
         ],
       ),
     );
