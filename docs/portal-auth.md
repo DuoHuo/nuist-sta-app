@@ -66,6 +66,11 @@ VPN 认证（`core/network/vpn_auth.dart`）共用。`dio_cookie_manager` 默认
 Cookie 另存到 `Location` 目标上，导致 host-only Cookie 跨域混用、无 Path 的 Cookie
 被复制到别的路径，进而出现偶发的无限重定向；这里改为每一跳只按响应来源保存自己的 Cookie。
 
+个别学校平台（如劳动教育）会在 HTTPS 响应里下发 `SameSite=None` 却漏掉 `Secure`。
+dart:io 按 RFC 6265bis 会直接抛异常，`dio_cookie_manager` 进而把整条响应判为保存失败，
+同响应里合法的会话 Cookie 也一起丢掉。原生客户端不实现 SameSite 语义，`PortalCookieManager`
+会去掉这个非法属性再保存；实在无法解析的 Cookie 只丢弃单条，不再拖垮整次登录。
+
 service → 落地 URL 表（`_established`）也经 `EstablishedStore` 落到同一安全存储，
 冷启动读回。落地 URL 里有 icard 的 JWT，不落盘的话电费每次启动都得重新过 CAS。
 条目信任期 12 小时（`establishedTtl`），超过后当作未命中，重新走一次 SSO 快路径确认。

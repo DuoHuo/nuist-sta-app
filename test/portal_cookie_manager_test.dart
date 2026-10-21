@@ -213,4 +213,110 @@ void main() {
     });
     expect(await _cookies(jar, business), {'JSESSIONID': 'business-session'});
   });
+
+  for (final status in [200, 302]) {
+    test('HTTP $status 响应里 SameSite=None 缺 Secure 的 Cookie 被修正后仍入库', () async {
+      final jar = CookieJar();
+      final client = _client(
+        jar,
+        (_) => ResponseBody.fromString(
+          '',
+          status,
+          headers: {
+            HttpHeaders.locationHeader: ['$business'],
+            HttpHeaders.setCookieHeader: [
+              'JSESSIONID=auth-session; Path=/; HttpOnly',
+              'legacy=1; Path=/; HttpOnly; SameSite=None',
+            ],
+          },
+        ),
+      );
+
+      final response = await client.getUri<dynamic>(
+        auth,
+        options: PortalHttp.options(),
+      );
+
+      expect(response.statusCode, status);
+      final cookies = await jar.loadForRequest(auth);
+      expect(
+        {for (final cookie in cookies) cookie.name: cookie.value},
+        {'JSESSIONID': 'auth-session', 'legacy': '1'},
+      );
+      // 去掉非法属性后按普通 Cookie 保存，原生客户端不区分 SameSite。
+      expect(cookies.firstWhere((c) => c.name == 'legacy').sameSite, isNull);
+    });
+  }
+
+  test('带 Secure 的 SameSite=None 原样保留', () async {
+    final jar = CookieJar();
+    final client = _client(
+      jar,
+      (_) => ResponseBody.fromString(
+        '',
+        200,
+        headers: {
+          HttpHeaders.setCookieHeader: [
+            'strict=1; Path=/; HttpOnly; SameSite=None; Secure',
+          ],
+        },
+      ),
+    );
+
+    await client.getUri<dynamic>(auth, options: PortalHttp.options());
+
+    final cookie = (await jar.loadForRequest(auth)).single;
+    expect(cookie.sameSite, SameSite.none);
+    expect(cookie.secure, isTrue);
+  });
+
+  test('无法解析的 Cookie 单条跳过，同响应其它 Cookie 不受影响', () async {
+    final jar = CookieJar();
+    final client = _client(
+      jar,
+      (_) => ResponseBody.fromString(
+        '',
+        200,
+        headers: {
+          HttpHeaders.setCookieHeader: [
+            'good=1; Path=/; HttpOnly',
+            'bad-without-equals; Path=/',
+          ],
+        },
+      ),
+    );
+
+    final response = await client.getUri<dynamic>(
+      auth,
+      options: PortalHttp.options(),
+    );
+
+    expect(response.statusCode, 200);
+    expect(await _cookies(jar, auth), {'good': '1'});
+  });
+
+  test('一条 header 合并多个 Cookie 时，只修正非法的那条', () async {
+    final jar = CookieJar();
+    final client = _client(
+      jar,
+      (_) => ResponseBody.fromString(
+        '',
+        200,
+        headers: {
+          HttpHeaders.setCookieHeader: [
+            'good=1; Path=/, bad=2; Path=/; SameSite=None',
+          ],
+        },
+      ),
+    );
+
+    await client.getUri<dynamic>(auth, options: PortalHttp.options());
+
+    final cookies = await jar.loadForRequest(auth);
+    expect(
+      {for (final cookie in cookies) cookie.name: cookie.value},
+      {'good': '1', 'bad': '2'},
+    );
+    expect(cookies.firstWhere((c) => c.name == 'bad').sameSite, isNull);
+  });
 }
