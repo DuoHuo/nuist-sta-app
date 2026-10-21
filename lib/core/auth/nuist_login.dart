@@ -40,14 +40,21 @@ class NuistLogin {
   /// 在 [base] 上完成一次登录，返回跟随跳转后的落地 URL。
   ///
   /// [base] 是留给 VPN 模式的扩展位：webvpn 的代理前缀可以直接顶替 authserver
-  /// 根地址，流程本身一个字都不用改（Python 版正是这么做的）。真要启用 VPN
-  /// 还需补上 VPN Cookie 的获取与失效重试，那部分暂未移植。
-  Future<String> login(String service, {String? base}) async {
+  /// 根地址。[followServiceRedirects] 为 false 时，只取得业务跳转地址，
+  /// 由调用方完成业务登录，避免 CAS 阶段占着队列等待 VPN 建连。
+  Future<String> login(
+    String service, {
+    String? base,
+    bool followServiceRedirects = true,
+  }) async {
     final resolvedBase = base ?? authserverNormal;
     final loginUrl = _loginUrl(resolvedBase, service);
 
     onStage?.call('opening');
-    final (execution, landing) = await _openLoginPage(loginUrl);
+    final (execution, landing) = await _openLoginPage(
+      loginUrl,
+      followServiceRedirects: followServiceRedirects,
+    );
     if (execution == null) {
       // SSO 票根还在，服务端直接把我们送到了目标服务，不必再签一次断言。
       onStage?.call('sso_reused');
@@ -67,6 +74,9 @@ class NuistLogin {
       execution,
     );
     if (!PortalHttp.isRedirect(response.statusCode)) {
+      if (response.statusCode != 401) {
+        throw const PortalLoginError('门户暂时无法完成认证，请稍后再试');
+      }
       throw PortalCredentialError(
         '登录未返回重定向（HTTP ${response.statusCode}），'
         '门户上的通行密钥可能已被删除或吊销',
@@ -78,10 +88,11 @@ class NuistLogin {
       throw const PortalLoginError('登录返回重定向但缺少 Location');
     }
 
-    final landed = await http.followRedirects(
-      await http.get(Uri.parse(loginUrl).resolve(location)),
+    final (_, landedUrl) = await _followLoginRedirects(
+      response,
+      loginUrl,
+      followServiceRedirects: followServiceRedirects,
     );
-    final landedUrl = landed.realUri.toString();
     if (landedUrl.contains(loginPath)) {
       throw PortalLoginError('登录后又跳回认证页，service 可能不正确：$service');
     }
@@ -94,23 +105,56 @@ class NuistLogin {
   /// 访问登录页，取得会话 Cookie 和 execution 令牌。
   ///
   /// 返回的 execution 为 null 表示 SSO 已登录、服务端直接跳走了。
-  Future<(String?, String)> _openLoginPage(String loginUrl) async {
-    final response = await http.followRedirects(
+  Future<(String?, String)> _openLoginPage(
+    String loginUrl, {
+    required bool followServiceRedirects,
+  }) async {
+    final (response, landed) = await _followLoginRedirects(
       await http.get(
         Uri.parse(loginUrl),
         headers: {'Accept': 'text/html,application/xhtml+xml'},
       ),
+      loginUrl,
+      followServiceRedirects: followServiceRedirects,
     );
-    final landed = response.realUri.toString();
     if (!landed.contains(loginPath)) return (null, landed);
 
-    // execution 藏在登录页的隐藏 input 里；抓包常见值 e1s1 作为后备。
+    // 只在确认拿到登录表单后签名，维护页和权限错误不能触发 WebAuthn。
     // 值可能含被 HTML 转义的 base64 字符（如 &#x2F;），得先反转义。
     final match = RegExp(
       r'''name=["']execution["'][^>]*value=["']([^"']+)''',
       caseSensitive: false,
     ).firstMatch(_unescapeHtml('${response.data}'));
-    return (match?.group(1) ?? 'e1s1', landed);
+    if (response.statusCode != 200 || match == null) {
+      throw const PortalLoginError('门户未返回正常登录页面，请稍后再试');
+    }
+    return (match.group(1), landed);
+  }
+
+  Future<(Response<dynamic>, String)> _followLoginRedirects(
+    Response<dynamic> response,
+    String loginUrl, {
+    required bool followServiceRedirects,
+  }) async {
+    var current = response;
+    final auth = Uri.parse(loginUrl);
+    for (var hop = 0; hop < PortalHttp.maxRedirects; hop++) {
+      if (!PortalHttp.isRedirect(current.statusCode)) {
+        return (current, current.realUri.toString());
+      }
+      final location = current.headers.value('location');
+      if (location == null || location.isEmpty) {
+        throw const PortalLoginError('登录跳转缺少 Location');
+      }
+      final target = current.realUri.resolve(location);
+      if (!followServiceRedirects &&
+          (target.host != auth.host ||
+              !target.path.startsWith('/authserver/'))) {
+        return (current, target.toString());
+      }
+      current = await http.get(target);
+    }
+    throw const PortalLoginError('登录重定向次数过多，请稍后再试');
   }
 
   /// 请求 WebAuthn 断言参数（challenge 等）。
@@ -137,7 +181,7 @@ class NuistLogin {
   /// 解析 startAssertion 响应，返回 request；失败抛 [PortalException]。
   ///
   /// 异常文案会展示给用户，绝不包含原始响应：服务端 message 只有在短小纯文本
-  /// 时才采用（见 safe_message.dart），原文仅在 debug 下进 portalLog。
+  /// 时才采用（见 safe_message.dart）；日志仅记录状态和响应类型。
   @visibleForTesting
   static Map<String, dynamic> parseStartAssertion(
     Object? data, {
@@ -149,16 +193,28 @@ class NuistLogin {
         portalLog(
           () =>
               'startAssertion 非 JSON 响应: HTTP $statusCode '
-              '${_preview(data)}',
+              '格式异常',
         );
       }
       throw const PortalLoginError(kLoginFailedText);
     }
     if (kDebugMode) {
-      portalLog(() => 'startAssertion 响应: ${_preview(body)}');
+      portalLog(() => 'startAssertion 响应: 已收到 JSON');
     }
+    if (statusCode != null && statusCode != 200 && statusCode != 401) {
+      throw const PortalLoginError(kLoginFailedText);
+    }
+    final message = body['message'];
+    // 只有认证接口的明确拒绝或已实测的设备不存在响应才表示凭据失效。
+    // 普通 JSON 错误也可能来自维护或服务故障，不能堵住后续认证。
+    final credentialRejected =
+        statusCode == 401 ||
+        (message is String && message.contains('未查询到设备信息'));
     if (body['success'] == false) {
-      throw PortalCredentialError(safeServerMessage(body['message']));
+      if (credentialRejected) {
+        throw PortalCredentialError(safeServerMessage(message));
+      }
+      throw PortalLoginError(safeServerMessage(message));
     }
 
     // 响应结构在不同版本里出现过 result 和 datas 两种外壳，都试一遍。
@@ -169,8 +225,7 @@ class NuistLogin {
       // 凭据在门户上被删除/吊销时，服务端不给 success 字段，只返回
       // HTTP 200 + {"message": "未查询到设备信息"}。这是最常见的失效形态，
       // 必须归到凭据错误，UI 才能提示重新绑定而不是让用户干等重试。
-      final message = body['message'];
-      if (message is String && message.isNotEmpty) {
+      if (credentialRejected) {
         const suffix = '，通行密钥可能已被删除或吊销';
         if (isSafeUserMessage(
           message,
@@ -180,7 +235,7 @@ class NuistLogin {
         }
         throw const PortalCredentialError(kLoginFailedText);
       }
-      throw const PortalLoginError(kLoginFailedText);
+      throw PortalLoginError(safeServerMessage(message));
     }
     return request;
   }
@@ -297,13 +352,6 @@ class NuistLogin {
 
   static Map<String, dynamic>? _asMap(Object? value) =>
       value is Map ? value.cast<String, dynamic>() : null;
-
-  /// 日志用的响应摘要：截断到一屏，避免整页 HTML 刷屏。
-  static String _preview(Object? data) {
-    final text = data is Map || data is List ? jsonEncode(data) : '$data';
-    final flat = text.replaceAll(RegExp(r'\s+'), ' ');
-    return flat.length > 300 ? '${flat.substring(0, 300)}…' : flat;
-  }
 
   /// 反转义登录页里的 HTML 实体，只覆盖 execution 值可能出现的那几种。
   static String _unescapeHtml(String input) => input

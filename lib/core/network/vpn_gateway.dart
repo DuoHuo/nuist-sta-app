@@ -25,6 +25,11 @@ class VpnGateway implements VpnConnector {
   Future<int>? _pending;
   Future<void>? _resetting;
 
+  /// 在装入业务 Cookie 前准备隧道，避免首次请求带着 VPN 登录前的旧状态。
+  Future<void> prepare() async {
+    await _ensureConnected();
+  }
+
   Future<int> _ensureConnected() async {
     if (_resetting case final resetting?) await resetting;
     if (_pending case final pending?) {

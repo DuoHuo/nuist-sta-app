@@ -11,14 +11,12 @@ import '../config/campus_config.dart';
 import '../network/vpn_dio.dart';
 import '../network/vpn_gateway.dart';
 import 'aia_trust.dart';
+import 'cas_session.dart';
 import 'established_store.dart';
 import 'nuist_login.dart';
-import 'passkey_bundle.dart';
-import 'passkey_store.dart';
 import 'portal_cookie_manager.dart';
 import 'portal_exceptions.dart';
 import 'portal_http.dart';
-import 'secure_cookie_storage.dart';
 
 /// 常用服务的 service 参数。
 ///
@@ -67,25 +65,63 @@ abstract final class PortalServices {
 /// );
 /// ```
 class PortalSession {
-  PortalSession._();
+  PortalSession._({
+    CasSession? cas,
+    Future<void> Function()? prepareNetwork,
+    Future<void> Function()? resetNetwork,
+    this._createHttp,
+    Future<Map<String, EstablishedEntry>> Function()? readEstablished,
+    Future<void> Function(Map<String, EstablishedEntry>)? writeEstablished,
+  }) : _cas = cas ?? CasSession.instance,
+       _prepareNetwork = prepareNetwork ?? VpnGateway.instance.prepare,
+       _resetNetwork = resetNetwork ?? VpnGateway.instance.reset,
+       _readEstablished = readEstablished ?? EstablishedStore.read,
+       _writeEstablished = writeEstablished ?? EstablishedStore.write;
+
+  /// 在测试中注入合成认证服务器与本地存储，不连接学校或加载 VPN 原生库。
+  @visibleForTesting
+  factory PortalSession.forTesting({
+    required CasSession cas,
+    required PortalHttp Function(CookieJar jar) createHttp,
+    Future<void> Function()? prepareNetwork,
+    Future<void> Function()? resetNetwork,
+    Future<Map<String, EstablishedEntry>> Function()? readEstablished,
+    Future<void> Function(Map<String, EstablishedEntry>)? writeEstablished,
+  }) => PortalSession._(
+    cas: cas,
+    createHttp: createHttp,
+    prepareNetwork: prepareNetwork ?? () async {},
+    resetNetwork: resetNetwork ?? () async {},
+    readEstablished: readEstablished ?? () async => {},
+    writeEstablished: writeEstablished ?? (_) async {},
+  );
 
   static final PortalSession instance = PortalSession._();
 
-  /// 落地 URL 缓存的信任期。超过后不再直接采信，重新走一次 SSO 快路径确认
-  /// （CAS 票根若还在，代价只是两个跳转）。
+  /// 业务落地缓存保留原来的 12 小时信任期。
   static const establishedTtl = Duration(hours: 12);
+
+  final CasSession _cas;
+  final Future<void> Function() _prepareNetwork;
+  final Future<void> Function() _resetNetwork;
+  final PortalHttp Function(CookieJar jar)? _createHttp;
+  final Future<Map<String, EstablishedEntry>> Function() _readEstablished;
+  final Future<void> Function(Map<String, EstablishedEntry>) _writeEstablished;
 
   /// 最近一次因凭据问题导致的失败；绑定状态页监听它来显示「已失效」。
   ///
   /// 只有确定不是网络问题时才会被置位（见 [PortalHttp.send] 的异常归类）。
-  final ValueNotifier<PortalCredentialError?> credentialError = ValueNotifier(
-    null,
-  );
+  ValueNotifier<PortalCredentialError?> get credentialError =>
+      _cas.credentialError;
 
-  late final PersistCookieJar _jar;
-  late final PortalHttp _http;
-  late final AiaTrust _trust;
+  late CookieJar _jar;
+  late PortalHttp _http;
+  int? _clientGeneration;
   bool _ready = false;
+  Future<void>? _clearing;
+  bool _clearWebView = false;
+  Future<void> _saving = Future.value();
+  Future<void> _webViewQueue = Future.value();
 
   /// 已建立会话的 service → 落地 URL，冷启动时从磁盘恢复。
   final Map<String, EstablishedEntry> _established = {};
@@ -96,7 +132,7 @@ class PortalSession {
   /// 同一个 service 的并发请求合并成一次登录。
   final Map<String, Future<String>> _pending = {};
 
-  /// 登录串行化队列：让后来者等前一个把票根建起来，从而走 SSO 快路径。
+  /// 业务登录串行化队列；CAS 认证由 [_cas] 与 VPN 共同协调。
   Future<void> _queue = Future.value();
 
   // ==================== 对外接口 ====================
@@ -108,8 +144,7 @@ class PortalSession {
   /// 纯属浪费。
   ///
   /// [trustRestored] 为 false 时不采信从磁盘恢复、本进程尚未验证过的缓存。
-  /// 给没有过期探测能力的调用方（如 WebView 承载页）用，其余接口都能从业务
-  /// 响应里发现过期并 force 重试，直接吃缓存就好。
+  /// 给无法在页面内恢复会话的 WebView 使用，其他业务仍按原有流程重试。
   Future<String> ensureLoggedIn(
     String service, {
     bool force = false,
@@ -117,21 +152,26 @@ class PortalSession {
     void Function(String stage)? onStage,
   }) async {
     _ensureReady();
+    if (_clearing case final clearing?) await clearing;
+    final generation = _cas.cookies.generation;
+    _ensureReady();
     await _restored;
+    _cas.cookies.checkGeneration(generation);
+    final pending = _pending[service];
+    if (pending != null) return pending;
     if (!force) {
       final cached = _lookup(service, trustRestored: trustRestored);
       if (cached != null) return cached;
     }
-    final pending = _pending[service];
-    if (pending != null) return pending;
     // 下面到登记 _pending 之间不能有 await，否则并发调用会漏过合流各登一次。
     if (force && _established.remove(service) != null) {
-      unawaited(EstablishedStore.write(_established));
+      unawaited(_persist());
     }
     late final Future<String> future;
-    future = _serialize(() => _performLogin(service, onStage)).whenComplete(() {
-      if (identical(_pending[service], future)) _pending.remove(service);
-    });
+    future = _serialize(() => _performLogin(service, generation, onStage))
+        .whenComplete(() {
+          if (identical(_pending[service], future)) _pending.remove(service);
+        });
     _pending[service] = future;
     return future;
   }
@@ -146,9 +186,7 @@ class PortalSession {
 
   /// 共享全局 Cookie 的裸客户端，**不保证任何登录态**。
   ///
-  /// 给「先拿落盘的会话直接请求业务页，被拦回登录页再走 [clientFor] 强制重登」
-  /// 的子系统用（双创、劳动教育）：它们的会话独立于 CAS 票根，先登一遍 CAS
-  /// 再发现子系统会话其实还活着，等于白跑。常规接口请走 [request] / [clientFor]。
+  /// 用于双创、劳动教育等自行判断业务会话是否失效的查询。
   PortalHttp get http {
     _ensureReady();
     return _http;
@@ -161,14 +199,20 @@ class PortalSession {
     String service,
     Future<Response<dynamic>> Function(PortalHttp http) send,
   ) async {
+    _ensureReady();
+    if (_clearing case final clearing?) await clearing;
+    final generation = _cas.cookies.generation;
     var http = await clientFor(service);
+    _cas.cookies.checkGeneration(generation);
     var response = await http.followRedirects(await send(http));
+    _cas.cookies.checkGeneration(generation);
     if (!_looksLikeLoginPage(response)) return response;
 
     // 被门户弹回了登录页，说明落盘的会话已经过期，重登一次再放行。
-    portalLog(() => '会话已过期，重新登录 $service');
+    portalLog(() => '业务会话已过期，重新登录');
     http = await clientFor(service, force: true);
     response = await http.followRedirects(await send(http));
+    _cas.cookies.checkGeneration(generation);
     if (_looksLikeLoginPage(response)) {
       throw const PortalLoginError('重新登录后仍被门户拦回登录页，请稍后再试');
     }
@@ -182,40 +226,73 @@ class PortalSession {
   /// 共享的，灌一次全局生效。
   Future<void> syncToWebView(Iterable<String> urls) async {
     _ensureReady();
-    final manager = WebViewCookieManager();
-    // 顺带同步 authserver，WebView 里再点门户链接也不用重新登。
-    final targets = {'${NuistLogin.authserverNormal}/', ...urls};
-    for (final url in targets) {
-      final uri = Uri.tryParse(url);
-      if (uri == null || !uri.hasAuthority) continue;
-      for (final cookie in await _jar.loadForRequest(uri)) {
-        await manager.setCookie(
-          WebViewCookie(
-            name: cookie.name,
-            value: cookie.value,
-            domain: cookie.domain ?? uri.host,
-            path: cookie.path ?? '/',
-          ),
-        );
+    if (_clearing case final clearing?) await clearing;
+    _ensureReady();
+    final generation = _cas.cookies.generation;
+    final jar = _jar;
+    return _serializeWebView(() async {
+      final manager = WebViewCookieManager();
+      // 顺带同步 authserver，WebView 里再点门户链接也不用重新登。
+      final targets = {
+        '${NuistLogin.authserverNormal}/authserver/login',
+        ...urls,
+      };
+      for (final url in targets) {
+        final uri = Uri.tryParse(url);
+        if (uri == null || !uri.hasAuthority) continue;
+        for (final cookie in await jar.loadForRequest(uri)) {
+          _cas.cookies.checkGeneration(generation);
+          await manager.setCookie(
+            WebViewCookie(
+              name: cookie.name,
+              value: cookie.value,
+              domain: cookie.domain ?? uri.host,
+              path: cookie.path ?? '/',
+            ),
+          );
+          _cas.cookies.checkGeneration(generation);
+        }
+        _cas.cookies.checkGeneration(generation);
       }
-    }
+    });
   }
 
   /// 清空会话。解绑时应连带清掉 WebView，重新绑定时则要保留（留着门户的登录
   /// 态，用户就不必再输一遍密码）。
-  Future<void> clear({bool includeWebView = false}) async {
+  Future<void> clear({bool includeWebView = false}) {
+    _clearWebView |= includeWebView;
+    if (_clearing case final clearing?) return clearing;
     _ensureReady();
-    await _restored;
+    final cookiesCleared = _cas.cookies.clearAll();
+    _http.dio.close(force: true);
+    _cas.closeClient(resetQueue: true);
+    _clientGeneration = null;
     _established.clear();
+    _pending.clear();
+    _queue = Future.value();
     credentialError.value = null;
-    await EstablishedStore.write(_established);
-    await _jar.deleteAll();
-    await VpnGateway.instance.reset();
-    if (includeWebView) {
-      try {
-        await WebViewCookieManager().clearCookies();
-      } catch (_) {}
-    }
+    late final Future<void> clearing;
+    clearing =
+        () async {
+          try {
+            await _resetNetwork();
+          } finally {
+            await _restored;
+            await cookiesCleared;
+            await _persist();
+            if (_clearWebView) {
+              try {
+                await _serializeWebView(() async {
+                  await WebViewCookieManager().clearCookies();
+                });
+              } catch (_) {}
+            }
+          }
+        }().whenComplete(() {
+          if (identical(_clearing, clearing)) _clearing = null;
+          _clearWebView = false;
+        });
+    return _clearing = clearing;
   }
 
   /// 作废当前会话后完整登录一次，用来验证本机凭据是否还被门户承认。
@@ -228,9 +305,6 @@ class PortalSession {
     void Function(String stage)? onStage,
   }) async {
     final target = service ?? PortalServices.jwxt;
-    // 先等在飞的登录跑完：force 会合流到它，而它是在 clear 之前开始的，
-    // 验不出凭据。
-    await _queue;
     await clear();
     return ensureLoggedIn(target, force: true, onStage: onStage);
   }
@@ -253,40 +327,56 @@ class PortalSession {
   // ==================== 内部实现 ====================
 
   void _ensureReady() {
-    if (_ready) return;
     if (kDebugMode) portalLogger ??= debugPrint;
-    _jar = PersistCookieJar(
-      // CASTGC 和 JSESSIONID 都是会话 Cookie 且无 expires，这两个开关不开
-      // 等于什么都没存（Python 版落盘时同样强调了这点）。
-      persistSession: true,
-      ignoreExpires: true,
-      storage: const SecureCookieStorage(),
-    );
+    final generation = _cas.cookies.generation;
+    if (!_ready) {
+      _restored = _readEstablished().then((entries) {
+        if (generation != _cas.cookies.generation) return;
+        for (final MapEntry(:key, :value) in entries.entries) {
+          _established.putIfAbsent(key, () => value);
+        }
+      });
+      _ready = true;
+    }
+    if (_clientGeneration == generation) return;
+    if (_clientGeneration != null) _http.dio.close(force: true);
+    _clientGeneration = generation;
+    _jar = _cas.cookies.openJar();
+    if (_createHttp case final factory?) {
+      _http = factory(_jar);
+      return;
+    }
     final trust = AiaTrust(
       resolveCacheDir: () async {
         final base = await getApplicationSupportDirectory();
         return Directory('${base.path}${Platform.pathSeparator}aia_certs');
       },
     );
-    _trust = trust;
-    final dio = vpnDio(
-      options: BaseOptions(
-        headers: {
-          'User-Agent': NuistLogin.userAgent,
-          'Accept-Language': 'zh-CN,en;q=0.9,en-US;q=0.8',
-        },
-      ),
-      securityContext: trust.context,
-      onBadCertificate: trust.onBadCertificate,
-    )..interceptors.add(PortalCookieManager(_jar));
+    final dio =
+        vpnDio(
+            options: BaseOptions(
+              headers: {
+                'User-Agent': NuistLogin.userAgent,
+                'Accept-Language': 'zh-CN,en;q=0.9,en-US;q=0.8',
+              },
+            ),
+            securityContext: trust.context,
+            onBadCertificate: trust.onBadCertificate,
+          )
+          ..interceptors.add(
+            PortalCookieManager(
+              _jar,
+              beforeRequest: () async {
+                if (_clearing case final clearing?) await clearing;
+                _cas.cookies.checkGeneration(generation);
+                await trust.preload();
+                await _prepareNetwork();
+                _cas.cookies.checkGeneration(generation);
+              },
+              checkSession: () => _cas.cookies.checkGeneration(generation),
+            ),
+          );
     _http = PortalHttp(dio, trust: trust);
-    _restored = EstablishedStore.read().then((entries) {
-      // 只补本进程还没登过的：恢复是异步的，别把已经新鲜的条目覆盖成旧的。
-      for (final MapEntry(:key, :value) in entries.entries) {
-        _established.putIfAbsent(key, () => value);
-      }
-    });
-    _ready = true;
   }
 
   /// 取 [service] 的缓存落地 URL；过期或不采信时返回 null。
@@ -294,7 +384,7 @@ class PortalSession {
     final entry = _established[service];
     if (entry == null) return null;
     if (entry.isExpired(establishedTtl)) {
-      portalLog(() => '落地缓存超过信任期，重新确认 $service');
+      portalLog(() => '业务落地缓存超过信任期，重新确认');
       _established.remove(service);
       return null;
     }
@@ -304,42 +394,63 @@ class PortalSession {
 
   Future<String> _performLogin(
     String service,
+    int generation,
     void Function(String stage)? onStage,
   ) async {
+    _cas.cookies.checkGeneration(generation);
     _ensureReady();
-    // 先把缓存的中间证书灌进信任库，这样冷启动第一次握手就能直接成功。
-    await _trust.preload();
-    final PasskeyBundle? bundle = await PasskeyStore.read();
-    if (bundle == null) {
-      throw const PortalCredentialError('尚未绑定统一门户，请先完成绑定');
-    }
+    final http = _http;
+    await _prepareNetwork();
+    _cas.cookies.checkGeneration(generation);
     try {
-      portalLog(() => '开始登录 service=$service');
-      final landing = await NuistLogin(
-        http: _http,
-        bundle: bundle,
+      portalLog(() => '恢复业务会话');
+      final target = await _cas.authenticate(
+        service,
         onStage: (stage) {
           portalLog(() => '阶段: $stage');
           onStage?.call(stage);
         },
-      ).login(service);
-      portalLog(() => '登录成功，落地 $landing');
+      );
+      _cas.cookies.checkGeneration(generation);
+      final response = await http.followRedirects(
+        await http.get(Uri.parse(target)),
+      );
+      if (_looksLikeLoginPage(response) || (response.statusCode ?? 0) >= 400) {
+        throw const PortalLoginError('业务登录未完成，请稍后再试');
+      }
+      final landing = response.realUri.toString();
+      _cas.cookies.checkGeneration(generation);
+      portalLog(() => '业务会话恢复成功');
       _established[service] = EstablishedEntry(
         landing: landing,
         at: DateTime.now(),
       );
-      credentialError.value = null;
-      await EstablishedStore.write(_established);
+      await _persist();
+      _cas.cookies.checkGeneration(generation);
       return landing;
     } on PortalCredentialError catch (e) {
       // 凭据被服务端拒绝，记下来让绑定状态页显示「已失效」。
       portalLog(() => '凭据失效: ${e.message}');
+      _cas.cookies.checkGeneration(generation);
       credentialError.value = e;
       rethrow;
     } on PortalException catch (e) {
       portalLog(() => '登录失败(${e.runtimeType}): ${e.message}');
       rethrow;
     }
+  }
+
+  Future<void> _persist() {
+    final snapshot = Map<String, EstablishedEntry>.of(_established);
+    final result = _saving.then((_) => _writeEstablished(snapshot));
+    _saving = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
+  Future<void> _serializeWebView(Future<void> Function() task) {
+    final result = _webViewQueue.then((_) => task());
+    _webViewQueue = result.then((_) {}, onError: (_) {});
+    return result;
   }
 
   /// 串行化登录，并保证一次失败不会把队列卡死。

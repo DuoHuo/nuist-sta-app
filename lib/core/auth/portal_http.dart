@@ -42,6 +42,34 @@ class PortalHttp {
   static bool isRedirect(int? status) =>
       status != null && redirectCodes.contains(status);
 
+  /// 明确的 CAS 登录跳转或表单；用于识别 VPN 控制器会话失效。
+  static bool isLoginResponse(Response<dynamic> response) {
+    if (response.statusCode == 401) return true;
+    if ((response.statusCode ?? 0) >= 400) return false;
+    bool isLoginUri(Uri uri) => uri.path
+        .toLowerCase()
+        .replaceFirst(RegExp(r'/+$'), '')
+        .endsWith('/authserver/login');
+    if (isLoginUri(response.realUri)) return true;
+    final location = response.headers.value('location');
+    if (isRedirect(response.statusCode) &&
+        location != null &&
+        isLoginUri(response.realUri.resolve(location))) {
+      return true;
+    }
+    final body = response.data;
+    return body is String &&
+        (RegExp(
+              r'''<form\b[^>]*\bid\s*=\s*["']casLoginForm["']''',
+              caseSensitive: false,
+            ).hasMatch(body) ||
+            (body.toLowerCase().contains('authserver/login') &&
+                RegExp(
+                  r'''\bname\s*=\s*["']execution["']''',
+                  caseSensitive: false,
+                ).hasMatch(body)));
+  }
+
   static Options options({
     Map<String, String>? headers,
     String? contentType,
@@ -187,6 +215,9 @@ class PortalHttp {
 
   /// 日志里的 URL：去掉 query，CAS 的 ticket 和 service 参数又长又没信息量。
   static String _short(Uri uri) =>
-      uri.replace(query: '').toString().replaceAll(RegExp(r'\?$'), '') +
+      uri
+          .replace(query: '', fragment: '')
+          .toString()
+          .replaceAll(RegExp(r'[?#]+$'), '') +
       (uri.hasQuery ? '?…' : '');
 }

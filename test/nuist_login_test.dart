@@ -84,7 +84,7 @@ void main() {
           'message': '<b>x</b>',
         }),
         throwsA(
-          isA<PortalCredentialError>().having(
+          isA<PortalLoginError>().having(
             (e) => e.message,
             'message',
             kLoginFailedText,

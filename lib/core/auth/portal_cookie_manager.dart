@@ -15,10 +15,53 @@ import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 /// Cookie 也一起丢掉），CAS 登录因此中断。原生客户端本来就不实现 SameSite
 /// 语义，这里去掉该属性；实在无法解析的 Cookie 单独丢弃，不再拖垮整次请求。
 class PortalCookieManager extends CookieManager {
-  PortalCookieManager(super.cookieJar) {
+  PortalCookieManager(
+    super.cookieJar, {
+    this.beforeRequest,
+    this.checkSession,
+  }) {
     // 兜住加载路径（请求头里的 Cookie）以及保存时漏网的 HttpException；
     // FormatException 不会在这里被忽略，所以在 [_normalizeSetCookie] 里提前过滤。
     ignoreInvalidCookies = true;
+  }
+
+  /// 装入 Cookie 前准备网络和证书，确保使用 VPN 登录后更新的会话。
+  final Future<void> Function()? beforeRequest;
+
+  /// 解绑后拒绝旧请求和旧响应，包含没有 Set-Cookie 的响应。
+  final void Function()? checkSession;
+
+  @override
+  Future<void> onRequest(
+    RequestOptions options,
+    RequestInterceptorHandler handler,
+  ) async {
+    try {
+      checkSession?.call();
+      await beforeRequest?.call();
+      checkSession?.call();
+    } catch (error) {
+      handler.reject(DioException(requestOptions: options, error: error), true);
+      return;
+    }
+    await super.onRequest(options, handler);
+  }
+
+  @override
+  Future<void> onResponse(
+    Response response,
+    ResponseInterceptorHandler handler,
+  ) async {
+    try {
+      checkSession?.call();
+    } catch (error) {
+      handler.reject(
+        DioException(requestOptions: response.requestOptions, error: error),
+        true,
+      );
+      return;
+    }
+    await super.onResponse(response, handler);
   }
 
   /// 匹配属性位置的 `; SameSite=None`（大小写不敏感，允许等号两侧空格）。
@@ -71,6 +114,7 @@ class PortalCookieManager extends CookieManager {
   /// 使用不含 Location 的响应视图保存 Cookie，原响应仍供调用方跟随跳转。
   @override
   Future<void> saveCookies(Response response) {
+    checkSession?.call();
     final headers = <String, List<String>>{
       for (final entry in response.headers.map.entries)
         if (entry.key.toLowerCase() != HttpHeaders.locationHeader)
