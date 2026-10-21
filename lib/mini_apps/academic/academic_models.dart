@@ -110,9 +110,27 @@ class AcademicSummary {
   /// 优先解析 XFJD：带 `%` 按百分数；不带 `%` 时 `>1` 视为百分数、`0~1`
   /// 视为比例。XFJD 解析不了再用「已获 / 应修」推算。都不行（如大一新生
   /// 字段全空或全为 `"0"`）返回 0，避免进度条拿到 null 变成无限转圈。
-  double get creditProgressRatio {
+  double get creditProgressRatio =>
+      _creditProgressFromApi ?? _creditProgressByCredits;
+
+  /// 「32.9%」：学分进度的展示文本，与 [creditProgressRatio] 同源。
+  ///
+  /// 没有数据时不是 `--` 而是 `0%`：进度条此时就是 0，文本显示 `--`
+  /// 会让人以为是解析失败。
+  String get creditProgressText {
+    final ratio = creditProgressRatio;
+    final pct = (ratio * 100).toStringAsFixed(1);
+    return '${pct.replaceFirst(RegExp(r'\.0$'), '')}%';
+  }
+
+  /// XFJD 解析出的比例；解析不了为 null。
+  double? get _creditProgressFromApi {
     final fromText = _parseProgress(creditProgress);
-    if (fromText != null) return fromText.clamp(0.0, 1.0);
+    return fromText?.clamp(0.0, 1.0);
+  }
+
+  /// 用「已获 / 应修」推算的比例，应修缺失或为 0 时为 0。
+  double get _creditProgressByCredits {
     final earned = double.tryParse(earnedCredits);
     final required = double.tryParse(requiredCredits);
     if (earned != null && required != null && required > 0) {

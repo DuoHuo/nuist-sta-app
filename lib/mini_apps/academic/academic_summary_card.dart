@@ -139,7 +139,7 @@ class AcademicSummaryBody extends StatelessWidget {
             const Spacer(),
             Text(
               '已获 ${_orDash(s.earnedCredits)} / 应修 ${_orDash(s.requiredCredits)}'
-              '　${_orDash(s.creditProgress)}',
+              '　${s.creditProgressText}',
               style: TextStyle(fontSize: 12, color: palette.labelText),
             ),
           ],

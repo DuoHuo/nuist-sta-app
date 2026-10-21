@@ -84,4 +84,16 @@ void main() {
     expect(text('1'), '100%');
     expect(text('0.875'), '87.5%');
   });
+
+  test('creditProgressText 与进度条同源，没有数据时是 0% 而不是 --', () {
+    String text(Map<String, dynamic> json) => _parse(json).creditProgressText;
+    expect(text(_all('')), '0%');
+    expect(text(_all('0')), '0%');
+    expect(text({'XH': '202512340001'}), '0%');
+    expect(text({'XFJD': 'NaN%'}), '0%');
+    expect(text({'XFJD': '32.9%'}), '32.9%');
+    expect(text({'XFJD': '32.9'}), '32.9%');
+    expect(text({'YHXF': '30', 'YXZXF': '120'}), '25%');
+    expect(text({'XFJD': '150%'}), '100%');
+  });
 }

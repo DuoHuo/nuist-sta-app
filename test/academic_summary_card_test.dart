@@ -32,10 +32,21 @@ void main() {
     });
   }
 
-  testWidgets('全空数据各指标显示 --', (tester) async {
+  testWidgets('全空数据各指标显示 --，学分进度显示 0%', (tester) async {
     await _pump(tester, {'XH': '202512340001'});
     await tester.pumpAndSettle();
-    expect(find.text('已获 -- / 应修 --　--'), findsOneWidget);
+    expect(find.text('已获 -- / 应修 --　0%'), findsOneWidget);
     expect(find.text('--'), findsNWidgets(7));
+  });
+
+  testWidgets('考试数据未出时学分进度同样显示 0%', (tester) async {
+    await _pump(tester, {
+      'XH': '202512340001',
+      'XFJD': '0',
+      'YHXF': '0',
+      'YXZXF': '0',
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('已获 0 / 应修 0　0%'), findsOneWidget);
   });
 }
