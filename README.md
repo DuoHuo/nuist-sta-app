@@ -82,4 +82,5 @@ NUIST++ 使用学校统一门户获取需要登录的数据。登录和绑定在
 
 ## License
 
-To be determined.
+> [!IMPORTANT]
+> 采用 [AGPL-3.0](LICENSE) 协议
