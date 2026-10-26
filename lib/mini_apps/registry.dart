@@ -3,6 +3,7 @@ import 'bulletin/bulletin_manifest.dart';
 import 'campus_map/campus_map_manifest.dart';
 import 'electricity/electricity_manifest.dart';
 import 'free_classroom/free_classroom_manifest.dart';
+import 'timetable/timetable_exams_manifest.dart';
 import 'timetable/timetable_manifest.dart';
 
 /// 全量小程序注册表：首页宫格按此渲染。
@@ -15,6 +16,8 @@ final List<AppManifest> appRegistry = [
   freeClassroomManifest,
   campusMapManifest,
   timetableManifest,
+  // 考试安排：课表考试在主页的直观入口（issue #30），数据复用课表。
+  examScheduleManifest,
   // H5 小程序示例：给 url 即可，由通用 WebView 页承载。
   // AppManifest(id: 'demo-web', label: '网页示例', color: Color(0xFF8B5CF6),
   //     glyph: '网', url: 'https://example.com'),
