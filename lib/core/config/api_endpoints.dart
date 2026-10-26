@@ -9,3 +9,6 @@ const String kContributorsEndpoint = '$kApiBase/contributors';
 
 /// 公告接口。
 const String kAnnouncementEndpoint = '$kApiBase/announcement';
+
+/// 课表 WakeUp 分享口令生成接口。
+const String kTimetableWakeupEndpoint = '$kApiBase/timetable/wakeup-share';

@@ -75,8 +75,8 @@ void main() {
     '1080x2400': (Size(1080, 2400), 1.0),
   };
 
-  // §13.12 / TB01（替代 U04/X02）：顶栏「+」/ 同步 / 齿轮，无「更多」。
-  testWidgets('TB01 顶栏只有加课、同步、齿轮（设置），无分享、无更多', (tester) async {
+  // 顶栏保留原有操作，并提供可直接点击的 WakeUp 导出入口。
+  testWidgets('TB01 顶栏有加课、WakeUp 导出、同步和设置，无更多', (tester) async {
     _setState(_State.current);
     await _pump(tester, size: const Size(360, 640));
     expect(find.byTooltip('添加'), findsOneWidget);
@@ -89,12 +89,13 @@ void main() {
     expect(find.byTooltip('分享'), findsNothing);
     expect(find.byIcon(Icons.share_outlined), findsNothing);
     expect(find.byIcon(Icons.share), findsNothing);
-    expect(find.byIcon(Icons.ios_share), findsNothing);
+    expect(find.byTooltip('导出到 WakeUp'), findsOneWidget);
+    expect(find.byIcon(Icons.ios_share), findsOneWidget);
     final icons = tester
         .widgetList<IconButton>(find.byType(IconButton))
         .map((b) => b.tooltip)
         .toList();
-    expect(icons, ['添加', '同步', '设置']);
+    expect(icons, ['添加', '导出到 WakeUp', '同步', '设置']);
   });
 
   for (final entry in configs.entries) {

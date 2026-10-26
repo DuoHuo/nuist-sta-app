@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import 'timetable_schedule_event_detail_sheet.dart';
 import 'timetable_controller.dart';
+import 'timetable_export_page.dart';
 import 'timetable_perf.dart';
 import 'timetable_settings_page.dart';
 import 'timetable_theme.dart';
@@ -296,6 +297,14 @@ class _TimetablePageState extends State<TimetablePage> {
     );
   }
 
+  void _openExport() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TimetableExportPage(controller: _controller),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
@@ -329,6 +338,7 @@ class _TimetablePageState extends State<TimetablePage> {
                           _controller.syncStatus == TimetableSyncStatus.syncing,
                       syncError: _showSyncErrorDot,
                       onSettings: _openSettings,
+                      onExport: _openExport,
                     ),
                     // item 5：点顶栏周数展开 / 收起的横向周条（200ms）。
                     _weekStripSlot(context),
@@ -396,6 +406,7 @@ class _TopBar extends StatelessWidget {
     required this.onAdd,
     required this.onSync,
     required this.onSettings,
+    required this.onExport,
   });
 
   final int week;
@@ -413,6 +424,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onAdd;
   final VoidCallback onSync;
   final VoidCallback onSettings;
+  final VoidCallback onExport;
 
   @override
   Widget build(BuildContext context) {
@@ -487,6 +499,12 @@ class _TopBar extends StatelessWidget {
               ),
             ),
             _IconBtn(icon: Icons.add, onTap: onAdd, tooltip: '添加'),
+            _IconBtn(
+              key: const Key('timetable_export_button'),
+              icon: Icons.ios_share,
+              onTap: onExport,
+              tooltip: '导出到 WakeUp',
+            ),
             if (syncing)
               const SizedBox(
                 key: Key('timetable_syncing_indicator'),
