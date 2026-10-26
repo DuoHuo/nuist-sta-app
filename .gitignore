@@ -65,6 +65,7 @@ app.*.map.json
 # 本地环境
 .env
 .env.*
+.vscode/
 
 # 调试与自检的临时产物
 test/failures/
