@@ -40,7 +40,6 @@ jobs:
           fi
 
           {
-            printf '# %s\n\n' "$RELEASE_TAG"
             if [ -n "$PREVIOUS_TAG" ]; then
               printf '_Changes since %s._\n\n' "$PREVIOUS_TAG"
             else
