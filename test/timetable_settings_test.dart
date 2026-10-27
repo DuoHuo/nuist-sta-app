@@ -106,7 +106,8 @@ void main() {
   }
 
   Future<void> pumpPage(WidgetTester tester, Widget body) async {
-    tester.view.physicalSize = const Size(1080, 2400);
+    // 提醒 + 小组件卡片打开后页面变长：拉高视口让懒加载列表全部建出来。
+    tester.view.physicalSize = const Size(1080, 6000);
     tester.view.devicePixelRatio = 2.625;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(MaterialApp(home: body));
@@ -122,28 +123,57 @@ void main() {
       )
       .value;
 
+  Future<void> pumpAppearance(WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1080, 6000);
+    tester.view.devicePixelRatio = 2.625;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(home: TimetableAppearancePage(controller: _c)),
+    );
+    await tester.pump();
+  }
+
+  Future<void> reveal(WidgetTester tester, Key key) async {
+    final f = find.byKey(key, skipOffstage: false);
+    await tester.scrollUntilVisible(
+      f,
+      300,
+      scrollable: find.descendant(
+        of: find.byType(ListView),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
   bool chipSelected(WidgetTester tester, String groupKey, String label) =>
       tester
           .widget<ChoiceChip>(
             find.descendant(
               of: find.byKey(Key(groupKey)),
-              matching: find.byKey(ValueKey('seg_$label')),
+              matching: find.widgetWithText(ChoiceChip, label),
             ),
           )
           .selected;
 
   group('设置页', () {
     testWidgets('ST01 默认值', (tester) async {
-      await pumpPage(
-        tester,
-        TimetableSettingsPage(controller: _c, showReminderCard: true),
-      );
+      await pumpAppearance(tester);
+      await reveal(tester, const Key('tt_settings_show_location'));
       expect(switchValue(tester, 'tt_settings_show_location'), isTrue);
       expect(switchValue(tester, 'tt_settings_show_teacher'), isFalse);
+      await reveal(tester, const Key('tt_settings_font_scale'));
       expect(chipSelected(tester, 'tt_settings_font_scale', '标准'), isTrue);
-      expect(chipSelected(tester, 'tt_settings_week_start', '周一'), isTrue);
-      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
-      await tester.pumpAndSettle();
+      // 一周起始改为 trailing + 弹窗，默认周一。
+      await reveal(tester, const Key('tt_settings_week_start'));
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('tt_settings_week_start')),
+          matching: find.text('周一'),
+        ),
+        findsOneWidget,
+      );
+      await reveal(tester, const Key('tt_settings_opacity'));
       expect(
         tester
             .widget<Text>(find.byKey(const Key('tt_settings_opacity_value')))
@@ -153,38 +183,54 @@ void main() {
       // A/B/C 入口已隐藏（ST19）；默认方案仍为 A（存储）。
       expect(find.text('A 柔和'), findsNothing);
       expect(_c.settings.paletteScheme, 'A');
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      expect(switchValue(tester, 'tt_settings_reminder'), isFalse);
-      expect(find.text('15 分钟'), findsOneWidget);
-      expect(switchValue(tester, 'tt_settings_show_tomorrow'), isTrue);
-      expect(
-        tester
-            .widget<Text>(
-              find.byKey(const Key('tt_settings_period_height_value')),
-            )
-            .data,
-        '64',
-      );
-      // 提醒关着时「提前时间」整行置灰不可点。
-      await tester.tap(
-        find.byKey(const Key('tt_settings_reminder_lead')),
-        warnIfMissed: false,
-      );
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('tt_settings_lead_5')), findsNothing);
-    });
-
-    testWidgets('ST02 四张卡片、顺序、组内行；不出现未选的设置项', (tester) async {
       await pumpPage(
         tester,
         TimetableSettingsPage(controller: _c, showReminderCard: true),
       );
-      // 六张卡片一屏放不下：拉高视口，让懒加载列表全部建出来。
+      expect(switchValue(tester, 'tt_settings_reminder'), isFalse);
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.descendant(
+                of: find.byKey(const Key('tt_settings_reminder_lead')),
+                matching: find.byKey(const ValueKey('seg_15')),
+              ),
+            )
+            .selected,
+        isTrue,
+      );
+      expect(switchValue(tester, 'tt_settings_show_tomorrow'), isTrue);
+      expect(_c.settings.periodHeight, 64);
+      // 提醒关着时「提前时间」整行置灰不可点。
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const Key('tt_settings_reminder_lead')),
+          matching: find.byKey(const ValueKey('seg_5')),
+        ),
+        warnIfMissed: false,
+      );
+      await settleIo(tester);
+      expect(_c.settings.reminderLeadMinutes, 15);
+    });
+
+    testWidgets('ST02 设置重组并保留明日提醒、顺序、组内行', (tester) async {
+      await pumpPage(
+        tester,
+        TimetableSettingsPage(controller: _c, showReminderCard: true),
+      );
       tester.view.physicalSize = const Size(1080, 6000);
       await tester.pump();
-      final titles = ['显示', '外观', '提醒', '首页', '考试', '其他'];
-      final ys = [for (final t in titles) tester.getTopLeft(find.text(t)).dy];
+      // 设置重组后仍保留独立的明日提醒卡片。
+      final titles = [
+        '首页',
+        TtSettingsText.widgetCard,
+        TtSettingsText.reminderCard,
+        '明日提醒',
+        '其他',
+      ];
+      final ys = [
+        for (final t in titles) tester.getTopLeft(find.text(t).first).dy,
+      ];
       for (var i = 1; i < ys.length; i++) {
         expect(ys[i] > ys[i - 1], isTrue, reason: titles[i]);
       }
@@ -192,60 +238,102 @@ void main() {
         of: find.byKey(Key('tt_settings_group_$g')),
         matching: find.text(text),
       );
-      // §13.16 新名。
-      for (final t in ['地点', '老师', '一周起始']) {
-        expect(inGroup('display', t), findsOneWidget, reason: t);
-      }
-      // 「周日」仅剩「一周起始」选项；周六/非本周已迁入外观页。
-      expect(inGroup('display', '周日'), findsOneWidget);
-      expect(inGroup('display', '周六'), findsNothing);
-      expect(inGroup('display', '非本周课程'), findsNothing);
-      for (final t in ['配色与预览', '字号', '格子高度']) {
-        expect(inGroup('appearance', t), findsOneWidget, reason: t);
-      }
-      for (final t in ['上课提醒', '提前时间', '放假期间也会提醒']) {
-        expect(inGroup('reminder', t), findsOneWidget, reason: t);
-      }
+      expect(inGroup('home', '首页显示课数'), findsOneWidget);
       expect(inGroup('home', '显示明天的课'), findsOneWidget);
-      expect(inGroup('exam', '显示考试'), findsOneWidget);
+      for (final t in [
+        TtSettingsText.reminderSwitch,
+        TtSettingsText.reminderLead,
+        TtSettingsText.reminderHolidayHint,
+      ]) {
+        // 卡片标题与开关同为「上课提醒」（spec-settings-regroup），开关行另计一处。
+        expect(
+          inGroup('reminder', t),
+          t == TtSettingsText.reminderSwitch
+              ? findsNWidgets(2)
+              : findsOneWidget,
+          reason: t,
+        );
+      }
       expect(inGroup('other', '教务账号'), findsOneWidget);
       expect(inGroup('other', '恢复教务课程'), findsOneWidget);
-      for (final t in ['深色模式', '网格线', '背景', '圆角', '开学', '当前周']) {
+      // 周视图 / 考试 / 格子信息不得残留在设置首页；外观入口改成置顶的独立单行卡。
+      for (final g in ['display', 'appearance', 'exam']) {
+        expect(
+          find.byKey(Key('tt_settings_group_$g')),
+          findsNothing,
+          reason: g,
+        );
+      }
+      final appearanceCard = find.byKey(
+        const Key('tt_settings_appearance_card'),
+      );
+      expect(appearanceCard, findsOneWidget);
+      expect(
+        tester.getTopLeft(appearanceCard).dy,
+        lessThan(
+          tester.getTopLeft(find.byKey(const Key('tt_settings_group_home'))).dy,
+        ),
+      );
+      final appearanceEntry = find.byKey(
+        const Key('tt_settings_appearance_entry'),
+      );
+      expect(appearanceEntry, findsOneWidget);
+      // 无分组标题：整页只有行标题这一处「外观」；无副标题：行内只有一个 Text。
+      expect(find.text('外观'), findsOneWidget);
+      expect(
+        find.descendant(of: appearanceEntry, matching: find.byType(Text)),
+        findsOneWidget,
+      );
+      // 「其他」行序：教务账号 → 变动记录 → 整天调课 → 恢复教务课程；无「教务系统绑定」。
+      expect(inGroup('other', '教务系统绑定'), findsNothing);
+      final otherYs = [
+        for (final k in [
+          'tt_settings_account',
+          'tt_settings_change_log',
+          'tt_settings_day_swaps',
+          'tt_settings_restore_jwxt',
+        ])
+          tester.getTopLeft(find.byKey(Key(k))).dy,
+      ];
+      for (var i = 1; i < otherYs.length; i++) {
+        expect(otherYs[i] > otherYs[i - 1], isTrue, reason: 'other[$i]');
+      }
+      for (final t in ['深色模式', '网格线', '背景', '圆角', '开学', '当前周', '配色与预览']) {
         expect(find.textContaining(t), findsNothing, reason: t);
       }
-      // 行高 52、卡片圆角 12。
+      // 自适应行高含内边距，最小 52；卡片圆角 12（首页卡）。
       expect(
         tester
-            .getSize(find.byKey(const Key('tt_settings_show_location')))
+            .getSize(find.byKey(const Key('tt_settings_show_tomorrow')))
             .height,
-        52,
+        greaterThanOrEqualTo(52),
       );
       final card = tester.widget<Material>(
         find
             .descendant(
-              of: find.byKey(const Key('tt_settings_group_display')),
+              of: find.byKey(const Key('tt_settings_group_home')),
               matching: find.byType(Material),
             )
             .first,
       );
       expect(card.borderRadius, BorderRadius.circular(12));
       expect(card.color, Colors.white);
-      // 小字 12sp。
       final hint = tester.widget<Text>(find.text('放假期间也会提醒'));
       expect(hint.style!.fontSize, 12);
     });
 
-    testWidgets('ST02b 本版默认隐藏提醒：只有 显示→外观→首页 三张卡片，间距正常', (tester) async {
-      expect(kShowReminderSettings, isFalse);
-      await pumpPage(tester, TimetableSettingsPage(controller: _c));
-      expect(find.textContaining('提醒'), findsNothing);
+    testWidgets('ST02b 隐藏课前提醒及小组件卡片时：明日提醒仍显示，间距正常', (tester) async {
+      expect(kShowReminderSettings, isTrue);
+      await pumpPage(
+        tester,
+        TimetableSettingsPage(controller: _c, showReminderCard: false),
+      );
       expect(find.text('放假期间也会提醒'), findsNothing);
       expect(find.text('提前时间'), findsNothing);
       for (final m in TimetableSettings.reminderLeadOptions) {
         expect(find.text('$m 分钟'), findsNothing, reason: '$m');
         expect(find.byKey(Key('tt_settings_lead_$m')), findsNothing);
       }
-      expect(find.textContaining('分钟'), findsNothing);
       for (final k in [
         'tt_settings_group_reminder',
         'tt_settings_reminder',
@@ -255,18 +343,19 @@ void main() {
         expect(find.byKey(Key(k)), findsNothing, reason: k);
       }
       final groups = [
-        for (final g in ['display', 'appearance', 'home'])
+        for (final g in ['home', 'next_day_reminder', 'other'])
           find.byKey(Key('tt_settings_group_$g')),
       ];
       for (final g in groups) {
         expect(g, findsOneWidget);
       }
-      final titles = ['显示', '外观', '首页'];
-      final ys = [for (final t in titles) tester.getTopLeft(find.text(t)).dy];
+      final titles = ['首页', '明日提醒', '其他'];
+      final ys = [
+        for (final t in titles) tester.getTopLeft(find.text(t).first).dy,
+      ];
       for (var i = 1; i < ys.length; i++) {
         expect(ys[i] > ys[i - 1], isTrue, reason: titles[i]);
       }
-      // 卡片紧挨着排（间距由每组自带的上边距给出），外观与首页之间没有空位。
       for (var i = 1; i < groups.length; i++) {
         expect(
           tester.getTopLeft(groups[i]).dy,
@@ -275,15 +364,15 @@ void main() {
         );
       }
       final gap1 =
-          tester.getTopLeft(find.text('外观')).dy -
+          tester.getTopLeft(find.text('明日提醒').first).dy -
           tester.getBottomLeft(groups[0]).dy;
       final gap2 =
-          tester.getTopLeft(find.text('首页')).dy -
+          tester.getTopLeft(find.text('其他')).dy -
           tester.getBottomLeft(groups[1]).dy;
       expect(gap2, gap1);
     });
 
-    testWidgets('ST02c 存储里 reminderEnabled=true：默认页仍无提醒 UI，打开不回写', (
+    testWidgets('ST02c 存储里 reminderEnabled=true：隐藏提醒卡片时无提醒 UI，打开不回写', (
       tester,
     ) async {
       final stored = TimetableSettings(
@@ -298,9 +387,16 @@ void main() {
       final before = _filesIn(tmp);
       expect(before, isNotEmpty);
 
-      await pumpPage(tester, TimetableSettingsPage(controller: _c));
+      await pumpPage(
+        tester,
+        TimetableSettingsPage(controller: _c, showReminderCard: false),
+      );
       await settleIo(tester);
-      expect(find.textContaining('提醒'), findsNothing);
+      expect(find.text('上课提醒'), findsNothing);
+      expect(
+        find.byKey(const Key('tt_settings_group_next_day_reminder')),
+        findsOneWidget,
+      );
       expect(find.text('放假期间也会提醒'), findsNothing);
       expect(find.textContaining('分钟'), findsNothing);
       expect(find.byKey(const Key('tt_settings_group_reminder')), findsNothing);
@@ -310,12 +406,68 @@ void main() {
       expect(_filesIn(tmp), before);
     });
 
-    testWidgets('连点多个设置：每次读当前值合并，互不覆盖并持久化', (tester) async {
+    testWidgets('明日提醒与课前提醒独立，关闭后时间不可选，重开可选择半小时档位', (tester) async {
       await pumpPage(tester, TimetableSettingsPage(controller: _c));
+      tester.view.physicalSize = const Size(1080, 6000);
+      await tester.pump();
+      final switchKey = find.byKey(const Key('tt_settings_next_day_reminder'));
+      final timeKey = find.byKey(const Key('tt_settings_next_day_time'));
+      await tester.ensureVisible(switchKey);
+      await tester.pumpAndSettle();
+      expect(switchValue(tester, 'tt_settings_next_day_reminder'), isTrue);
+      expect(
+        find.descendant(of: switchKey, matching: find.text('明日提醒')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: timeKey, matching: find.text('提醒时间')),
+        findsOneWidget,
+      );
+      expect(find.text('22:00'), findsOneWidget);
+
+      await tester.tap(switchKey);
+      await settleIo(tester);
+      expect(_c.settings.nextDayReminderEnabled, isFalse);
+      expect(_c.settings.reminderEnabled, isFalse);
+      // 关闭后时间行 IgnorePointer，点不到、也不弹 sheet。
+      await tester.ensureVisible(timeKey);
+      await tester.tap(timeKey, warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(find.text('21:00'), findsNothing);
+
+      await tester.tap(switchKey);
+      await settleIo(tester);
+      expect(_c.settings.nextDayReminderEnabled, isTrue);
+      await tester.pumpAndSettle();
+
+      // 直接改时间档位并校验与课前提醒独立；半小时 sheet 用 ensureVisible 后再点。
+      await tester.ensureVisible(timeKey);
+      await tester.tap(timeKey);
+      await tester.pumpAndSettle();
+      expect(find.text('21:00'), findsOneWidget);
+      expect(find.text('23:30'), findsOneWidget);
+      await tester.tap(find.text('23:30'));
+      await settleIo(tester);
+      expect(_c.settings.nextDayReminderMinute, 1410);
+      expect(_c.settings.reminderEnabled, isFalse);
+      final stored = (await tester.runAsync(TimetableStore.readSettings))!;
+      expect(stored.nextDayReminderMinute, 1410);
+      expect(stored.nextDayReminderEnabled, isTrue);
+    });
+
+    testWidgets('连点多个设置：每次读当前值合并，互不覆盖并持久化', (tester) async {
+      await pumpAppearance(tester);
+      await reveal(tester, const Key('tt_settings_show_location'));
       await tester.tap(find.byKey(const Key('tt_settings_show_location')));
       await tester.tap(find.byKey(const Key('tt_settings_show_teacher')));
-      await tester.tap(find.byKey(const Key('seg_大')));
-      await tester.tap(find.byKey(const Key('seg_周日')));
+      await reveal(tester, const Key('tt_settings_font_scale'));
+      await tester.tap(find.widgetWithText(ChoiceChip, '大'));
+      await reveal(tester, const Key('tt_settings_week_start'));
+      await tester.tap(find.byKey(const Key('tt_settings_week_start')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('周日'));
+      await tester.pumpAndSettle();
+      await pumpPage(tester, TimetableSettingsPage(controller: _c));
       await tester.tap(find.byKey(const Key('tt_settings_show_tomorrow')));
       await settleIo(tester);
       final s = _c.settings;
@@ -333,9 +485,7 @@ void main() {
     });
 
     testWidgets('ST12 不透明度滑块 30–100、步长 10', (tester) async {
-      await pumpPage(tester, TimetableSettingsPage(controller: _c));
-      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
-      await tester.pumpAndSettle();
+      await pumpAppearance(tester);
       final slider = tester.widget<Slider>(
         find.byKey(const Key('tt_settings_opacity')),
       );
@@ -372,10 +522,8 @@ void main() {
       load(settings: read);
       final before = _filesIn(tmp);
 
-      await pumpPage(tester, TimetableSettingsPage(controller: _c));
+      await pumpAppearance(tester);
       await settleIo(tester);
-      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
-      await tester.pumpAndSettle();
       final slider = tester.widget<Slider>(
         find.byKey(const Key('tt_settings_opacity')),
       );
@@ -420,21 +568,20 @@ void main() {
       await tester.tap(find.byKey(const Key('tt_settings_reminder')));
       await settleIo(tester);
       expect(_c.settings.reminderEnabled, isTrue);
-      await tester.tap(find.byKey(const Key('tt_settings_reminder_lead')));
-      await tester.pumpAndSettle();
-      for (final m in [5, 10, 15, 20, 30]) {
-        expect(find.byKey(Key('tt_settings_lead_$m')), findsOneWidget);
+      Finder seg(int m) => find.descendant(
+        of: find.byKey(const Key('tt_settings_reminder_lead')),
+        matching: find.byKey(ValueKey('seg_$m')),
+      );
+      for (final m in kReminderLeadChoices) {
+        expect(seg(m), findsOneWidget);
       }
-      await tester.tap(find.byKey(const Key('tt_settings_lead_20')));
-      await tester.pumpAndSettle();
+      await tester.tap(seg(30));
       await settleIo(tester);
-      expect(_c.settings.reminderLeadMinutes, 20);
+      expect(_c.settings.reminderLeadMinutes, 30);
     });
 
     testWidgets('ST19 外观页暂时不展示配色方案 A/B/C 入口', (tester) async {
-      await pumpPage(tester, TimetableSettingsPage(controller: _c));
-      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
-      await tester.pumpAndSettle();
+      await pumpAppearance(tester);
       expect(find.byKey(const Key('tt_settings_palette')), findsNothing);
       expect(find.text('A 柔和'), findsNothing);
       expect(find.text('B 马卡龙'), findsNothing);
@@ -496,11 +643,11 @@ void main() {
       );
     });
 
-    testWidgets('ST09 文字大小三档：课名 10.8 / 12 / 13.8', (tester) async {
+    testWidgets('ST09 文字大小三档：取整后课名 11 / 12 / 14', (tester) async {
       for (final (scale, size) in [
-        (CellFontScale.small, 10.8),
+        (CellFontScale.small, 11.0),
         (CellFontScale.standard, 12.0),
-        (CellFontScale.large, 13.8),
+        (CellFontScale.large, 14.0),
       ]) {
         load(
           settings: base().copyWith(fontScale: scale),
@@ -512,10 +659,13 @@ void main() {
       }
     });
 
-    test('ST10 最小 10sp 夹紧', () {
+    test('ST10 最小 10sp 夹紧后取整', () {
       const scaler = TextScaler.linear(0.85);
       final v = CourseCell.cellFontSize(12, 0.9, scaler);
-      expect(v * 0.85, closeTo(10, 0.001));
+      // 10/0.85≈11.76 取整为 12，实际 10.2sp：仍不低于 10sp。
+      expect(v, 12);
+      expect(v * 0.85, closeTo(10.2, 0.001));
+      expect(v * 0.85, greaterThanOrEqualTo(10 - 1e-9));
     });
 
     testWidgets('ST13 不透明度只作用于底色：文字/角标/圆点不变淡', (tester) async {

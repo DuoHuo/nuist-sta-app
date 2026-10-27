@@ -11,6 +11,7 @@ import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_export_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_export_models.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_copy.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_export_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
@@ -53,6 +54,18 @@ void _load({bool pending = false}) {
 
 List<Map<String, Object?>> _items(TimetableExportSnapshot snapshot) =>
     snapshot.payload['items'] as List<Map<String, Object?>>;
+
+const _validSlot = CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1');
+
+void _loadCourses(List<Course> courses) {
+  _c.debugSetSnapshot(
+    TimetableSnapshot(
+      settings: TimetableSettings(termStartDate: _start, showExams: false),
+      periods: TimetableController.defaultPeriods(),
+      courses: courses,
+    ),
+  );
+}
 
 class _FakeApi extends TimetableExportApi {
   final completion = Completer<TimetableWakeupShare>();
@@ -106,6 +119,61 @@ void main() {
     ]) {
       expect(encoded, isNot(contains(private)));
     }
+  });
+
+  test('无固定时间的时段按 noFixedTime 跳过并保留课程名', () {
+    _loadCourses([
+      const Course(
+        id: 'valid',
+        name: '正常课程',
+        source: CourseSource.jwxt,
+        slots: [_validSlot],
+      ),
+      const Course(
+        id: 'no-time',
+        name: '无固定时间课程',
+        source: CourseSource.jwxt,
+        slots: [CourseSlot(day: 0, startNode: 1, endNode: 2, weeks: '1')],
+      ),
+    ]);
+    final snapshot = TimetableExportSnapshot.fromController(_c);
+    expect(snapshot.skippedSlots, 1);
+    final item = snapshot.skippedItems.single;
+    expect(item.courseName, '无固定时间课程');
+    expect(item.reason, TimetableExportSkipReason.noFixedTime);
+  });
+
+  test('空周次按 emptyWeeks 跳过，缺少时间时优先 noFixedTime', () {
+    _loadCourses([
+      const Course(
+        id: 'valid',
+        name: '正常课程',
+        source: CourseSource.jwxt,
+        slots: [_validSlot],
+      ),
+      const Course(
+        id: 'empty-weeks',
+        name: '空周次课程',
+        source: CourseSource.jwxt,
+        slots: [CourseSlot(day: 2, startNode: 3, endNode: 4, weeks: '0000')],
+      ),
+      const Course(
+        id: 'both',
+        name: '两种原因课程',
+        source: CourseSource.jwxt,
+        slots: [CourseSlot(day: 1, startNode: 0, endNode: 0, weeks: '')],
+      ),
+    ]);
+    final snapshot = TimetableExportSnapshot.fromController(_c);
+    expect(snapshot.skippedSlots, 2);
+    expect(snapshot.skippedItems.map((item) => item.courseName), [
+      '空周次课程',
+      '两种原因课程',
+    ]);
+    expect(snapshot.skippedItems.map((item) => item.reason), [
+      TimetableExportSkipReason.emptyWeeks,
+      TimetableExportSkipReason.noFixedTime,
+    ]);
   });
 
   test('隐藏考试仍导出，夜间日程保留精确时间并扩展日期范围', () async {
@@ -266,5 +334,70 @@ void main() {
     await tester.tap(find.text('复制口令'));
     await tester.pump();
     expect(clipboard, '分享口令为「$_shareId」');
+  });
+
+  testWidgets('无未导出课时不显示入口', (tester) async {
+    final api = _FakeApi();
+    addTearDown(api.close);
+    api.completion.complete(
+      const TimetableWakeupShare(shareText: '分享口令为「$_shareId」'),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        home: TimetableExportPage(controller: _c, api: api),
+      ),
+    );
+    await tester.tap(find.text('生成 WakeUp 口令'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('tt_export_skipped_link')), findsNothing);
+  });
+
+  testWidgets('有未导出课：口令下显示入口，点开列出原因', (tester) async {
+    _loadCourses([
+      const Course(
+        id: 'valid',
+        name: '正常课程',
+        source: CourseSource.jwxt,
+        slots: [_validSlot],
+      ),
+      const Course(
+        id: 'no-time',
+        name: '无固定时间课程',
+        source: CourseSource.jwxt,
+        slots: [CourseSlot(day: 0, startNode: 1, endNode: 2, weeks: '1')],
+      ),
+      const Course(
+        id: 'empty-weeks',
+        name: '空周次课程',
+        source: CourseSource.jwxt,
+        slots: [CourseSlot(day: 2, startNode: 3, endNode: 4, weeks: '0000')],
+      ),
+    ]);
+    final api = _FakeApi();
+    addTearDown(api.close);
+    api.completion.complete(
+      const TimetableWakeupShare(shareText: '分享口令为「$_shareId」'),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        home: TimetableExportPage(controller: _c, api: api),
+      ),
+    );
+    await tester.tap(find.text('生成 WakeUp 口令'));
+    await tester.pumpAndSettle();
+    expect(find.text(TimetableCopy.exportSkippedLinkLabel(2)), findsOneWidget);
+    await tester.tap(find.byKey(const Key('tt_export_skipped_link')));
+    await tester.pumpAndSettle();
+    expect(find.text(TimetableCopy.exportSkippedSheetTitle), findsOneWidget);
+    expect(find.text('无固定时间课程'), findsOneWidget);
+    expect(find.text(TimetableCopy.exportSkipNoFixedTime), findsOneWidget);
+    expect(find.text('空周次课程'), findsOneWidget);
+    expect(find.text(TimetableCopy.exportSkipEmptyWeeks), findsOneWidget);
+    expect(find.text(TimetableCopy.exportSkippedFooter), findsOneWidget);
+    await tester.tap(find.byKey(const Key('tt_export_skipped_got_it')));
+    await tester.pumpAndSettle();
+    expect(find.text(TimetableCopy.exportSkippedSheetTitle), findsNothing);
   });
 }

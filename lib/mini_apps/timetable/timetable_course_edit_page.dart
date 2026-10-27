@@ -186,8 +186,13 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
     final range = slot.startNode == slot.endNode
         ? '第 ${slot.startNode} 节'
         : '第 ${slot.startNode}–${slot.endNode} 节';
-    final s = c.periodStart(slot.startNode);
-    final e = c.periodEnd(slot.endNode);
+    final time = c.timeForSlot(
+      widget.cell.course,
+      slot,
+      date: widget.cell.date,
+    );
+    final s = time.start;
+    final e = time.end;
     final clock = (s == null || e == null) ? '' : ' $s–$e';
     return '周$wd $range$clock';
   }

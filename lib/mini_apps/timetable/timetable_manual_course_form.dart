@@ -204,10 +204,13 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   void _quickPick(int mode) {
     setState(() {
       _weeksError = null;
-      _weeks = {
+      final target = {
         for (var w = 1; w <= _totalWeeks; w++)
           if (mode == 0 || (mode == 1 && w.isOdd) || (mode == 2 && w.isEven)) w,
       };
+      // 已恰好选中该模式对应的周次时再次点击即反选清空。
+      final same = _weeks.length == target.length && _weeks.containsAll(target);
+      _weeks = same ? <int>{} : target;
     });
   }
 

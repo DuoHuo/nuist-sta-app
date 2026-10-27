@@ -6,6 +6,7 @@ import '../../core/colors.dart';
 import 'timetable_controller.dart';
 import 'timetable_export_api.dart';
 import 'timetable_export_models.dart';
+import 'timetable_copy.dart';
 
 /// WakeUp 导出页：预览范围、生成口令与复制分享文本。
 class TimetableExportPage extends StatefulWidget {
@@ -83,6 +84,93 @@ class _TimetableExportPageState extends State<TimetableExportPage> {
     }
   }
 
+  String _reasonLabel(TimetableExportSkipReason reason) => switch (reason) {
+    TimetableExportSkipReason.noFixedTime =>
+      TimetableCopy.exportSkipNoFixedTime,
+    TimetableExportSkipReason.emptyWeeks => TimetableCopy.exportSkipEmptyWeeks,
+  };
+
+  Future<void> _showSkippedSheet(List<TimetableExportSkippedSlot> items) {
+    final palette = AppPalette.of(context);
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: palette.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  TimetableCopy.exportSkippedSheetTitle,
+                  key: const Key('tt_export_skipped_sheet_title'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                    color: palette.titleText,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.sizeOf(ctx).height * 0.45,
+                  ),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: items.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (_, i) {
+                      final item = items[i];
+                      return Row(
+                        key: Key('tt_export_skipped_row_$i'),
+                        children: [
+                          Expanded(
+                            child: Text(
+                              item.courseName,
+                              style: TextStyle(
+                                fontSize: 15,
+                                color: palette.titleText,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            _reasonLabel(item.reason),
+                            key: Key('tt_export_skipped_reason_$i'),
+                            style: TextStyle(fontSize: 13, color: palette.hint),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  TimetableCopy.exportSkippedFooter,
+                  key: const Key('tt_export_skipped_footer'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 13, color: palette.hint),
+                ),
+                const SizedBox(height: 12),
+                FilledButton(
+                  key: const Key('tt_export_skipped_got_it'),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text(TimetableCopy.exportSkippedGotIt),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
@@ -153,6 +241,22 @@ class _TimetableExportPageState extends State<TimetableExportPage> {
                 height: 1.6,
               ),
             ),
+            if (snapshot != null && snapshot.skippedItems.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: InkWell(
+                  key: const Key('tt_export_skipped_link'),
+                  onTap: () => _showSkippedSheet(snapshot.skippedItems),
+                  child: Text(
+                    TimetableCopy.exportSkippedLinkLabel(
+                      snapshot.skippedItems.length,
+                    ),
+                    style: TextStyle(fontSize: 13, color: palette.hint),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 20),
             FilledButton.icon(
               onPressed: () => _copy(share.shareText, '已复制口令'),

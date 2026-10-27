@@ -61,7 +61,7 @@ void main() {
   }
 
   Future<void> pumpAppearance(WidgetTester tester) async {
-    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.physicalSize = const Size(1080, 6000);
     tester.view.devicePixelRatio = 2.625;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
@@ -88,12 +88,24 @@ void main() {
     await settleIo(tester);
     expect(_c.settings.cellOpacity, 30);
 
-    await tester.tap(find.text('黑字'));
+    await tester.ensureVisible(
+      find.byKey(const Key('tt_settings_cell_text_color')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('tt_settings_cell_text_color')),
+        matching: find.text('黑'),
+      ),
+    );
     await settleIo(tester);
     expect(_c.settings.cellTextColor, CellTextColorMode.black);
 
     expect(find.text('六'), findsWidgets);
-    await tester.tap(find.byKey(const Key('tt_settings_saturday')));
+    final sat = find.byKey(const Key('tt_settings_saturday'));
+    await tester.ensureVisible(sat);
+    await tester.pumpAndSettle();
+    await tester.tap(sat);
     await settleIo(tester);
     expect(_c.settings.showSaturday, isFalse);
   });
@@ -126,10 +138,21 @@ void main() {
 
   testWidgets('AW04 直接连续选色：取消不保存，输入色号保存', (tester) async {
     await pumpAppearance(tester);
-    final exam = find.byKey(const Key('tt_settings_exam_color'));
-    await tester.ensureVisible(exam);
+    // ListView 懒建元素：考试组在视口外时 skipOffstage 默认找不到。
+    final exam = find.byKey(
+      const Key('tt_settings_exam_color'),
+      skipOffstage: false,
+    );
+    await tester.scrollUntilVisible(
+      exam,
+      300,
+      scrollable: find.descendant(
+        of: find.byType(ListView),
+        matching: find.byType(Scrollable),
+      ),
+    );
     await tester.pumpAndSettle();
-    await tester.tap(exam);
+    await tester.tap(find.byKey(const Key('tt_settings_exam_color')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('tt_color_sv_panel')), findsOneWidget);
     expect(find.byKey(const Key('tt_color_hue')), findsOneWidget);
@@ -155,7 +178,8 @@ void main() {
       find.byKey(const Key('tt_appearance_preview_grid')),
     );
     final startWeek = grid.week;
-    await tester.fling(pager, const Offset(-400, 0), 1000);
+    // 按页面宽度拖动一页，避免 fling 惯性连续翻过两周。
+    await tester.drag(pager, Offset(-tester.getSize(pager).width * 0.7, 0));
     await tester.pumpAndSettle();
     final after = tester.widget<WeekGrid>(
       find.byKey(const Key('tt_appearance_preview_grid')),
@@ -164,5 +188,116 @@ void main() {
       expect(after.week, startWeek + 1);
     }
     expect(_c.viewingWeek, beforeView);
+  });
+
+  /// 短屏触发可折叠预览；设置区经 ClipRect 裁在分界线下方。
+  Future<void> pumpAppearanceCollapsible(
+    WidgetTester tester, {
+    required bool expandPreview,
+  }) async {
+    // constraints.maxHeight < 560 → collapsible；物理高需扣 AppBar。
+    tester.view.physicalSize = const Size(1080, 1400);
+    tester.view.devicePixelRatio = 2.625;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(home: TimetableAppearancePage(controller: _c)),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const Key('tt_appearance_preview_collapse_bar')),
+      findsOneWidget,
+    );
+    final expanded = find.byKey(const Key('tt_appearance_preview_expanded'));
+    if (expandPreview) {
+      if (expanded.evaluate().isEmpty) {
+        await tester.tap(
+          find.byKey(const Key('tt_appearance_preview_collapse_bar')),
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(expanded, findsOneWidget);
+    } else {
+      if (expanded.evaluate().isNotEmpty) {
+        await tester.tap(
+          find.byKey(const Key('tt_appearance_preview_collapse_bar')),
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(expanded, findsNothing);
+    }
+  }
+
+  Future<void> assertSettingsClippedBelowDivider(WidgetTester tester) async {
+    expect(
+      find.byKey(const Key('tt_appearance_settings_clip')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('tt_appearance_settings_list')),
+      findsOneWidget,
+    );
+    expect(
+      tester.widget(find.byKey(const Key('tt_appearance_settings_clip'))),
+      isA<ClipRect>(),
+    );
+    final clipRect = tester.getRect(
+      find.byKey(const Key('tt_appearance_settings_clip')),
+    );
+    final collapse = find.byKey(
+      const Key('tt_appearance_preview_collapse_bar'),
+    );
+    final preview = find.byKey(const Key('tt_appearance_preview_expanded'));
+    if (preview.evaluate().isNotEmpty) {
+      expect(
+        clipRect.top,
+        greaterThanOrEqualTo(tester.getRect(preview).bottom - 0.5),
+        reason: '展开态：设置裁切顶边应在预览底边下方',
+      );
+    } else {
+      expect(
+        clipRect.top,
+        greaterThanOrEqualTo(tester.getRect(collapse).bottom - 0.5),
+        reason: '折叠态：设置裁切顶边应在折叠条底边下方',
+      );
+    }
+
+    // 用力上滚：裁切顶边仍贴分界线，预览/折叠条不被遮挡。
+    await tester.drag(
+      find.byKey(const Key('tt_appearance_settings_list')),
+      const Offset(0, 2400),
+    );
+    await tester.pumpAndSettle();
+    final clipAfter = tester.getRect(
+      find.byKey(const Key('tt_appearance_settings_clip')),
+    );
+    if (preview.evaluate().isNotEmpty) {
+      expect(
+        find.byKey(const Key('tt_appearance_preview_expanded')),
+        findsOneWidget,
+      );
+      expect(
+        clipAfter.top,
+        greaterThanOrEqualTo(tester.getRect(preview).bottom - 0.5),
+      );
+    } else {
+      expect(
+        find.byKey(const Key('tt_appearance_preview_collapse_bar')),
+        findsOneWidget,
+      );
+      expect(
+        clipAfter.top,
+        greaterThanOrEqualTo(tester.getRect(collapse).bottom - 0.5),
+      );
+    }
+  }
+
+  testWidgets('AW06 展开预览时设置区 ClipRect 裁在分界线下方', (tester) async {
+    await pumpAppearanceCollapsible(tester, expandPreview: true);
+    await assertSettingsClippedBelowDivider(tester);
+  });
+
+  testWidgets('AW07 折叠预览时设置区仍只在分界线下方滚动', (tester) async {
+    await pumpAppearanceCollapsible(tester, expandPreview: false);
+    await assertSettingsClippedBelowDivider(tester);
   });
 }
