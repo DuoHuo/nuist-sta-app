@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
@@ -53,6 +54,7 @@ class VpnAuth {
 
   PortalHttp get _http {
     final generation = _cas.cookies.generation;
+    final epoch = _generation;
     if (_cookieGeneration == generation && _client != null) return _client!;
     _client?.dio.close(force: true);
     _cookieGeneration = generation;
@@ -64,7 +66,12 @@ class VpnAuth {
       ..interceptors.add(
         PortalCookieManager(
           _jar,
-          checkSession: () => _cas.cookies.checkGeneration(generation),
+          checkSession: () {
+            _cas.cookies.checkGeneration(generation);
+            if (epoch != _generation) {
+              throw const SocketException('VPN 认证已取消，请重试');
+            }
+          },
         ),
       )
       ..httpClientAdapter = IOHttpClientAdapter(
@@ -75,38 +82,52 @@ class VpnAuth {
 
   /// 先复用保存的控制器会话取得新 token，明确失效后才恢复 CAS 登录。
   Future<VpnCredentials> obtain() async {
-    vpnLog('读取本机绑定凭据');
     final generation = _cas.cookies.generation;
-    final bundle = await _readCredential();
-    _cas.cookies.checkGeneration(generation);
+    final epoch = _generation;
+    void check() {
+      _cas.cookies.checkGeneration(generation);
+      if (epoch != _generation) throw const SocketException('VPN 认证已取消，请重试');
+    }
+
+    final bundle = await vpnStage(
+      '读取本机绑定凭据',
+      _readCredential,
+      timeout: const Duration(seconds: 10),
+    );
+    check();
     if (bundle == null) {
       throw const PortalCredentialError('使用校园 VPN 前请先绑定统一门户');
     }
     final http = _http;
     final jar = _jar;
-    final reused = await _obtainWithSession(bundle, http, jar);
-    _cas.cookies.checkGeneration(generation);
+    final reused = await _obtainWithSession(bundle, http, jar, check);
+    check();
     if (reused != null) {
       vpnLog('复用控制器会话取得隧道凭据');
       return reused;
     }
-    await _clearController();
-    _cas.cookies.checkGeneration(generation);
+    await vpnStage(
+      '清理过期控制器 Cookie',
+      _clearController,
+      timeout: const Duration(seconds: 10),
+    );
+    check();
     final target = await _cas.authenticate(
       service,
       onStage: (stage) => vpnLog('CAS 阶段: $stage'),
     );
-    _cas.cookies.checkGeneration(generation);
+    check();
     final response = await http.followRedirects(
       await http.get(Uri.parse(target)),
     );
+    check();
     if (PortalHttp.isLoginResponse(response) ||
         (response.statusCode ?? 0) >= 400) {
       throw const PortalLoginError('VPN 登录未完成，请稍后再试');
     }
     vpnLog('VPN CAS 登录完成，检查身份信息');
-    final fresh = await _obtainWithSession(bundle, http, jar);
-    _cas.cookies.checkGeneration(generation);
+    final fresh = await _obtainWithSession(bundle, http, jar, check);
+    check();
     if (fresh == null) {
       throw const PortalLoginError('VPN 登录未返回有效控制器会话，请稍后再试');
     }
@@ -117,8 +138,15 @@ class VpnAuth {
     PasskeyBundle bundle,
     PortalHttp http,
     CookieJar jar,
+    void Function() check,
   ) async {
-    final cookies = await jar.loadForRequest(Uri.parse('$controller/'));
+    check();
+    final cookies = await vpnStage(
+      '读取控制器 Cookie',
+      () => jar.loadForRequest(Uri.parse('$controller/')),
+      timeout: const Duration(seconds: 10),
+    );
+    check();
     final infoCookie = cookies.where((cookie) => cookie.name == 'clientInfo');
     if (infoCookie.isEmpty ||
         !cookies.any((cookie) => cookie.name == 'ENSSESSIONID')) {
@@ -146,10 +174,12 @@ class VpnAuth {
       return null;
     }
     for (var attempt = 0; attempt < 6; attempt++) {
+      check();
       vpnLog('向控制器获取隧道凭据，第 ${attempt + 1}/6 次');
       final response = await http.get(
         Uri.parse('$controller/enlink/api/client/user/terminal/rules/$uid'),
       );
+      check();
       if (PortalHttp.isLoginResponse(response)) return null;
       final Map<String, dynamic> body;
       try {
@@ -189,8 +219,10 @@ class VpnAuth {
             port,
             user,
           );
+          check();
           vpnLog('SPA 敲门包已发送');
           await Future<void>.delayed(const Duration(milliseconds: 400));
+          check();
         }
         vpnLog('控制器已下发有效隧道凭据');
         return VpnCredentials(
@@ -269,10 +301,15 @@ class VpnAuth {
 
   /// 换号或解绑时销毁 VPN Cookie 与引导连接池。
   Future<void> clear() async {
+    cancel();
+    await _clearController();
+  }
+
+  /// 作废迟到的认证结果并关闭引导连接，不删除仍可复用的 Cookie。
+  void cancel() {
     _generation++;
     _client?.dio.close(force: true);
     _client = null;
     _cookieGeneration = null;
-    await _clearController();
   }
 }

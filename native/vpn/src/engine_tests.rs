@@ -225,7 +225,17 @@ fn tunnel_dns_tcp_secret_backpressure_and_half_close() {
     // 单条非法连接不能杀死已有隧道。
     assert!(handle.open("0.0.0.0".into(), 8080).is_err());
     assert!(handle.alive());
+    // 以陈旧时钟模拟调度停顿；恢复后应收到心跳回复并继续使用同一隧道。
+    thread::sleep(Duration::from_millis(100));
+    let (sender, receiver) = mpsc::sync_channel(1);
+    handle
+        .commands
+        .send(Command::SimulateSuspend(sender))
+        .unwrap();
+    receiver.recv_timeout(Duration::from_secs(2)).unwrap();
     let bridge = handle.open("campus.test".into(), 8080).unwrap();
+    assert_eq!(handle.status()["healthy"], true);
+    assert!(handle.status()["heartbeats"].as_u64().unwrap() >= 2);
     let mut intruder = TcpStream::connect((Ipv4Addr::LOCALHOST, bridge.port)).unwrap();
     intruder
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -268,4 +278,117 @@ fn tunnel_dns_tcp_secret_backpressure_and_half_close() {
     assert_eq!(received, expected.len());
     assert!(graceful, "对端必须收到正常关闭的最终 ACK");
     assert!(!handle.alive());
+}
+
+#[test]
+fn cancelled_tls_start_returns_without_waiting_for_peer() {
+    let listener = TcpListener::bind(("localhost", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let control = Arc::new(StartControl::new());
+    let worker_control = control.clone();
+    let worker = thread::spawn(move || {
+        start_with_control(
+            &json!({"host":"localhost", "port":port, "user":"synthetic", "token":"test-token"}),
+            RootCertStore::empty(),
+            worker_control,
+        )
+    });
+    let (peer, _) = listener.accept().unwrap();
+    let waiting = Instant::now();
+    while control.status()["stage"] != "TLS" && waiting.elapsed() < Duration::from_secs(2) {
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(control.status()["stage"], "TLS");
+    let started = Instant::now();
+    control.cancel();
+    let result = worker.join().unwrap();
+    assert!(result.is_err());
+    assert!(started.elapsed() < Duration::from_secs(1));
+    drop(peer);
+}
+
+#[test]
+fn protocol_handshake_has_total_deadline_after_partial_response() {
+    let listener = TcpListener::bind(("localhost", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let worker = thread::spawn(move || {
+        let (raw, _) = listener.accept().unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let config =
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![CertificateDer::from(CERT)],
+                    PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(KEY)),
+                )
+                .unwrap();
+        let mut tls = StreamOwned::new(ServerConnection::new(Arc::new(config)).unwrap(), raw);
+        let mut header = [0; 12];
+        tls.read_exact(&mut header).unwrap();
+        let mut body = vec![0; u16::from_be_bytes([header[2], header[3]]) as usize - 12];
+        tls.read_exact(&mut body).unwrap();
+        tls.write_all(&[1, 2, 0, 20, 0, 0, 0, 0, 1, 0, 0, 0])
+            .unwrap();
+        tls.flush().unwrap();
+        thread::sleep(Duration::from_millis(600));
+    });
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(CERT)).unwrap();
+    let started = Instant::now();
+    let control = Arc::new(StartControl::new());
+    let client_control = control.clone();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let result = start_with_deadline(
+            &json!({"host":"localhost", "port":port, "user":"synthetic", "token":"test-token"}),
+            roots,
+            client_control,
+            Duration::from_millis(300),
+        );
+        let _ = sender.send(result);
+    });
+    let result = receiver
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_else(|_| {
+            control.cancel();
+            panic!("握手未按期限返回");
+        });
+    assert!(result.is_err_and(|error| error.kind() == io::ErrorKind::TimedOut));
+    assert!(started.elapsed() < Duration::from_millis(550));
+    worker.join().unwrap();
+}
+
+#[test]
+fn running_flag_does_not_hide_stalled_worker() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    let (commands, _receiver) = mpsc::sync_channel(1);
+    let now = Instant::now();
+    let handle = Handle {
+        commands,
+        running: Arc::new(AtomicBool::new(true)),
+        exit_reason: Arc::new(Mutex::new(None)),
+        socket: Arc::new(socket),
+        health: Arc::new(Mutex::new(Health {
+            progress: now,
+            received: now,
+            heartbeats: 1,
+            received_bytes: 12,
+            recovering: false,
+            dns_timeouts: 0,
+            tcp_timeouts: 0,
+        })),
+    };
+    assert_eq!(handle.status()["healthy"], true);
+    handle.health.lock().unwrap().progress = now - Duration::from_secs(40);
+    assert_eq!(handle.status()["alive"], true);
+    assert_eq!(handle.status()["healthy"], false);
+    handle.health.lock().unwrap().progress = Instant::now();
+    handle.health.lock().unwrap().recovering = true;
+    assert_eq!(handle.status()["healthy"], false);
+    handle.stop();
+    assert_eq!(handle.status()["alive"], false);
 }

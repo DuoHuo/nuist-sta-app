@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -11,16 +12,58 @@ class VpnNative {
 
   /// 执行一条控制命令，业务流量不经过此接口。
   Future<Map<String, dynamic>> call(Map<String, dynamic> request) async {
-    try {
-      return await Isolate.run(() => _call(request));
-    } catch (error) {
-      // 不输出 request/result：其中可能包含 token 和回环鉴权密钥。
-      vpnLog('原生控制调用失败：${vpnErrorKind(error)}');
-      rethrow;
-    }
+    final method = request['method'];
+    final timeout = switch (method) {
+      'start' => const Duration(seconds: 30),
+      'open' => const Duration(seconds: 24),
+      _ => const Duration(seconds: 3),
+    };
+    final label = switch (method) {
+      'open' =>
+        '${VpnConnectionLog.current?.label ?? "原生目标连接"} '
+            'open，隧道 id=${request['id']}',
+      'status' => '隧道 id=${request['id']} 原生 status',
+      'start' ||
+      'startStatus' ||
+      'cancelStart' => '原生 $method，startId=${request['startId']}',
+      _ => '原生 $method',
+    };
+    // 只输出操作名，绝不展开 request/result。
+    return vpnStage(label, () async {
+      var expired = false;
+      final work = Isolate.run(() => _call(request, label));
+      unawaited(
+        work.then((result) async {
+          // 即使 isolate 调度迟到，过期的启动结果也不能留下孤立隧道。
+          if (expired && method == 'start' && result['id'] is int) {
+            try {
+              await call({'method': 'stop', 'id': result['id']});
+            } catch (_) {}
+          }
+          if (expired && method == 'prepareStart' && result['startId'] is int) {
+            try {
+              await call({
+                'method': 'cancelStart',
+                'startId': result['startId'],
+              });
+            } catch (_) {}
+          }
+        }, onError: (Object _) {}),
+      );
+      return work.timeout(
+        timeout,
+        onTimeout: () {
+          expired = true;
+          throw SocketException('VPN 原生 $method 调用超时，请重试');
+        },
+      );
+    });
   }
 
-  static Map<String, dynamic> _call(Map<String, dynamic> request) {
+  static Map<String, dynamic> _call(
+    Map<String, dynamic> request,
+    String label,
+  ) {
     const configured = String.fromEnvironment('VPN_NATIVE_LIBRARY');
     final name = configured.isNotEmpty
         ? configured
@@ -74,6 +117,19 @@ class VpnNative {
         utf8.decode(result.asTypedList(length)),
       ) as Map<String, dynamic>;
       if (response['ok'] != true) {
+        final message = response['error'] as String? ?? '';
+        final stage = RegExp(r'阶段="?(配置|DNS|TCP|TLS|协议鉴权)"?')
+            .firstMatch(message)
+            ?.group(1);
+        final kind = RegExp(r'类别=(\w+)').firstMatch(message)?.group(1);
+        if (stage != null) vpnLog('$label 失败：阶段=$stage，类别=${kind ?? "未知"}');
+        for (final phase in ['DNS', 'TCP', '回环鉴权']) {
+          if (message.contains('VPN 目标 $phase') ||
+              message.contains('VPN $phase超时')) {
+            vpnLog('$label 失败：阶段=$phase');
+            break;
+          }
+        }
         throw SocketException(response['error'] as String? ?? 'VPN 操作失败');
       }
       return response['data'] as Map<String, dynamic>;

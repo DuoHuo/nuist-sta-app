@@ -6,6 +6,7 @@ import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../network/vpn_log.dart';
 import 'aia_trust.dart';
 import 'nuist_login.dart';
 import 'passkey_bundle.dart';
@@ -25,6 +26,7 @@ class CasSession {
     PortalCookieStore? cookies,
     Future<PasskeyBundle?> Function()? readCredential,
     this.createHttp,
+    this.authenticationTimeout = const Duration(seconds: 40),
   }) : cookies = cookies ?? PortalCookieStore.instance,
        _readCredential = readCredential ?? PasskeyStore.read;
 
@@ -33,6 +35,10 @@ class CasSession {
   /// 与业务和 VPN 共用的 Cookie 存储。
   final PortalCookieStore cookies;
   final Future<PasskeyBundle?> Function() _readCredential;
+
+  /// 包含排队与平台存储的认证期限，超时后释放队列。
+  final Duration authenticationTimeout;
+  int _authenticationGeneration = 0;
 
   /// 测试用的引导客户端工厂；默认创建直连 CAS 的客户端。
   final PortalHttp Function(CookieJar jar)? createHttp;
@@ -49,6 +55,7 @@ class CasSession {
     closeClient();
     _clientGeneration = generation;
     final jar = cookies.openJar();
+    final epoch = _authenticationGeneration;
     if (createHttp case final factory?) return _client = factory(jar);
     final trust = AiaTrust(
       resolveCacheDir: () async {
@@ -73,7 +80,12 @@ class CasSession {
           ..interceptors.add(
             PortalCookieManager(
               jar,
-              checkSession: () => cookies.checkGeneration(generation),
+              checkSession: () {
+                cookies.checkGeneration(generation);
+                if (epoch != _authenticationGeneration) {
+                  throw const PortalNetworkError('门户认证已取消，请重试');
+                }
+              },
             ),
           );
     return _client = PortalHttp(dio, trust: trust);
@@ -85,31 +97,62 @@ class CasSession {
     void Function(String stage)? onStage,
   }) {
     final generation = cookies.generation;
-    final result = _queue.then((_) async {
+    final epoch = _authenticationGeneration;
+    void check() {
       cookies.checkGeneration(generation);
-      if (credentialError.value case final error?) throw error;
-      final http = _http(generation);
-      await _trust?.preload();
-      final bundle = await _readCredential();
-      cookies.checkGeneration(generation);
-      if (bundle == null) {
-        throw const PortalCredentialError('尚未绑定统一门户，请先完成绑定');
+      if (epoch != _authenticationGeneration) {
+        throw const PortalNetworkError('门户认证已取消，请重试');
       }
-      try {
-        final target = await NuistLogin(
-          http: http,
-          bundle: bundle,
-          onStage: onStage,
-        ).login(service, followServiceRedirects: false);
-        cookies.checkGeneration(generation);
-        credentialError.value = null;
-        return target;
-      } on PortalCredentialError catch (error) {
-        cookies.checkGeneration(generation);
-        credentialError.value = error;
-        rethrow;
-      }
-    });
+    }
+
+    final result = _queue
+        .then((_) async {
+          check();
+          if (credentialError.value case final error?) throw error;
+          final http = _http(generation);
+          await vpnStage('CAS 证书预热', () async {
+            await _trust?.preload();
+          }, timeout: authenticationTimeout);
+          check();
+          final bundle = await vpnStage(
+            'CAS 读取绑定凭据',
+            _readCredential,
+            timeout: authenticationTimeout,
+          );
+          check();
+          if (bundle == null) {
+            throw const PortalCredentialError('尚未绑定统一门户，请先完成绑定');
+          }
+          try {
+            final target = await vpnStage(
+              'CAS 登录',
+              () => NuistLogin(
+                http: http,
+                bundle: bundle,
+                onStage: onStage,
+              ).login(service, followServiceRedirects: false),
+              timeout: authenticationTimeout,
+            );
+            check();
+            credentialError.value = null;
+            return target;
+          } on PortalCredentialError catch (error) {
+            check();
+            credentialError.value = error;
+            rethrow;
+          }
+        })
+        .timeout(
+          authenticationTimeout,
+          onTimeout: () {
+            // 关闭旧客户端并作废其后续响应，不等待不可取消的平台通道。
+            if (epoch == _authenticationGeneration) {
+              closeClient(resetQueue: true);
+            }
+            vpnLog('CAS 认证整体超时（含排队），期限=${authenticationTimeout.inSeconds}s');
+            throw const PortalNetworkError('门户认证超时，请检查网络后重试');
+          },
+        );
     _queue = result.then((_) {}, onError: (_) {});
     return result;
   }
@@ -120,6 +163,9 @@ class CasSession {
     _client = null;
     _clientGeneration = null;
     _trust = null;
-    if (resetQueue) _queue = Future.value();
+    if (resetQueue) {
+      _authenticationGeneration++;
+      _queue = Future.value();
+    }
   }
 }

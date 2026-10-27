@@ -45,7 +45,12 @@ class AiaTrust {
 
   /// 把缓存目录里的中间证书全部加进 [context]。应在首个 TLS 请求前调用；
   /// 多次调用只生效一次。
-  Future<void> preload() => _preloading ??= _preload();
+  Future<void> preload() => _preloading ??= _preload().timeout(
+    const Duration(seconds: 5),
+    onTimeout: () {
+      portalLog(() => 'AIA 缓存预热超时，继续使用系统证书');
+    },
+  );
   Future<void>? _preloading;
 
   Future<void> _preload() async {

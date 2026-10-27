@@ -1,7 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
+
+import '../network/vpn_log.dart';
+import 'portal_exceptions.dart';
 
 /// 门户与 VPN 共用的 Cookie 拦截器，只按响应来源保存 Cookie。
 ///
@@ -19,6 +23,7 @@ class PortalCookieManager extends CookieManager {
     super.cookieJar, {
     this.beforeRequest,
     this.checkSession,
+    this.preparationTimeout = const Duration(seconds: 70),
   }) {
     // 兜住加载路径（请求头里的 Cookie）以及保存时漏网的 HttpException；
     // FormatException 不会在这里被忽略，所以在 [_normalizeSetCookie] 里提前过滤。
@@ -31,20 +36,57 @@ class PortalCookieManager extends CookieManager {
   /// 解绑后拒绝旧请求和旧响应，包含没有 Set-Cookie 的响应。
   final void Function()? checkSession;
 
+  /// 请求准备阶段包含 VPN 启动和 Cookie 读取，不受 Dio 传输超时保护。
+  final Duration preparationTimeout;
+
   @override
   Future<void> onRequest(
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
+    final log = VpnRequestLog.start(options, managedByInterceptor: true);
     try {
+      final preparation = vpnStage(
+        '${log?.label ?? options.uri.host} 准备',
+        () async {
+          checkSession?.call();
+          await beforeRequest?.call();
+          checkSession?.call();
+          return loadCookies(options);
+        },
+        timeout: preparationTimeout,
+      );
+      final cancelled = options.cancelToken?.whenCancel.then<String>((error) {
+        throw error;
+      });
+      final cookies = await (cancelled == null
+          ? preparation
+          : Future.any([preparation, cancelled]));
       checkSession?.call();
-      await beforeRequest?.call();
-      checkSession?.call();
+      if (options.cancelToken?.isCancelled == true) {
+        throw options.cancelToken!.cancelError!;
+      }
+      log?.preparationMs = log.watch.elapsedMilliseconds;
+      log?.route = '直连';
+      options.headers[HttpHeaders.cookieHeader] = cookies.isNotEmpty
+          ? cookies
+          : null;
+      handler.next(options);
     } catch (error) {
-      handler.reject(DioException(requestOptions: options, error: error), true);
+      log?.fail(error);
+      handler.reject(
+        error is DioException
+            ? error
+            : DioException(
+                requestOptions: options,
+                error: error is TimeoutException
+                    ? const PortalNetworkError('校园网络准备超时，请检查网络后重试')
+                    : error,
+              ),
+        true,
+      );
       return;
     }
-    await super.onRequest(options, handler);
   }
 
   @override
@@ -55,6 +97,7 @@ class PortalCookieManager extends CookieManager {
     try {
       checkSession?.call();
     } catch (error) {
+      VpnRequestLog.of(response.requestOptions)?.fail(error);
       handler.reject(
         DioException(requestOptions: response.requestOptions, error: error),
         true,
@@ -62,6 +105,16 @@ class PortalCookieManager extends CookieManager {
       return;
     }
     await super.onResponse(response, handler);
+  }
+
+  @override
+  Future<void> onError(
+    DioException err,
+    ErrorInterceptorHandler handler,
+  ) async {
+    VpnRequestLog.of(err.requestOptions)
+        ?.fail(err, status: err.response?.statusCode);
+    await super.onError(err, handler);
   }
 
   /// 匹配属性位置的 `; SameSite=None`（大小写不敏感，允许等号两侧空格）。
@@ -113,7 +166,7 @@ class PortalCookieManager extends CookieManager {
 
   /// 使用不含 Location 的响应视图保存 Cookie，原响应仍供调用方跟随跳转。
   @override
-  Future<void> saveCookies(Response response) {
+  Future<void> saveCookies(Response response) async {
     checkSession?.call();
     final headers = <String, List<String>>{
       for (final entry in response.headers.map.entries)
@@ -125,7 +178,7 @@ class PortalCookieManager extends CookieManager {
                 ]
               : entry.value,
     };
-    return super.saveCookies(
+    await super.saveCookies(
       Response<dynamic>(
         requestOptions: response.requestOptions,
         statusCode: response.statusCode,
@@ -135,6 +188,11 @@ class PortalCookieManager extends CookieManager {
           preserveHeaderCase: response.headers.preserveHeaderCase,
         ),
       ),
+    );
+    VpnRequestLog.of(response.requestOptions)?.complete(
+      response.statusCode,
+      response.realUri,
+      response.headers.value(HttpHeaders.locationHeader),
     );
   }
 }

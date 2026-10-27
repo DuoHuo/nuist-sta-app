@@ -5,6 +5,7 @@ import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 
 import '../network/vpn_http_adapter.dart';
+import '../network/vpn_log.dart';
 import 'aia_trust.dart';
 import 'portal_exceptions.dart';
 import 'safe_message.dart';
@@ -90,10 +91,12 @@ class PortalHttp {
     Uri uri, {
     Map<String, String>? headers,
     ResponseType responseType = ResponseType.plain,
+    CancelToken? cancelToken,
   }) => send(
     () => dio.getUri<dynamic>(
       uri,
       options: options(headers: headers, responseType: responseType),
+      cancelToken: cancelToken,
     ),
   );
 
@@ -125,20 +128,24 @@ class PortalHttp {
     try {
       final response = await request();
       final location = response.headers.value('location');
-      portalLog(
-        () =>
-            '${response.requestOptions.method} ${_short(response.realUri)} '
-            '→ HTTP ${response.statusCode}'
-            '${location == null ? '' : ' → ${_short(Uri.parse(location))}'}',
-      );
+      if (VpnRequestLog.of(response.requestOptions) == null) {
+        portalLog(
+          () =>
+              '${response.requestOptions.method} ${_short(response.realUri)} '
+              '→ HTTP ${response.statusCode}'
+              '${location == null ? '' : ' → ${_short(Uri.parse(location))}'}',
+        );
+      }
       return response;
     } on DioException catch (e) {
       if (e.error case final PortalException error) throw error;
-      portalLog(
-        () =>
-            '${e.requestOptions.method} ${_short(e.requestOptions.uri)} '
-            '✗ ${e.type.name}: ${e.message ?? e.error}',
-      );
+      if (VpnRequestLog.of(e.requestOptions) == null) {
+        portalLog(
+          () =>
+              '${e.requestOptions.method} ${_short(e.requestOptions.uri)} '
+              '✗ ${e.type.name}: ${e.error == null ? e.type.name : vpnErrorKind(e.error!)}',
+        );
+      }
       if (await _repairedChain(e)) return send(request);
       // 自定义连接工厂的 TLS 异常可能被 Dio 归为 unknown，仍属于网络错误。
       if (e.error is HandshakeException) {
@@ -200,7 +207,10 @@ class PortalHttp {
   /// 在底层 HttpClient 内部，中间几跳的 Set-Cookie 不会进 CookieJar。CAS 流程
   /// 恰恰靠中间跳转下发会话 Cookie，丢了就登不进去。Python 版没这个问题，是
   /// 因为 requests 自己实现跟随、每跳都过 jar。
-  Future<Response<dynamic>> followRedirects(Response<dynamic> response) async {
+  Future<Response<dynamic>> followRedirects(
+    Response<dynamic> response, {
+    CancelToken? cancelToken,
+  }) async {
     var current = response;
     for (var hop = 0; hop < maxRedirects; hop++) {
       if (!isRedirect(current.statusCode)) return current;
@@ -208,15 +218,18 @@ class PortalHttp {
       if (location == null || location.isEmpty) {
         throw PortalLoginError('HTTP ${current.statusCode} 重定向缺少 Location');
       }
-      current = await get(current.realUri.resolve(location));
+      current = await get(
+        current.realUri.resolve(location),
+        cancelToken: cancelToken,
+      );
     }
     throw const PortalLoginError('重定向次数过多，疑似陷入跳转循环');
   }
 
-  /// 日志里的 URL：去掉 query，CAS 的 ticket 和 service 参数又长又没信息量。
+  /// 日志只保留出口主机；路径也可能含账号标识，不能输出。
   static String _short(Uri uri) =>
       uri
-          .replace(query: '', fragment: '')
+          .replace(path: '', query: '', fragment: '', userInfo: '')
           .toString()
           .replaceAll(RegExp(r'[?#]+$'), '') +
       (uri.hasQuery ? '?…' : '');

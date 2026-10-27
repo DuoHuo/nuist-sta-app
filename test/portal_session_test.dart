@@ -575,6 +575,38 @@ void main() {
     expect(campus.assertions, 2);
   });
 
+  test('CAS 凭据读取卡住时有界失败并释放队列，迟到任务不发送认证请求', () async {
+    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+    final gate = Completer<void>();
+    var firstRead = true;
+    final cas = CasSession(
+      cookies: campus.cookies,
+      authenticationTimeout: const Duration(milliseconds: 100),
+      readCredential: () async {
+        if (firstRead) {
+          firstRead = false;
+          await gate.future;
+        }
+        return _bundle();
+      },
+      createHttp: (jar) => _http(jar, campus.auth),
+    );
+    await expectLater(
+      cas.authenticate('https://jwxt.test/callback'),
+      throwsA(isA<PortalNetworkError>()),
+    );
+    expect(cas.credentialError.value, isNull);
+    expect(campus.authRequests, 0);
+    expect(
+      await cas.authenticate('https://jwxt.test/callback'),
+      contains('synthetic-ticket'),
+    );
+    final requests = campus.authRequests;
+    gate.complete();
+    await Future<void>.delayed(Duration.zero);
+    expect(campus.authRequests, requests);
+  });
+
   test('CAS 普通 JSON 错误不标记密钥失效，恢复服务后可继续认证', () async {
     final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
     Map<String, Object?>? failure;

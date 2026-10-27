@@ -9,18 +9,80 @@ use std::collections::HashMap;
 use std::ffi::{c_char, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 static ENGINES: OnceLock<Mutex<HashMap<u64, engine::Handle>>> = OnceLock::new();
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static STARTS: OnceLock<Mutex<HashMap<u64, Arc<engine::StartControl>>>> = OnceLock::new();
 
 fn dispatch(request: Value) -> Result<Value, String> {
     let engines = ENGINES.get_or_init(|| Mutex::new(HashMap::new()));
     let method = request["method"].as_str().ok_or("缺少操作名称")?;
+    let starts = STARTS.get_or_init(|| Mutex::new(HashMap::new()));
     match method {
         "version" => Ok(json!({"abi": 1})),
+        "prepareStart" => {
+            let mut registry = starts.lock().map_err(|_| "VPN 启动注册表不可用")?;
+            if registry.len() >= 4 {
+                return Err("VPN 启动任务数量超限".into());
+            }
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            registry.insert(id, Arc::new(engine::StartControl::new()));
+            Ok(json!({"startId": id}))
+        }
+        "cancelStart" => {
+            let id = request["startId"].as_u64().ok_or("缺少启动编号")?;
+            if let Some(control) = starts
+                .lock()
+                .map_err(|_| "VPN 启动注册表不可用")?
+                .remove(&id)
+            {
+                control.cancel();
+            }
+            Ok(json!({}))
+        }
+        "startStatus" => {
+            let id = request["startId"].as_u64().ok_or("缺少启动编号")?;
+            let control = starts
+                .lock()
+                .map_err(|_| "VPN 启动注册表不可用")?
+                .get(&id)
+                .cloned();
+            Ok(control
+                .map(|control| control.status())
+                .unwrap_or_else(|| json!({"stage": "已结束"})))
+        }
         "start" => {
-            let (handle, info) = engine::start(&request).map_err(|e| e.to_string())?;
+            let start_id = request["startId"].as_u64();
+            let control = match start_id {
+                Some(id) => starts
+                    .lock()
+                    .map_err(|_| "VPN 启动注册表不可用")?
+                    .get(&id)
+                    .cloned()
+                    .ok_or("VPN 启动已取消")?,
+                None => Arc::new(engine::StartControl::new()),
+            };
+            let outcome = engine::start_controlled(&request, control.clone());
+            // 先检查取消、再释放登记；cancelStart 在握手完成边界也能阻止发布。
+            if let Some(id) = start_id {
+                let mut registry = starts.lock().map_err(|_| "VPN 启动注册表不可用")?;
+                if !registry.contains_key(&id) {
+                    if let Ok((handle, _)) = outcome {
+                        handle.stop();
+                    }
+                    return Err("VPN 启动已取消".into());
+                }
+                registry.remove(&id);
+            }
+            let (handle, info) = outcome.map_err(|e| {
+                format!(
+                    "{}（阶段={}，类别={:?}）",
+                    e,
+                    control.status()["stage"],
+                    e.kind()
+                )
+            })?;
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             let mut registry = engines.lock().map_err(|_| "VPN 注册表不可用")?;
             if registry.len() >= 4 {
@@ -29,7 +91,7 @@ fn dispatch(request: Value) -> Result<Value, String> {
             }
             registry.insert(id, handle);
             Ok(
-                json!({"id": id, "virtualIp": info.address.to_string(), "dns": info.dns.to_string()}),
+                json!({"id": id, "virtualIp": info.address.to_string(), "dns": info.dns.to_string(), "startup": control.status()}),
             )
         }
         "stop" => {
@@ -49,7 +111,7 @@ fn dispatch(request: Value) -> Result<Value, String> {
                 .cloned()
                 .ok_or("VPN 实例已关闭")?;
             if method == "status" {
-                return Ok(json!({"alive": handle.alive(), "exitReason": handle.exit_reason()}));
+                return Ok(handle.status());
             }
             let host = request["host"].as_str().ok_or("缺少目标主机")?;
             let port = request["port"]

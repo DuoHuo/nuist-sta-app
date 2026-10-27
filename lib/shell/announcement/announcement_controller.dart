@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -131,7 +132,12 @@ class AnnouncementController extends ChangeNotifier {
         }
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[announcement] 拉取失败，沿用缓存: $e');
+      if (kDebugMode) {
+        final kind = e is DioException
+            ? '${e.type.name}，HTTP ${e.response?.statusCode ?? "无响应"}'
+            : '${e.runtimeType}';
+        debugPrint('[announcement] 拉取失败，沿用缓存: $kind');
+      }
     }
     _notify();
   }

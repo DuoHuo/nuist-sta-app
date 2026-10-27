@@ -10,6 +10,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../config/campus_config.dart';
 import '../network/vpn_dio.dart';
 import '../network/vpn_gateway.dart';
+import '../network/vpn_log.dart';
 import 'aia_trust.dart';
 import 'cas_session.dart';
 import 'established_store.dart';
@@ -100,6 +101,7 @@ class PortalSession {
 
   /// 业务落地缓存保留原来的 12 小时信任期。
   static const establishedTtl = Duration(hours: 12);
+  static const _loginTimeout = Duration(seconds: 90);
 
   final CasSession _cas;
   final Future<void> Function() _prepareNetwork;
@@ -168,8 +170,12 @@ class PortalSession {
       unawaited(_persist());
     }
     late final Future<String> future;
-    future = _serialize(() => _performLogin(service, generation, onStage))
-        .whenComplete(() {
+    final cancelToken = CancelToken();
+    future =
+        _serialize(
+          () => _performLogin(service, generation, onStage, cancelToken),
+          onTimeout: () => cancelToken.cancel('业务登录整体超时'),
+        ).whenComplete(() {
           if (identical(_pending[service], future)) _pending.remove(service);
         });
     _pending[service] = future;
@@ -330,12 +336,20 @@ class PortalSession {
     if (kDebugMode) portalLogger ??= debugPrint;
     final generation = _cas.cookies.generation;
     if (!_ready) {
-      _restored = _readEstablished().then((entries) {
-        if (generation != _cas.cookies.generation) return;
-        for (final MapEntry(:key, :value) in entries.entries) {
-          _established.putIfAbsent(key, () => value);
-        }
-      });
+      _restored = _readEstablished()
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              vpnLog('业务登录缓存读取超时，按无缓存处理');
+              return {};
+            },
+          )
+          .then((entries) {
+            if (generation != _cas.cookies.generation) return;
+            for (final MapEntry(:key, :value) in entries.entries) {
+              _established.putIfAbsent(key, () => value);
+            }
+          });
       _ready = true;
     }
     if (_clientGeneration == generation) return;
@@ -369,7 +383,7 @@ class PortalSession {
               beforeRequest: () async {
                 if (_clearing case final clearing?) await clearing;
                 _cas.cookies.checkGeneration(generation);
-                await trust.preload();
+                await vpnStage('业务证书预热', trust.preload);
                 await _prepareNetwork();
                 _cas.cookies.checkGeneration(generation);
               },
@@ -396,47 +410,62 @@ class PortalSession {
     String service,
     int generation,
     void Function(String stage)? onStage,
+    CancelToken cancelToken,
   ) async {
-    _cas.cookies.checkGeneration(generation);
+    void check() {
+      _cas.cookies.checkGeneration(generation);
+      if (cancelToken.isCancelled) {
+        throw const PortalNetworkError('业务登录已超时，请重试');
+      }
+    }
+
+    check();
     _ensureReady();
     final http = _http;
-    await _prepareNetwork();
-    _cas.cookies.checkGeneration(generation);
+    final host = Uri.parse(service).host;
     try {
-      portalLog(() => '恢复业务会话');
+      await _prepareNetwork();
+      check();
+      portalLog(() => '恢复业务会话 $host');
       final target = await _cas.authenticate(
         service,
         onStage: (stage) {
-          portalLog(() => '阶段: $stage');
+          portalLog(() => '业务会话 $host CAS 阶段: $stage');
           onStage?.call(stage);
         },
       );
-      _cas.cookies.checkGeneration(generation);
+      check();
       final response = await http.followRedirects(
-        await http.get(Uri.parse(target)),
+        await http.get(Uri.parse(target), cancelToken: cancelToken),
+        cancelToken: cancelToken,
       );
+      check();
       if (_looksLikeLoginPage(response) || (response.statusCode ?? 0) >= 400) {
         throw const PortalLoginError('业务登录未完成，请稍后再试');
       }
       final landing = response.realUri.toString();
-      _cas.cookies.checkGeneration(generation);
-      portalLog(() => '业务会话恢复成功');
+      check();
+      portalLog(() => '业务会话恢复成功 $host');
       _established[service] = EstablishedEntry(
         landing: landing,
         at: DateTime.now(),
       );
       await _persist();
-      _cas.cookies.checkGeneration(generation);
+      check();
       return landing;
     } on PortalCredentialError catch (e) {
       // 凭据被服务端拒绝，记下来让绑定状态页显示「已失效」。
-      portalLog(() => '凭据失效: ${e.message}');
-      _cas.cookies.checkGeneration(generation);
+      portalLog(() => '业务会话 $host 凭据失效: ${e.message}');
+      check();
       credentialError.value = e;
       rethrow;
     } on PortalException catch (e) {
-      portalLog(() => '登录失败(${e.runtimeType}): ${e.message}');
+      portalLog(() => '业务会话 $host 登录失败(${e.runtimeType}): ${e.message}');
       rethrow;
+    } on SocketException {
+      throw const PortalNetworkError('无法建立校园网络连接，请检查网络后重试');
+    } on TimeoutException {
+      throw const PortalNetworkError('校园网络准备超时，请检查网络后重试');
     }
   }
 
@@ -454,8 +483,20 @@ class PortalSession {
   }
 
   /// 串行化登录，并保证一次失败不会把队列卡死。
-  Future<T> _serialize<T>(Future<T> Function() task) {
-    final result = _queue.then((_) => task());
+  Future<T> _serialize<T>(
+    Future<T> Function() task, {
+    void Function()? onTimeout,
+  }) {
+    final result = _queue
+        .then((_) => task())
+        .timeout(
+          _loginTimeout,
+          onTimeout: () {
+            onTimeout?.call();
+            vpnLog('业务登录整体超时（含排队），释放登录队列');
+            throw const PortalNetworkError('业务登录超时，请检查网络后重试');
+          },
+        );
     _queue = result.then((_) {}, onError: (_) {});
     return result;
   }

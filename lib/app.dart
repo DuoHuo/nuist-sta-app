@@ -1,7 +1,13 @@
+import 'dart:async';
+import 'dart:io' show Platform;
+
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/app_info.dart';
+import 'core/network/vpn_gateway.dart';
 import 'core/schedule/weekly_classes.dart';
 import 'core/theme.dart';
 import 'core/theme_mode.dart';
@@ -16,8 +22,10 @@ class NuistApp extends StatefulWidget {
   State<NuistApp> createState() => _NuistAppState();
 }
 
-class _NuistAppState extends State<NuistApp> {
+class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   late final GoRouter _router = buildRouter();
+  StreamSubscription<List<ConnectivityResult>>? _networkSubscription;
+  String? _network;
 
   @override
   void initState() {
@@ -25,6 +33,38 @@ class _NuistAppState extends State<NuistApp> {
     // 校园地图等通过 core 接口读本周课程，由壳把课表的实现登记进去。
     WeeklyClasses.source ??= const TimetableWeeklyClasses();
     AppThemeMode.instance.load();
+    WidgetsBinding.instance.addObserver(this);
+    if (!kIsWeb && !Platform.environment.containsKey('FLUTTER_TEST')) {
+      try {
+        _networkSubscription = Connectivity().onConnectivityChanged.listen((
+          results,
+        ) {
+          final names = results.map((result) => result.name).toList()..sort();
+          final current = names.join(',');
+          final previous = _network;
+          _network = current;
+          if (previous != null && previous != current) {
+            unawaited(VpnGateway.instance.networkChanged());
+          }
+        }, onError: (Object _) {});
+      } catch (_) {
+        // 平台无网络监听时，仍由请求前的健康检查恢复隧道。
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(VpnGateway.instance.checkHealth());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _networkSubscription?.cancel();
+    super.dispose();
   }
 
   @override
