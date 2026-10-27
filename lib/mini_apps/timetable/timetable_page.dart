@@ -261,7 +261,7 @@ class _TimetablePageState extends State<TimetablePage> {
       await animateWeekPage(
         pc,
         _pageFor(week),
-        reduceMotion: MediaQuery.of(context).disableAnimations,
+        reduceMotion: MediaQuery.disableAnimationsOf(context),
       );
     }
     if (mounted) _controller.setViewingWeek(week);
@@ -277,7 +277,7 @@ class _TimetablePageState extends State<TimetablePage> {
             onSelect: (w) => unawaited(_selectWeek(w)),
           )
         : const SizedBox(width: double.infinity);
-    if (MediaQuery.of(context).disableAnimations) return strip;
+    if (MediaQuery.disableAnimationsOf(context)) return strip;
     return AnimatedSize(
       duration: const Duration(milliseconds: 200),
       curve: Curves.easeOutCubic,
@@ -309,6 +309,8 @@ class _TimetablePageState extends State<TimetablePage> {
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
     return Scaffold(
+      // 输入只出现在弹层，键盘升降时保持背景课表的尺寸，避免重排整个周视图。
+      resizeToAvoidBottomInset: false,
       backgroundColor: colors.pageBg,
       body: SafeArea(
         child: ListenableBuilder(

@@ -211,7 +211,7 @@ abstract final class TimetableTheme {
   /// 课程 / 考试共用的 12 个预设（PM 1020 终稿 + 设计给定棕）。
   ///
   /// 冷暖交错排布；B 的大色块 / 选色器 / 考试色共用此列表。
-  /// 显示一律走 [userCoursePair]（浅底深字 / 深色 [darkCoursePair]），不再按亮度分叉白字。
+  /// 自动分配后显示为柔和配色；手动选定颜色则由 [userCoursePair] 保留原色。
   static const List<Color> coursePresetColors = [
     Color(0xFFE91E63), // 1 粉 warm
     Color(0xFF2196F3), // 2 蓝 cool
@@ -351,7 +351,7 @@ abstract final class TimetableTheme {
   static CourseColorPair autoCoursePair(int index, {bool dark = false}) {
     final list = coursePresetColors;
     final bg = list[index < 0 ? 0 : index % list.length];
-    return userCoursePair(bg, dark: dark);
+    return _softCoursePair(bg, dark: dark);
   }
 
   /// 课名 → 自动色对：稳定哈希进 12 预设（同名同色）。
@@ -360,12 +360,20 @@ abstract final class TimetableTheme {
     bool dark = false,
   }) => autoCoursePair(coursePresetIndexForName(name), dark: dark);
 
-  /// item 9：用户自选色 / 自动预设 [c]（原始 ARGB）在当前明暗下的（底色, 文字色）。
-  ///
-  /// **唯一显示方案**（周视图 / 首页 / 外观 / 选色预览共用）：浅色「浅底 + 同色相深字」，
-  /// 深色走 [darkCoursePair]（深底浅字）。种子过暗时先抬成柔和浅底，避免再走考试格白字分叉。
-  /// 考试格仍用 [examCellBg] + [examText]，不经本函数。
+  /// 自选颜色原样显示，明暗主题都不改变所选色值；自动文字取对比度更高的黑或白。
   static CourseColorPair userCoursePair(Color c, {bool dark = false}) {
+    final luminance = c.computeLuminance();
+    final whiteContrast = 1.05 / (luminance + 0.05);
+    final blackContrast =
+        (luminance + 0.05) / (forcedBlackText.computeLuminance() + 0.05);
+    return CourseColorPair(
+      c,
+      whiteContrast >= blackContrast ? forcedWhiteText : forcedBlackText,
+    );
+  }
+
+  /// 自动分配的默认色仍使用柔和配色，自选颜色不经过此转换。
+  static CourseColorPair _softCoursePair(Color c, {bool dark = false}) {
     final hsl = HSLColor.fromColor(c);
     final Color lightBg;
     if (c.computeLuminance() > 0.4) {

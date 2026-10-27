@@ -9,7 +9,6 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_day_swap_ui.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_grid.dart';
 
 const _w16 = '1111111111111111';
@@ -305,7 +304,7 @@ void main() {
   });
 
   for (final mode in [ThemeMode.light, ThemeMode.dark]) {
-    testWidgets('SWU09 有单日修改的格子右上角 4dp 圆点（${mode.name}）', (tester) async {
+    testWidgets('SWU09 单日修改不显示标记圆点，修改仍只影响当天（${mode.name}）', (tester) async {
       load();
       await pumpGrid(tester);
       expect(find.byKey(const Key('course_cell_date_edit_dot')), findsNothing);
@@ -319,12 +318,8 @@ void main() {
         ),
         mode: mode,
       );
-      final dot = find.byKey(const Key('course_cell_date_edit_dot'));
-      expect(dot, findsOneWidget);
-      expect(tester.getSize(dot), const Size(4, 4));
-      final ctx = tester.element(dot);
-      final deco = tester.widget<Container>(dot).decoration! as BoxDecoration;
-      expect(deco.color, TimetableTheme.colorsOf(ctx).warning);
+      expect(find.byKey(const Key('course_cell_date_edit_dot')), findsNothing);
+      expect(cellOn(_mon, 'm1').slot.location, '新地点');
       expect(tester.takeException(), isNull);
       // 下一周同一门课没有圆点。
       await pumpHost(

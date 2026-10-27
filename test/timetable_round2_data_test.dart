@@ -321,7 +321,7 @@ void main() {
         expect(streak, lessThan(3), reason: '无连续 ≥3 个冷色');
         final hsv = HSVColor.fromColor(c);
         expect(hsv.saturation, greaterThanOrEqualTo(0.30));
-        // 设计给定靛/棕等可低于 0.18；仍保留原色，显示时经 userCoursePair 抬浅底。
+        // 设计给定靛/棕等可低于 0.18；仍保留原色，自动分配时使用柔和底色。
         final lum = c.computeLuminance();
         expect(lum, greaterThanOrEqualTo(0.08));
         expect(lum, lessThanOrEqualTo(0.90));
@@ -347,14 +347,17 @@ void main() {
           coursePresetIndexForCourse(c.courses.single),
         ).bg.toARGB32(),
       );
-      // 统一方案：任意预设经 userCoursePair 后不再出现「白字分叉」
+      // 自选颜色保持原色，明暗主题一致；自动文字选择黑或白以保证可读。
       for (final raw in TimetableTheme.coursePresetColors) {
         final light = TimetableTheme.userCoursePair(raw);
         final dark = TimetableTheme.userCoursePair(raw, dark: true);
-        expect(light.fg.toARGB32(), isNot(TimetableTheme.examText.toARGB32()));
-        expect(dark.fg.toARGB32(), isNot(TimetableTheme.examText.toARGB32()));
-        // 深色为 darkCoursePair：字 = 浅色底
-        expect(dark.fg.toARGB32(), light.bg.toARGB32());
+        expect(light.bg, raw);
+        expect(dark.bg, raw);
+        expect(dark.fg, light.fg);
+        expect(
+          light.fg,
+          anyOf(TimetableTheme.forcedWhiteText, TimetableTheme.forcedBlackText),
+        );
       }
       expect(coursePresetIndexForName('高数'), inInclusiveRange(0, 11));
     });

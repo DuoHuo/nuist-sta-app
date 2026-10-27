@@ -89,7 +89,10 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
     final pick = await showTimetableColorPicker(
       context,
       current: Color(_c.settings.examColor),
-      presets: TimetableTheme.examColorOptions,
+      defaultColor: const Color(kDefaultExamColor),
+      previewTitle: '考试',
+      opacity: _c.settings.cellOpacity,
+      textColorMode: _c.settings.cellTextColor,
       showReset: _c.settings.examColor != kDefaultExamColor,
       forExam: true,
       title: '考试颜色',
@@ -107,6 +110,7 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
     final c = _c;
     final pc = _pageController;
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: TimetableTheme.colorsOf(context).pageBg,
       appBar: AppBar(title: const Text('外观')),
       body: ListenableBuilder(

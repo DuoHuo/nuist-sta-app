@@ -48,7 +48,8 @@ void _load(CellTextColorMode mode) {
 }
 
 Future<void> _io(WidgetTester tester) async {
-  for (var i = 0; i < 3; i++) {
+  // 在 FakeAsync 结束前排空设置保存的多次异步 IO，避免 Windows 文件句柄残留。
+  for (var i = 0; i < 20; i++) {
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 20)),
     );

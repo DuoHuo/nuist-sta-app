@@ -310,7 +310,7 @@ void main() {
       }
     });
 
-    testWidgets('EX03 考试颜色与课程同套 12 预设；外观页选预设写入 examColor', (tester) async {
+    testWidgets('EX03 外观页输入色号写入 examColor', (tester) async {
       expect(
         TimetableTheme.examColorOptions,
         TimetableTheme.coursePresetColors,
@@ -323,12 +323,10 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tt_settings_exam_color')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tt_color_preset_6')));
+      await tester.enterText(find.byKey(const Key('tt_color_hex')), '3892AC');
+      await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
       await _settleIo(tester);
-      expect(
-        _c.settings.examColor,
-        TimetableTheme.coursePresetColors[6].toARGB32(),
-      );
+      expect(_c.settings.examColor, 0xFF3892AC);
     });
 
     testWidgets('恢复教务课程：二次确认；取消不动，确认后 restoreAllJwxt 清掉调课记录', (tester) async {

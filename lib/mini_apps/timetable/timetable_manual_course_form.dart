@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'timetable_color_picker.dart';
 import 'timetable_colors.dart';
 import 'timetable_controller.dart';
+import 'timetable_date_edits.dart';
 import 'timetable_apply_weeks_sheet.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
@@ -71,10 +72,13 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   /// 旧色号字段（仍写入 Course.colorIndex，兼容旧数据）。
   int? _colorIndex;
 
-  /// spec-next-1020 item 3：用户自选 ARGB（12+HSV）；null = 默认自动色。
+  /// 用户自选原始 ARGB；null 表示使用默认色。
   int? _userArgb;
+  int? _initialUserArgb;
+  EditScope _colorScope = EditScope.allWeeks;
   bool _userArgbCleared = false;
   bool _saving = false;
+  bool _pickingColor = false;
   String? _weeksError;
 
   bool get _isEdit => widget.initial != null;
@@ -107,6 +111,7 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     _colorIndex = c?.colorIndex;
     if (c != null) {
       _userArgb = widget.controller.userColorOf(c);
+      _initialUserArgb = _userArgb;
     }
     _location = TextEditingController(text: slot?.location ?? '');
     _teacher = TextEditingController(text: slot?.teacher ?? '');
@@ -164,6 +169,14 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   _init;
 
   Future<void> _persistUserColor(TimetableController c, String courseId) async {
+    if (_userArgb == _initialUserArgb && !_userArgbCleared) return;
+    if (_colorScope == EditScope.thisDay && widget.cell != null) {
+      await c.setOccurrenceColor(
+        widget.cell!,
+        _userArgbCleared ? null : _userArgb,
+      );
+      return;
+    }
     if (_userArgbCleared) {
       await c.setUserCourseColor(courseId, null);
       return;
@@ -207,7 +220,32 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
       return;
     }
     if (!ok || _saving) return;
+    final colorCell = widget.cell;
+    if ((_userArgb != _initialUserArgb || _userArgbCleared) &&
+        colorCell?.date != null &&
+        colorCell!.activeThisWeek) {
+      final scope = await showCourseColorScopeSheet(context, cell: colorCell);
+      if (scope == null || !mounted) return;
+      _colorScope = scope;
+    }
     setState(() => _saving = true);
+    // 只调整颜色时不重写课程字段，避免把这次课的局部改名、备注扩散到全学期。
+    if (_isEdit &&
+        (_userArgb != _initialUserArgb || _userArgbCleared) &&
+        _name.text.trim() == _init.name.trim() &&
+        _teacher.text.trim() == _init.teacher.trim() &&
+        _location.text.trim() == _init.location.trim() &&
+        _note.text.trim() == _init.note.trim() &&
+        _day == _init.day &&
+        _start == _init.start &&
+        _end == _init.end &&
+        _weeks.length == _init.weeks.length &&
+        _weeks.containsAll(_init.weeks)) {
+      await _persistUserColor(widget.controller, widget.initial!.id);
+      if (!mounted) return;
+      Navigator.of(context).pop(widget.initial);
+      return;
+    }
     final sorted = _weeks.toList()..sort();
     final bits = _weekBits;
     final slot = CourseSlot(
@@ -346,7 +384,7 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
 
   /// 预览自动色下标：与 [coursePairFor] 一致（已有课优先 id，新建按课名）。
   int get _previewColorIndex {
-    final existing = widget.cell?.course;
+    final existing = widget.initial ?? widget.cell?.course;
     if (existing != null && existing.id.trim().isNotEmpty) {
       return coursePresetIndexForCourse(existing);
     }
@@ -356,15 +394,25 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   }
 
   Future<void> _pickColor() async {
-    final colors = TimetableTheme.colorsOf(context);
-    final current = _previewDisplayBg(colors.isDark);
+    final defaultColor = TimetableTheme.autoCoursePair(
+      _previewColorIndex,
+      dark: TimetableTheme.colorsOf(context).isDark,
+    ).bg;
+    final current = _userArgb == null ? defaultColor : Color(_userArgb!);
+    setState(() => _pickingColor = true);
     final pick = await showTimetableColorPicker(
       context,
       current: current,
+      defaultColor: defaultColor,
       showReset: _userArgb != null || _colorIndex != null,
       title: '颜色',
+      previewTitle: _name.text.trim().isEmpty ? '课程名称' : _name.text.trim(),
+      opacity: widget.controller.settings.cellOpacity,
+      textColorMode: widget.controller.settings.cellTextColor,
     );
-    if (pick == null || !mounted) return;
+    if (!mounted) return;
+    setState(() => _pickingColor = false);
+    if (pick == null) return;
     setState(() {
       if (pick.reset) {
         _userArgb = null;
@@ -376,13 +424,6 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
         _colorIndex = null;
       }
     });
-  }
-
-  Color _previewDisplayBg(bool dark) {
-    if (_userArgb != null) {
-      return TimetableTheme.userCoursePair(Color(_userArgb!), dark: dark).bg;
-    }
-    return TimetableTheme.autoCoursePair(_previewColorIndex, dark: dark).bg;
   }
 
   @override
@@ -419,6 +460,7 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
     String? conflict,
   ) {
     return Scaffold(
+      resizeToAvoidBottomInset: !_pickingColor,
       backgroundColor: colors.surface,
       appBar: AppBar(
         title: Text(_isEdit ? '编辑课程' : '添加课程'),
@@ -459,24 +501,7 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
               key: const Key('manual_course_color'),
               contentPadding: EdgeInsets.zero,
               title: const Text('颜色'),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    key: const Key('manual_course_color_preview'),
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      // 与课表格同一套显示换算（item 9）。
-                      color: _previewDisplayBg(
-                        TimetableTheme.colorsOf(context).isDark,
-                      ),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const Icon(Icons.chevron_right),
-                ],
-              ),
+              trailing: const Icon(Icons.chevron_right),
               onTap: _pickColor,
             ),
             DropdownButtonFormField<int>(

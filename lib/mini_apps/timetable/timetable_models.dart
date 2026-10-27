@@ -166,6 +166,7 @@ class Course {
     this.credit,
     this.colorIndex,
     this.assignedColorIndex,
+    this.occurrenceColor,
     this.source = CourseSource.manual,
     this.slots = const [],
     this.hidden = false,
@@ -185,6 +186,9 @@ class Course {
   /// 自选色也无此值，只给这门课补算一次）。[colorIndex] 优先。
   /// 旧文件无此字段 → null，启动时算一次并落盘。
   final int? assignedColorIndex;
+
+  /// 当前这次课的自选 ARGB，仅用于显示；持久化在单日修改记录中，不写入课程 JSON。
+  final int? occurrenceColor;
   final CourseSource source;
   final List<CourseSlot> slots;
   final bool hidden;
@@ -217,6 +221,7 @@ class Course {
     int? colorIndex,
     bool clearColor = false,
     int? assignedColorIndex,
+    int? occurrenceColor,
     bool clearAssignedColor = false,
     CourseSource? source,
     List<CourseSlot>? slots,
@@ -231,6 +236,7 @@ class Course {
     assignedColorIndex: clearAssignedColor
         ? null
         : (assignedColorIndex ?? this.assignedColorIndex),
+    occurrenceColor: occurrenceColor ?? this.occurrenceColor,
     source: source ?? this.source,
     slots: slots ?? this.slots,
     hidden: hidden ?? this.hidden,

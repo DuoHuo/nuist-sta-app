@@ -7,10 +7,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_colors.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_color.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_appearance_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
@@ -107,6 +111,21 @@ Future<void> _openColorPicker(WidgetTester tester, String name) async {
   expect(find.byKey(const Key('tt_color_picker')), findsOneWidget);
 }
 
+Future<void> _chooseColor(WidgetTester tester, Color color) async {
+  await tester.enterText(
+    find.byKey(const Key('tt_color_hex')),
+    color.toARGB32().toRadixString(16).substring(2),
+  );
+  await tester.ensureVisible(find.byKey(const Key('tt_color_custom_apply')));
+  await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
+  await _settleIo(tester);
+}
+
+Future<void> _globalScope(WidgetTester tester) async {
+  await tester.tap(find.byKey(const Key('course_color_scope_all')));
+  await _settleIo(tester);
+}
+
 Map<String, dynamic> _colorsFile(Directory dir) => jsonDecode(
   File('${dir.path}/${TimetableStore.courseColorsFile}').readAsStringSync(),
 ) as Map<String, dynamic>;
@@ -159,48 +178,175 @@ void main() {
   });
 
   group('UC 课程颜色', () {
-    testWidgets('UC02 详情选预设：格子用该色（存原始 ARGB），写盘后重读一致', (tester) async {
+    testWidgets('UC02 色号直接保存到全局：色条、格子与存储同步', (tester) async {
       _load();
       await _pumpGrid(tester);
       await _openColorPicker(tester, '测试课甲');
-      await tester.tap(find.byKey(const Key('tt_color_preset_3')));
-      await _settleIo(tester);
-      final preset = TimetableTheme.coursePresetColors[3];
+      const preset = Color(0xFF43856B);
+      await _chooseColor(tester, preset);
+      expect(_c.userColorOf(_a), isNull);
+      await _globalScope(tester);
+      final bar = tester.widget<Container>(
+        find.byKey(const Key('course_detail_color_bar')),
+      );
+      expect((bar.decoration! as BoxDecoration).color, preset);
+      expect(find.text('颜色（已自选）'), findsNothing);
       expect(_c.userColorOf(_a), preset.toARGB32());
       Navigator.of(tester.element(find.byType(WeekGrid))).pop();
       await _settleIo(tester);
-      expect(_cellBg(tester, '测试课甲'), TimetableTheme.userCoursePair(preset).bg);
+      expect(_cellBg(tester, '测试课甲'), preset);
       await _settleIo(tester);
       expect(await tester.runAsync(TimetableStore.readUserCourseColors), {
         'a': preset.toARGB32(),
       });
     });
 
-    testWidgets('UC03 自定义颜色：点「+」弹出 HSV，拖色相条再「保存」', (tester) async {
+    testWidgets('UC03 拖动色相并保存：仅本周这一节变化', (tester) async {
       _load();
       await _pumpGrid(tester);
+      final original = _cellBg(tester, '测试课甲');
       await _openColorPicker(tester, '测试课甲');
-      // 网格 alone 无 HSV。
-      expect(find.byKey(const Key('tt_color_hue')), findsNothing);
-      expect(find.byKey(const Key('tt_color_sv_panel')), findsNothing);
-      await tester.tap(find.byKey(const Key('tt_color_custom_plus')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('tt_color_hsv_dialog')), findsOneWidget);
       expect(find.byKey(const Key('tt_color_sv_panel')), findsOneWidget);
-      // 竖向色相条：向下拖改变色相。
       await tester.drag(
         find.byKey(const Key('tt_color_hue')),
-        const Offset(0, 120),
+        const Offset(80, 0),
+      );
+      final panel = find.byKey(const Key('tt_color_sv_panel'));
+      final size = tester.getSize(panel);
+      await tester.tapAt(
+        tester.getTopLeft(panel) +
+            Offset(size.width * 0.62, size.height * 0.38),
       );
       await tester.pump();
+      final value =
+          int.parse(
+            tester
+                .widget<TextField>(find.byKey(const Key('tt_color_hex')))
+                .controller!
+                .text,
+            radix: 16,
+          ) |
+          0xFF000000;
       await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
       await _settleIo(tester);
-      final v = _c.userColorOf(_a);
-      expect(v, isNotNull);
+      await tester.tap(find.byKey(const Key('course_color_scope_this')));
+      await _settleIo(tester);
+      expect(_c.userColorOf(_a), isNull);
+      final current = _c.cellsForDay(7, 1).single;
+      expect(_c.userColorOf(current.course), value);
       expect(
-        TimetableTheme.coursePresetColors.map((c) => c.toARGB32()),
-        isNot(contains(v)),
+        coursePairFor(_c, _c.cellsForDay(8, 1).single.course).bg,
+        original,
       );
+      expect(
+        (tester
+                    .widget<Container>(
+                      find.byKey(const Key('course_detail_color_bar')),
+                    )
+                    .decoration!
+                as BoxDecoration)
+            .color,
+        Color(value),
+      );
+      await tester.tap(find.byKey(const Key('course_detail_color')));
+      await _settleIo(tester);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('tt_color_hex')))
+            .controller!
+            .text,
+        value.toRadixString(16).substring(2).toUpperCase(),
+      );
+    });
+
+    for (final dark in [false, true]) {
+      testWidgets('预览与色号、单节课及全局一致；键盘升降不重建色盘（dark=$dark）', (tester) async {
+        _load();
+        await _pumpGrid(tester, dark: dark);
+        await _openColorPicker(tester, '测试课甲');
+        expect(
+          find.byKey(const Key('course_detail_color_swatch')),
+          findsNothing,
+        );
+        await tester.enterText(find.byKey(const Key('tt_color_hex')), '43856B');
+        await tester.pump();
+        final preview = tester.widget<Container>(
+          find.byKey(const Key('tt_color_display_swatch')),
+        );
+        expect(
+          (preview.decoration! as BoxDecoration).color!.toARGB32(),
+          0xFF43856B,
+        );
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('tt_color_hex')))
+              .decoration!
+              .suffixIcon,
+          isNull,
+        );
+        final panelBefore = tester.widget(
+          find.byKey(const Key('tt_color_sv_panel')),
+        );
+        final hueBefore = tester.widget(find.byKey(const Key('tt_color_hue')));
+        for (var inset = 0; inset <= 300; inset += 30) {
+          tester.view.viewInsets = FakeViewPadding(
+            bottom: inset.toDouble() * 3,
+          );
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        expect(
+          identical(
+            tester.widget(find.byKey(const Key('tt_color_sv_panel'))),
+            panelBefore,
+          ),
+          isTrue,
+        );
+        expect(
+          identical(
+            tester.widget(find.byKey(const Key('tt_color_hue'))),
+            hueBefore,
+          ),
+          isTrue,
+        );
+        tester.view.resetViewInsets();
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
+        await _settleIo(tester);
+        await tester.tap(find.byKey(const Key('course_color_scope_this')));
+        await _settleIo(tester);
+        Navigator.of(tester.element(find.byType(WeekGrid))).pop();
+        await _settleIo(tester);
+        expect(_cellBg(tester, '测试课甲')!.toARGB32(), 0xFF43856B);
+        await tester.runAsync(() => _c.setUserCourseColor('a', 0xFF43856B));
+        await tester.pump();
+        expect(_cellBg(tester, '测试课甲')!.toARGB32(), 0xFF43856B);
+      });
+    }
+
+    testWidgets('选色弹层键盘动画不改变背景周课表尺寸', (tester) async {
+      _load();
+      await tester.runAsync(() => TimetableStore.saveSnapshot(_c.snapshot));
+      await tester.runAsync(() => _c.ensureStarted());
+      tester.view.physicalSize = const Size(1200, 2400);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
+      );
+      await _settleIo(tester);
+      final grid = find.byType(WeekGrid).first;
+      final sizeBefore = tester.getSize(grid);
+      await _openColorPicker(tester, '测试课甲');
+      await tester.tap(find.byKey(const Key('tt_color_hex')));
+      for (var inset = 0; inset <= 300; inset += 30) {
+        tester.view.viewInsets = FakeViewPadding(bottom: inset.toDouble() * 3);
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(tester.getSize(grid), sizeBefore);
+      }
+      tester.view.resetViewInsets();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('UC04 恢复默认：清掉自选标记，回到自动色', (tester) async {
@@ -211,13 +357,144 @@ void main() {
       expect(before, isNotNull);
       await _openColorPicker(tester, '测试课甲');
       await tester.tap(find.byKey(const Key('tt_color_reset')));
+      await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
       await _settleIo(tester);
+      await _globalScope(tester);
       expect(_c.userColorOf(_a), isNull);
       await _settleIo(tester);
       expect(
         await tester.runAsync(TimetableStore.readUserCourseColors),
         isEmpty,
       );
+    });
+
+    testWidgets('无效色号不可保存；取消范围不落盘；深色预填保持原始色号', (tester) async {
+      _load();
+      await tester.runAsync(() => _c.setUserCourseColor('a', 0xFF43856B));
+      await _pumpGrid(tester, dark: true);
+      await _openColorPicker(tester, '测试课甲');
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('tt_color_hex')))
+            .controller!
+            .text,
+        '43856B',
+      );
+      await tester.enterText(find.byKey(const Key('tt_color_hex')), 'bad!');
+      await tester.pump();
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('tt_color_custom_apply')),
+            )
+            .onPressed,
+        isNull,
+      );
+      await _chooseColor(tester, const Color(0xFF753AC5));
+      await tester.tap(find.text('取消'));
+      await _settleIo(tester);
+      expect(_c.userColorOf(_a), 0xFF43856B);
+      expect(await tester.runAsync(ScheduleStore.readCourseDateEdits), isEmpty);
+    });
+
+    test('局部颜色往返与重启；全局覆盖只清颜色，保留改名备注', () async {
+      _load();
+      await TimetableStore.saveSnapshot(_c.snapshot);
+      await _c.editOccurrence(
+        _c.cellsForDay(7, 1).single,
+        name: '测试课习题',
+        note: '保留备注',
+      );
+      await _c.setOccurrenceColor(_c.cellsForDay(7, 1).single, 0xFF753AC5);
+      final records = await ScheduleStore.readCourseDateEdits();
+      expect(records.single.color, 0xFF753AC5);
+      _c.debugReset();
+      await _c.ensureStarted();
+      expect(_c.userColorOf(_c.cellsForDay(7, 1).single.course), 0xFF753AC5);
+      expect(_c.userColorOf(_c.cellsForDay(8, 1).single.course), isNull);
+      await _c.setUserCourseColor('a', 0xFF43856B);
+      final current = _c.cellsForDay(7, 1).single;
+      expect(_c.userColorOf(current.course), 0xFF43856B);
+      expect(current.course.name, '测试课习题');
+      expect(current.slot.note, '保留备注');
+      expect(_c.courseDateEdits.single.color, isNull);
+    });
+
+    testWidgets('手动课表单只改颜色：保存后选范围，不扩散局部备注', (tester) async {
+      _load();
+      final manual = await tester.runAsync(
+        () => _c.addManualCourse(
+          _a.copyWith(id: '', source: CourseSource.manual),
+        ),
+      );
+      final original = _c
+          .cellsForDay(7, 1)
+          .firstWhere((cell) => cell.course.id == manual!.id);
+      await tester.runAsync(() => _c.editOccurrence(original, note: '仅这一节的备注'));
+      final cell = _c
+          .cellsForDay(7, 1)
+          .firstWhere((cell) => cell.course.id == manual!.id);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: appLightTheme(),
+          home: ManualCourseForm(
+            controller: _c,
+            initial: cell.course,
+            initialSlot: cell.slot,
+            cell: cell,
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const Key('manual_course_color')));
+      await tester.pumpAndSettle();
+      await _chooseColor(tester, const Color(0xFF386F95));
+      expect(find.byKey(const Key('course_color_scope_sheet')), findsNothing);
+      await tester.tap(find.byKey(const Key('manual_course_save')));
+      await _settleIo(tester);
+      await tester.tap(find.byKey(const Key('course_color_scope_this')));
+      await _settleIo(tester);
+      expect(_c.userColorOf(_c.manualCourses.single), isNull);
+      expect(_c.manualCourses.single.slots.single.note, isEmpty);
+      final current = _c
+          .cellsForDay(7, 1)
+          .firstWhere((cell) => cell.course.id == manual!.id);
+      expect(_c.userColorOf(current.course), 0xFF386F95);
+      expect(current.slot.note, '仅这一节的备注');
+    });
+
+    test('同一天的其他时段保持原色', () async {
+      _load();
+      final course = _a.copyWith(
+        slots: [
+          ..._a.slots,
+          const CourseSlot(
+            day: 1,
+            startNode: 5,
+            endNode: 6,
+            weeks: '11111111111111111111',
+          ),
+        ],
+      );
+      _c.debugSetSnapshot(
+        _c.snapshot.copyWith(courses: [course]),
+        viewingWeek: 7,
+      );
+      await _c.setOccurrenceColor(_c.cellsForDay(7, 1).first, 0xFF386F95);
+      expect(_c.userColorOf(_c.cellsForDay(7, 1).first.course), 0xFF386F95);
+      expect(_c.userColorOf(_c.cellsForDay(7, 1).last.course), isNull);
+    });
+
+    test('多周修改只为当前周新增局部颜色；恢复继承全局', () async {
+      _load();
+      final original = _c.cellsForDay(7, 1).single;
+      await _c.editOccurrenceWeeks(original, weeks: [7, 8], note: '多周备注');
+      await _c.setOccurrenceColor(_c.cellsForDay(8, 1).single, 0xFF753AC5);
+      expect(_c.userColorOf(_c.cellsForDay(7, 1).single.course), isNull);
+      expect(_c.userColorOf(_c.cellsForDay(8, 1).single.course), 0xFF753AC5);
+      expect(_c.cellsForDay(8, 1).single.slot.note, '多周备注');
+      await _c.setOccurrenceColor(_c.cellsForDay(8, 1).single, null);
+      expect(_c.userColorOf(_c.cellsForDay(8, 1).single.course), isNull);
+      expect(_c.cellsForDay(8, 1).single.slot.note, '多周备注');
     });
 
     test('UC05 自动配色跳过自选色的课（不占色号）', () async {
@@ -229,7 +506,7 @@ void main() {
       expect(_c.courseColorMap.keys.any((k) => k.contains('乙')), isTrue);
     });
 
-    testWidgets('UC06 深色：自选色一律走 darkCoursePair（不再按亮度白字分叉）', (tester) async {
+    testWidgets('UC06 深色：自选色保持原始色值并自动选择对比度高的文字', (tester) async {
       _load();
       const strong = Color(0xFF1565C0);
       const light = Color(0xFFDCE8FB);
@@ -240,10 +517,10 @@ void main() {
       await _pumpGrid(tester, dark: true);
       final pa = TimetableTheme.userCoursePair(light, dark: true);
       final pb = TimetableTheme.userCoursePair(strong, dark: true);
-      expect(_cellBg(tester, '测试课甲'), pa.bg);
-      expect(pa.fg, TimetableTheme.userCoursePair(light).bg);
-      expect(_cellBg(tester, '测试课乙'), pb.bg);
-      expect(pb.fg, TimetableTheme.userCoursePair(strong).bg);
+      expect(_cellBg(tester, '测试课甲'), light);
+      expect(pa.fg, TimetableTheme.forcedBlackText);
+      expect(_cellBg(tester, '测试课乙'), strong);
+      expect(pb.fg, TimetableTheme.forcedWhiteText);
       // 只存原始值，没有第二份深色色值。
       expect(await tester.runAsync(TimetableStore.readUserCourseColors), {
         'a': light.toARGB32(),
@@ -264,7 +541,7 @@ void main() {
       location: '测试楼 A101',
     );
 
-    testWidgets('UC07 设置改考试颜色（自定义面板选预设）：所有考试格都换色', (tester) async {
+    testWidgets('UC07 设置输入考试色号：所有考试格都换色', (tester) async {
       _load();
       await tester.runAsync(() async {
         await _c.addScheduleEvent(exam('测试考试一', DateTime(2026, 10, 13)));
@@ -280,9 +557,8 @@ void main() {
       await tester.tap(find.byKey(const Key('tt_settings_exam_color')));
       await _settleIo(tester);
       expect(find.byKey(const Key('tt_color_picker')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('tt_color_preset_4')));
-      await _settleIo(tester);
-      final chosen = TimetableTheme.examColorOptions[4];
+      const chosen = Color(0xFF933C69);
+      await _chooseColor(tester, chosen);
       expect(_c.settings.examColor, chosen.toARGB32());
       await _pumpGrid(tester);
       expect(_c.scheduleEvents, hasLength(2));

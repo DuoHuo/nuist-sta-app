@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
@@ -134,14 +135,14 @@ void main() {
       expect(off.backgroundColor, const Color(0xFFF0F1F3));
     });
 
-    testWidgets('暗色主题下预设色板仍为浅色（12 预设）', (tester) async {
+    testWidgets('暗色选色面板实时预览深色课程', (tester) async {
       _setCourses(const []);
       tester.view.physicalSize = const Size(1080, 2400);
       tester.view.devicePixelRatio = 2.75;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
         MaterialApp(
-          theme: ThemeData(brightness: Brightness.dark),
+          theme: appDarkTheme(),
           home: Scaffold(
             body: Builder(
               builder: (context) => ElevatedButton(
@@ -156,17 +157,17 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('manual_course_color')));
       await tester.pumpAndSettle();
-      final presets = TimetableTheme.coursePresetColors;
-      for (var i = 0; i < presets.length; i++) {
-        final swatch = tester.widget<Container>(
-          find.descendant(
-            of: find.byKey(Key('tt_color_preset_$i')),
-            matching: find.byType(Container),
-          ),
-        );
-        final color = (swatch.decoration! as BoxDecoration).color;
-        expect(color, presets[i]);
-      }
+      expect(find.byKey(const Key('tt_color_sv_panel')), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('tt_color_hex')), '3873A2');
+      await tester.pump();
+      final preview = tester.widget<Container>(
+        find.byKey(const Key('tt_color_display_swatch')),
+      );
+      expect(
+        (preview.decoration! as BoxDecoration).color,
+        TimetableTheme.userCoursePair(const Color(0xFF3873A2), dark: true).bg,
+      );
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('未选颜色保存 colorIndex = null；预览为哈希色', (tester) async {
@@ -174,13 +175,21 @@ void main() {
       await _openForm(tester);
       await tester.enterText(find.byKey(const Key('manual_course_name')), '体育');
       await tester.pump();
-      final preview = tester.widget<Container>(
+      expect(
         find.byKey(const Key('manual_course_color_preview')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const Key('manual_course_color')));
+      await tester.pumpAndSettle();
+      final preview = tester.widget<Container>(
+        find.byKey(const Key('tt_color_display_swatch')),
       );
       expect(
         (preview.decoration! as BoxDecoration).color,
         TimetableTheme.autoCoursePairForName('体育').bg,
       );
+      await tester.tap(find.byKey(const Key('tt_color_cancel')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settle(tester);
       expect(_c.manualCourses.single.colorIndex, isNull);
@@ -192,8 +201,9 @@ void main() {
       await tester.enterText(find.byKey(const Key('manual_course_name')), '体育');
       await tester.tap(find.byKey(const Key('manual_course_color')));
       await tester.pumpAndSettle();
-      final preset = TimetableTheme.coursePresetColors[5];
-      await tester.tap(find.byKey(const Key('tt_color_preset_5')));
+      const preset = Color(0xFF3873A2);
+      await tester.enterText(find.byKey(const Key('tt_color_hex')), '3873A2');
+      await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settle(tester);
@@ -204,13 +214,21 @@ void main() {
 
       await _openForm(tester, initial: saved);
       expect(find.text('编辑课程'), findsOneWidget);
-      final preview = tester.widget<Container>(
+      expect(
         find.byKey(const Key('manual_course_color_preview')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const Key('manual_course_color')));
+      await tester.pumpAndSettle();
+      final preview = tester.widget<Container>(
+        find.byKey(const Key('tt_color_display_swatch')),
       );
       expect(
         (preview.decoration! as BoxDecoration).color,
         TimetableTheme.userCoursePair(preset).bg,
       );
+      await tester.tap(find.byKey(const Key('tt_color_cancel')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settle(tester);
       expect(_c.manualCourses.single.colorIndex, isNull);

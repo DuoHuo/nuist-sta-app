@@ -243,7 +243,7 @@ class TimetableController extends ChangeNotifier {
   Map<String, int> _userColors = const {};
 
   /// [c] 的用户自选色（原始 ARGB）；没选过为 null。
-  int? userColorOf(Course c) => _userColors[c.id];
+  int? userColorOf(Course c) => c.occurrenceColor ?? _userColors[c.id];
 
   /// 设 / 清（[color] 为 null，即「恢复默认」）某门课的自选色并落盘。不重算其他课的颜色。
   Future<void> setUserCourseColor(String courseId, int? color) async {
@@ -254,6 +254,16 @@ class TimetableController extends ChangeNotifier {
       next[courseId] = color | 0xFF000000;
     }
     _userColors = next;
+    // 应用到全局时清除这门课的局部颜色，保留备注、调课等其他修改。
+    if (_dateEdits.any((e) => e.courseId == courseId && e.color != null)) {
+      await _setDateEdits([
+        for (final e in _dateEdits)
+          if (e.courseId != courseId || e.color == null)
+            e
+          else if (!e.copyWith(clearColor: true).isEmpty)
+            e.copyWith(clearColor: true),
+      ]);
+    }
     notifyListeners();
     try {
       await TimetableStore.saveUserCourseColors(next);
@@ -2054,7 +2064,9 @@ class TimetableController extends ChangeNotifier {
     );
     final name = rec.name;
     return _Cand(
-      name == null ? c.course : c.course.copyWith(name: name),
+      name == null && rec.color == null
+          ? c.course
+          : c.course.copyWith(name: name, occurrenceColor: rec.color),
       slot,
       true,
       swappedFrom: c.swappedFrom,
@@ -2237,6 +2249,49 @@ class TimetableController extends ChangeNotifier {
       if (e.matches(k.courseId, k.date, k.start, k.end)) hit = e;
     }
     return hit;
+  }
+
+  /// 设置这周这一节的颜色；null 恢复为课程全局颜色，不影响同门课的其他时段。
+  /// 已有按周修改时为当前周建立独立记录，保留这次课的其他修改。
+  Future<bool> setOccurrenceColor(GridCell cell, int? color) async {
+    final key = _occurrenceKey(cell);
+    if (key == null || baseOccurrenceOf(cell) == null) return false;
+    final inherited = cell.dateEdit;
+    final date = inherited?.isWeeksScoped == true
+        ? mondayOfWeek(cell.date!)
+              .add(Duration(days: inherited!.date.weekday - 1))
+        : key.date;
+    CourseDateEdit? old;
+    for (final e in _dateEdits) {
+      if (e.scope == DateEditScope.oneDay &&
+          e.matches(key.courseId, date, key.start, key.end)) {
+        old = e;
+      }
+    }
+    if (old == null && color == null) return true;
+    final rec =
+        (old ??
+                CourseDateEdit(
+                  id: 'dedit-${DateTime.now().microsecondsSinceEpoch}-${_dateEditSeq++}',
+                  courseId: key.courseId,
+                  date: date,
+                  origStart: key.start,
+                  origEnd: key.end,
+                  name: inherited?.name,
+                  teacher: inherited?.teacher,
+                  location: inherited?.location,
+                  note: inherited?.note,
+                  toDate: inherited?.movesTime == true ? cell.date : null,
+                  toStart: inherited?.toStart,
+                  toEnd: inherited?.toEnd,
+                  createdAt: DateTime.now().toIso8601String(),
+                ))
+            .copyWith(
+              color: color == null ? null : color | 0xFF000000,
+              clearColor: color == null,
+            );
+    await _upsertDateEdit(old, rec);
+    return true;
   }
 
   /// 只改这一天：改这次课的课名 / 老师 / 地点 / 备注，或挪到同一周的 [toDay]

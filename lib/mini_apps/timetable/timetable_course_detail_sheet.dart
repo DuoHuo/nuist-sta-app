@@ -40,20 +40,38 @@ class CourseDetailSheet extends StatefulWidget {
 }
 
 class _CourseDetailSheetState extends State<CourseDetailSheet> {
+  GridCell get _cell {
+    final initial = widget.cell;
+    final date = initial.date;
+    if (date == null) return initial;
+    for (final cell in widget.controller.cellsForDay(
+      widget.controller.weekOfDate(date),
+      date.weekday,
+    )) {
+      if (cell.course.id == initial.course.id &&
+          cell.slot.startNode == initial.slot.startNode &&
+          cell.slot.endNode == initial.slot.endNode &&
+          cell.activeThisWeek == initial.activeThisWeek) {
+        return cell;
+      }
+    }
+    return initial;
+  }
+
   @override
-  Widget build(BuildContext context) {
-    final course = widget.cell.course;
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: widget.controller,
+    builder: (context, _) => _buildDetail(context),
+  );
+
+  Widget _buildDetail(BuildContext context) {
+    final course = _cell.course;
     // 教务课不走手动课表单：底部改为 [JwxtCourseDetailActions]（§13.15 编辑 / 删除 /
     // 已修改 + 恢复原课程，只写本地覆盖层）。
     final readOnly = course.source == CourseSource.jwxt;
-    final slot = widget.cell.slot;
-    // 4dp 色条在面色上用该色号文字色（A 柔和底色太浅，白底上看不出）；深色下取
-    // 深色格的浅字色（item 12），在深色面上才看得见。
-    final color = coursePairFor(
-      widget.controller,
-      course,
-      dark: TimetableTheme.colorsOf(context).isDark,
-    ).fg;
+    final slot = _cell.slot;
+    // 标题色条直接使用课程原始颜色，与颜色入口的色点保持一致。
+    final color = courseRawColorFor(widget.controller, course);
     // 调过的教务课：「已调课：原 周X 第 a–b 节」+「恢复原位置」（spec §13.2）。
     final slotIndex = _slotIndexOf(course, slot);
     final overrideInfo = slotIndex < 0
@@ -85,6 +103,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
             child: Row(
               children: [
                 Container(
+                  key: const Key('course_detail_color_bar'),
                   width: 4,
                   height: 22,
                   decoration: BoxDecoration(
@@ -151,7 +170,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                 ],
               ),
             ),
-          if (widget.cell.dateEdit != null)
+          if (_cell.dateEdit != null)
             Padding(
               key: const Key('course_detail_date_edit'),
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -165,7 +184,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      widget.cell.dateEdit?.isWeeksScoped == true
+                      _cell.dateEdit?.isWeeksScoped == true
                           ? '已按周修改'
                           : '这一天已单独修改',
                       style: TimetableTheme.bodyStyle(
@@ -180,9 +199,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                       foregroundColor: TimetableTheme.colorsOf(context).accent,
                     ),
                     child: Text(
-                      widget.cell.dateEdit?.isWeeksScoped == true
-                          ? '恢复'
-                          : '恢复这一天',
+                      _cell.dateEdit?.isWeeksScoped == true ? '恢复' : '恢复这一天',
                     ),
                   ),
                 ],
@@ -203,18 +220,19 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
               text: slot.note.isEmpty ? '备注（选填）' : slot.note,
               muted: slot.note.isEmpty,
             ),
-          // item 9：课程颜色（12 预设 + 自定义 HSV + 恢复默认）。
-          CourseColorRow(controller: widget.controller, course: course),
+          // 颜色保存后选择仅本周这一节或课程全局。
+          CourseColorRow(
+            controller: widget.controller,
+            course: course,
+            cell: _cell,
+          ),
           if (course.credit != null)
             _InfoRow(
               icon: Icons.school_outlined,
               text: '${_formatCredit(course.credit!)} 学分',
             ),
           if (readOnly)
-            JwxtCourseDetailActions(
-              controller: widget.controller,
-              cell: widget.cell,
-            ),
+            JwxtCourseDetailActions(controller: widget.controller, cell: _cell),
           if (!readOnly)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
@@ -262,7 +280,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
 
   /// 第 1 条：撤销这一格的单日修改。
   Future<void> _restoreDay() async {
-    final id = widget.cell.dateEdit?.id;
+    final id = _cell.dateEdit?.id;
     if (id == null) return;
     setState(() => _restoring = true);
     final navigator = Navigator.of(context);
@@ -327,8 +345,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
       context,
       controller: widget.controller,
       initial: course,
-      initialSlot: widget.cell.slot,
-      cell: widget.cell,
+      initialSlot: _cell.slot,
+      cell: _cell,
     );
     if (saved == null || !mounted) return;
     if (navigator.canPop()) navigator.pop();
@@ -338,7 +356,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
   }
 
   Future<void> _delete(Course course) async {
-    final cell = widget.cell;
+    final cell = _cell;
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.maybeOf(context);
     final date = cell.date;

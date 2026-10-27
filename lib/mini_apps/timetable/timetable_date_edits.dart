@@ -77,6 +77,7 @@ class CourseDateEdit {
     this.teacher,
     this.location,
     this.note,
+    this.color,
     this.toDate,
     this.toStart,
     this.toEnd,
@@ -107,6 +108,9 @@ class CourseDateEdit {
   final String? teacher;
   final String? location;
   final String? note;
+
+  /// 这次课的自选原始 ARGB；null 时继承课程全局颜色。
+  final int? color;
   final DateTime? toDate;
   final int? toStart;
   final int? toEnd;
@@ -134,7 +138,11 @@ class CourseDateEdit {
       (toEnd != null && toEnd != origEnd);
 
   bool get hasFieldEdits =>
-      name != null || teacher != null || location != null || note != null;
+      name != null ||
+      teacher != null ||
+      location != null ||
+      note != null ||
+      color != null;
 
   /// 编辑记录什么都没改（应删除）。weekdayMatch 删除不算空。
   bool get isEmpty =>
@@ -190,6 +198,8 @@ class CourseDateEdit {
     String? teacher,
     String? location,
     String? note,
+    int? color,
+    bool clearColor = false,
     DateTime? toDate,
     int? toStart,
     int? toEnd,
@@ -216,6 +226,7 @@ class CourseDateEdit {
     teacher: clearTeacher ? null : (teacher ?? this.teacher),
     location: clearLocation ? null : (location ?? this.location),
     note: clearNote ? null : (note ?? this.note),
+    color: clearColor ? null : (color ?? this.color),
     toDate: clearMove ? null : (toDate ?? this.toDate),
     toStart: clearMove ? null : (toStart ?? this.toStart),
     toEnd: clearMove ? null : (toEnd ?? this.toEnd),
@@ -239,6 +250,7 @@ class CourseDateEdit {
     if (teacher != null) 'teacher': teacher,
     if (location != null) 'location': location,
     if (note != null) 'note': note,
+    if (color != null) 'color': color,
     if (toDate != null) 'toDate': dateKeyOf(toDate!),
     if (toStart != null) 'toStart': toStart,
     if (toEnd != null) 'toEnd': toEnd,
@@ -260,6 +272,7 @@ class CourseDateEdit {
     'teacher',
     'location',
     'note',
+    'color',
     'toDate',
     'toStart',
     'toEnd',
@@ -368,6 +381,7 @@ class CourseDateEdit {
       teacher: s('teacher'),
       location: s('location'),
       note: s('note'),
+      color: i('color') == null ? null : i('color')! | 0xFF000000,
       toDate: parseDateKey(m['toDate']),
       toStart: ts,
       toEnd: te,
