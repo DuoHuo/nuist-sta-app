@@ -77,8 +77,13 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     final overrideInfo = slotIndex < 0
         ? null
         : widget.controller.overrideInfoFor(course, slotIndex);
-    final start = widget.controller.periodStart(slot.startNode) ?? '';
-    final end = widget.controller.periodEnd(slot.endNode) ?? '';
+    final time = widget.controller.timeForSlot(
+      course,
+      slot,
+      date: widget.cell.date,
+    );
+    final start = time.start ?? '';
+    final end = time.end ?? '';
     final timeText = slot.startNode == slot.endNode
         ? '第 ${slot.startNode} 节 $start–$end'
         : '第 ${slot.startNode}–${slot.endNode} 节 $start–$end';
@@ -115,8 +120,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                 Expanded(
                   child: Text(
                     course.classId.isEmpty
-                        ? course.name
-                        : '${course.name}[${course.classId}]',
+                        ? course.displayName
+                        : '${course.displayName}[${course.classId}]',
                     style: TimetableTheme.titleStyle(
                       color: TimetableTheme.colorsOf(context).titleText,
                     ),
@@ -137,6 +142,13 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
               text: _weeksText(slot),
             ),
           _InfoRow(icon: Icons.access_time, text: timeText),
+          // 实验时段：格内放不下（1 节高）时这里仍能确认是实验课；体育课不打标。
+          if (slot.isLab && !course.isPe)
+            const _InfoRow(
+              key: Key('course_detail_lab_label'),
+              icon: Icons.science_outlined,
+              text: '实验课',
+            ),
           if (overrideInfo != null)
             Padding(
               key: const Key('course_detail_override'),
@@ -401,7 +413,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('删除课程'),
-        content: Text('确定删除「${course.name}」吗？此操作不可撤销。'),
+        content: Text('确定删除「${course.displayName}」吗？此操作不可撤销。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -479,7 +491,12 @@ class _ManualTag extends StatelessWidget {
 }
 
 class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.icon, required this.text, this.muted = false});
+  const _InfoRow({
+    super.key,
+    required this.icon,
+    required this.text,
+    this.muted = false,
+  });
 
   final IconData icon;
   final String text;

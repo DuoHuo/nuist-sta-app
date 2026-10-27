@@ -131,7 +131,7 @@ void main() {
 
       await pumpPage(tester);
       expect(tester.takeException(), isNull);
-      expect(find.text('第 18 周', findRichText: true), findsOneWidget);
+      expect(find.textContaining('第 18 周', findRichText: true), findsOneWidget);
       expect(find.text('本周第 19 周 · 课程已结束'), findsOneWidget);
       expect(find.textContaining('非本周', findRichText: true), findsNothing);
       expect(find.text('回到本周'), findsNothing);
@@ -145,7 +145,7 @@ void main() {
       expect(find.text('28'), findsOneWidget);
 
       // 选周弹层：只有 1..18，不高亮越界的「本周」。
-      await tester.tap(find.text('第 18 周', findRichText: true));
+      await tester.tap(find.textContaining('第 18 周', findRichText: true));
       await tester.pumpAndSettle();
       expect(find.text('18'), findsOneWidget);
       expect(find.text('19'), findsNothing);
@@ -208,7 +208,7 @@ void main() {
 
       await pumpPage(tester);
       expect(tester.takeException(), isNull);
-      expect(find.text('第 1 周', findRichText: true), findsOneWidget);
+      expect(find.textContaining('第 1 周', findRichText: true), findsOneWidget);
       expect(find.textContaining('课程已结束'), findsNothing);
       expect(find.byType(WeekGrid), findsOneWidget);
 

@@ -79,3 +79,6 @@ passkey*.json
 .claude/settings.local.json
 CLAUDE.local.md
 .agents/
+# Personal timetable capture — never commit; use kb_lab_tuesday_sample.json / kb_mock.json
+test/fixtures/timetable/kb_real_sample.json
+test/fixtures/timetable/*_real_sample.json

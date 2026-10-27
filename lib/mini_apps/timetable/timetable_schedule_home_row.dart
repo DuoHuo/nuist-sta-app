@@ -46,8 +46,9 @@ List<HomeEntry> mergeHomeEntries(
     for (final c in courses)
       HomeEntry.course(
         c,
-        TimeOfDayMinutes.tryParse(controller.periodStart(c.slot.startNode))
-                ?.totalMinutes ??
+        TimeOfDayMinutes.tryParse(
+              controller.timeForSlot(c.course, c.slot).start,
+            )?.totalMinutes ??
             c.slot.startNode * 60,
       ),
     for (final e in events) HomeEntry.event(e),

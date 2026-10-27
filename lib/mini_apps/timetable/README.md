@@ -222,7 +222,7 @@ fetchUnscheduled(t)  → POST xskcb/xswpkc.do     XNXQDM=
 
 其余请求（`cxxtcs`、`cxryywzt`、`cxxsjbxx`、`cxdqfwqsj`、`cxkssjct`、`cxwapdksrwtj`、日志/角色类）本版**都不调**。
 
-`cxyxkwapkwdkc.do`（参数 `XNXQDM`，返回 `KCH`/`KCM`/`ZJJSXM`）是「已选课、考试还没排」的课程列表。本版没有考试列表页，**不调**；以后要做「待安排考试」再接。
+`cxyxkwapkwdkc.do`（参数 `XNXQDM`，返回 `KCH`/`KCM`/`ZJJSXM`）是「已选课、考试还没排」的课程列表。本版考试列表页只显示已排好的考试，**不调**；以后要做「待安排考试」再接。
 
 ### 2. 响应结构
 

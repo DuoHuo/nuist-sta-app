@@ -178,6 +178,7 @@ class _WeekGridState extends State<WeekGrid> {
         final periodW = TimetableTheme.periodColumnWidth;
         final dayW = (constraints.maxWidth - periodW) / days.length;
         final gridH = periodH * nodes;
+        final dpr = MediaQuery.devicePixelRatioOf(context);
         _days = days;
         _dayW = dayW;
         _periodH = periodH;
@@ -317,6 +318,7 @@ class _WeekGridState extends State<WeekGrid> {
                                       periodH: periodH,
                                       radius: radius,
                                       nodes: nodes,
+                                      dpr: dpr,
                                     ),
                                   ?_draggedCell(dayW, periodH, radius),
                                 ],
@@ -363,6 +365,7 @@ class _WeekGridState extends State<WeekGrid> {
     required double periodH,
     required double radius,
     required int nodes,
+    required double dpr,
   }) {
     final widgets = <Widget>[];
     final dayCells = [
@@ -424,11 +427,23 @@ class _WeekGridState extends State<WeekGrid> {
       final start = groupStart.clamp(1, nodes);
       if (end < start) continue;
       // 叠放时用该组的并集节次范围，避免遮挡。
-      final top = (start - 1) * periodH + TimetableTheme.cellMargin;
-      final height =
+      final rawTop = (start - 1) * periodH + TimetableTheme.cellMargin;
+      final rawHeight =
           (end - start + 1) * periodH - TimetableTheme.cellMargin * 2;
-      final left = dayIndex * dayW + TimetableTheme.cellMargin;
-      final width = dayW - TimetableTheme.cellMargin * 2;
+      final rawLeft = dayIndex * dayW + TimetableTheme.cellMargin;
+      final rawWidth = dayW - TimetableTheme.cellMargin * 2;
+      // 对齐到物理像素，避免 cellMargin=1.5 + 小数 dayW 落在半像素上导致文字发虚。
+      final box = TimetableTheme.snapDeviceRect(
+        left: rawLeft,
+        top: rawTop,
+        width: rawWidth,
+        height: rawHeight,
+        dpr: dpr,
+      );
+      final left = box.left;
+      final top = box.top;
+      final width = box.width;
+      final height = box.height;
       final draggable =
           widget.enableDrag &&
           !widget.previewMode &&
@@ -440,8 +455,12 @@ class _WeekGridState extends State<WeekGrid> {
           top: top,
           width: width,
           height: height,
-          child: Opacity(
-            opacity: hidden ? 0 : 1,
+          // 拖走后原位隐藏：用 Visibility 保布局，避免 Opacity 造成整格半透明栅格化发虚。
+          child: Visibility(
+            visible: !hidden,
+            maintainState: true,
+            maintainAnimation: true,
+            maintainSize: true,
             child: CourseCell(
               controller: controller,
               cell: cell,
@@ -478,6 +497,7 @@ class _WeekGridState extends State<WeekGrid> {
         dayW: dayW,
         periodH: periodH,
         radius: radius,
+        dpr: dpr,
       ),
     );
     return widgets;
@@ -502,6 +522,7 @@ class _WeekGridState extends State<WeekGrid> {
     required double dayW,
     required double periodH,
     required double radius,
+    required double dpr,
   }) {
     final sorted = List.of(items)
       ..sort((a, b) {
@@ -527,14 +548,20 @@ class _WeekGridState extends State<WeekGrid> {
         () {
           final start = cluster.map((e) => e.startNode).reduce(math.min);
           final end = cluster.map((e) => e.endNode).reduce(math.max);
-          final width = dayW - TimetableTheme.cellMargin * 2;
-          final height =
-              (end - start + 1) * periodH - TimetableTheme.cellMargin * 2;
+          final box = TimetableTheme.snapDeviceRect(
+            left: dayIndex * dayW + TimetableTheme.cellMargin,
+            top: (start - 1) * periodH + TimetableTheme.cellMargin,
+            width: dayW - TimetableTheme.cellMargin * 2,
+            height: (end - start + 1) * periodH - TimetableTheme.cellMargin * 2,
+            dpr: dpr,
+          );
+          final width = box.width;
+          final height = box.height;
           final primary = cluster.first.event;
           return Positioned(
             key: ValueKey('schedule_slot_${primary.id}'),
-            left: dayIndex * dayW + TimetableTheme.cellMargin,
-            top: (start - 1) * periodH + TimetableTheme.cellMargin,
+            left: box.left,
+            top: box.top,
             width: width,
             height: height,
             child: ScheduleEventCell(
@@ -565,8 +592,17 @@ class _WeekGridState extends State<WeekGrid> {
     final d = _drag;
     if (d == null || !(d.moving || d.resolving)) return null;
     final span = d.cell.slot.span;
-    final height = span * periodH - TimetableTheme.cellMargin * 2;
-    final width = dayW - TimetableTheme.cellMargin * 2;
+    // 浮动格与原格同大小：按原格位对齐物理像素后取宽高，避免拖动时比原格窄/高一点点。
+    final origin = _slotTopLeft(d.originColumn, d.cell.slot.startNode);
+    final originBox = TimetableTheme.snapDeviceRect(
+      left: origin.dx,
+      top: origin.dy,
+      width: dayW - TimetableTheme.cellMargin * 2,
+      height: span * periodH - TimetableTheme.cellMargin * 2,
+      dpr: MediaQuery.devicePixelRatioOf(context),
+    );
+    final height = originBox.height;
+    final width = originBox.width;
     final pos = d.settleTo ?? _followTopLeft(d);
     return AnimatedPositioned(
       key: const Key('week_grid_dragging_cell'),
@@ -798,7 +834,7 @@ class _WeekGridState extends State<WeekGrid> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: Text(
-                course.name,
+                course.displayName,
                 style: TimetableTheme.titleStyle(color: colors.titleText),
               ),
             ),
@@ -890,7 +926,7 @@ class _WeekGridState extends State<WeekGrid> {
             for (final c in cells)
               ListTile(
                 key: ValueKey('stack_item_${c.course.id}'),
-                title: Text(c.course.name),
+                title: Text(c.course.displayName),
                 subtitle: Text(
                   '第 ${c.slot.startNode}–${c.slot.endNode} 节'
                   '${c.slot.location.isEmpty ? '' : ' · ${c.slot.location}'}',
@@ -1029,8 +1065,8 @@ class SlotCellGroup {
       cells.map((c) => c.slot.endNode).reduce((a, b) => a > b ? a : b);
 
   static int _byName(GridCell a, GridCell b) {
-    final byName = normalizeCourseName(a.course.name)
-        .compareTo(normalizeCourseName(b.course.name));
+    final byName = normalizeCourseName(a.course.displayName)
+        .compareTo(normalizeCourseName(b.course.displayName));
     if (byName != 0) return byName;
     return a.course.id.compareTo(b.course.id);
   }
@@ -1172,7 +1208,7 @@ class _OtherCoursesRow extends StatelessWidget {
                     Semantics(
                       button: true,
                       excludeSemantics: true,
-                      label: '其他课程，${c.name}',
+                      label: '其他课程，${c.displayName}',
                       child: Material(
                         color: colors.chipBg,
                         shape: const StadiumBorder(),
@@ -1188,7 +1224,7 @@ class _OtherCoursesRow extends StatelessWidget {
                                 vertical: 6,
                               ),
                               child: Text(
-                                c.name,
+                                c.displayName,
                                 style: TimetableTheme.captionStyle(
                                   color: colors.titleText,
                                 ),

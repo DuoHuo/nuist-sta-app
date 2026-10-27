@@ -135,42 +135,73 @@ void main() {
     }
 
     testWidgets('分段选项：未选中灰描边 #D0D4DC + 正文灰字，选中浅蓝底蓝字无描边', (tester) async {
+      // 设置首页的课数分段沿用此样式；外观页使用独立的分段组件。
       await pumpPage(tester);
       ChoiceChip chip(String label) =>
           tester.widget<ChoiceChip>(find.byKey(ValueKey('seg_$label')));
-      for (final (sel, unsel) in [
-        ('周一', ['周日']),
-        ('标准', ['小', '大']),
-      ]) {
-        final s = chip(sel);
-        expect(s.selected, isTrue);
-        expect(s.selectedColor, TimetableTheme.accentSoft);
-        expect(s.labelStyle!.color, TimetableTheme.accent);
-        expect(s.side!.color, Colors.transparent);
-        for (final u in unsel) {
-          final x = chip(u);
-          expect(x.selected, isFalse);
-          expect(x.side!.color, const Color(0xFFD0D4DC));
-          expect(x.labelStyle!.color, TimetableTheme.labelText);
-          expect(x.surfaceTintColor, Colors.transparent);
-        }
+      final s = chip('2');
+      expect(s.selected, isTrue);
+      expect(s.selectedColor, TimetableTheme.accentSoft);
+      expect(s.labelStyle!.color, TimetableTheme.accent);
+      expect(s.side!.color, Colors.transparent);
+      for (final u in ['1', '3', '4']) {
+        final x = chip(u);
+        expect(x.selected, isFalse);
+        expect(x.side!.color, const Color(0xFFD0D4DC));
+        expect(x.labelStyle!.color, TimetableTheme.labelText);
+        expect(x.surfaceTintColor, Colors.transparent);
       }
     });
 
     testWidgets('格子高度滑块可见；不透明度在外观页且宽度合理', (tester) async {
-      // 不透明度已迁到外观独立页，不再与「格子高度」同页对齐。
-      await pumpPage(tester);
-      final height = find.byKey(const Key('tt_settings_period_height'));
-      await tester.ensureVisible(height);
+      // 格子高度与不透明度都在外观页。
+      tester.view.physicalSize = const Size(1080, 6000);
+      tester.view.devicePixelRatio = 2.625;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(colorSchemeSeed: Colors.pink),
+          home: TimetableAppearancePage(controller: _c),
+        ),
+      );
+      await tester.pump();
+      final height = find.byKey(
+        const Key('tt_settings_period_height'),
+        skipOffstage: false,
+      );
+      await tester.scrollUntilVisible(
+        height,
+        300,
+        scrollable: find.descendant(
+          of: find.byType(ListView),
+          matching: find.byType(Scrollable),
+        ),
+      );
       await tester.pumpAndSettle();
-      expect(tester.getRect(height).width, greaterThan(100));
+      expect(
+        tester
+            .getRect(find.byKey(const Key('tt_settings_period_height')))
+            .width,
+        greaterThan(100),
+      );
 
-      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      final opacity = find.byKey(
+        const Key('tt_settings_opacity'),
+        skipOffstage: false,
+      );
+      await tester.scrollUntilVisible(
+        opacity,
+        -300,
+        scrollable: find.descendant(
+          of: find.byType(ListView),
+          matching: find.byType(Scrollable),
+        ),
+      );
       await tester.pumpAndSettle();
-      final opacity = find.byKey(const Key('tt_settings_opacity'));
-      await tester.ensureVisible(opacity);
-      await tester.pumpAndSettle();
-      expect(tester.getRect(opacity).width, greaterThan(100));
+      expect(
+        tester.getRect(find.byKey(const Key('tt_settings_opacity'))).width,
+        greaterThan(100),
+      );
     });
   });
 

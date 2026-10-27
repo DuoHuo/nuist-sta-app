@@ -76,7 +76,7 @@ void main() {
   };
 
   // 顶栏保留原有操作，并提供可直接点击的 WakeUp 导出入口。
-  testWidgets('TB01 顶栏有加课、WakeUp 导出、同步和设置，无更多', (tester) async {
+  testWidgets('TB01 顶栏保留加课、WakeUp 导出、同步和设置，并提供外观菜单', (tester) async {
     _setState(_State.current);
     await _pump(tester, size: const Size(360, 640));
     expect(find.byTooltip('添加'), findsOneWidget);
@@ -85,7 +85,14 @@ void main() {
     expect(find.byTooltip('更多'), findsNothing);
     expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
     expect(find.byIcon(Icons.more_horiz), findsNothing);
+    expect(find.byTooltip('课表菜单'), findsNothing);
     expect(find.byIcon(Icons.more_vert), findsNothing);
+    expect(find.byKey(const Key('timetable_week_menu')), findsNothing);
+    expect(
+      find.byKey(const Key('timetable_appearance_menu_entry')),
+      findsNothing,
+    );
+    expect(find.text('课表外观'), findsNothing);
     expect(find.byTooltip('分享'), findsNothing);
     expect(find.byIcon(Icons.share_outlined), findsNothing);
     expect(find.byIcon(Icons.share), findsNothing);

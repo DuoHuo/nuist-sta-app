@@ -243,8 +243,8 @@ void main() {
       }
     });
 
-    testWidgets('TB04/TB09/TB10/TB12 设置「其他」：教务账号（已绑定/去登录）在第 1 行，'
-        '恢复教务课程第 2 行；点击走原登录/解绑入口', (tester) async {
+    testWidgets('TB04/TB09/TB10/TB12 设置「其他」：教务账号在第 1 行，'
+        '恢复教务课程在普通项最后；点击走原登录/解绑入口', (tester) async {
       _bigView(tester, size: const Size(1080, 6000));
       _load();
       await bind(tester, true);
@@ -266,11 +266,19 @@ void main() {
         tester.getTopLeft(account).dy < tester.getTopLeft(restore).dy,
         isTrue,
       );
-      // 「其他」在最底部（考试卡片之后）。
+      // 「最下面」= 普通项最后一行，在「整天调课」之后。
+      expect(
+        tester.getTopLeft(restore).dy >
+            tester
+                .getTopLeft(find.byKey(const Key('tt_settings_day_swaps')))
+                .dy,
+        isTrue,
+      );
+      // 设置首页已无考试卡；「其他」仍在首页卡之后。
       expect(
         tester.getTopLeft(other).dy >
             tester
-                .getTopLeft(find.byKey(const Key('tt_settings_group_exam')))
+                .getTopLeft(find.byKey(const Key('tt_settings_group_home')))
                 .dy,
         isTrue,
       );

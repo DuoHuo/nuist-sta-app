@@ -16,6 +16,7 @@ class AppManifest {
     required this.color,
     this.glyph,
     this.icon,
+    this.iconWidget,
     this.entry,
     this.url,
     this.requiresPortal = false,
@@ -39,11 +40,19 @@ class AppManifest {
   /// 宫格图标底色。
   final Color color;
 
-  /// 图标底色上的单字，如「图」。与设计稿一致的首选图标形式。
+  /// 图标底色上的单字，如「图」。
+  ///
+  /// 没有 [iconWidget] 时才会用到，仍优先于 [icon]。
   final String? glyph;
 
-  /// 备选：Material 图标。glyph 与 icon 同时存在时 glyph 优先。
+  /// 备选：Material 图标。优先级最低。
   final IconData? icon;
+
+  /// 可选：自定义图形图标，优先级最高（如按设计稿 SVG 绘制的图案）。
+  ///
+  /// 壳把它放进色块内 **24×24** 的方框里居中，图形自己负责填满这个方框；
+  /// 图案应当自带颜色，壳不做着色。用了它就把 [glyph] 清空，避免双显。
+  final WidgetBuilder? iconWidget;
 
   /// 原生小程序的入口页面。
   final WidgetBuilder? entry;

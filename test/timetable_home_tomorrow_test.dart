@@ -128,6 +128,99 @@ void main() {
     expect(sun.kind, HomeTomorrowKind.noClass); // 第 8 周周一的课被挪走
   });
 
+  group('firstCourseTomorrow 公共接口', () {
+    test('按明天实际节次取首课，和数据顺序无关，不受首页开关影响', () {
+      final early = _c('early', '体育（3）', 2).copyWith(projectName: '射箭');
+      final late = _c('late', '晚课', 2).copyWith(
+        slots: [
+          const CourseSlot(day: 2, startNode: 5, endNode: 6, weeks: _w16),
+        ],
+      );
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: [late, early, _c('today', '今日课', 1)],
+          settings: TimetableSettings(
+            termStartDate: DateTime(2026, 8, 31),
+            showTomorrowOnHome: false,
+          ),
+        ),
+      );
+      final first = c.firstCourseTomorrow(now: DateTime(2026, 10, 12, 23, 59));
+      expect(first!.course.id, 'early');
+      expect(first.course.displayName, '体育·射箭');
+      expect(first.slot.startNode, 1);
+    });
+
+    test('跨周和跨年按本机自然日查询，不把下周当本周', () {
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: [
+            _c('mon', '周一课', 1).copyWith(
+              slots: [
+                const CourseSlot(
+                  day: 1,
+                  startNode: 3,
+                  endNode: 4,
+                  weeks: '00000001',
+                ),
+              ],
+            ),
+          ],
+          settings: TimetableSettings(termStartDate: DateTime(2026, 8, 31)),
+        ),
+      );
+      expect(c.firstCourseTomorrow(now: DateTime(2026, 10, 11)), isNull);
+      expect(
+        c.firstCourseTomorrow(now: DateTime(2026, 10, 18))!.course.id,
+        'mon',
+      );
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: [_c('fri', '元旦课', 5)],
+          settings: TimetableSettings(termStartDate: DateTime(2026, 12, 28)),
+        ),
+      );
+      expect(
+        c.firstCourseTomorrow(now: DateTime(2026, 12, 31, 23, 59))!.course.id,
+        'fri',
+      );
+    });
+
+    test('无课、隐藏课、学期外或未知开学日返回 null', () {
+      load();
+      expect(c.firstCourseTomorrow(now: DateTime(2026, 10, 13)), isNull);
+      expect(c.firstCourseTomorrow(now: DateTime(2026, 8, 20)), isNull);
+      expect(c.firstCourseTomorrow(now: DateTime(2026, 12, 21)), isNull);
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: [_c('hidden', '隐藏课', 2).copyWith(hidden: true)],
+          settings: TimetableSettings(termStartDate: DateTime(2026, 8, 31)),
+        ),
+      );
+      expect(c.firstCourseTomorrow(now: DateTime(2026, 10, 12)), isNull);
+      c.debugSetSnapshot(const TimetableSnapshot());
+      expect(c.firstCourseTomorrow(now: DateTime(2026, 10, 12)), isNull);
+    });
+
+    test('调课后只在新日期返回实际节次', () async {
+      load();
+      final mon = c.courses.firstWhere((x) => x.id == 'mon');
+      final moved = await c.moveSlot(
+        mon,
+        0,
+        toDay: 3,
+        toStartPeriod: 3,
+        week: 8,
+        scope: MoveScope.thisWeek,
+      );
+      expect(moved.ok, isTrue);
+      expect(c.firstCourseTomorrow(now: DateTime(2026, 10, 18)), isNull);
+      final first = c.firstCourseTomorrow(now: DateTime(2026, 10, 20));
+      expect(first!.course.id, 'mon');
+      expect(first.slot.startNode, 3);
+    });
+  });
+
   test('无开学日：unknown', () {
     c.debugSetSnapshot(const TimetableSnapshot());
     expect(

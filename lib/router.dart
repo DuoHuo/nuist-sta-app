@@ -7,6 +7,7 @@ import 'mini_apps/innovation_credit/innovation_credit_page.dart';
 import 'mini_apps/labor_score/labor_score_page.dart';
 import 'mini_apps/registry.dart';
 import 'mini_apps/score/score_page.dart';
+import 'mini_apps/timetable/timetable_page.dart';
 import 'mini_apps/web/mini_web_view_page.dart';
 import 'shell/home/home_page.dart';
 import 'shell/profile/about/about_page.dart';
@@ -95,6 +96,9 @@ GoRouter buildRouter() => GoRouter(
         }
         final child = manifest.isWeb
             ? MiniWebViewPage(manifest: manifest)
+            : id == 'timetable' &&
+                  state.uri.queryParameters['focus'] == 'tomorrow'
+            ? const TimetablePage(focusTomorrow: true)
             : manifest.entry!(context);
         return MaterialPage<void>(key: state.pageKey, child: child);
       },

@@ -158,12 +158,12 @@ void main() {
       _load(manual: [_course('a', '测试课甲')]);
       await pumpPage(tester);
       expect(strip, findsNothing);
-      await tester.tap(find.text('第 7 周'));
+      await tester.tap(find.textContaining('第 7 周', findRichText: true));
       await tester.pumpAndSettle();
       expect(strip, findsOneWidget);
       expect(find.bySemanticsLabel('第 7 周，本周'), findsOneWidget);
       expect(find.bySemanticsLabel('第 6 周'), findsOneWidget);
-      await tester.tap(find.text('第 7 周'));
+      await tester.tap(find.textContaining('第 7 周', findRichText: true));
       await tester.pumpAndSettle();
       expect(strip, findsNothing);
       semantics.dispose();
@@ -172,7 +172,7 @@ void main() {
     testWidgets('NAV04 选中周实心、本周描边；选某周后收起并翻到该周', (tester) async {
       _load(manual: [_course('a', '测试课甲')]);
       await pumpPage(tester);
-      await tester.tap(find.text('第 7 周'));
+      await tester.tap(find.textContaining('第 7 周', findRichText: true));
       await tester.pumpAndSettle();
       final colors = TimetableColors.light;
       expect(chipMaterial(tester, 7).color, colors.accent);
@@ -195,7 +195,7 @@ void main() {
     testWidgets('NAV05 减少动画：选周直接跳转', (tester) async {
       _load(manual: [_course('a', '测试课甲')]);
       await pumpPage(tester, disableAnimations: true);
-      await tester.tap(find.text('第 7 周'));
+      await tester.tap(find.textContaining('第 7 周', findRichText: true));
       await tester.pump();
       await tester.tap(chip(5));
       await tester.pump();

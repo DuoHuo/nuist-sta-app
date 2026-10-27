@@ -11,11 +11,15 @@ import 'timetable_colors.dart';
 import 'timetable_date_edits.dart';
 import 'timetable_remaining_weeks.dart';
 import 'timetable_models.dart';
+import 'timetable_next_day_reminder.dart';
+import 'timetable_next_day_reminder_channel.dart';
 import 'timetable_overrides.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_store.dart';
 import 'timetable_store.dart';
+import 'timetable_sync_diff.dart';
 import 'timetable_theme.dart';
+import 'timetable_timing.dart';
 import 'timetable_week_layout.dart';
 
 /// 教务同步状态。
@@ -93,8 +97,8 @@ class TimetableSyncOutcome {
 
   final bool success;
 
-  /// 是否自动触发（冷启动 / 回前台 / 网络恢复 / 打开课表页的自动同步）。
-  /// 手动同步图标、登录成功后的同步为 false。
+  /// 是否自动触发（冷启动 / 网络恢复 / 打开课表页 / 回前台超 6 小时的静默补同步）。
+  /// 手动同步图标、登录成功后的同步为 false；回前台的本地刷新本身不产生同步结果。
   final bool automatic;
 
   /// 失败原因；成功为 [TimetableSyncFailure.none]。
@@ -134,6 +138,10 @@ class TimetableController extends ChangeNotifier {
 
   TimetableSnapshot _snapshot = const TimetableSnapshot();
   int _viewingWeek = 1;
+
+  /// 上次 [followCurrentWeekIfChanged] 观察到的 [currentWeek]。
+  /// 变了才把 [viewingWeek] 拉回本周；同周内手动翻周不打断。
+  int? _lastSeenCurrentWeek;
   bool _loading = false;
   String? _statusMessage;
   bool _portalBound = false;
@@ -141,6 +149,13 @@ class TimetableController extends ChangeNotifier {
   TimetableSyncStatus _syncStatus = TimetableSyncStatus.idle;
   TimetableSyncFailure _syncFailure = TimetableSyncFailure.none;
   Future<void>? _syncInFlight;
+
+  /// 最近一次成功同步写入的变动结果（含待弹窗列表）；失败或无 diff 为 null。
+  TimetableSyncDiffResult? lastSyncDiff;
+
+  /// 供变更提醒弹窗：最近一次同步中尚未标记 notified 的记录。
+  List<TimetableChangeRecord> get pendingChangeAlerts =>
+      List.unmodifiable(lastSyncDiff?.toNotify ?? const []);
 
   List<Course> _manualCourses = const [];
   int _manualSeq = 0;
@@ -159,7 +174,53 @@ class TimetableController extends ChangeNotifier {
   /// 设置修改、解绑。提醒（设置 11）后续订阅它重排。
   Stream<ScheduleChangeReason> get scheduleChanged => _scheduleChanged.stream;
 
-  void _fireScheduleChanged(ScheduleChangeReason r) => _scheduleChanged.add(r);
+  void _fireScheduleChanged(ScheduleChangeReason r) {
+    _scheduleChanged.add(r);
+    unawaited(updateNextDayReminder());
+  }
+
+  /// 将套用调课、单日修改后的课程生成通知缓存，覆盖未来 400 个本机自然日。
+  /// 只排明日提醒，不读取 reminderEnabled（课前提醒开关）。
+  Future<void> updateNextDayReminder() async {
+    final enabled =
+        settings.nextDayReminderEnabled &&
+        _portalBound &&
+        settings.termStartDate != null &&
+        (_snapshot.syncedAt != null || hasCourses);
+    final payloads = <String, Object?>{};
+    if (enabled) {
+      // 用 syncClock（测试可注入），覆盖未来 400 个本机自然日。
+      final now = syncClock();
+      final today = DateTime(now.year, now.month, now.day);
+      for (var offset = 0; offset < 400; offset++) {
+        final eve = today.add(Duration(days: offset));
+        final tomorrow = eve.add(const Duration(days: 1));
+        final week = actualWeek(tomorrow);
+        // 无开学日时 actualWeek 为 null，停止；有开学日则始终有周次（可超出学期）。
+        if (week == null) break;
+        final payload = buildNextDayReminder(
+          tomorrow: tomorrow,
+          courses: coursesOnDate(tomorrow),
+          periods: periods,
+          startTimeOf: (item) =>
+              timeForSlot(item.course, item.slot, date: tomorrow).start,
+          loggedIn: _portalBound,
+          hasCache: true,
+          outsideTerm: week < 1 || week > totalWeeks,
+        );
+        if (payload != null) {
+          payloads[nextDayReminderDateKey(eve)] = payload.toJson();
+        }
+      }
+    }
+    await NextDayReminderChannel.update({
+      'enabled': enabled,
+      'minuteOfDay': TimetableSettings.sanitizeNextDayMinute(
+        settings.nextDayReminderMinute,
+      ),
+      'payloads': payloads,
+    });
+  }
 
   final StreamController<TimetableSyncOutcome> _syncOutcomes =
       StreamController<TimetableSyncOutcome>.broadcast();
@@ -175,7 +236,7 @@ class TimetableController extends ChangeNotifier {
 
   bool _lastAutoSyncFailed = false;
 
-  /// 最近一次自动同步（冷启动 / 回前台 / 网络恢复 / 打开课表页）失败后为 true；
+  /// 最近一次自动同步（冷启动 / 网络恢复 / 打开课表页）失败后为 true；
   /// 之后任意一次同步成功（含手动、登录）即清除。不持久化。失败原因见
   /// [syncFailure] / [lastSyncOutcome]。
   bool get lastAutoSyncFailed => _lastAutoSyncFailed;
@@ -495,7 +556,9 @@ class TimetableController extends ChangeNotifier {
     return TimetableApi.fetchExams(term);
   }
 
-  List<PeriodTime> get periods => _snapshot.periods;
+  /// 作息表；快照为空时回退到校历默认作息，避免实验/体育连堂时刻算不出。
+  List<PeriodTime> get periods =>
+      _snapshot.periods.isEmpty ? defaultPeriods() : _snapshot.periods;
   TimetableSettings get settings => _snapshot.settings;
   int get viewingWeek => _viewingWeek;
   bool get loading => _loading;
@@ -548,13 +611,76 @@ class TimetableController extends ChangeNotifier {
 
   bool get isViewingCurrentWeek => _viewingWeek == currentWeek;
 
+  /// 若 [currentWeek] 相对上次检查已变（改系统日期 / 跨周 / App 回前台），
+  /// 把 [viewingWeek] 跳到 [_defaultViewingWeek]（本周，钳到 1..totalWeeks）。
+  /// 同一本周内用户手动翻周不打断。返回是否改了 viewingWeek。
+  ///
+  /// 打开周课表、[onAppResumed]、同步成功后调用；PageView 由页面监听
+  /// [setViewingWeek] 的 notify 对齐页码。
+  bool followCurrentWeekIfChanged() {
+    final week = currentWeek;
+    final prev = _lastSeenCurrentWeek;
+    if (prev == week) return false;
+    _lastSeenCurrentWeek = week;
+    final target = _defaultViewingWeek;
+    if (_viewingWeek == target) return false;
+    setViewingWeek(target);
+    return true;
+  }
+
   Future<void> ensureStarted() {
     if (_started) return _starting ?? Future.value();
     _started = true;
     return _starting = _start();
   }
 
+  /// 只读本地磁盘刷新：从 [TimetableStore] / [ScheduleStore] 重新载入快照、手动课程、
+  /// 调课 / 编辑 / 日程等本地数据，并通知监听者刷新 UI。
+  ///
+  /// **不**调用 [fetchSnapshot]，**不**调用 [TimetableSyncDiff.applyAfterFetch]。
+  /// 首页下拉、App 回前台、首页课表卡片刷新按钮只走这里；远程全量同步用
+  /// [syncFromJwxt] / [manualSync]。
+  ///
+  /// 成功返回 `true`；读盘失败返回 `false`（供 UI toast「刷新失败」），不抛出。
+  Future<bool> refreshLocal() async {
+    try {
+      await debugBeforeRefreshLocal?.call();
+      await ensureStarted();
+      await _reloadFromDisk();
+      // 磁盘上的手动课 / 配色可能变了：清掉缓存后按当前数据重读配色表。
+      _colorMap = null;
+      await _loadColorMap();
+      _clampViewingWeek();
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _start() async {
+    await _reloadFromDisk();
+    await _loadColorMap();
+    if (_fillMissingAssignedColors()) {
+      await TimetableStore.saveManualCourses(_manualCourses);
+    }
+    // 旧数据：「其他」日程的名称还没有固定色号 → 补一次并落盘（只写 schedule_events.json）。
+    if (_backfillOtherColors()) {
+      await ScheduleStore.saveEventsAndOtherColors(
+        _scheduleEvents,
+        _otherColors,
+      );
+    }
+    _viewingWeek = _defaultViewingWeek;
+    _lastSeenCurrentWeek = currentWeek;
+    _portalBound = await bindingCheck();
+    await updateNextDayReminder();
+    notifyListeners();
+  }
+
+  /// 从磁盘重载全部本地数据（快照、手动课程、调课 / 编辑 / 日程记录、同步状态）。
+  /// [_start] 与 [refreshLocal] 共用；不读门户绑定状态，也不发网络请求。
+  Future<void> _reloadFromDisk() async {
     _manualCourses = await TimetableStore.readManualCourses();
     _overrides = await TimetableStore.readOverrides();
     _scheduleEvents = List.unmodifiable(await ScheduleStore.readEvents());
@@ -592,20 +718,6 @@ class TimetableController extends ChangeNotifier {
     if (_snapshot.periods.isEmpty) {
       _snapshot = _snapshot.copyWith(periods: defaultPeriods());
     }
-    await _loadColorMap();
-    if (_fillMissingAssignedColors()) {
-      await TimetableStore.saveManualCourses(_manualCourses);
-    }
-    // 旧数据：「其他」日程的名称还没有固定色号 → 补一次并落盘（只写 schedule_events.json）。
-    if (_backfillOtherColors()) {
-      await ScheduleStore.saveEventsAndOtherColors(
-        _scheduleEvents,
-        _otherColors,
-      );
-    }
-    _viewingWeek = _defaultViewingWeek;
-    _portalBound = await bindingCheck();
-    notifyListeners();
   }
 
   /// 启动时读 course_colors.json：方案与当前一致就直接用；缺失/损坏/方案不符/
@@ -674,11 +786,13 @@ class TimetableController extends ChangeNotifier {
   Future<bool> refreshPortalBound() async {
     _portalBound = await bindingCheck();
     notifyListeners();
+    // 明日提醒重排不挡同步/SnackBar；未 mock 的 MethodChannel 在测试里会挂起。
+    unawaited(updateNextDayReminder());
     return _portalBound;
   }
 
-  /// 页面打开时：已登录且缓存为空/过期则自动同步。
-  /// 同样受 10 分钟节流（距上次成功不足则不同步）。
+  /// 课表页打开时：已登录且缓存为空/过期则自动从教务全量同步。
+  /// 同样受 10 分钟节流（距上次成功不足则不同步）。仍走远程。
   Future<void> autoSyncIfNeeded() async {
     if (_loading || !needsSync) return;
     if (!_elapsedSinceSuccess(autoSyncInterval)) return;
@@ -688,8 +802,8 @@ class TimetableController extends ChangeNotifier {
     await syncFromJwxt();
   }
 
-  /// 手动「立即同步」入口：未绑定门户时不发请求、不报失败，返回 false
-  /// 由页面跳转登录；已绑定则同步并返回 true。
+  /// 远程手动「立即同步」入口（周课表顶栏用）：未绑定门户时不发请求、不报失败，
+  /// 返回 false 由页面跳转登录；已绑定则从教务全量同步并返回 true。
   Future<bool> syncIfBound() async {
     if (!await refreshPortalBound()) return false;
     await syncFromJwxt();
@@ -711,6 +825,9 @@ class TimetableController extends ChangeNotifier {
     _syncInFlight = f;
     return f;
   }
+
+  /// [syncFromJwxt] 的别名：从教务远程拉取全量课表，行为与 [syncFromJwxt] 完全等同。
+  Future<void> syncFromRemote() => syncFromJwxt();
 
   Future<void> _doSync({bool automatic = false}) async {
     TimetableSyncOutcome? outcome;
@@ -750,6 +867,20 @@ class TimetableController extends ChangeNotifier {
         syncedAt: DateTime.now(),
         clearError: true,
       );
+      // 同步 diff：在覆盖内存快照前比对旧教务源；失败不影响同步成功态。
+      final previousJwxt = _snapshot.courses;
+      try {
+        lastSyncDiff = await TimetableSyncDiff.applyAfterFetch(
+          previousJwxtCourses: previousJwxt,
+          newJwxtCourses: snapshot.courses,
+          xnxqdm: snapshot.settings.termCode.isNotEmpty
+              ? snapshot.settings.termCode
+              : term,
+          detectedAt: snapshot.syncedAt,
+        );
+      } catch (_) {
+        lastSyncDiff = null;
+      }
       _snapshot = snapshot;
       // SW01（§13.10）：同步成功后停留在正在看的周（只钳到 1..totalWeeks）。
       // 同步前就在看本周、之前周次未知（无开学日）或换了学期时才跟到新的本周。
@@ -760,6 +891,8 @@ class TimetableController extends ChangeNotifier {
       } else {
         _clampViewingWeek();
       }
+      // 系统日期/本周相对上次已变时跟到本周（同周内手动翻周仍由上面 SW01 保留）。
+      followCurrentWeekIfChanged();
       await TimetableStore.saveSnapshot(_snapshot);
       // settings.json 只合并学期四键（与磁盘一致则不写）；periodHeight 原值、
       // 开关与未知键原样保留，绝不序列化整个内存设置。
@@ -835,12 +968,15 @@ class TimetableController extends ChangeNotifier {
     _colorMap = null;
     _started = true;
     _viewingWeek = viewingWeek ?? _defaultViewingWeek;
+    _lastSeenCurrentWeek = currentWeek;
     notifyListeners();
   }
 
   /// 测试用：重置单例状态（下次 [ensureStarted] 重新读盘）。
   @visibleForTesting
   void debugReset() {
+    lastSyncDiff = null;
+    _lastSeenCurrentWeek = null;
     _started = false;
     _starting = null;
     _snapshot = const TimetableSnapshot();
@@ -855,6 +991,7 @@ class TimetableController extends ChangeNotifier {
     _daySwaps = const [];
     _examOverrides = const {};
     _lastSyncSuccessAt = null;
+    debugBeforeRefreshLocal = null;
     _lastFailureOffline = false;
     _offlineRetryPending = false;
     _triggerBusy = false;
@@ -904,6 +1041,7 @@ class TimetableController extends ChangeNotifier {
     // 不序列化内存设置：只从原始 settings.json 中删除学期键。
     await TimetableStore.removeTermSettingKeys();
     _clampViewingWeek();
+    await updateNextDayReminder();
     notifyListeners();
   }
 
@@ -1329,7 +1467,11 @@ class TimetableController extends ChangeNotifier {
 
     if (settings.termStartDate != null) {
       for (final cell in _activeCellsOn(today)) {
-        take(TimeOfDayMinutes.tryParse(periodEnd(cell.slot.endNode)));
+        take(
+          TimeOfDayMinutes.tryParse(
+            timeForSlot(cell.course, cell.slot, date: today).end,
+          ),
+        );
       }
     }
     for (final e in scheduleEventsOn(today)) {
@@ -1610,15 +1752,20 @@ class TimetableController extends ChangeNotifier {
 
   // ===== 第 7 条：自动同步与节流 =====
 
-  /// 自动同步最短间隔（距上次成功）。
+  /// 自动同步最短间隔（距上次成功）。冷启动 / 打开课表页 / 网络恢复补同步共用。
   static const autoSyncInterval = Duration(minutes: 10);
 
-  /// 回到前台时的间隔（距上次成功，严格大于）。
-  static const resumeSyncInterval = Duration(minutes: 30);
+  /// 回前台静默补拉教务的阈值：距上次**成功**远程同步超过此时长才补一次。
+  /// 首页切回 / 下拉仍只走 [refreshLocal]，不受此常量影响。
+  static const resumeRemoteSyncInterval = Duration(hours: 6);
 
   /// 节流用的「现在」（带时分秒），测试可替换。
   @visibleForTesting
   static DateTime Function() syncClock = DateTime.now;
+
+  /// 测试用：在 [refreshLocal] 读盘前调用；抛错则 [refreshLocal] 返回 false。
+  @visibleForTesting
+  static Future<void> Function()? debugBeforeRefreshLocal;
 
   DateTime? _lastSyncSuccessAt;
   bool _lastFailureOffline = false;
@@ -1628,11 +1775,10 @@ class TimetableController extends ChangeNotifier {
   /// 最近一次同步成功时间（持久化在 `sync_state.json`，重启后仍在）。
   DateTime? get lastSyncSuccessAt => _lastSyncSuccessAt;
 
-  bool _elapsedSinceSuccess(Duration d, {bool strict = false}) {
+  bool _elapsedSinceSuccess(Duration d) {
     final last = _lastSyncSuccessAt;
     if (last == null) return true;
-    final gap = syncClock().difference(last);
-    return strict ? gap > d : gap >= d;
+    return syncClock().difference(last) >= d;
   }
 
   /// 是否「网络不可用」（断网/DNS/连不上）；超时、5xx 不算。
@@ -1689,11 +1835,25 @@ class TimetableController extends ChangeNotifier {
     return _trigger(armOfflineRetry: false);
   }
 
-  /// App 回到前台：距上次成功 >30 分钟才同步。
-  Future<bool> onAppResumed() => _trigger(
-    due: () => _elapsedSinceSuccess(resumeSyncInterval, strict: true),
-    automatic: true,
-  );
+  /// App 回到前台：始终先 [refreshLocal]（返回值供 UI toast「刷新失败」）；
+  /// 若距上次**成功**远程同步已超过 [resumeRemoteSyncInterval]（含从未成功），
+  /// 再静默发起一次后台远程同步（[unawaited]，不阻塞本 Future / 首页展示）。
+  /// 切回首页 tab、首页下拉仍只走 [refreshLocal]，不经过这里的远程分支。
+  Future<bool> onAppResumed() async {
+    final ok = await refreshLocal();
+    followCurrentWeekIfChanged();
+    if (_elapsedSinceSuccess(resumeRemoteSyncInterval)) {
+      // 与冷启动一样走 _trigger（10 分钟节流不再套用；此处用 6h due）。
+      // 不 await：本地刷新结果立刻返回，远程在后台跑。
+      unawaited(
+        _trigger(
+          due: () => _elapsedSinceSuccess(resumeRemoteSyncInterval),
+          automatic: true,
+        ).catchError((Object _) => false),
+      );
+    }
+    return ok;
+  }
 
   /// 网络恢复（由 App 层的连接监听调用）：只有上一次自动同步因断网失败时，
   /// 立即重试一次（不等 10 分钟）；重试失败不再自动重试。其他情况忽略。
@@ -1705,7 +1865,7 @@ class TimetableController extends ChangeNotifier {
     return _trigger(armOfflineRetry: false, automatic: true);
   }
 
-  /// 右上角手动同步（不受节流限制）。未绑定返回 false（页面跳转登录）。
+  /// 远程手动同步（周课表顶栏用，不受节流限制）。未绑定返回 false（页面跳转登录）。
   Future<bool> manualSync() => _trigger(armOfflineRetry: false);
 
   Future<void> _setOverrides(
@@ -2055,6 +2215,7 @@ class TimetableController extends ChangeNotifier {
       teacher: rec.teacher ?? s.teacher,
       location: rec.location ?? s.location,
       note: rec.note ?? s.note,
+      isLab: s.isLab,
       splitFrom: s.splitFrom,
     );
     tagSlotOrigin(
@@ -2086,6 +2247,7 @@ class TimetableController extends ChangeNotifier {
       teacher: s.teacher,
       location: s.location,
       note: s.note,
+      isLab: s.isLab,
       splitFrom: s.splitFrom,
     );
     tagSlotOrigin(
@@ -2688,8 +2850,8 @@ class TimetableController extends ChangeNotifier {
     for (final cell in cellsForDay(w, day)) {
       if (cell.course.id == courseId &&
           cell.slot.day == day &&
-          cell.slot.startNode == startNode &&
-          cell.slot.endNode == endNode) {
+          cell.slot.startNode <= startNode &&
+          cell.slot.endNode >= startNode) {
         return cell;
       }
     }
@@ -2699,7 +2861,7 @@ class TimetableController extends ChangeNotifier {
   /// 指定日期的课程（用于明天预告）。
   List<TodayCourseItem> coursesOnDate(DateTime date) {
     if (settings.termStartDate == null) return const [];
-    final cells = _activeCellsOn(date);
+    final cells = _timedCellsOn(date);
     return [
       for (final cell in cells)
         TodayCourseItem(
@@ -2710,15 +2872,84 @@ class TimetableController extends ChangeNotifier {
     ];
   }
 
+  // 今日/明日及原生导出使用合并后的连堂；周视图保留逐条记录供编辑寻址。
+  List<GridCell> _timedCellsOn(DateTime date) {
+    final cells = _activeCellsOn(date).toList();
+    final out = <GridCell>[];
+    for (final course in courses) {
+      final group = cells.where((c) => c.course.id == course.id).toList();
+      final runs = mergeTimingSlots(course, [for (final c in group) c.slot]);
+      for (final slot in runs) {
+        final first = group.firstWhere(
+          (c) => c.slot.startNode == slot.startNode,
+        );
+        final segments = resolveTimingSegments(
+          periods: periods,
+          startNode: slot.startNode,
+          endNode: slot.endNode,
+          kind: timingKindOf(course: first.course, slot: slot),
+        );
+        final displaySlots = [
+          if (segments.isEmpty) slot, // 缺作息时保留课程，不能让首课查询丢数据。
+          for (final segment in segments)
+            segment.startNode == slot.startNode &&
+                    segment.endNode == slot.endNode
+                ? slot
+                : CourseSlot(
+                    day: slot.day,
+                    startNode: segment.startNode,
+                    endNode: segment.endNode,
+                    weeks: slot.weeks,
+                    weeksLabel: slot.weeksLabel,
+                    teacher: slot.teacher,
+                    location: slot.location,
+                    note: slot.note,
+                    istk: slot.istk,
+                    isLab: slot.isLab,
+                  ),
+        ];
+        for (final displaySlot in displaySlots) {
+          out.add(
+            GridCell(
+              course: first.course,
+              slot: displaySlot,
+              conflictCount: first.conflictCount,
+              activeThisWeek: true,
+              date: first.date,
+              swappedFrom: first.swappedFrom,
+              dateEdit: first.dateEdit,
+            ),
+          );
+        }
+      }
+    }
+    out.sort((a, b) => a.slot.startNode.compareTo(b.slot.startNode));
+    return out;
+  }
+
+  /// 明天第一节课，供小组件「之后」行等调用；先调用 [ensureStarted] 载入本机课表。
+  ///
+  /// 按本机自然日计算，使用套用改课、调课后的实际课程与节次，不受首页明天开关影响。
+  /// 无课、无开学日或不在学期内返回 null。显示名统一读取返回值的 `course.displayName`，
+  /// 实际起止时刻可交给 [effectiveSlotTime] 换算（含实验/体育课时刻规则）。
+  TodayCourseItem? firstCourseTomorrow({DateTime? now}) {
+    final today = now ?? DateTime.now();
+    final tomorrow = DateTime(today.year, today.month, today.day + 1);
+    final week = actualWeek(tomorrow);
+    if (week == null || week < 1 || week > totalWeeks) return null;
+    return coursesOnDate(tomorrow).firstOrNull;
+  }
+
   /// 今日课程（按节次排序，最多取完）。
   List<TodayCourseItem> todayCourses({DateTime? now}) {
     final n = now ?? DateTime.now();
     // 用「今天」的真实周（不钳制），开学前/学期后无课、无提醒。
-    final cells = _activeCellsOn(n).toList();
+    final cells = _timedCellsOn(n);
     final items = <TodayCourseItem>[];
     for (final cell in cells) {
-      final start = _timeOf(n, periodStart(cell.slot.startNode));
-      final end = _timeOf(n, periodEnd(cell.slot.endNode));
+      final time = timeForSlot(cell.course, cell.slot, date: n);
+      final start = _timeOf(n, time.start);
+      final end = _timeOf(n, time.end);
       if (start == null || end == null) {
         items.add(
           TodayCourseItem(
@@ -2781,6 +3012,75 @@ class TimetableController extends ChangeNotifier {
       if (p.node == node) return p;
     }
     return null;
+  }
+
+  /// 时段在给定课程类型下的实际起止（实验/体育会取消小课间）。
+  ///
+  /// 见 `timetable_timing.dart` 的 [effectiveSlotBounds] / [resolveTimingSegments]。
+  ({String? start, String? end}) effectiveSlotTime(
+    int startNode,
+    int endNode, {
+    CourseTimingKind kind = CourseTimingKind.standard,
+  }) => effectiveSlotBounds(
+    periods: periods,
+    startNode: startNode,
+    endNode: endNode,
+    kind: kind,
+  );
+
+  /// 课程各显示面共用的实际时刻入口；逐条记录先按当日连堂合并再取本记录的边界。
+  ({String? start, String? end}) timeForSlot(
+    Course course,
+    CourseSlot slot, {
+    DateTime? date,
+  }) {
+    final kind = timingKindOf(course: course, slot: slot);
+    if (kind == CourseTimingKind.standard) {
+      return effectiveSlotTime(slot.startNode, slot.endNode, kind: kind);
+    }
+    final day = date ?? dateOfColumn(currentWeek, slot.day);
+    final peers = cellsForDay(actualWeek(day) ?? currentWeek, day.weekday)
+        .where((c) => c.activeThisWeek && c.course.id == course.id)
+        .map((c) => c.slot)
+        .toList();
+    final run = mergeTimingSlots(course, peers)
+        .where(
+          (s) => s.startNode <= slot.startNode && s.endNode >= slot.endNode,
+        )
+        .firstOrNull;
+    if (run == null) {
+      return effectiveSlotTime(slot.startNode, slot.endNode, kind: kind);
+    }
+    final segments = resolveTimingSegments(
+      periods: periods,
+      startNode: run.startNode,
+      endNode: run.endNode,
+      kind: kind,
+    );
+    String? shifted(int node, bool start) {
+      final segment = segments
+          .where((s) => s.startNode <= node && s.endNode >= node)
+          .firstOrNull;
+      final raw = start ? periodStart(node) : periodEnd(node);
+      final value = TimeOfDayMinutes.tryParse(raw);
+      if (segment == null || value == null) return raw;
+      // 仍由 effectiveSlotTime 决定累计压缩量，各显示面不另写时刻规则。
+      final adjustedEnd = TimeOfDayMinutes.tryParse(
+        effectiveSlotTime(segment.startNode, node, kind: kind).end,
+      );
+      final standardEnd = TimeOfDayMinutes.tryParse(periodEnd(node));
+      if (adjustedEnd == null || standardEnd == null) return raw;
+      final minutes =
+          value.totalMinutes +
+          adjustedEnd.totalMinutes -
+          standardEnd.totalMinutes;
+      return '${(minutes ~/ 60).toString().padLeft(2, '0')}:${(minutes % 60).toString().padLeft(2, '0')}';
+    }
+
+    return (
+      start: shifted(slot.startNode, true),
+      end: shifted(slot.endNode, false),
+    );
   }
 
   /// 查看周的周一日期。周次待同步时以本周周一作为第 1 周。
