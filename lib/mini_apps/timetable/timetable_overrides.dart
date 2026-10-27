@@ -361,6 +361,7 @@ AppliedOverrides applySlotOverrides(
           teacher: s.teacher,
           location: s.location,
           note: s.note,
+          isLab: s.isLab,
         );
         _origins[r] = SlotOrigin(courseId: c.id, original: s, moved: false);
         slots.add(r);
@@ -374,6 +375,7 @@ AppliedOverrides applySlotOverrides(
           teacher: s.teacher,
           location: s.location,
           note: s.note,
+          isLab: s.isLab,
         );
         _origins[m] = SlotOrigin(courseId: c.id, original: s, moved: true);
         slots.add(m);
@@ -438,6 +440,7 @@ List<CourseSlot> moveManualSlots(
       teacher: t.teacher,
       location: t.location,
       note: t.note,
+      isLab: t.isLab || s.isLab,
       splitFrom: t.splitFrom,
     );
   } else {
@@ -449,6 +452,7 @@ List<CourseSlot> moveManualSlots(
       teacher: s.teacher,
       location: s.location,
       note: s.note,
+      isLab: s.isLab,
       splitFrom: keep ? s.ref : s.splitFrom,
     );
   }
@@ -468,6 +472,7 @@ List<CourseSlot> moveManualSlots(
             teacher: s.teacher,
             location: s.location,
             note: s.note,
+            isLab: s.isLab,
             splitFrom: s.splitFrom,
           ),
         ?moved,
@@ -643,6 +648,7 @@ List<Course> applyCourseEdits(
         teacher: e.teacher ?? s.teacher,
         location: e.location ?? s.location,
         note: e.note ?? s.note,
+        isLab: s.isLab,
         splitFrom: s.splitFrom,
       );
       tagSlotOrigin(

@@ -61,11 +61,26 @@ void main() {
     await tester.pump();
   }
 
-  Future<void> tapAppearanceKey(WidgetTester tester, Key key) async {
-    final f = find.byKey(key);
+  Future<void> revealAppearanceKey(WidgetTester tester, Key key) async {
+    final f = find.byKey(key, skipOffstage: false);
+    // 外观页设置使用懒加载列表，先滚动构建目标，再等待对齐结束。
+    await tester.scrollUntilVisible(
+      f,
+      250,
+      scrollable: find.descendant(
+        of: find.byType(ListView),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
     await tester.ensureVisible(f);
     await tester.pumpAndSettle();
-    await tester.tap(f);
+    expect(f.hitTestable(), findsOneWidget);
+  }
+
+  Future<void> tapAppearanceKey(WidgetTester tester, Key key) async {
+    await revealAppearanceKey(tester, key);
+    await tester.tap(find.byKey(key));
   }
 
   Widget grid() => Scaffold(
@@ -75,18 +90,20 @@ void main() {
     ),
   );
 
-  testWidgets('设置页保留地点等；周六/非本周迁入外观；非本周课程默认关', (tester) async {
+  testWidgets('显示项统一迁入外观；设置页不残留；非本周课程默认关', (tester) async {
     expect(const TimetableSettings().showNonCurrentWeek, isFalse);
     await pumpPage(tester, TimetableSettingsPage(controller: _c));
-    expect(find.text('地点'), findsOneWidget);
-    expect(find.text('格子高度'), findsOneWidget);
+    expect(find.byKey(const Key('tt_settings_show_location')), findsNothing);
+    expect(find.byKey(const Key('tt_settings_period_height')), findsNothing);
     expect(find.textContaining('M2'), findsNothing);
     // 周六 / 非本周课程只在外观页。
     expect(find.byKey(const Key('tt_settings_saturday')), findsNothing);
     expect(find.byKey(const Key('tt_settings_non_current')), findsNothing);
     await pumpPage(tester, TimetableAppearancePage(controller: _c));
-    expect(find.text('周六'), findsOneWidget);
-    expect(find.text('非本周课程'), findsOneWidget);
+    await revealAppearanceKey(tester, const Key('tt_settings_saturday'));
+    expect(find.text('显示周六'), findsOneWidget);
+    await revealAppearanceKey(tester, const Key('tt_settings_non_current'));
+    expect(find.text('显示非本周课'), findsOneWidget);
     final sw = tester.widget<Switch>(
       find.descendant(
         of: find.byKey(const Key('tt_settings_non_current')),
@@ -151,9 +168,10 @@ void main() {
     expect(find.byType(CourseCell), findsNothing);
   });
 
-  testWidgets('格子高度滑块：写入 periodHeight 并持久化', (tester) async {
-    await pumpPage(tester, TimetableSettingsPage(controller: _c));
+  testWidgets('外观页格子高度滑块：写入 periodHeight 并持久化', (tester) async {
+    await pumpPage(tester, TimetableAppearancePage(controller: _c));
     final slider = find.byKey(const Key('tt_settings_period_height'));
+    await revealAppearanceKey(tester, const Key('tt_settings_period_height'));
     await tester.drag(slider, const Offset(-2000, 0));
     await settleIo(tester);
     expect(_c.settings.periodHeight, 52);

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'timetable_controller.dart';
+import 'timetable_exam_merge.dart';
 import 'timetable_exams_card.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_layout.dart';
@@ -69,19 +70,19 @@ class TimetableExamsPage extends StatelessWidget {
   }
 }
 
-/// 已结束的考试（日期早于今天），按日期倒序（最近的在前）。
+/// 已结束的考试（日期早于今天），按日期倒序（最近的在前），不受课表显示开关影响。
+/// 与 [upcomingExams] 共用同一套合并去重规则。
 List<ScheduleEvent> pastExams(
   TimetableController controller, {
   required DateTime today,
 }) {
-  if (!controller.settings.showExams) return const [];
   final day = DateTime(today.year, today.month, today.day);
-  final exams = [
+  final exams = mergeExams([
     for (final e in controller.scheduleEvents)
       if (e.isExam &&
           DateTime(e.date.year, e.date.month, e.date.day).isBefore(day))
         e,
-  ];
+  ]);
   exams.sort((a, b) {
     final d = DateTime(
       b.date.year,

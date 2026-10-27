@@ -28,16 +28,7 @@ class AppGridItem extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
             ),
             alignment: Alignment.center,
-            child: app.glyph != null
-                ? Text(
-                    app.glyph!,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  )
-                : Icon(app.icon, color: Colors.white, size: 24),
+            child: _buildIcon(),
           ),
           const SizedBox(height: 7),
           Text(
@@ -49,5 +40,24 @@ class AppGridItem extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// 色块里的图形：自定义图形 > 单字 glyph > Material 图标。
+  Widget _buildIcon() {
+    if (app.iconWidget case final build?) {
+      // 统一按 24dp 摆，图形自己铺满这个方框。
+      return SizedBox.square(dimension: 24, child: Builder(builder: build));
+    }
+    if (app.glyph case final glyph?) {
+      return Text(
+        glyph,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+        ),
+      );
+    }
+    return Icon(app.icon, color: Colors.white, size: 24);
   }
 }

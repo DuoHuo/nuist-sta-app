@@ -2,7 +2,6 @@
 // 首页行点按只进课表（10/19）。全部为构造数据，不读真实样例。
 // ignore_for_file: unused_element
 
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -15,7 +14,9 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.d
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_edit_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_copy.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 
 final _c = TimetableController.instance;
@@ -95,6 +96,7 @@ void _setUpController() {
     TimetableController.clock = origClock;
     TimetableController.bindingCheck = origBinding;
     TimetableController.fetchSnapshot = origFetch;
+    TimetableController.debugBeforeRefreshLocal = null;
     TimetableStore.debugDirectory = null;
     _c.debugReset();
     if (tmp.existsSync()) tmp.deleteSync(recursive: true);
@@ -284,15 +286,9 @@ void main() {
       expect(t.overflow, isNot(TextOverflow.ellipsis));
     });
 
-    testWidgets('HN12b 刷新钮 48dp 热区叠放，不撑高标题行；更新失败静默', (tester) async {
+    testWidgets('HN12b 刷新钮 48dp 热区叠放，不撑高标题行', (tester) async {
       TimetableController.bindingCheck = () async => true;
       _load(manual: [a]);
-      _c.debugSetSnapshot(
-        _c.snapshot.copyWith(
-          syncedAt: DateTime(2026, 10, 12, 6),
-          lastError: 'offline (test)',
-        ),
-      );
       await pumpHome(tester, DateTime(2026, 10, 12, 7));
       expect(
         tester.getSize(find.byKey(const Key('home_card_refresh'))),
@@ -302,40 +298,105 @@ void main() {
       final card = tester.getRect(find.byType(TimetableHomeCard));
       final title = tester.getRect(find.byKey(const Key('home_card_title')));
       expect(title.top - card.top, lessThan(16));
-      // 有缓存且上次失败：不显示「缓存于 …」。
       expect(find.textContaining('缓存于'), findsNothing);
-      // 手动刷新失败同样静默：不弹 SnackBar。
-      await tester.tap(find.byKey(const Key('home_card_refresh')));
-      await _io(tester, 5);
-      await tester.pump(const Duration(seconds: 1));
-      expect(find.byKey(const Key('home_card_sync_snackbar')), findsNothing);
-      expect(find.textContaining('同步失败'), findsNothing);
     });
 
-    testWidgets('HN13 点刷新走 manualSync：同步中图标旋转，结束后停止', (tester) async {
+    testWidgets('HN12c 读盘失败弹「刷新失败」', (tester) async {
+      TimetableController.bindingCheck = () async => true;
       _load(manual: [a]);
-      final gate = Completer<void>();
+      await pumpHome(tester, DateTime(2026, 10, 12, 7));
+
+      TimetableController.debugBeforeRefreshLocal = () async {
+        throw StateError('disk (test)');
+      };
+      await tester.tap(find.byKey(const Key('home_card_refresh')));
+      await _io(tester, 8);
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+      expect(find.byKey(const Key('home_card_sync_snackbar')), findsOneWidget);
+      expect(find.text(TimetableCopy.homeRefreshFailed), findsOneWidget);
+    });
+
+    testWidgets('HN12c2 读盘成功不弹「刷新失败」', (tester) async {
+      TimetableController.bindingCheck = () async => true;
+      TimetableController.debugBeforeRefreshLocal = null;
+      _load(manual: [a]);
+      await pumpHome(tester, DateTime(2026, 10, 12, 7));
+      await tester.tap(find.byKey(const Key('home_card_refresh')));
+      await _io(tester, 8);
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+      expect(find.byKey(const Key('home_card_sync_snackbar')), findsNothing);
+      expect(find.text(TimetableCopy.homeRefreshFailed), findsNothing);
+    });
+
+    testWidgets('HN12d 显示 lastSyncSuccessAt 相对时间；null 不展示', (tester) async {
+      TimetableController.bindingCheck = () async => true;
+      _load(manual: [a]);
+      final now = DateTime(2026, 10, 12, 7);
+      // widget 测试假异步下磁盘 IO 必须走 runAsync，否则会挂死。
+      await tester.runAsync(() async {
+        await ScheduleStore.saveLastSyncSuccess(DateTime(2026, 10, 12, 6, 55));
+        await _c.refreshLocal();
+      });
+      expect(_c.lastSyncSuccessAt, DateTime(2026, 10, 12, 6, 55));
+      await pumpHome(tester, now);
+      expect(find.byKey(const Key('home_card_sync_ago')), findsOneWidget);
+      expect(find.text('5 分钟前同步'), findsOneWidget);
+
+      // null：不显示该行
+      _c.debugReset();
+      _load(manual: [a]);
+      expect(_c.lastSyncSuccessAt, isNull);
+      await pumpHome(tester, now);
+      expect(find.byKey(const Key('home_card_sync_ago')), findsNothing);
+    });
+
+    test('HN12e formatSyncAgo 文案边界', () {
+      final now = DateTime(2026, 10, 12, 12);
+      expect(formatSyncAgo(null, now), isNull);
+      expect(formatSyncAgo(now, now), '刚刚同步');
+      expect(
+        formatSyncAgo(now.subtract(const Duration(seconds: 59)), now),
+        '刚刚同步',
+      );
+      expect(
+        formatSyncAgo(now.subtract(const Duration(minutes: 1)), now),
+        '1 分钟前同步',
+      );
+      expect(
+        formatSyncAgo(now.subtract(const Duration(minutes: 59)), now),
+        '59 分钟前同步',
+      );
+      expect(
+        formatSyncAgo(now.subtract(const Duration(hours: 1)), now),
+        '1 小时前同步',
+      );
+      expect(
+        formatSyncAgo(now.subtract(const Duration(hours: 23)), now),
+        '23 小时前同步',
+      );
+      expect(
+        formatSyncAgo(now.subtract(const Duration(hours: 24)), now),
+        '1 天前同步',
+      );
+    });
+
+    testWidgets('HN13 点刷新只重读本地，不请求教务', (tester) async {
+      _load(manual: [a]);
+      var fetches = 0;
       TimetableController.bindingCheck = () async => true;
       TimetableController.fetchSnapshot = (term, {baseSettings}) async {
-        await gate.future;
+        fetches++;
         throw const SocketException('offline (test)');
       };
       await pumpHome(tester, DateTime(2026, 10, 12, 7));
       await _io(tester);
       await tester.tap(find.byKey(const Key('home_card_refresh')));
-      await _io(tester);
-      expect(_c.syncStatus, TimetableSyncStatus.syncing);
-      RotationTransition spin() => tester.widget<RotationTransition>(
-        find.byKey(const Key('home_card_refresh_spin')),
-      );
-      final v0 = spin().turns.value;
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(spin().turns.value, isNot(v0));
-      gate.complete();
       await _io(tester, 5);
+      expect(fetches, 0);
       expect(_c.syncStatus, isNot(TimetableSyncStatus.syncing));
-      expect(spin().turns.value, 0);
-      await tester.pump(const Duration(seconds: 5));
+      expect(find.byKey(const Key('home_card_sync_snackbar')), findsNothing);
     });
   });
 

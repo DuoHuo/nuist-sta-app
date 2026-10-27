@@ -6,6 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_exams_card.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_exams_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_cell.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_store.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_grid.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
@@ -126,11 +130,31 @@ void main() {
       expect(got.map((e) => e.title).toList(), ['测试考试a', '测试考试c']);
     });
 
-    testWidgets('upcomingExams：显示考试开关关 → 空', (tester) async {
-      _load(showExams: false);
-      await _add(tester, _exam('a', DateTime(2026, 10, 13)));
-      expect(upcomingExams(_c, today: _today), isEmpty);
-    });
+    for (final showExams in [false, true]) {
+      test('考试查询不受显示开关影响：showExams=$showExams', () async {
+        _load(showExams: showExams);
+        final upcoming = _exam(
+          'a',
+          _today,
+        ).copyWith(source: ScheduleSource.jwxt, courseCode: 'test-a');
+        final past = _exam(
+          'p',
+          DateTime(2026, 10, 11),
+        ).copyWith(source: ScheduleSource.jwxt, courseCode: 'test-p');
+        await _c.replaceJwxtExams([past, upcoming]);
+        await _c.addScheduleEvent(_other('o', _today));
+        expect(upcomingExams(_c, today: _today).map((e) => e.id), ['a']);
+        expect(pastExams(_c, today: _today).map((e) => e.id), ['p']);
+        expect(
+          _c.scheduleEventsOn(_today).map((e) => e.id),
+          showExams ? ['a', 'o'] : ['o'],
+        );
+        expect(
+          (await ScheduleStore.readEvents()).where((e) => e.isExam),
+          hasLength(2),
+        );
+      });
+    }
   });
 
   group('卡片 UI', () {
@@ -170,11 +194,61 @@ void main() {
       expect(find.text('考试安排'), findsNothing);
     });
 
-    testWidgets('显示考试开关关：卡片隐藏', (tester) async {
-      _load(showExams: false);
-      await _add(tester, _exam('a', DateTime(2026, 10, 13)));
-      await _pump(tester);
-      expect(find.byKey(const Key('exams_card_title')), findsNothing);
+    testWidgets('教务考试：切换开关只影响周课表，卡片与列表始终显示', (tester) async {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      _c.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: const [],
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(
+            termStartDate: today.subtract(Duration(days: today.weekday - 1)),
+          ),
+        ),
+        viewingWeek: 1,
+      );
+      final upcoming = _exam(
+        'a',
+        today,
+      ).copyWith(source: ScheduleSource.jwxt, courseCode: 'test-a');
+      final past = _exam(
+        'p',
+        today.subtract(const Duration(days: 1)),
+      ).copyWith(source: ScheduleSource.jwxt, courseCode: 'test-p');
+      await tester.runAsync(() => _c.replaceJwxtExams([upcoming, past]));
+      // 同一份教务数据反复切换，确认无须重新同步就能恢复周课表。
+      for (final showExams in [false, true, false]) {
+        await tester.runAsync(
+          () => _c.updateSettings(_c.settings.copyWith(showExams: showExams)),
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(body: TimetableExamsCard(now: () => today)),
+          ),
+        );
+        await tester.pump();
+        expect(find.byKey(const Key('exams_card_title')), findsOneWidget);
+        expect(find.text('测试考试a'), findsOneWidget);
+        expect(find.text('测试考试p'), findsNothing);
+
+        await tester.pumpWidget(const MaterialApp(home: TimetableExamsPage()));
+        await tester.pump();
+        expect(find.text('即将到来（1）'), findsOneWidget);
+        expect(find.text('已结束（1）'), findsOneWidget);
+        expect(find.byKey(const Key('exams_page_row_a')), findsOneWidget);
+        expect(find.byKey(const Key('exams_page_row_p')), findsOneWidget);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(body: WeekGrid(week: 1, controller: _c)),
+          ),
+        );
+        await tester.pump();
+        final cell = find.byWidgetPredicate(
+          (w) => w is ScheduleEventCell && w.event.id == 'a',
+        );
+        expect(cell, showExams ? findsOneWidget : findsNothing);
+      }
     });
   });
 }

@@ -351,6 +351,52 @@ class TimetableStore {
     _writeRawAtomicSync(file, raw);
   }
 
+  /// 最近成功保存的自定义色（原始 ARGB 列表，最多 6，新的在前）。
+  static const recentCustomColorsKey = 'recentCustomColors';
+  static const int maxRecentCustomColors = 6;
+
+  /// 读最近自定义色；坏项跳过。不抛异常。
+  static Future<List<int>> readRecentCustomColors() async {
+    final file = await _file(courseColorsFile);
+    if (file == null) return const [];
+    final raw = _readRawSync(file)[recentCustomColorsKey];
+    if (raw is! List) return const [];
+    final out = <int>[];
+    for (final v in raw) {
+      if (v is int) {
+        out.add(v | 0xFF000000);
+      } else if (v is num) {
+        out.add(v.toInt() | 0xFF000000);
+      }
+      if (out.length >= maxRecentCustomColors) break;
+    }
+    return out;
+  }
+
+  /// 把一次成功保存的自定义色插到最近列表前（去重，最多 [maxRecentCustomColors]）。
+  static Future<void> pushRecentCustomColor(int argb) async {
+    final file = await _file(courseColorsFile);
+    if (file == null) return;
+    final raw = _readRawSync(file);
+    final color = argb | 0xFF000000;
+    final prev = <int>[];
+    final existing = raw[recentCustomColorsKey];
+    if (existing is List) {
+      for (final v in existing) {
+        final n = v is int ? v : (v is num ? v.toInt() : null);
+        if (n == null) continue;
+        final a = n | 0xFF000000;
+        if (a == color) continue;
+        prev.add(a);
+      }
+    }
+    raw[recentCustomColorsKey] = [
+      color,
+      ...prev.take(maxRecentCustomColors - 1),
+    ];
+    _writeRawAtomicSync(file, raw);
+  }
+
   /// 先写同目录临时文件再 rename，写到一半崩溃不会留下半个 JSON。
   static void _writeRawAtomicSync(File file, Map<String, dynamic> raw) {
     final tmp = File('${file.path}.tmp');

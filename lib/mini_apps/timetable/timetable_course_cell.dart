@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
+import 'timetable_timing.dart';
 import 'timetable_overrides.dart';
 import 'timetable_theme.dart';
 import 'timetable_course_color.dart';
@@ -25,6 +26,7 @@ class CourseCell extends StatelessWidget {
     this.onDragUpdate,
     this.onDragEnd,
     this.onDragCancel,
+    this.pairOverride,
   });
 
   /// 长按拖动调课的触发时长（spec §13.2：按住约 0.8 秒后开始移动才拖起来）。
@@ -49,6 +51,9 @@ class CourseCell extends StatelessWidget {
   final GestureLongPressMoveUpdateCallback? onDragUpdate;
   final GestureLongPressEndCallback? onDragEnd;
   final GestureLongPressCancelCallback? onDragCancel;
+
+  /// 选色预览等：非空时跳过 [coursePairFor]，直接用该对（再经不透明度混合）。
+  final CourseColorPair? pairOverride;
 
   TimetableController get _ctl => controller ?? TimetableController.instance;
 
@@ -86,8 +91,9 @@ class CourseCell extends StatelessWidget {
     // 深色（item 12）：同色相「深底浅字」（[TimetableTheme.coursePair]），显示时换算；
     // 不透明度往 #121316 混；非本周格取上游 [TimetableColors.dark] 的 offWeek*。
     final colors = TimetableTheme.colorsOf(context);
-    // item 9：用户自选色优先（[coursePairFor]）。
-    final pair = coursePairFor(ctl, cell.course, dark: colors.isDark);
+    // item 9：用户自选色优先（[coursePairFor]）；选色预览可 [pairOverride]。
+    final pair =
+        pairOverride ?? coursePairFor(ctl, cell.course, dark: colors.isDark);
     final bg = active
         ? TimetableTheme.blendCellBg(
             pair.bg,
@@ -117,7 +123,13 @@ class CourseCell extends StatelessWidget {
         _weekCount(cell.slot.weeks) > 1;
     final stacked = stackCount > 1;
     final showOffWeek = !active;
-    final showBadge = showParity || stacked || showOffWeek;
+    // 实验标签按「时段」判定：体育课即使时段带 isLab 也不打标。
+    final labSlot = cell.slot.isLab && !cell.course.isPe;
+    // 1 节高的格子放不下底部标签行：格内省略「实验」，改由课程详情标注「实验课」。
+    final showLab = labSlot && cell.slot.span > 1;
+    // 有「实验」时底部只留一行：居中，「实验」在前，其余角标依次靠后（放不下就省略）。
+    final showCenterBadge = !showLab && (showParity || stacked || showOffWeek);
+    final showBottomBadge = showLab || showCenterBadge;
 
     return Semantics(
       button: true,
@@ -158,8 +170,13 @@ class CourseCell extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
                   child: ClipRect(
                     child: LayoutBuilder(
-                      builder: (context, box) =>
-                          _content(context, box, fg, showBadge),
+                      builder: (context, box) => _content(
+                        context,
+                        box,
+                        fg,
+                        showBottomBadge,
+                        showLab ? labBadgeReserve : badgeReserve,
+                      ),
                     ),
                   ),
                 ),
@@ -177,7 +194,83 @@ class CourseCell extends StatelessWidget {
                       ),
                     ),
                   ),
-                if (showBadge)
+                if (showLab)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 3,
+                    child: LayoutBuilder(
+                      builder: (context, box) {
+                        // 除「实验」外最多再放一个角标；行宽不够时只保留「实验」。
+                        final parityLabel = parity == WeekParity.odd
+                            ? '单周'
+                            : '双周';
+                        final (String?, Widget?) extra = stacked
+                            ? (
+                                '$stackCount 门',
+                                _badge(
+                                  '$stackCount 门',
+                                  fg,
+                                  key: const Key('course_cell_stack_badge'),
+                                ),
+                              )
+                            : showOffWeek
+                            ? (
+                                offWeekLabel,
+                                // 「非本周」已由格子语义标签念过一次，胶囊不再重复朗读。
+                                ExcludeSemantics(
+                                  child: _badge(
+                                    offWeekLabel,
+                                    fg,
+                                    key: const Key('course_cell_off_week_pill'),
+                                  ),
+                                ),
+                              )
+                            : showParity
+                            ? (
+                                parityLabel,
+                                _badge(
+                                  parityLabel,
+                                  fg,
+                                  key: const Key('course_cell_parity_pill'),
+                                ),
+                              )
+                            : (null, null);
+                        final fits =
+                            extra.$1 != null &&
+                            box.maxWidth >=
+                                _badgeWidth(
+                                      context,
+                                      labPillLabel,
+                                      fontSize: labPillFontSize,
+                                      paddingH: labPillPaddingH,
+                                    ) +
+                                    labPillGap +
+                                    _badgeWidth(context, extra.$1!);
+                        return Center(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _badge(
+                                labPillLabel,
+                                fg,
+                                key: const Key('course_cell_lab_pill'),
+                                fontSize: labPillFontSize,
+                                paddingH: labPillPaddingH,
+                                height: labPillHeight,
+                                borderAlpha: labPillBorderAlpha,
+                              ),
+                              if (fits) ...[
+                                const SizedBox(width: labPillGap),
+                                extra.$2!,
+                              ],
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                if (showCenterBadge)
                   Positioned(
                     left: 0,
                     right: 0,
@@ -223,14 +316,15 @@ class CourseCell extends StatelessWidget {
   /// 按可用高度排版格内文字（spec §13.9，替代 §2.4 / §13.3 的旧优先级）：
   /// 先为底部胶囊预留空间；地点永不截断（逐字换行，不限行数）。空间不够时依次
   /// ① 隐藏课程代码 [xx] ② 隐藏老师 ③ 课名截断（至少 1 行，末尾省略）
-  /// ④ 本格字号逐级缩小（每级 1sp，最小 10sp）。见 [planCellContent]。
-  /// 仍放不下（极端：1 节 + 大字号 + 长地点）：地点完整、课名 1 行省略，
+  /// ④ 本格字号逐级缩小（每级 1sp，最小 10sp，取整）。见 [planCellContent]。
+  /// 到下限仍放不下：地点完整、课名 1 行省略号截断，不再继续缩；
   /// 超出格子的部分被裁掉，不报 overflow。
   Widget _content(
     BuildContext context,
     BoxConstraints box,
     Color fg,
     bool showBadge,
+    double badgeReserve,
   ) {
     final scaler = MediaQuery.textScalerOf(context);
     final base = DefaultTextStyle.of(context).style;
@@ -238,12 +332,21 @@ class CourseCell extends StatelessWidget {
     final factor = settings.fontScale.factor;
     var avail = box.maxHeight.isFinite ? box.maxHeight : double.infinity;
     if (showBadge) avail -= badgeReserve;
+    final showTime =
+        timingKindOf(course: cell.course, slot: cell.slot) !=
+        CourseTimingKind.standard;
+    final time = showTime
+        ? _ctl.timeForSlot(cell.course, cell.slot, date: cell.date)
+        : null;
+    if (showTime) {
+      avail -= cellFontSize(TimetableTheme.cellSubSize, factor, scaler) * 1.3;
+    }
     final hasLoc = settings.showLocation && cell.slot.location.isNotEmpty;
     final teacher = cell.slot.teacher.trim();
     final hasTeacher = settings.showTeacher && teacher.isNotEmpty;
     final locText = hasLoc ? cellLocationText(cell.slot.location) : '';
     final plan = planCellContent(
-      name: cell.course.name,
+      name: cell.course.displayName,
       location: locText,
       hasClass: cell.course.classId.isNotEmpty,
       hasTeacher: hasTeacher,
@@ -271,7 +374,7 @@ class CourseCell extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CourseNameText(
-            name: cell.course.name,
+            name: cell.course.displayName,
             style: nameStyle,
             maxLines: plan.nameLines,
           ),
@@ -292,6 +395,13 @@ class CourseCell extends StatelessWidget {
               softWrap: true,
               style: subStyle,
             ),
+          if (time?.start != null && time?.end != null)
+            Text(
+              '${time!.start}–${time.end}',
+              key: const Key('course_cell_time'),
+              maxLines: 1,
+              style: subStyle,
+            ),
           if (plan.showTeacher)
             Text(
               teacher,
@@ -305,44 +415,102 @@ class CourseCell extends StatelessWidget {
     );
   }
 
-  /// 格内字号：基准 × 文字大小系数（§13.3），乘系统缩放后不小于 10sp。
+  /// 格内字号：基准 × 文字大小系数（§13.3），乘系统缩放后不小于 10sp；结果取整避免发虚。
   static double cellFontSize(double base, double factor, TextScaler scaler) {
     final scale = scaler.scale(1);
     final sized = base * factor;
-    if (scale <= 0) return sized;
+    if (scale <= 0) return TimetableTheme.snapFontSp(sized);
     final minUnscaled = 10 / scale;
-    return sized < minUnscaled ? minUnscaled : sized;
+    final v = sized < minUnscaled ? minUnscaled : sized;
+    return TimetableTheme.snapFontSp(v);
   }
 
   /// 非本周格底部胶囊文字（§13.8：替代原课名前缀写法）。
   static const String offWeekLabel = '非本周';
+
+  /// 实验时段格内胶囊文字。
+  static const String labPillLabel = '实验';
+
+  /// 实验胶囊字号（sp）。
+  static const double labPillFontSize = 10;
+
+  /// 实验胶囊高度（dp）与圆角（= 高度一半）。
+  static const double labPillHeight = 16;
+
+  /// 实验胶囊水平内边距（dp）。
+  static const double labPillPaddingH = 4;
+
+  /// 实验胶囊描边不透明度：同文字色 60%。
+  static const double labPillBorderAlpha = 0.6;
+
+  /// 「实验」与同行下一个胶囊的间距（dp）。
+  static const double labPillGap = 4;
 
   static int _weekCount(String weeks) => '1'.allMatches(weeks).length;
 
   /// 底部胶囊预留高度（胶囊 + bottom 3 - 内边距 4 + 余量）。
   static const double badgeReserve = 14;
 
-  /// Micro 胶囊（单/双周、「非本周」与「N 门」共用样式）：
-  /// 文字与描边都用该课文字色 [fg]（不透明），无填充。
-  static Widget _badge(String text, Color fg, {Key? key}) => Container(
+  /// 实验胶囊行的预留高度：16dp 胶囊 + bottom 3 - 内边距 4 + 余量。
+  static const double labBadgeReserve = 16;
+
+  /// Micro 胶囊（单/双周、「非本周」、「N 门」与「实验」共用样式）：
+  /// 文字与描边都用该课文字色 [fg]，无填充。
+  ///
+  /// 「实验」用 [fontSize] 10 / [paddingH] 4 / [height] 16 / [borderAlpha] 0.6；
+  /// 其余胶囊保持原有 9sp、横向 5dp、自适应高度、实色描边。
+  static Widget _badge(
+    String text,
+    Color fg, {
+    Key? key,
+    double fontSize = TimetableTheme.badgeSize,
+    double paddingH = 5,
+    double? height,
+    double borderAlpha = 1,
+  }) => Container(
     key: key,
-    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
+    height: height,
+    alignment: height == null ? null : Alignment.center,
+    padding: EdgeInsets.symmetric(horizontal: paddingH, vertical: 0),
     decoration: BoxDecoration(
-      border: Border.all(color: fg, width: 1),
+      border: Border.all(color: fg.withValues(alpha: borderAlpha), width: 1),
       borderRadius: BorderRadius.circular(8),
     ),
     child: Text(
       text,
-      style: TextStyle(fontSize: TimetableTheme.badgeSize, color: fg),
+      style: TextStyle(fontSize: fontSize, color: fg),
     ),
   );
+
+  /// 胶囊在当前字体与系统缩放下的宽度（含横向内边距与 1dp 描边），
+  /// 供底部行决定是否还能放下下一个胶囊。
+  static double _badgeWidth(
+    BuildContext context,
+    String text, {
+    double fontSize = TimetableTheme.badgeSize,
+    double paddingH = 5,
+  }) {
+    final base = DefaultTextStyle.of(context).style;
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: base.copyWith(fontSize: fontSize),
+      ),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    final width = painter.width;
+    painter.dispose();
+    return width + paddingH * 2 + 2;
+  }
 
   String _semanticsLabel(bool showBadge, WeekParity parity) {
     final parts = <String>[
       if (!cell.activeThisWeek) '非本周',
-      cell.course.name,
+      cell.course.displayName,
       '第${cell.slot.startNode}-${cell.slot.endNode}节',
       if (cell.slot.location.isNotEmpty) cell.slot.location,
+      if (cell.slot.isLab && !cell.course.isPe) '实验课',
       if (showBadge) (parity == WeekParity.odd ? '单周' : '双周'),
       if (stackCount > 1) '本时段 $stackCount 门课',
     ];
@@ -377,8 +545,10 @@ class CellContentPlan {
 
 /// 格内让位（spec §13.9）。地点（[location]，已是 [cellLocationText] 结果，空串表示不显示）
 /// 永不截断；高度不够时依次 ① 隐藏代码 ② 隐藏老师 ③ 课名截断到能放下的行数（≥1）
-/// ④ 字号每级缩小 1sp（实际字号，含系统缩放），最小 10sp。缩小后代码与老师保持隐藏，
-/// 只尽量多给课名行数。[nameSize]/[subSize] 为未乘系统缩放的起始字号。
+/// ④ 字号每级缩小 1sp（实际字号，含系统缩放），最小 10sp；算完取整。
+/// 到下限仍放不下：地点完整、课名 1 行省略号截断，不再继续缩。
+/// 缩小后代码与老师保持隐藏，只尽量多给课名行数。
+/// [nameSize]/[subSize] 为未乘系统缩放的起始字号。
 CellContentPlan planCellContent({
   required String name,
   required String location,
@@ -419,8 +589,10 @@ CellContentPlan planCellContent({
   const eps = 0.01;
   bool fit(double h) => h <= maxHeight + eps;
   for (var i = 0; ; i++) {
-    final ns = math.max(minSize, nameSize - i * unit);
-    final ss = math.max(minSize, subSize - i * unit);
+    final ns = TimetableTheme.snapFontSp(
+      math.max(minSize, nameSize - i * unit),
+    );
+    final ss = TimetableTheme.snapFontSp(math.max(minSize, subSize - i * unit));
     final nSt = nameStyle.copyWith(fontSize: ns);
     final sSt = subStyle.copyWith(fontSize: ss);
     final nameH = heightOf('课', nSt);

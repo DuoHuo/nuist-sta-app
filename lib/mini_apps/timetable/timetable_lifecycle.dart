@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import 'timetable_controller.dart';
+import 'timetable_notify_service.dart';
 
 /// 网络「有 / 无」的抽象（便于测试注入），只关心是否有任意连接，不区分 wifi / 移动网络。
 abstract class NetworkReachability {
@@ -53,12 +54,15 @@ class NetworkRestoreDetector {
 }
 
 /// App 层课表同步时机接线（第 7 条 AS）：
-/// - 挂载时（冷启动）调用一次 [TimetableController.onAppStart]；
-/// - 回到前台（[AppLifecycleState.resumed]）调用 [TimetableController.onAppResumed]；
-/// - 网络从无到有时调用 [TimetableController.onNetworkRestored]（节流与「只补一次」由
-///   controller 决定）。
+/// - 挂载时（冷启动）调用一次 [TimetableController.onAppStart]（远程同步，受 10 分钟
+///   节流）；经 [_fire] 异步发出，不阻塞首页展示。
+/// - 回到前台（[AppLifecycleState.resumed]）调用 [TimetableController.onAppResumed]
+///   （始终本地刷新；距上次成功远程同步超过 6 小时则再静默补一次远程）；
+/// - 网络从无到有时调用 [TimetableController.onNetworkRestored]（远程补同步，节流与
+///   「只补一次」由 controller 决定）。
 /// 登录成功的同步（[TimetableController.onLoginSucceeded]）由门户绑定页
 /// （portal_status_page）在绑定 / 导入通行密钥成功后调用，不在这里接。
+/// 切回首页 tab / 首页下拉只走 [TimetableController.refreshLocal]，不经过本 Scope。
 class TimetableLifecycleScope extends StatefulWidget {
   const TimetableLifecycleScope({
     super.key,
@@ -109,6 +113,7 @@ class _TimetableLifecycleScopeState extends State<TimetableLifecycleScope>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _fire(widget.onAppStart ?? _ctl.onAppStart);
+    _notify((n) => n.ensureStarted());
     final reach = widget.reachability ?? _defaultReachability();
     if (reach == null) return;
     try {
@@ -125,6 +130,15 @@ class _TimetableLifecycleScopeState extends State<TimetableLifecycleScope>
     }
   }
 
+  /// 提醒 / 小组件编排；测试环境（无原生端）跳过。
+  void _notify(Future<void> Function(TimetableNotifyService n) f) {
+    if (!kIsWeb && Platform.environment.containsKey('FLUTTER_TEST')) return;
+    if (widget.controller != null) return;
+    try {
+      unawaited(f(TimetableNotifyService.instance).catchError((Object _) {}));
+    } catch (_) {}
+  }
+
   static NetworkReachability? _defaultReachability() {
     if (!kIsWeb && Platform.environment.containsKey('FLUTTER_TEST')) {
       return null;
@@ -136,6 +150,8 @@ class _TimetableLifecycleScopeState extends State<TimetableLifecycleScope>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _fire(widget.onAppResumed ?? _ctl.onAppResumed);
+      // 回前台：跨天 / 改时间后补排提醒与小组件。
+      _notify((n) => n.reschedule());
     }
   }
 

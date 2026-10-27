@@ -13,6 +13,26 @@ class TimetableExportException implements Exception {
   String toString() => message;
 }
 
+/// 导出时跳过某个时段的原因。
+enum TimetableExportSkipReason {
+  /// 时段没有固定的星期或节次。
+  noFixedTime,
+
+  /// 周次位串中没有任何一周有课。
+  emptyWeeks,
+}
+
+/// 导出时被跳过的单个时段，保留课程名称和跳过原因。
+class TimetableExportSkippedSlot {
+  const TimetableExportSkippedSlot({
+    required this.courseName,
+    required this.reason,
+  });
+
+  final String courseName;
+  final TimetableExportSkipReason reason;
+}
+
 /// 去除身份和教务内部编号的导出快照；WakeUp 格式转换由服务端完成。
 class TimetableExportSnapshot {
   const TimetableExportSnapshot({
@@ -20,7 +40,7 @@ class TimetableExportSnapshot {
     required this.courseCount,
     required this.examCount,
     required this.otherCount,
-    required this.skippedSlots,
+    required this.skippedItems,
     required this.warnings,
   });
 
@@ -28,7 +48,13 @@ class TimetableExportSnapshot {
   final int courseCount;
   final int examCount;
   final int otherCount;
-  final int skippedSlots;
+
+  /// 未能导出的时段，按课程和时段顺序排列。
+  final List<TimetableExportSkippedSlot> skippedItems;
+
+  /// 被跳过时段的数量，保留给只关心数量的调用方。
+  int get skippedSlots => skippedItems.length;
+
   final List<String> warnings;
 
   /// 从现有课表日期视图取实际安排，保留调课、单次编辑及删除的结果。
@@ -87,7 +113,7 @@ class TimetableExportSnapshot {
           items.add({
             'key': keyOf('course:${cell.course.id}'),
             'kind': 'course',
-            'title': cell.course.name,
+            'title': cell.course.displayName,
             'date': dateKeyOf(c.dateOfColumn(week, day)),
             'startNode': cell.slot.startNode,
             'endNode': cell.slot.endNode,
@@ -135,11 +161,21 @@ class TimetableExportSnapshot {
     if (items.length > 10000) {
       throw const TimetableExportException('课程和日程安排过多，请减少导出范围');
     }
-    final skipped = c.courses
-        .where((course) => !course.hidden)
-        .expand((course) => course.slots)
-        .where((slot) => !slot.hasFixedTime || !slot.weeks.contains('1'))
-        .length;
+    final skippedItems = <TimetableExportSkippedSlot>[
+      for (final course in c.courses)
+        if (!course.hidden)
+          for (final slot in course.slots)
+            if (!slot.hasFixedTime)
+              TimetableExportSkippedSlot(
+                courseName: course.displayName,
+                reason: TimetableExportSkipReason.noFixedTime,
+              )
+            else if (!slot.weeks.contains('1'))
+              TimetableExportSkippedSlot(
+                courseName: course.displayName,
+                reason: TimetableExportSkipReason.emptyWeeks,
+              ),
+    ];
     final warnings = <String>[
       if (firstWeek < 1)
         '包含学期开始前的安排，WakeUp 第 1 周将从 ${dateKeyOf(c.weekStartDate(firstWeek))} 开始；实际日期不变。',
@@ -157,7 +193,7 @@ class TimetableExportSnapshot {
       courseCount: exportedCourses.length,
       examCount: exams,
       otherCount: other,
-      skippedSlots: skipped,
+      skippedItems: skippedItems,
       warnings: warnings,
     );
   }

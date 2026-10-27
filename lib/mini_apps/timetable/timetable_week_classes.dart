@@ -19,7 +19,7 @@ class TimetableWeeklyClasses implements WeeklyClassSource {
         if (!cell.activeThisWeek || location.isEmpty) continue;
         classes.add(
           WeeklyClass(
-            courseName: cell.course.name,
+            courseName: cell.course.displayName,
             location: location,
             weekday: day,
             startNode: cell.slot.startNode,

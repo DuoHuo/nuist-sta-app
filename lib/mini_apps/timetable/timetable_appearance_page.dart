@@ -9,14 +9,8 @@ import 'timetable_models.dart';
 import 'timetable_theme.dart';
 import 'timetable_week_grid.dart';
 
-/// spec-next-1020b：外观页——上半 ~48% 为本周真实课表缩略，下半为可滚动设置；
-/// 设置改完上半即时变。周六/日、非本周、表头字号、节数时间等只在此页入口。
-///
-/// 预览复用 [WeekGrid]（含 `scheduleItemsForColumn` / [ScheduleEventCell]），
-/// 与周视图一致；非本周考试双胶囊等由数据侧落地后自动出现。
-///
-/// +9 hotfix：上半预览支持左右滑切周（[PageView]，手感同主周视图），
-/// 预览周为页内本地状态，不改 [TimetableController.viewingWeek]。
+/// 课表外观：固定真实课表预览与独立滚动的四组设置，修改后即时刷新。
+/// 短屏或大字号时预览默认收起；预览周独立于主课表的当前查看周。
 class TimetableAppearancePage extends StatefulWidget {
   const TimetableAppearancePage({super.key, this.controller});
 
@@ -28,8 +22,8 @@ class TimetableAppearancePage extends StatefulWidget {
 
   static const cellTextColorLabels = {
     CellTextColorMode.auto: '自动',
-    CellTextColorMode.white: '白字',
-    CellTextColorMode.black: '黑字',
+    CellTextColorMode.white: '白',
+    CellTextColorMode.black: '黑',
   };
 
   static const homeMaxLabels = {1: '1', 2: '2', 3: '3', 4: '4'};
@@ -44,6 +38,7 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
       widget.controller ?? TimetableController.instance;
   PageController? _pageController;
   late int _previewWeek;
+  bool _previewExpanded = false;
 
   int get _totalWeeks => math.max(1, _c.totalWeeks);
 
@@ -126,182 +121,410 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
               .clamp(kHeaderTextSizeMin, kHeaderTextSizeMax)
               .toDouble();
           final total = _totalWeeks;
-          return Column(
-            children: [
-              Expanded(
-                flex: 48,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    TimetableTheme.pagePaddingH,
-                    8,
-                    TimetableTheme.pagePaddingH,
-                    0,
-                  ),
-                  child: Material(
-                    key: const Key('tt_appearance_preview'),
-                    color: colors.surface,
-                    borderRadius: BorderRadius.circular(
-                      TimetableTheme.cardRadius,
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: pc == null
-                        ? const SizedBox.shrink()
-                        : PageView.builder(
-                            key: const Key('tt_appearance_preview_pager'),
-                            controller: pc,
-                            itemCount: total,
-                            onPageChanged: _onPreviewPageChanged,
-                            itemBuilder: (context, index) {
-                              final week = index + 1;
-                              return WeekGrid(
-                                key: week == _previewWeek
-                                    ? const Key('tt_appearance_preview_grid')
-                                    : ValueKey(
-                                        'tt_appearance_preview_grid_$week',
-                                      ),
-                                week: week,
-                                controller: c,
-                                enableDrag: false,
-                                previewMode: true,
-                              );
-                            },
-                          ),
-                  ),
-                ),
-              ),
-              Expanded(
-                flex: 52,
-                child: ListView(
-                  padding: const EdgeInsets.only(bottom: 24),
+          return SafeArea(
+            top: false,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final textScale =
+                    MediaQuery.textScalerOf(context).scale(14) / 14;
+                final previewHeight = math.min(
+                  MediaQuery.sizeOf(context).height * 0.38,
+                  constraints.maxHeight * 0.45,
+                );
+                final collapsible =
+                    previewHeight < 160 ||
+                    constraints.maxHeight < 560 ||
+                    textScale >= 1.5;
+                final expanded = !collapsible || _previewExpanded;
+                return Column(
                   children: [
-                    _ApGroup(
-                      key: const Key('tt_appearance_group'),
-                      title: '外观',
-                      children: [
-                        _ApRow(
-                          title: '文字颜色',
-                          trailing: _ApSegments<CellTextColorMode>(
-                            key: const Key('tt_settings_cell_text_color'),
-                            options:
-                                TimetableAppearancePage.cellTextColorLabels,
-                            selected: s.cellTextColor,
-                            onSelected: (v) =>
-                                _update((x) => x.copyWith(cellTextColor: v)),
+                    if (collapsible)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                        child: Material(
+                          color: colors.surface,
+                          borderRadius: BorderRadius.circular(
+                            TimetableTheme.cardRadius,
                           ),
-                        ),
-                        _ApSliderRow(
-                          title: '不透明度',
-                          valueLabel: '$opacity%',
-                          valueKey: const Key('tt_settings_opacity_value'),
-                          slider: Slider(
-                            key: const Key('tt_settings_opacity'),
-                            min: TimetableAppearancePage.opacityMin.toDouble(),
-                            max: TimetableAppearancePage.opacityMax.toDouble(),
-                            divisions:
-                                (TimetableAppearancePage.opacityMax -
-                                    TimetableAppearancePage.opacityMin) ~/
-                                TimetableAppearancePage.opacityStep,
-                            value: opacity.toDouble(),
-                            activeColor: colors.accent,
-                            label: '$opacity%',
-                            onChanged: (v) {
-                              final next = v.round();
-                              if (next == c.settings.cellOpacity) return;
-                              _update((x) => x.copyWith(cellOpacity: next));
-                            },
-                          ),
-                        ),
-                        _ApRow(
-                          key: const Key('tt_settings_home_max_items'),
-                          title: '今日课表最多显示',
-                          trailing: _ApSegments<int>(
-                            key: const Key('tt_settings_home_max_segments'),
-                            options: TimetableAppearancePage.homeMaxLabels,
-                            selected: s.homeMaxItems,
-                            onSelected: (v) =>
-                                _update((x) => x.copyWith(homeMaxItems: v)),
-                          ),
-                        ),
-                        _ApSliderRow(
-                          title: '表头文字大小',
-                          valueLabel: '${headerSize.round()}',
-                          valueKey: const Key(
-                            'tt_settings_header_text_size_value',
-                          ),
-                          slider: Slider(
-                            key: const Key('tt_settings_header_text_size'),
-                            min: kHeaderTextSizeMin,
-                            max: kHeaderTextSizeMax,
-                            divisions: (kHeaderTextSizeMax - kHeaderTextSizeMin)
-                                .round(),
-                            value: headerSize,
-                            activeColor: colors.accent,
-                            label: '${headerSize.round()}',
-                            onChanged: (v) {
-                              final next = v.roundToDouble();
-                              if (next == c.settings.headerTextSize) return;
-                              _update((x) => x.copyWith(headerTextSize: next));
-                            },
-                          ),
-                        ),
-                        _ApSwitchRow(
-                          key: const Key('tt_settings_show_period_times'),
-                          title: '节数栏显示时间',
-                          value: s.showPeriodTimes,
-                          onChanged: (v) =>
-                              _update((x) => x.copyWith(showPeriodTimes: v)),
-                        ),
-                        _ApSwitchRow(
-                          key: const Key('tt_settings_saturday'),
-                          title: '周六',
-                          value: s.showSaturday,
-                          onChanged: (v) =>
-                              _update((x) => x.copyWith(showSaturday: v)),
-                        ),
-                        _ApSwitchRow(
-                          key: const Key('tt_settings_sunday'),
-                          title: '周日',
-                          value: s.showSunday,
-                          onChanged: (v) =>
-                              _update((x) => x.copyWith(showSunday: v)),
-                        ),
-                        _ApSwitchRow(
-                          key: const Key('tt_settings_non_current'),
-                          title: '非本周课程',
-                          value: s.showNonCurrentWeek,
-                          onChanged: (v) =>
-                              _update((x) => x.copyWith(showNonCurrentWeek: v)),
-                        ),
-                        _ApRow(
-                          key: const Key('tt_settings_exam_color'),
-                          title: '考试颜色',
-                          onTap: () => _pickExamColor(context),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                key: const Key('tt_settings_exam_color_swatch'),
-                                width: 18,
-                                height: 18,
-                                decoration: BoxDecoration(
-                                  color: TimetableTheme.examCellBg(
-                                    Color(s.examColor),
-                                    dark: colors.isDark,
-                                  ),
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(color: colors.divider),
+                          child: InkWell(
+                            key: const Key(
+                              'tt_appearance_preview_collapse_bar',
+                            ),
+                            borderRadius: BorderRadius.circular(
+                              TimetableTheme.cardRadius,
+                            ),
+                            onTap: () => setState(
+                              () => _previewExpanded = !_previewExpanded,
+                            ),
+                            child: SizedBox(
+                              height: 44,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        '预览 · 第 $_previewWeek 周',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TimetableTheme.bodyStyle(
+                                          color: colors.titleText,
+                                        ),
+                                      ),
+                                    ),
+                                    Icon(
+                                      expanded
+                                          ? Icons.expand_less
+                                          : Icons.expand_more,
+                                      color: colors.hint,
+                                    ),
+                                  ],
                                 ),
                               ),
-                              Icon(Icons.chevron_right, color: colors.hint),
-                            ],
+                            ),
                           ),
                         ),
-                      ],
+                      ),
+                    if (expanded)
+                      SizedBox(
+                        key: const Key('tt_appearance_preview_expanded'),
+                        height: previewHeight,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            TimetableTheme.pagePaddingH,
+                            8,
+                            TimetableTheme.pagePaddingH,
+                            0,
+                          ),
+                          child: Material(
+                            key: const Key('tt_appearance_preview'),
+                            color: colors.surface,
+                            borderRadius: BorderRadius.circular(
+                              TimetableTheme.cardRadius,
+                            ),
+                            clipBehavior: Clip.antiAlias,
+                            child: pc == null
+                                ? const SizedBox.shrink()
+                                : PageView.builder(
+                                    key: const Key(
+                                      'tt_appearance_preview_pager',
+                                    ),
+                                    controller: pc,
+                                    itemCount: total,
+                                    onPageChanged: _onPreviewPageChanged,
+                                    itemBuilder: (context, index) {
+                                      final week = index + 1;
+                                      return MediaQuery(
+                                        data: MediaQuery.of(context).copyWith(
+                                          textScaler: MediaQuery.textScalerOf(
+                                            context,
+                                          ).clamp(maxScaleFactor: 1.3),
+                                        ),
+                                        child: WeekGrid(
+                                          key: week == _previewWeek
+                                              ? const Key(
+                                                  'tt_appearance_preview_grid',
+                                                )
+                                              : ValueKey(
+                                                  'tt_appearance_preview_grid_$week',
+                                                ),
+                                          week: week,
+                                          controller: c,
+                                          enableDrag: false,
+                                          previewMode: true,
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ),
+                      ),
+                    // 设置区在预览/折叠条分界线处裁切，上滚时不与预览叠层。
+                    Expanded(
+                      child: ClipRect(
+                        key: const Key('tt_appearance_settings_clip'),
+                        child: ListView(
+                          key: const Key('tt_appearance_settings_list'),
+                          padding: const EdgeInsets.only(bottom: 24),
+                          children: [
+                            _ApGroup(
+                              key: const Key('tt_appearance_group'),
+                              title: '外观',
+                              children: [
+                                _ApRow(
+                                  title: '文字颜色',
+                                  trailing: _ApSegments<CellTextColorMode>(
+                                    key: const Key(
+                                      'tt_settings_cell_text_color',
+                                    ),
+                                    options: TimetableAppearancePage
+                                        .cellTextColorLabels,
+                                    selected: s.cellTextColor,
+                                    onSelected: (v) => _update(
+                                      (x) => x.copyWith(cellTextColor: v),
+                                    ),
+                                  ),
+                                ),
+                                _ApSliderRow(
+                                  title: '不透明度',
+                                  valueLabel: '$opacity%',
+                                  valueKey: const Key(
+                                    'tt_settings_opacity_value',
+                                  ),
+                                  slider: Slider(
+                                    key: const Key('tt_settings_opacity'),
+                                    min: TimetableAppearancePage.opacityMin
+                                        .toDouble(),
+                                    max: TimetableAppearancePage.opacityMax
+                                        .toDouble(),
+                                    divisions:
+                                        (TimetableAppearancePage.opacityMax -
+                                            TimetableAppearancePage
+                                                .opacityMin) ~/
+                                        TimetableAppearancePage.opacityStep,
+                                    value: opacity.toDouble(),
+                                    activeColor: colors.accent,
+                                    label: '$opacity%',
+                                    onChanged: (v) {
+                                      final next = v.round();
+                                      if (next == c.settings.cellOpacity) {
+                                        return;
+                                      }
+                                      _update(
+                                        (x) => x.copyWith(cellOpacity: next),
+                                      );
+                                    },
+                                  ),
+                                ),
+                                _ApSliderRow(
+                                  title: '表头字号',
+                                  valueLabel: '${headerSize.round()}',
+                                  valueKey: const Key(
+                                    'tt_settings_header_text_size_value',
+                                  ),
+                                  slider: Slider(
+                                    key: const Key(
+                                      'tt_settings_header_text_size',
+                                    ),
+                                    min: kHeaderTextSizeMin,
+                                    max: kHeaderTextSizeMax,
+                                    divisions:
+                                        (kHeaderTextSizeMax -
+                                                kHeaderTextSizeMin)
+                                            .round(),
+                                    value: headerSize,
+                                    activeColor: colors.accent,
+                                    label: '${headerSize.round()}',
+                                    onChanged: (v) {
+                                      final next = v.roundToDouble();
+                                      if (next == c.settings.headerTextSize) {
+                                        return;
+                                      }
+                                      _update(
+                                        (x) => x.copyWith(headerTextSize: next),
+                                      );
+                                    },
+                                  ),
+                                ),
+                                _ApSwitchRow(
+                                  key: const Key(
+                                    'tt_settings_show_period_times',
+                                  ),
+                                  title: '节次显示时间',
+                                  value: s.showPeriodTimes,
+                                  onChanged: (v) => _update(
+                                    (x) => x.copyWith(showPeriodTimes: v),
+                                  ),
+                                ),
+                                _ApSliderRow(
+                                  title: '格子高度',
+                                  valueLabel: '${s.periodHeight.round()}',
+                                  valueKey: const Key(
+                                    'tt_settings_period_height_value',
+                                  ),
+                                  slider: Slider(
+                                    key: const Key('tt_settings_period_height'),
+                                    min: TimetableTheme.periodHeightMin,
+                                    max: TimetableTheme.periodHeightMax,
+                                    divisions:
+                                        ((TimetableTheme.periodHeightMax -
+                                                    TimetableTheme
+                                                        .periodHeightMin) /
+                                                2)
+                                            .round(),
+                                    value: s.periodHeight.clamp(
+                                      TimetableTheme.periodHeightMin,
+                                      TimetableTheme.periodHeightMax,
+                                    ),
+                                    activeColor: colors.accent,
+                                    onChanged: (v) => _update(
+                                      (x) => x.copyWith(periodHeight: v),
+                                    ),
+                                  ),
+                                ),
+                                // 与「不透明度」等行同级左对齐，勿嵌进滑杆行。
+                                _ApRow(
+                                  title: '格子字号',
+                                  trailing: _ApSegments<CellFontScale>(
+                                    key: const Key('tt_settings_font_scale'),
+                                    options: const {
+                                      CellFontScale.small: '小',
+                                      CellFontScale.standard: '标准',
+                                      CellFontScale.large: '大',
+                                    },
+                                    selected: s.fontScale,
+                                    onSelected: (v) => _update(
+                                      (x) => x.copyWith(fontScale: v),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            _ApGroup(
+                              key: const Key('tt_appearance_group_week'),
+                              title: '周视图',
+                              children: [
+                                _ApRow(
+                                  key: const Key('tt_settings_week_start'),
+                                  title: '一周起始',
+                                  trailing: Text(
+                                    s.weekStartsOnMonday ? '周一' : '周日',
+                                    style: TimetableTheme.bodyStyle(
+                                      color: colors.hint,
+                                    ),
+                                  ),
+                                  onTap: () async {
+                                    final monday = await showDialog<bool>(
+                                      context: context,
+                                      builder: (context) => SimpleDialog(
+                                        title: const Text('一周起始'),
+                                        children: [
+                                          for (final option in const {
+                                            true: '周一',
+                                            false: '周日',
+                                          }.entries)
+                                            SimpleDialogOption(
+                                              onPressed: () => Navigator.pop(
+                                                context,
+                                                option.key,
+                                              ),
+                                              child: Text(option.value),
+                                            ),
+                                        ],
+                                      ),
+                                    );
+                                    if (monday != null) {
+                                      _update(
+                                        (x) => x.copyWith(
+                                          weekStartsOnMonday: monday,
+                                        ),
+                                      );
+                                    }
+                                  },
+                                ),
+                                _ApSwitchRow(
+                                  key: const Key('tt_settings_saturday'),
+                                  title: '显示周六',
+                                  value: s.showSaturday,
+                                  onChanged: (v) => _update(
+                                    (x) => x.copyWith(showSaturday: v),
+                                  ),
+                                ),
+                                _ApSwitchRow(
+                                  key: const Key('tt_settings_sunday'),
+                                  title: '显示周日',
+                                  value: s.showSunday,
+                                  onChanged: (v) =>
+                                      _update((x) => x.copyWith(showSunday: v)),
+                                ),
+                              ],
+                            ),
+                            _ApGroup(
+                              key: const Key('tt_settings_group_exam'),
+                              title: '考试',
+                              children: [
+                                _ApSwitchRow(
+                                  key: const Key('tt_settings_show_exams'),
+                                  title: '显示考试',
+                                  value: s.showExams,
+                                  onChanged: (v) =>
+                                      _update((x) => x.copyWith(showExams: v)),
+                                ),
+                                _ApRow(
+                                  key: const Key('tt_settings_exam_color'),
+                                  title: '考试颜色',
+                                  onTap: () => _pickExamColor(context),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        key: const Key(
+                                          'tt_settings_exam_color_swatch',
+                                        ),
+                                        width: 18,
+                                        height: 18,
+                                        decoration: BoxDecoration(
+                                          color: TimetableTheme.examCellBg(
+                                            Color(s.examColor),
+                                            dark: colors.isDark,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            4,
+                                          ),
+                                          border: Border.all(
+                                            color: colors.divider,
+                                          ),
+                                        ),
+                                      ),
+                                      Icon(
+                                        Icons.chevron_right,
+                                        color: colors.hint,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            _ApGroup(
+                              key: const Key('tt_appearance_group_cell_info'),
+                              title: '格子信息',
+                              children: [
+                                _ApSwitchRow(
+                                  key: const Key('tt_settings_show_location'),
+                                  title: '显示地点',
+                                  value: s.showLocation,
+                                  onChanged: (v) => _update(
+                                    (x) => x.copyWith(showLocation: v),
+                                  ),
+                                ),
+                                _ApSwitchRow(
+                                  key: const Key('tt_settings_show_teacher'),
+                                  title: '显示教师',
+                                  value: s.showTeacher,
+                                  onChanged: (v) => _update(
+                                    (x) => x.copyWith(showTeacher: v),
+                                  ),
+                                ),
+                                _ApSwitchRow(
+                                  key: const Key('tt_settings_non_current'),
+                                  title: '显示非本周课',
+                                  value: s.showNonCurrentWeek,
+                                  onChanged: (v) => _update(
+                                    (x) => x.copyWith(showNonCurrentWeek: v),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
-                ),
-              ),
-            ],
+                );
+              },
+            ),
           );
         },
       ),
@@ -341,7 +564,10 @@ class _ApGroup extends StatelessWidget {
           Material(
             color: TimetableTheme.colorsOf(context).surface,
             borderRadius: BorderRadius.circular(TimetableTheme.cardRadius),
-            child: Column(children: children),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: children,
+            ),
           ),
         ],
       ),
@@ -363,19 +589,36 @@ class _ApRow extends StatelessWidget {
       child: ConstrainedBox(
         constraints: const BoxConstraints(
           minHeight: TimetableTheme.listRowHeight,
+          minWidth: double.infinity,
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: TimetableTheme.bodyStyle(color: colors.titleText),
-                ),
-              ),
-              ?trailing,
-            ],
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final label = Text(
+                title,
+                style: TimetableTheme.bodyStyle(color: colors.titleText),
+              );
+              final stacked =
+                  trailing is _ApSegments &&
+                  (constraints.maxWidth < 380 ||
+                      MediaQuery.textScalerOf(context).scale(14) > 20);
+              if (stacked) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [label, const SizedBox(height: 6), ?trailing],
+                  ),
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: label),
+                  ?trailing,
+                ],
+              );
+            },
           ),
         ),
       ),

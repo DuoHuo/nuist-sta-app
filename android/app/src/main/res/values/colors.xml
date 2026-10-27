@@ -1,4 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- 桌面小组件颜色 token（spec-widget-4x2 §4，浅色；深色见 values-night/colors.xml） -->
+    <color name="wg_bg">#FFFFFFFF</color>
+    <color name="wg_chip">#FFF5F6F8</color>
+    <color name="wg_t1">#FF171A1F</color>
+    <color name="wg_t2">#FF4A4F66</color>
+    <color name="wg_t3">#FF6B7186</color>
+    <color name="wg_acc">#FF0082EF</color>
+    <color name="wg_link">#FF0072D1</color>
+    <color name="wg_brk">#FFFF9800</color>
+    <color name="wg_brk_text">#FFE67E00</color>
+    <!-- 胶囊按钮文字 / 竖条底色（运行时 setColorFilter 染成课程色） -->
+    <color name="wg_on_acc">#FFFFFFFF</color>
+    <color name="wg_bar_base">#FFFFFFFF</color>
 </resources>

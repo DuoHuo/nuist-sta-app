@@ -45,6 +45,38 @@ abstract final class TimetableTheme {
   static const Color danger = AppColors.danger;
   static const Color dangerDark = AppColorsDark.danger;
 
+  // ---- 同步变动类型胶囊（浅/深成对，设计师定稿）----
+  // 浅色：浅底 + 同色系深字；深色：同系提亮字 + 压暗底，保证对比。
+  static const Color changeAddedBg = Color(0xFFE8F5E9);
+  static const Color changeAddedBgDark = Color(0xFF1F3A24);
+  static const Color changeAddedFg = Color(0xFF2E7D32);
+  static const Color changeAddedFgDark = Color(0xFF81C784);
+
+  static const Color changeRemovedBg = Color(0xFFFDECEA);
+  static const Color changeRemovedBgDark = Color(0xFF3D1F1F);
+  static const Color changeRemovedFg = Color(0xFFC62828);
+  static const Color changeRemovedFgDark = Color(0xFFEF9A9A);
+
+  static const Color changeTimeBg = Color(0xFFFFF3E0);
+  static const Color changeTimeBgDark = Color(0xFF3D2C14);
+  static const Color changeTimeFg = Color(0xFFE65100);
+  static const Color changeTimeFgDark = Color(0xFFFFB74D);
+
+  static const Color changeLocationBg = Color(0xFFE3F2FD);
+  static const Color changeLocationBgDark = Color(0xFF1A2C3D);
+  static const Color changeLocationFg = Color(0xFF1565C0);
+  static const Color changeLocationFgDark = Color(0xFF90CAF9);
+
+  static const Color changeTeacherBg = Color(0xFFF3E5F5);
+  static const Color changeTeacherBgDark = Color(0xFF2E1F36);
+  static const Color changeTeacherFg = Color(0xFF6A1B9A);
+  static const Color changeTeacherFgDark = Color(0xFFCE93D8);
+
+  static const Color changeRetakeBg = Color(0xFFECEFF1);
+  static const Color changeRetakeBgDark = Color(0xFF263238);
+  static const Color changeRetakeFg = Color(0xFF455A64);
+  static const Color changeRetakeFgDark = Color(0xFFB0BEC5);
+
   /// 今天表头底色：accent @12%。
   static Color get accentSoft => accent.withValues(alpha: 0.12);
 
@@ -510,6 +542,37 @@ abstract final class TimetableTheme {
   static const double listRowHeight = 52;
   static const double cellRadius = 4;
   static const double cellMargin = 1.5;
+
+  /// 把逻辑像素对齐到物理像素，减轻半像素发虚。
+  static double snapDevicePx(double logical, double dpr) {
+    if (!(dpr > 0) || !logical.isFinite) return logical;
+    return (logical * dpr).round() / dpr;
+  }
+
+  /// 分别对齐左右 / 上下边再求宽高，避免宽高单独取整后错位。
+  static ({double left, double top, double width, double height})
+  snapDeviceRect({
+    required double left,
+    required double top,
+    required double width,
+    required double height,
+    required double dpr,
+  }) {
+    final l = snapDevicePx(left, dpr);
+    final t = snapDevicePx(top, dpr);
+    final r = snapDevicePx(left + width, dpr);
+    final b = snapDevicePx(top + height, dpr);
+    final w = r - l;
+    final h = b - t;
+    return (left: l, top: t, width: w > 0 ? w : 0, height: h > 0 ? h : 0);
+  }
+
+  /// 格内字号取整（逻辑 sp 整数），避免 10.8 这类半像素字号发虚。
+  static double snapFontSp(double sp) {
+    if (!sp.isFinite) return sp;
+    return sp.roundToDouble();
+  }
+
   static const double periodHeight = 64;
   static const double periodHeightMin = 52;
   static const double periodHeightMax = 90;
@@ -565,14 +628,15 @@ abstract final class TimetableTheme {
     fontSize: cellSize,
     fontWeight: cellWeight,
     color: color ?? titleText,
-    height: 1.2,
+    // 1.1：中文上下笔画不被切；再低会裁切（设计定稿）。
+    height: 1.1,
   );
 
   static TextStyle cellSubStyle({Color? color}) => TextStyle(
     fontSize: cellSubSize,
     fontWeight: cellSubWeight,
     color: color ?? labelText,
-    height: 1.15,
+    height: 1.1,
   );
 
   static TextStyle captionStyle({Color? color}) => TextStyle(
@@ -620,6 +684,18 @@ class TimetableColors {
     required this.offWeekText,
     required this.warning,
     required this.danger,
+    required this.changeAddedBg,
+    required this.changeAddedFg,
+    required this.changeRemovedBg,
+    required this.changeRemovedFg,
+    required this.changeTimeBg,
+    required this.changeTimeFg,
+    required this.changeLocationBg,
+    required this.changeLocationFg,
+    required this.changeTeacherBg,
+    required this.changeTeacherFg,
+    required this.changeRetakeBg,
+    required this.changeRetakeFg,
   });
 
   /// 这套配色对应的明暗。
@@ -670,6 +746,30 @@ class TimetableColors {
   /// 语义色：失败 / 删除。
   final Color danger;
 
+  /// 变动类型胶囊：新增。
+  final Color changeAddedBg;
+  final Color changeAddedFg;
+
+  /// 变动类型胶囊：删除。
+  final Color changeRemovedBg;
+  final Color changeRemovedFg;
+
+  /// 变动类型胶囊：时间变动。
+  final Color changeTimeBg;
+  final Color changeTimeFg;
+
+  /// 变动类型胶囊：地点变动。
+  final Color changeLocationBg;
+  final Color changeLocationFg;
+
+  /// 变动类型胶囊：教师变动。
+  final Color changeTeacherBg;
+  final Color changeTeacherFg;
+
+  /// 变动类型胶囊：调课标记变动。
+  final Color changeRetakeBg;
+  final Color changeRetakeFg;
+
   /// 是否为深色模式。
   bool get isDark => brightness == Brightness.dark;
 
@@ -691,6 +791,18 @@ class TimetableColors {
     offWeekText: TimetableTheme.offWeekText,
     warning: TimetableTheme.warning,
     danger: TimetableTheme.danger,
+    changeAddedBg: TimetableTheme.changeAddedBg,
+    changeAddedFg: TimetableTheme.changeAddedFg,
+    changeRemovedBg: TimetableTheme.changeRemovedBg,
+    changeRemovedFg: TimetableTheme.changeRemovedFg,
+    changeTimeBg: TimetableTheme.changeTimeBg,
+    changeTimeFg: TimetableTheme.changeTimeFg,
+    changeLocationBg: TimetableTheme.changeLocationBg,
+    changeLocationFg: TimetableTheme.changeLocationFg,
+    changeTeacherBg: TimetableTheme.changeTeacherBg,
+    changeTeacherFg: TimetableTheme.changeTeacherFg,
+    changeRetakeBg: TimetableTheme.changeRetakeBg,
+    changeRetakeFg: TimetableTheme.changeRetakeFg,
   );
 
   /// 深色。
@@ -711,5 +823,17 @@ class TimetableColors {
     offWeekText: TimetableTheme.offWeekTextDark,
     warning: TimetableTheme.warningDark,
     danger: TimetableTheme.dangerDark,
+    changeAddedBg: TimetableTheme.changeAddedBgDark,
+    changeAddedFg: TimetableTheme.changeAddedFgDark,
+    changeRemovedBg: TimetableTheme.changeRemovedBgDark,
+    changeRemovedFg: TimetableTheme.changeRemovedFgDark,
+    changeTimeBg: TimetableTheme.changeTimeBgDark,
+    changeTimeFg: TimetableTheme.changeTimeFgDark,
+    changeLocationBg: TimetableTheme.changeLocationBgDark,
+    changeLocationFg: TimetableTheme.changeLocationFgDark,
+    changeTeacherBg: TimetableTheme.changeTeacherBgDark,
+    changeTeacherFg: TimetableTheme.changeTeacherFgDark,
+    changeRetakeBg: TimetableTheme.changeRetakeBgDark,
+    changeRetakeFg: TimetableTheme.changeRetakeFgDark,
   );
 }

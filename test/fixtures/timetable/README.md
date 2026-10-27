@@ -11,7 +11,8 @@
 
 | 文件 | 来源 | 对应 mock（入库） |
 |---|---|---|
-| `kb_real_sample.json` | 抓包 `cxxszhxqkb`，70 行 | `kb_mock.json` |
+| `kb_lab_tuesday_sample.json` | 脱敏：仅周二「数据结构课程设计」+「体育（3）」；无学号/姓名/真教师 | 本文件 |
+| `kb_real_sample.json`（勿提交，见 .gitignore） | 抓包 `cxxszhxqkb`，70 行 | `kb_mock.json` |
 | `unscheduled_real_sample.json` | 抓包 `xswpkc`，3 行 | `unscheduled_mock.json` |
 | `dqxnxq_real_sample.json` | 当前学期（`jshkcb/dqxnxq`） | `dqxnxq_mock.json` |
 | `dqzc_real_sample.json` | 当前周（`ZC=6`，可反推开学日 2026-08-31） | `dqzc_mock.json` |

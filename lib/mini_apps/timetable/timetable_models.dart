@@ -15,6 +15,8 @@ class CourseSlot {
     this.teacher = '',
     this.location = '',
     this.note = '',
+    this.istk = 0,
+    this.isLab = false,
     this.splitFrom,
   });
 
@@ -29,6 +31,15 @@ class CourseSlot {
   final String teacher;
   final String location;
   final String note;
+
+  /// 教务调课标记 ISTK（样例多为 0）；用户覆盖层不参与比对。
+  final int istk;
+
+  /// 教务实验标记 SFSYK：`"1"` / `1` / `true` 为实验课时段。
+  ///
+  /// 实验课的实际起止时刻未必与标准作息表一致，换算见 `timetable_timing.dart`。
+  /// 旧数据没有该字段 → false。
+  final bool isLab;
 
   /// 手动课拖动拆出的时段（「只改本周」/「改以后所有周」）记下它来自哪个原时段
   /// （按同一门课内的星期 + 起止节识别，见 [SlotRef]）。仅用于周视图：第 w 周本时段
@@ -48,6 +59,8 @@ class CourseSlot {
     teacher: teacher,
     location: location,
     note: note,
+    istk: istk,
+    isLab: isLab,
     splitFrom: clear ? null : (value ?? splitFrom),
   );
 
@@ -92,6 +105,8 @@ class CourseSlot {
     'teacher': teacher,
     'location': location,
     'note': note,
+    'istk': istk,
+    if (isLab) 'isLab': true,
     if (splitFrom != null) 'splitFrom': splitFrom!.toJson(),
   };
 
@@ -104,6 +119,8 @@ class CourseSlot {
     teacher: '${json['teacher'] ?? ''}',
     location: '${json['location'] ?? ''}',
     note: '${json['note'] ?? ''}',
+    istk: _asInt(json['istk']) ?? 0,
+    isLab: _asFlag(json['isLab']),
     splitFrom: SlotRef.tryParse(json['splitFrom']),
   );
 }
@@ -162,6 +179,8 @@ class Course {
     required this.id,
     required this.name,
     this.code = '',
+    this.buildingDisplay = '',
+    this.projectName = '',
     this.classId = '',
     this.credit,
     this.colorIndex,
@@ -175,6 +194,23 @@ class Course {
   final String id;
   final String name;
   final String code;
+
+  /// 教务原始场地字段 JXLDM_DISPLAY，非空时优先决定是否为体育课。
+  final String buildingDisplay;
+
+  /// 教务项目名称 KCXMMC，仅用于显示，不能用于识别体育课。
+  final String projectName;
+
+  /// 场地优先；场地为空时才按课程号与严格课名规则兜底。
+  bool get isPe => buildingDisplay.trim().isNotEmpty
+      ? buildingDisplay.trim() == '体育板块场地'
+      : code == '20000048' || looksLikePeCourse(name);
+
+  /// 周课表、小组件与推送共用的显示名；有体育项目时去掉体育课序号。
+  String get displayName => isPe && projectName.trim().isNotEmpty
+      ? '${looksLikePeCourse(name) ? '体育' : name}·${projectName.trim()}'
+      : name;
+
   final String classId;
   final double? credit;
 
@@ -216,6 +252,8 @@ class Course {
     String? id,
     String? name,
     String? code,
+    String? buildingDisplay,
+    String? projectName,
     String? classId,
     double? credit,
     int? colorIndex,
@@ -230,6 +268,8 @@ class Course {
     id: id ?? this.id,
     name: name ?? this.name,
     code: code ?? this.code,
+    buildingDisplay: buildingDisplay ?? this.buildingDisplay,
+    projectName: projectName ?? this.projectName,
     classId: classId ?? this.classId,
     credit: credit ?? this.credit,
     colorIndex: clearColor ? null : (colorIndex ?? this.colorIndex),
@@ -246,6 +286,8 @@ class Course {
     'id': id,
     'name': name,
     'code': code,
+    if (buildingDisplay.isNotEmpty) 'buildingDisplay': buildingDisplay,
+    if (projectName.isNotEmpty) 'projectName': projectName,
     'classId': classId,
     if (credit != null) 'credit': credit,
     if (colorIndex != null) 'colorIndex': colorIndex,
@@ -259,6 +301,8 @@ class Course {
     id: '${json['id'] ?? ''}',
     name: '${json['name'] ?? ''}',
     code: '${json['code'] ?? ''}',
+    buildingDisplay: '${json['buildingDisplay'] ?? ''}',
+    projectName: '${json['projectName'] ?? ''}',
     classId: '${json['classId'] ?? ''}',
     credit: (json['credit'] as num?)?.toDouble(),
     colorIndex: _asColorIndex(json['colorIndex']),
@@ -339,12 +383,20 @@ class TimetableSettings {
     this.showTomorrowOnHome = true,
     this.reminderEnabled = false,
     this.reminderLeadMinutes = 15,
+    this.nextDayReminderEnabled = true,
+    this.nextDayReminderMinute = 22 * 60,
     this.showExams = true,
     this.examColor = kDefaultExamColor,
     this.cellTextColor = CellTextColorMode.auto,
     this.homeMaxItems = kDefaultHomeMaxItems,
     this.headerTextSize = kDefaultHeaderTextSize,
     this.showPeriodTimes = true,
+    this.widgetShowTeacher = true,
+    this.widgetShowLocation = true,
+    this.widgetShowCountdown = true,
+    this.widgetShowCount = true,
+    this.widgetShowPeriod = true,
+    this.widgetCourseCount = 2,
   });
 
   final String scheduleName;
@@ -387,7 +439,20 @@ class TimetableSettings {
   /// 提前提醒分钟数：5/10/15/20/30（默认 15）。
   final int reminderLeadMinutes;
 
-  /// 课表和首页显示考试（默认开；关掉只隐藏，数据照常拉取保存）。
+  /// 明日提醒独立于上课提醒，默认开启。
+  final bool nextDayReminderEnabled;
+
+  /// 本机时间午夜起分钟数，21:00–23:30，每 30 分钟一档。
+  final int nextDayReminderMinute;
+
+  /// 可选的明日提醒时间。
+  static const nextDayReminderOptions = [1260, 1290, 1320, 1350, 1380, 1410];
+
+  /// 非法或旧数据退回 22:00。
+  static int sanitizeNextDayMinute(Object? value) =>
+      value is int && nextDayReminderOptions.contains(value) ? value : 1320;
+
+  /// 课表及首页课程预览显示考试（默认开；不影响考试安排卡片、列表及同步存储）。
   final bool showExams;
 
   /// 考试格子底色 ARGB（默认深红 0xFFC62828）。
@@ -405,11 +470,34 @@ class TimetableSettings {
   /// spec-next-1020b：节数栏是否显示作息时间（默认开）。
   final bool showPeriodTimes;
 
+  /// 小组件主块显示教师；默认开。
+  final bool widgetShowTeacher;
+
+  /// 小组件显示地点；默认开。
+  final bool widgetShowLocation;
+
+  /// 小组件显示倒计时（关 → 静态上课 / 下课时间）；默认开。
+  final bool widgetShowCountdown;
+
+  /// 小组件显示「还有 N 节」行 / 头部「+N」；默认开。
+  final bool widgetShowCount;
+
+  /// 小组件显示节次标签（如「第3-4节」）；关时只保留时间。默认开。
+  final bool widgetShowPeriod;
+
+  /// 小组件同时显示的课程总数（1 / 2 / 3，默认 2）：1 = 单块居中，
+  /// 2 = 两个主块样式块，3 = 主块 + 2 条紧凑行。
+  final int widgetCourseCount;
+
+  /// 1–3 之外（含非整数 / 缺失）一律回落到默认 2，不就近取值。
+  static int sanitizeCourseCount(Object? raw) =>
+      raw is int && raw >= 1 && raw <= 3 ? raw : 2;
+
   /// 每周第一天是周日（设置 9；只影响列顺序）。存储键仍是 `weekStartsOnMonday`。
   bool get weekStartsSunday => !weekStartsOnMonday;
 
   static const paletteSchemes = ['A', 'B', 'C'];
-  static const reminderLeadOptions = [5, 10, 15, 20, 30];
+  static const reminderLeadOptions = [5, 10, 15, 30];
 
   TimetableSettings copyWith({
     String? scheduleName,
@@ -434,12 +522,20 @@ class TimetableSettings {
     bool? showTomorrowOnHome,
     bool? reminderEnabled,
     int? reminderLeadMinutes,
+    bool? nextDayReminderEnabled,
+    int? nextDayReminderMinute,
     bool? showExams,
     int? examColor,
     CellTextColorMode? cellTextColor,
     int? homeMaxItems,
     double? headerTextSize,
     bool? showPeriodTimes,
+    bool? widgetShowTeacher,
+    bool? widgetShowLocation,
+    bool? widgetShowCountdown,
+    bool? widgetShowCount,
+    bool? widgetShowPeriod,
+    int? widgetCourseCount,
   }) => TimetableSettings(
     scheduleName: scheduleName ?? this.scheduleName,
     termCode: termCode ?? this.termCode,
@@ -466,12 +562,23 @@ class TimetableSettings {
     showTomorrowOnHome: showTomorrowOnHome ?? this.showTomorrowOnHome,
     reminderEnabled: reminderEnabled ?? this.reminderEnabled,
     reminderLeadMinutes: reminderLeadMinutes ?? this.reminderLeadMinutes,
+    nextDayReminderEnabled:
+        nextDayReminderEnabled ?? this.nextDayReminderEnabled,
+    nextDayReminderMinute: sanitizeNextDayMinute(
+      nextDayReminderMinute ?? this.nextDayReminderMinute,
+    ),
     showExams: showExams ?? this.showExams,
     examColor: examColor ?? this.examColor,
     cellTextColor: cellTextColor ?? this.cellTextColor,
     homeMaxItems: homeMaxItems ?? this.homeMaxItems,
     headerTextSize: headerTextSize ?? this.headerTextSize,
     showPeriodTimes: showPeriodTimes ?? this.showPeriodTimes,
+    widgetShowTeacher: widgetShowTeacher ?? this.widgetShowTeacher,
+    widgetShowLocation: widgetShowLocation ?? this.widgetShowLocation,
+    widgetShowCountdown: widgetShowCountdown ?? this.widgetShowCountdown,
+    widgetShowCount: widgetShowCount ?? this.widgetShowCount,
+    widgetShowPeriod: widgetShowPeriod ?? this.widgetShowPeriod,
+    widgetCourseCount: widgetCourseCount ?? this.widgetCourseCount,
   );
 
   /// 用 [o] 的用户偏好（显示/外观/提醒/首页开关）覆盖本对象，学期字段不变。
@@ -491,12 +598,20 @@ class TimetableSettings {
     showTomorrowOnHome: o.showTomorrowOnHome,
     reminderEnabled: o.reminderEnabled,
     reminderLeadMinutes: o.reminderLeadMinutes,
+    nextDayReminderEnabled: o.nextDayReminderEnabled,
+    nextDayReminderMinute: o.nextDayReminderMinute,
     showExams: o.showExams,
     examColor: o.examColor,
     cellTextColor: o.cellTextColor,
     homeMaxItems: o.homeMaxItems,
     headerTextSize: o.headerTextSize,
     showPeriodTimes: o.showPeriodTimes,
+    widgetShowTeacher: o.widgetShowTeacher,
+    widgetShowLocation: o.widgetShowLocation,
+    widgetShowCountdown: o.widgetShowCountdown,
+    widgetShowCount: o.widgetShowCount,
+    widgetShowPeriod: o.widgetShowPeriod,
+    widgetCourseCount: o.widgetCourseCount,
   );
 
   Map<String, dynamic> toJson() => {
@@ -521,12 +636,20 @@ class TimetableSettings {
     'showTomorrowOnHome': showTomorrowOnHome,
     'reminderEnabled': reminderEnabled,
     'reminderLeadMinutes': reminderLeadMinutes,
+    'nextDayReminderEnabled': nextDayReminderEnabled,
+    'nextDayReminderMinute': nextDayReminderMinute,
     'showExams': showExams,
     'examColor': examColor,
     'cellTextColor': cellTextColor.name,
     'homeMaxItems': homeMaxItems,
     'headerTextSize': headerTextSize,
     'showPeriodTimes': showPeriodTimes,
+    'widgetShowTeacher': widgetShowTeacher,
+    'widgetShowLocation': widgetShowLocation,
+    'widgetShowCountdown': widgetShowCountdown,
+    'widgetShowCount': widgetShowCount,
+    'widgetShowPeriod': widgetShowPeriod,
+    'widgetCourseCount': widgetCourseCount,
   };
 
   // ---- 宽松读取（只在内存纠正，不回写磁盘）----
@@ -539,15 +662,13 @@ class TimetableSettings {
     return raw.round().clamp(30, 100);
   }
 
-  /// 提前时间：吸附到 5/10/15/20/30 中最近的一档，距离相同取较大；
-  /// 非数字/非有限值 → 15。
+  /// 提前时间：只接受 5/10/15/30（整数值）；其他一律回落到默认 15。
   static int sanitizeLeadMinutes(Object? raw) {
-    if (raw is! num || !raw.isFinite) return 15;
-    var best = reminderLeadOptions.first;
-    for (final o in reminderLeadOptions) {
-      if ((o - raw).abs() <= (best - raw).abs()) best = o;
+    if (raw is num && raw.isFinite && raw == raw.roundToDouble()) {
+      final v = raw.toInt();
+      if (reminderLeadOptions.contains(v)) return v;
     }
-    return best;
+    return 15;
   }
 
   /// 考试颜色：整数 ARGB 原样用（补满不透明）；其他 → 默认深红。
@@ -618,12 +739,22 @@ class TimetableSettings {
         showTomorrowOnHome: _bool(json['showTomorrowOnHome'], true),
         reminderEnabled: _bool(json['reminderEnabled'], false),
         reminderLeadMinutes: sanitizeLeadMinutes(json['reminderLeadMinutes']),
+        nextDayReminderEnabled: _bool(json['nextDayReminderEnabled'], true),
+        nextDayReminderMinute: sanitizeNextDayMinute(
+          json['nextDayReminderMinute'],
+        ),
         showExams: _bool(json['showExams'], true),
         examColor: parseExamColor(json['examColor']),
         cellTextColor: parseCellTextColor(json['cellTextColor']),
         homeMaxItems: sanitizeHomeMaxItems(json['homeMaxItems']),
         headerTextSize: sanitizeHeaderTextSize(json['headerTextSize']),
         showPeriodTimes: _bool(json['showPeriodTimes'], true),
+        widgetShowTeacher: _bool(json['widgetShowTeacher'], true),
+        widgetShowLocation: _bool(json['widgetShowLocation'], true),
+        widgetShowCountdown: _bool(json['widgetShowCountdown'], true),
+        widgetShowCount: _bool(json['widgetShowCount'], true),
+        widgetShowPeriod: _bool(json['widgetShowPeriod'], true),
+        widgetCourseCount: sanitizeCourseCount(json['widgetCourseCount']),
       );
 }
 
@@ -757,6 +888,7 @@ class TodayCourseItem {
 /// - SKZC 周次位串 · SKXQ 星期 · KSJC/JSJC 起止节次
 /// - JASMC 教室（常为 **null** → 空串；UI 无地点时不显示 `@`）
 /// - SKJS 教师 · XF 学分
+/// - SFSYK 实验标记（`"1"` / `1` / `true` → [CourseSlot.isLab]）
 /// - SKBJ 上课班级名单（过长，不进网格/详情主列表）
 class TimetableParser {
   TimetableParser._();
@@ -843,8 +975,14 @@ class TimetableParser {
       final classId = _text(row, ['KXH']);
       final jxbId = _text(row, ['JXBID', 'JXBH']); // 仅指纹去重
       final teacher = _text(row, ['SKJS', 'JSXM']);
-      // JASMC 常为 JSON null → _text 得到 ''，网格不渲染 @
-      final location = _text(row, ['JASMC', 'JASMC_DISPLAY']);
+      // JASMC 常为 JSON null → ''；皆空时回退 JXLDM_DISPLAY（楼名），再 JASMC_DISPLAY
+      final location = () {
+        final jas = _text(row, ['JASMC']);
+        if (jas.isNotEmpty) return jas;
+        return _text(row, ['JXLDM_DISPLAY', 'JASMC_DISPLAY']);
+      }();
+      final istk = _asInt(row['ISTK']) ?? 0;
+      final isLab = _asFlag(row['SFSYK']);
       final weeksLabel = () {
         final zcmc = _text(row, ['ZCMC']);
         if (zcmc.isNotEmpty) return zcmc;
@@ -853,7 +991,7 @@ class TimetableParser {
       final credit = _asDouble(row['XF']);
       // SKBJ 故意不读入模型（过长，不进网格/详情）
       final fingerprint =
-          '$code|$classId|$jxbId|$day|$start|$end|$weeks|$teacher|$location';
+          '$code|$classId|$jxbId|$day|$start|$end|$weeks|$teacher|$location|$isLab';
       if (!seenFingerprints.add(fingerprint)) {
         skips.add(ParseSkip(reason: 'duplicate', courseCode: code));
         continue;
@@ -877,6 +1015,8 @@ class TimetableParser {
         weeksLabel: weeksLabel,
         teacher: teacher,
         location: location,
+        istk: istk,
+        isLab: isLab,
       );
       final existing = coursesByKey[key];
       if (existing == null) {
@@ -884,22 +1024,18 @@ class TimetableParser {
           id: key,
           name: name,
           code: code,
+          buildingDisplay: _text(row, ['JXLDM_DISPLAY']),
+          projectName: _text(row, ['KCXMMC']),
           classId: classId,
           credit: credit,
           source: CourseSource.jwxt,
           slots: [slot],
         );
       } else {
-        coursesByKey[key] = Course(
-          id: existing.id,
-          name: existing.name,
-          code: existing.code,
+        coursesByKey[key] = existing.copyWith(
           classId: existing.classId.isEmpty ? classId : existing.classId,
           credit: existing.credit ?? credit,
-          colorIndex: existing.colorIndex,
-          source: existing.source,
           slots: [...existing.slots, slot],
-          hidden: existing.hidden,
         );
       }
       if (fixed) {
@@ -1232,6 +1368,15 @@ int? _asInt(Object? value) {
   return int.tryParse(value.toString().trim());
 }
 
+/// SFSYK / isLab 一类的布尔标记：`"1"` / `1` / `true` 为 true，其余（含
+/// 缺省 / null / `"0"` / `0` / `false`）为 false。
+bool _asFlag(Object? value) {
+  if (value is bool) return value;
+  if (value is num) return value == 1;
+  final s = value?.toString().trim().toLowerCase();
+  return s == '1' || s == 'true';
+}
+
 double? _asDouble(Object? value) {
   if (value == null) return null;
   if (value is double) return value;
@@ -1315,3 +1460,8 @@ int teachingWeekOf(DateTime termStart, DateTime today) {
 }
 
 DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+/// 体育课名兜底：只允许「体育」及其后的数字、括号或序号。
+bool looksLikePeCourse(String name) =>
+    RegExp(r'^体育[0-9０-９一二三四五六七八九十百零〇两Ⅰ-Ⅻⅰ-ⅻ①-⑳⑴-⒇()（）]*$')
+        .hasMatch(name.trim());

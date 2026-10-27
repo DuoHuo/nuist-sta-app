@@ -20,6 +20,52 @@ double _cellWidthFor(double screenDp) =>
     TimetableTheme.cellMargin * 2;
 
 void main() {
+  testWidgets('体育项目在周课表格子共用显示名，有项目去序号、无项目保留原名', (tester) async {
+    _c.debugReset();
+    addTearDown(_c.debugReset);
+    for (final project in ['射箭', '']) {
+      final course = Course(
+        id: 'pe',
+        name: '体育（3）',
+        projectName: project,
+        slots: [CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1' * 16)],
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Align(
+            alignment: Alignment.topLeft,
+            child: CourseCell(
+              controller: _c,
+              cell: GridCell(
+                course: course,
+                slot: course.slots.single,
+                conflictCount: 0,
+                activeThisWeek: true,
+              ),
+              width: 100,
+              height: 120,
+              radius: TimetableTheme.cellRadius,
+            ),
+          ),
+        ),
+      );
+      final paragraph = tester.renderObject<RenderParagraph>(
+        find.descendant(
+          of: find.byType(CourseNameText),
+          matching: find.byType(RichText),
+        ),
+      );
+      expect(
+        paragraph.text
+            .toPlainText()
+            .replaceAll('\n', '')
+            .replaceAll('\u2060', ''),
+        project.isEmpty ? '体育（3）' : '体育·射箭',
+      );
+      expect(tester.takeException(), isNull);
+    }
+  });
+
   group('B02 课名括注不拆行', () {
     // 模拟器 1080x2400 @420dpi ≈ 411dp；此前用的手机 1080/2.75 ≈ 392dp。
     final widths = <String, double>{

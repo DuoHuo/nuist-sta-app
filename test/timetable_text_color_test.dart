@@ -9,6 +9,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_color.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_appearance_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
@@ -186,25 +187,21 @@ void main() {
     }
   });
 
-  testWidgets('TX05 设置页「外观」有「文字颜色」三段，选「黑字」写入设置', (tester) async {
+  testWidgets('TX05 外观页有「文字颜色」三段，选「黑」写入设置', (tester) async {
     _load(CellTextColorMode.auto);
     tester.view.physicalSize = const Size(1200, 6000);
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
-      MaterialApp(
-        home: TimetableSettingsPage(controller: _c, onOpenAccount: () async {}),
-      ),
+      MaterialApp(home: TimetableAppearancePage(controller: _c)),
     );
     await _io(tester);
-    await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
-    await tester.pumpAndSettle();
     final seg = find.byKey(const Key('tt_settings_cell_text_color'));
     expect(seg, findsOneWidget);
-    for (final label in ['自动', '白字', '黑字']) {
+    for (final label in ['自动', '白', '黑']) {
       expect(find.descendant(of: seg, matching: find.text(label)), findsOne);
     }
-    await tester.tap(find.descendant(of: seg, matching: find.text('黑字')));
+    await tester.tap(find.descendant(of: seg, matching: find.text('黑')));
     await _io(tester);
     expect(_c.settings.cellTextColor, CellTextColorMode.black);
   });

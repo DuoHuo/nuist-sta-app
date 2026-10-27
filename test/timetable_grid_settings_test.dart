@@ -88,6 +88,23 @@ void main() {
     await tester.pump();
   }
 
+  Future<void> revealHeight(WidgetTester tester) async {
+    // 格高已迁至外观页；只滚动设置列表，避免拖动上方课表预览。
+    final slider = find.byKey(const Key('tt_settings_period_height'));
+    await tester.scrollUntilVisible(
+      slider,
+      200,
+      scrollable: find.descendant(
+        of: find.byType(ListView),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(slider);
+    await tester.pumpAndSettle();
+    expect(slider.hitTestable(), findsOneWidget);
+  }
+
   group('S01 周末列：设置开启 或 本周该日有课', () {
     testWidgets('设置关 + 周六有本周手动课 → 显示周六列，周日仍隐藏', (tester) async {
       setUpCourses([manual('s', '周六课', 6, '1' * 20)], weekend: false);
@@ -221,8 +238,9 @@ void main() {
     testWidgets('滑块范围 52–90、步长 2', (tester) async {
       setUpCourses(const []);
       await tester.pumpWidget(
-        MaterialApp(home: TimetableSettingsPage(controller: _c)),
+        MaterialApp(home: TimetableAppearancePage(controller: _c)),
       );
+      await revealHeight(tester);
       final s = tester.widget<Slider>(
         find.byKey(const Key('tt_settings_period_height')),
       );
@@ -260,9 +278,10 @@ void main() {
       tester.view.devicePixelRatio = 2.625;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
-        MaterialApp(home: TimetableSettingsPage(controller: _c)),
+        MaterialApp(home: TimetableAppearancePage(controller: _c)),
       );
       await tester.pump();
+      await revealHeight(tester);
       // §13.3 / ST31：格子高度右边只显示数字，不写「dp」。
       expect(
         tester

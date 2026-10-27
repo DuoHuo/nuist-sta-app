@@ -81,7 +81,7 @@ void main() {
     );
     await _pumpPage(tester);
     expect(find.text('周次待同步 · 点此选择'), findsOneWidget);
-    expect(find.text('第 1 周', findRichText: true), findsOneWidget);
+    expect(find.textContaining('第 1 周', findRichText: true), findsOneWidget);
   });
 
   Widget detailFor(CourseSource source) {

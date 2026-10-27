@@ -39,6 +39,27 @@ Future<void> _settle(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+/// 打开「添加课程」表单（新建手动课，默认选中全部周次）。
+Future<void> _openAddForm(WidgetTester tester) async {
+  await tester.pumpWidget(const MaterialApp(home: TimetablePage()));
+  for (var i = 0; i < 10; i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  await tester.tap(find.byTooltip('添加'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('add_entry_course')));
+  await tester.pumpAndSettle();
+}
+
+/// 当前表单里被选中的周次。
+Set<int> _selectedWeeks(WidgetTester tester) => {
+  for (var w = 1; w <= 20; w++)
+    if (tester
+        .widget<FilterChip>(find.byKey(Key('manual_course_week_$w')))
+        .selected)
+      w,
+};
+
 Widget _detail(Course course) => MaterialApp(
   home: Scaffold(
     body: Builder(
@@ -195,5 +216,61 @@ void main() {
     // 不是手动课的删除按钮。
     expect(find.byKey(const Key('course_detail_delete')), findsNothing);
     expect(find.byKey(const Key('course_detail_jwxt_delete')), findsOneWidget);
+  });
+
+  testWidgets('周次快捷按钮：全部再次点击清空', (tester) async {
+    _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
+    await _openAddForm(tester);
+
+    expect(_selectedWeeks(tester), {for (var w = 1; w <= 20; w++) w});
+
+    await tester.tap(find.text('全部'));
+    await tester.pump();
+    expect(_selectedWeeks(tester), isEmpty);
+
+    // 清空后保存应提示至少选一周。
+    await tester.enterText(find.byKey(const Key('manual_course_name')), '自习课');
+    await tester.tap(find.byKey(const Key('manual_course_save')));
+    await tester.pump();
+    expect(find.text('请至少选择一周'), findsOneWidget);
+    expect(_c.manualCourses, isEmpty);
+  });
+
+  testWidgets('周次快捷按钮：单周再次点击清空', (tester) async {
+    _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
+    await _openAddForm(tester);
+
+    await tester.tap(find.text('单周'));
+    await tester.pump();
+    expect(_selectedWeeks(tester), {for (var w = 1; w <= 20; w += 2) w});
+
+    await tester.tap(find.text('单周'));
+    await tester.pump();
+    expect(_selectedWeeks(tester), isEmpty);
+  });
+
+  testWidgets('周次快捷按钮：单周/双周/全部互斥切换', (tester) async {
+    _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
+    await _openAddForm(tester);
+
+    await tester.tap(find.text('单周'));
+    await tester.pump();
+    expect(_selectedWeeks(tester), {for (var w = 1; w <= 20; w += 2) w});
+
+    await tester.tap(find.text('双周'));
+    await tester.pump();
+    expect(_selectedWeeks(tester), {for (var w = 2; w <= 20; w += 2) w});
+
+    await tester.tap(find.text('全部'));
+    await tester.pump();
+    expect(_selectedWeeks(tester), {for (var w = 1; w <= 20; w++) w});
+
+    // 双周集合再点一次同样清空。
+    await tester.tap(find.text('双周'));
+    await tester.pump();
+    expect(_selectedWeeks(tester), {for (var w = 2; w <= 20; w += 2) w});
+    await tester.tap(find.text('双周'));
+    await tester.pump();
+    expect(_selectedWeeks(tester), isEmpty);
   });
 }

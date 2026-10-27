@@ -200,16 +200,16 @@ void main() {
       kElevationToShadow[6],
     );
     expect(find.byType(CourseCell), findsNWidgets(2)); // 原格（透明）+ 浮动格
-    // 原位置的格子透明（不留虚影）。
-    final hiddenOpacity = tester.widget<Opacity>(
+    // 原位置的格子保布局但不可见（Visibility，不留虚影也不半透明栅格化）。
+    final hidden = tester.widget<Visibility>(
       find
           .ancestor(
             of: find.byType(CourseCell).first,
-            matching: find.byType(Opacity),
+            matching: find.byType(Visibility),
           )
           .first,
     );
-    expect(hiddenOpacity.opacity, 0);
+    expect(hidden.visible, isFalse);
     await g.up();
     await tester.pump();
     // 先约 150ms 滑进落点，再弹面板。中心在第 2 列（1.9 列）→ 周二；

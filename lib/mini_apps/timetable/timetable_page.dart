@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'timetable_schedule_event_detail_sheet.dart';
+import 'timetable_change_alert.dart';
 import 'timetable_controller.dart';
 import 'timetable_export_page.dart';
 import 'timetable_perf.dart';
@@ -14,7 +15,10 @@ import 'timetable_week_grid.dart';
 
 /// 课表周视图主页：顶栏 + PageView 翻周 + 网格。
 class TimetablePage extends StatefulWidget {
-  const TimetablePage({super.key});
+  const TimetablePage({super.key, this.focusTomorrow = false});
+
+  /// 从明日通知进入时定位到明天所在周。
+  final bool focusTomorrow;
 
   @override
   State<TimetablePage> createState() => _TimetablePageState();
@@ -91,6 +95,13 @@ class _TimetablePageState extends State<TimetablePage> {
   Future<void> _bootstrap() async {
     await _controller.ensureStarted();
     if (!mounted) return;
+    // 系统日期改了 / 跨周：打开时跟到本周；同周内手动翻过的周保留。
+    _controller.followCurrentWeekIfChanged();
+    if (widget.focusTomorrow) {
+      final now = DateTime.now();
+      final tomorrow = DateTime(now.year, now.month, now.day + 1);
+      _controller.setViewingWeek(_controller.actualWeek(tomorrow) ?? 1);
+    }
     _pageController = PageController(
       initialPage: _pageFor(_controller.viewingWeek),
     );
@@ -102,6 +113,19 @@ class _TimetablePageState extends State<TimetablePage> {
       _openPendingCourse();
     });
     await _controller.autoSyncIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(covariant TimetablePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusTomorrow && _ready) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final now = DateTime.now();
+        final tomorrow = DateTime(now.year, now.month, now.day + 1);
+        _controller.setViewingWeek(_controller.actualWeek(tomorrow) ?? 1);
+      });
+    }
   }
 
   /// 打开门户绑定状态页（登录 / 解绑）。回来后只刷新绑定状态（UI）；登录成功的
@@ -182,6 +206,14 @@ class _TimetablePageState extends State<TimetablePage> {
     if (messenger == null) return;
     if (outcome.success) {
       messenger.hideCurrentSnackBar();
+      // 有未通知变动时弹摘要 sheet，不再叠「已同步」SnackBar。
+      if (_controller.pendingChangeAlerts.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          showTimetableChangeAlert(context, controller: _controller);
+        });
+        return;
+      }
       messenger.showSnackBar(
         const SnackBar(
           key: Key('timetable_sync_snackbar'),
@@ -332,6 +364,7 @@ class _TimetablePageState extends State<TimetablePage> {
                       dateLabel: _dateLabel(),
                       weekPending: _controller.weekPending,
                       onWeekTap: _toggleWeekStrip,
+                      weekSelectorOpen: _weekStripOpen,
                       // §14.1：「+」三选一（课程 / 考试 / 其他）；「课程」仍是原手动课表单。
                       onAdd: () =>
                           showAddEntrySheet(context, controller: _controller),
@@ -405,6 +438,7 @@ class _TopBar extends StatelessWidget {
     this.syncing = false,
     this.syncError = false,
     required this.onWeekTap,
+    required this.weekSelectorOpen,
     required this.onAdd,
     required this.onSync,
     required this.onSettings,
@@ -423,6 +457,7 @@ class _TopBar extends StatelessWidget {
   /// AS-1：上次自动同步失败（同步图标右上角画圆点，读屏「同步，上次同步失败」）。
   final bool syncError;
   final VoidCallback onWeekTap;
+  final bool weekSelectorOpen;
   final VoidCallback onAdd;
   final VoidCallback onSync;
   final VoidCallback onSettings;
@@ -442,7 +477,8 @@ class _TopBar extends StatelessWidget {
               child: InkWell(
                 onTap: onWeekTap,
                 borderRadius: BorderRadius.circular(8),
-                child: Padding(
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 40),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
                     vertical: 4,
@@ -461,6 +497,22 @@ class _TopBar extends StatelessWidget {
                           ),
                           children: [
                             TextSpan(text: '第 $week 周'),
+                            WidgetSpan(
+                              alignment: PlaceholderAlignment.middle,
+                              child: Padding(
+                                padding: const EdgeInsets.only(left: 2),
+                                child: AnimatedRotation(
+                                  turns: weekSelectorOpen ? 0.5 : 0,
+                                  duration: const Duration(milliseconds: 150),
+                                  child: Icon(
+                                    Icons.arrow_drop_down,
+                                    key: const Key('timetable_week_tip_arrow'),
+                                    size: 16,
+                                    color: colors.titleText,
+                                  ),
+                                ),
+                              ),
+                            ),
                             if (!isCurrent && endedCurrentWeek == null)
                               TextSpan(
                                 text: '(非本周)',

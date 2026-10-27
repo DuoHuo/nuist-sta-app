@@ -78,18 +78,22 @@ void main() {
       expect(TimetableSettings.fromJson({'homeMaxItems': 9}).homeMaxItems, 2);
     });
 
-    test('提前时间吸附到 5/10/15/20/30，距离相同取较大', () {
+    test('提前时间只接受 5/10/15/30，其他回落 15', () {
       int f(Object? v) => TimetableSettings.sanitizeLeadMinutes(v);
+      expect(TimetableSettings.reminderLeadOptions, [5, 10, 15, 30]);
       expect(f(5), 5);
-      expect(f(12), 10);
+      expect(f(10), 10);
+      expect(f(15), 15);
+      expect(f(30), 30);
+      expect(f(30.0), 30);
+      expect(f(20), 15);
+      expect(f(12), 15);
       expect(f(12.5), 15);
-      expect(f(7.5), 10);
-      expect(f(17.5), 20);
-      expect(f(25), 30);
-      expect(f(24), 20);
-      expect(f(0), 5);
-      expect(f(-3), 5);
-      expect(f(100), 30);
+      expect(f(25), 15);
+      expect(f(0), 15);
+      expect(f(-3), 15);
+      expect(f(100), 15);
+      expect(f(null), 15);
       expect(f('15'), 15);
       expect(f('x'), 15);
       expect(f(true), 15);
@@ -153,7 +157,7 @@ void main() {
       settingsFile().writeAsStringSync(raw);
       await c.ensureStarted();
       expect(c.settings.cellOpacity, 100);
-      expect(c.settings.reminderLeadMinutes, 10);
+      expect(c.settings.reminderLeadMinutes, 15);
       expect(c.settings.fontScale, CellFontScale.standard);
       expect(settingsFile().readAsStringSync(), raw);
     });
