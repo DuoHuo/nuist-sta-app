@@ -9,6 +9,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/portal_http.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_exam_parser.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_exams_card.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_exams_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
@@ -298,7 +300,7 @@ void main() {
       }
     });
 
-    test('EX08 「显示考试」关也照常拉取保存，只是不显示', () async {
+    test('EX08 关闭课表考试显示仍同步入库，考试卡片与列表查询保留数据', () async {
       showExams = false;
       exams = (_) async => _parse('exam_mock.json');
       await _c.syncFromJwxt();
@@ -309,7 +311,17 @@ void main() {
         (await ScheduleStore.readEvents()).where((e) => e.isFromJwxt),
         hasLength(2),
       );
-      expect(_c.scheduleEventsOn(DateTime(2027, 1, 5)), isEmpty);
+      final storedIds = jwxtExams().map((e) => e.id).toSet();
+      expect(upcomingExams(_c, today: now).map((e) => e.id).toSet(), storedIds);
+      expect(
+        pastExams(_c, today: DateTime(2027, 2)).map((e) => e.id).toSet(),
+        storedIds,
+      );
+      final examDate = jwxtExams().first.date;
+      expect(_c.scheduleEventsOn(examDate), isEmpty);
+      await _c.updateSettings(_c.settings.copyWith(showExams: true));
+      expect(_c.scheduleEventsOn(examDate), hasLength(2));
+      expect(examCalls, 1, reason: '切换显示无需重新拉取考试');
     });
 
     test('EX33 exam_mock_empty.json：清掉教务考试，手动日程保留', () async {

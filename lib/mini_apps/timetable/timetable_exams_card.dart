@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'timetable_controller.dart';
+import 'timetable_exam_merge.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_layout.dart';
 import 'timetable_theme.dart';
@@ -14,19 +15,19 @@ import 'timetable_theme.dart';
 /// 一场都没有时整张卡片隐藏（主页只少这一张卡，宫格入口仍在）。
 
 /// 今天（[today]，只取年月日）起往后的全部考试，按日期升序、同日按开始时间。
-/// 受「显示考试」开关控制：关时返回空（与课表 / 首页课程卡对考试的处理一致）。
+/// 独立于课表「显示考试」开关，始终读取已同步的考试。
+/// 教务考试与手动 / 课表考试重复时按同一场合并，保留教务条目并补全空字段。
 List<ScheduleEvent> upcomingExams(
   TimetableController controller, {
   required DateTime today,
 }) {
-  if (!controller.settings.showExams) return const [];
   final day = DateTime(today.year, today.month, today.day);
-  final exams = [
+  final exams = mergeExams([
     for (final e in controller.scheduleEvents)
       if (e.isExam &&
           !DateTime(e.date.year, e.date.month, e.date.day).isBefore(day))
         e,
-  ];
+  ]);
   exams.sort((a, b) {
     final d = DateTime(
       a.date.year,
