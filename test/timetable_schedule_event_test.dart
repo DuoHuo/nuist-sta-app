@@ -470,20 +470,28 @@ void main() {
       );
       expect(title.style?.color, TimetableTheme.examText);
 
-      // 位置：周二列（第 2 列）、第 1–2 节。
+      // 位置：周二列（第 2 列）、第 1–2 节；与课程格一样按物理像素对齐。
       final pos = _positionedOf(tester, cell);
       final ph = _c.settings.periodHeight.clamp(
         TimetableTheme.periodHeightMin,
         TimetableTheme.periodHeightMax,
       );
-      expect(pos.top, closeTo(TimetableTheme.cellMargin, 0.01));
-      expect(pos.height, closeTo(2 * ph - 2 * TimetableTheme.cellMargin, 0.01));
       final days = _c.visibleDays(_week);
-      final dayW = (pos.width! + 2 * TimetableTheme.cellMargin);
-      expect(
-        pos.left,
-        closeTo(days.indexOf(2) * dayW + TimetableTheme.cellMargin, 0.01),
+      final dayW =
+          (tester.getSize(find.byType(WeekGrid)).width -
+              TimetableTheme.periodColumnWidth) /
+          days.length;
+      final expected = TimetableTheme.snapDeviceRect(
+        left: days.indexOf(2) * dayW + TimetableTheme.cellMargin,
+        top: TimetableTheme.cellMargin,
+        width: dayW - 2 * TimetableTheme.cellMargin,
+        height: 2 * ph - 2 * TimetableTheme.cellMargin,
+        dpr: tester.view.devicePixelRatio,
       );
+      expect(pos.left, closeTo(expected.left, 1e-6));
+      expect(pos.top, closeTo(expected.top, 1e-6));
+      expect(pos.width, closeTo(expected.width, 1e-6));
+      expect(pos.height, closeTo(expected.height, 1e-6));
     });
 
     testWidgets('EV08 只在所在周显示：第 7、9 周没有', (tester) async {
