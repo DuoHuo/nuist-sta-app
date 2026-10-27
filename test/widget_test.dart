@@ -1,6 +1,7 @@
 // 冒烟测试：注册表约束、首页宫格、小程序跳转、底部页签与点击反馈。
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nuist_sta_app/app.dart';
@@ -126,4 +127,82 @@ void main() {
       Brightness.light,
     );
   });
+
+  for (final mode in [ThemeMode.light, ThemeMode.dark]) {
+    testWidgets('${mode.name} 下路由和直接推入的页面支持预测性返回及取消', (tester) async {
+      addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
+      AppThemeMode.instance.value = mode;
+      await tester.pumpWidget(const NuistApp());
+      await tester.tap(find.text('我的'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('设置'));
+      await tester.pumpAndSettle();
+
+      final context = tester.element(find.text('深色模式'));
+      final settingsRoute = ModalRoute.of(context)! as PageRoute;
+      final navigator = Navigator.of(context);
+      final edge = mode == ThemeMode.light ? 0 : 1;
+      expect(settingsRoute.popGestureEnabled, isTrue);
+      expect(settingsRoute.isCurrent, isTrue);
+      expect(Theme.of(context).platform, TargetPlatform.android);
+      expect(settingsRoute.navigator, same(navigator));
+      expect(
+        Theme.of(context).pageTransitionsTheme.builders[TargetPlatform.android],
+        isA<PredictiveBackPageTransitionsBuilder>(),
+      );
+      Future<void> gesture(String method, {double progress = 0}) async {
+        ByteData? response;
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'flutter/backgesture',
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall(method, {
+              'touchOffset': [edge == 0 ? 5.0 : 795.0, 300.0],
+              'progress': progress,
+              'swipeEdge': edge,
+            }),
+          ),
+          (data) => response = data,
+        );
+        expect(response, isNotNull, reason: method);
+        final result = const StandardMethodCodec().decodeEnvelope(response!);
+        if (method == 'startBackGesture') {
+          expect(result, isTrue);
+          expect(navigator.userGestureInProgress, isTrue);
+        }
+        await tester.pumpAndSettle();
+      }
+
+      // 使用实际 go_router 页面，取消时应保留页面及其路由栈。
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', progress: 0.4);
+      expect(navigator.userGestureInProgress, isTrue);
+      expect(settingsRoute.animation!.value, closeTo(0.6, 0.001));
+      expect(find.text('统一门户'), findsOneWidget);
+      await gesture('cancelBackGesture');
+      expect(navigator.userGestureInProgress, isFalse);
+      expect(settingsRoute.isCurrent, isTrue);
+      expect(settingsRoute.animation!.value, 1);
+      expect(find.text('深色模式'), findsOneWidget);
+
+      // 小程序内部直接 push 的 MaterialPageRoute 也应使用同一套手势。
+      final detailRoute = MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('内部详情')),
+      );
+      navigator.push(detailRoute);
+      await tester.pumpAndSettle();
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', progress: 0.4);
+      expect(detailRoute.animation!.value, closeTo(0.6, 0.001));
+      await gesture('commitBackGesture');
+      expect(find.text('内部详情'), findsNothing);
+      expect(settingsRoute.isCurrent, isTrue);
+
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', progress: 0.4);
+      await gesture('commitBackGesture');
+      expect(find.text('深色模式'), findsNothing);
+      expect(find.text('统一门户'), findsOneWidget);
+      expect(navigator.canPop(), isFalse);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+  }
 }

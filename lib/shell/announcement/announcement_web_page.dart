@@ -30,6 +30,8 @@ class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
   int _progress = 0;
   String? _error;
   String? _pageTitle;
+  bool _canGoBack = false;
+  int _historyRevision = 0;
 
   @override
   void initState() {
@@ -49,8 +51,12 @@ class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
           },
           onPageStarted: (_) {
             if (mounted) setState(() => _error = null);
+            _syncBackHistory();
           },
+          onUrlChange: (_) => _syncBackHistory(),
           onPageFinished: (_) async {
+            await _syncBackHistory();
+            if (!mounted) return;
             final title = await _controller.getTitle();
             if (mounted && title != null && title.isNotEmpty) {
               setState(() => _pageTitle = title);
@@ -60,6 +66,7 @@ class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
             // 只处理主框架错误，子资源失败不影响页面展示。
             if (e.isForMainFrame == false) return;
             if (mounted) setState(() => _error = '页面加载失败');
+            _syncBackHistory();
           },
         ),
       )
@@ -72,10 +79,23 @@ class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
         ?.showSnackBar(const SnackBar(content: Text('链接已复制')));
   }
 
+  // 系统在手势开始前就需要知道能否退出，不能等返回回调里再异步查询。
+  Future<void> _syncBackHistory() async {
+    final revision = ++_historyRevision;
+    final canGoBack = await _controller.canGoBack();
+    if (!mounted || revision != _historyRevision || canGoBack == _canGoBack) {
+      return;
+    }
+    setState(() => _canGoBack = canGoBack);
+  }
+
   Future<void> _onBack() async {
-    if (await _controller.canGoBack()) {
+    final canGoBack = await _controller.canGoBack();
+    if (!mounted) return;
+    if (canGoBack) {
       await _controller.goBack();
-    } else if (mounted) {
+      await _syncBackHistory();
+    } else {
       Navigator.of(context).pop();
     }
   }
@@ -85,7 +105,7 @@ class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
     final palette = AppPalette.of(context);
     final loading = _progress > 0 && _progress < 100;
     return PopScope(
-      canPop: false,
+      canPop: !_canGoBack,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _onBack();
       },

@@ -17,6 +17,14 @@ ThemeData _buildTheme(Brightness brightness) {
   return ThemeData(
     useMaterial3: true,
     brightness: brightness,
+    // Android 全局启用预测性返回，覆盖 go_router 与直接 push 的 Material 路由。
+    // 明暗主题共用配置，其余平台沿用 Flutter 默认转场。
+    pageTransitionsTheme: PageTransitionsTheme(
+      builders: {
+        ...const PageTransitionsTheme().builders,
+        TargetPlatform.android: const PredictiveBackPageTransitionsBuilder(),
+      },
+    ),
     // 品牌色不走 M3 seed 推导：seed 会把 primary 调成算法生成的近似色，
     // 和设计稿的 accent 对不上。这里直接指定 primary / surface。
     colorScheme:

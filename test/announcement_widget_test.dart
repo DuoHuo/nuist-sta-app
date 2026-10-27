@@ -3,11 +3,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_api.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_controller.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_models.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_overlay.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_web_page.dart';
+// 复用现有 WebView 插件的平台接口，不新增测试依赖。
+// ignore: depend_on_referenced_packages
+import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
 
 Announcement a(
   String id, {
@@ -53,6 +57,77 @@ bool redDot(WidgetTester tester) =>
     tester.widget<Badge>(find.byType(Badge)).isLabelVisible;
 
 void main() {
+  testWidgets('公告网页仅在有历史时拦截返回，旧查询不能覆盖最新状态', (tester) async {
+    final previousPlatform = WebViewPlatform.instance;
+    final platform = _AnnouncementWebViewPlatform();
+    WebViewPlatform.instance = platform;
+    addTearDown(() {
+      if (previousPlatform != null) WebViewPlatform.instance = previousPlatform;
+    });
+    final navKey = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        navigatorKey: navKey,
+        home: const Scaffold(body: Text('公告入口')),
+      ),
+    );
+    final route = MaterialPageRoute<void>(
+      builder: (_) => const AnnouncementWebPage(
+        link: AnnouncementLink(label: '公告详情', url: 'https://example.com'),
+      ),
+    );
+    navKey.currentState!.push(route);
+    await tester.pumpAndSettle();
+    expect(route.popDisposition, RoutePopDisposition.pop);
+    expect(route.popGestureEnabled, isTrue);
+
+    // URL 变化包括网页自身的历史跳转，不必等整个页面加载结束。
+    final controller = platform.controller;
+    final delegate = platform.delegate;
+    controller.hasHistory = true;
+    delegate.urlChange(const UrlChange(url: 'https://example.com/detail'));
+    await tester.pumpAndSettle();
+    expect(route.popDisposition, RoutePopDisposition.doNotPop);
+    expect(route.popGestureEnabled, isFalse);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(controller.backCalls, 1);
+    expect(find.text('公告详情'), findsOneWidget);
+    expect(route.popDisposition, RoutePopDisposition.pop);
+
+    controller.hasHistory = true;
+    delegate.pageStarted('https://example.com/detail');
+    await tester.pumpAndSettle();
+    expect(route.popDisposition, RoutePopDisposition.doNotPop);
+    controller.hasHistory = false;
+    delegate.pageFinished('https://example.com');
+    await tester.pumpAndSettle();
+    expect(route.popDisposition, RoutePopDisposition.pop);
+
+    final staleHistory = Completer<bool>();
+    final latestHistory = Completer<bool>();
+    controller.historyResponses.addAll([
+      staleHistory.future,
+      latestHistory.future,
+    ]);
+    delegate.urlChange(const UrlChange(url: 'https://example.com/detail'));
+    delegate.urlChange(const UrlChange(url: 'https://example.com'));
+    latestHistory.complete(false);
+    await tester.pumpAndSettle();
+    staleHistory.complete(true);
+    await tester.pumpAndSettle();
+    expect(route.popDisposition, RoutePopDisposition.pop);
+    expect(route.popGestureEnabled, isTrue);
+
+    // 历史耗尽后交给路由退出，不会再次触发网页后退。
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(controller.backCalls, 1);
+    expect(find.text('公告详情'), findsNothing);
+    expect(find.text('公告入口'), findsOneWidget);
+  });
+
   testWidgets('铃铛红点：打开列表后标为已读并熄灭', (tester) async {
     final c = controllerWith([a('1')]);
     await tester.pumpWidget(app(c));
@@ -285,4 +360,95 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('标题p'), findsOneWidget);
   });
+}
+
+class _AnnouncementWebViewPlatform extends WebViewPlatform {
+  late _AnnouncementWebController controller;
+  late _AnnouncementNavigationDelegate delegate;
+
+  @override
+  PlatformWebViewController createPlatformWebViewController(
+    PlatformWebViewControllerCreationParams params,
+  ) => controller = _AnnouncementWebController(params);
+
+  @override
+  PlatformNavigationDelegate createPlatformNavigationDelegate(
+    PlatformNavigationDelegateCreationParams params,
+  ) => delegate = _AnnouncementNavigationDelegate(params);
+
+  @override
+  PlatformWebViewWidget createPlatformWebViewWidget(
+    PlatformWebViewWidgetCreationParams params,
+  ) => _AnnouncementWebWidget(params);
+}
+
+class _AnnouncementWebController extends PlatformWebViewController {
+  _AnnouncementWebController(super.params) : super.implementation();
+
+  bool hasHistory = false;
+  int backCalls = 0;
+  final historyResponses = <Future<bool>>[];
+
+  @override
+  Future<bool> canGoBack() => historyResponses.isEmpty
+      ? Future.value(hasHistory)
+      : historyResponses.removeAt(0);
+
+  @override
+  Future<void> goBack() async {
+    backCalls++;
+    hasHistory = false;
+  }
+
+  @override
+  Future<String?> getTitle() async => null;
+
+  @override
+  Future<void> setJavaScriptMode(JavaScriptMode mode) async {}
+
+  @override
+  Future<void> setPlatformNavigationDelegate(
+    PlatformNavigationDelegate handler,
+  ) async {}
+
+  @override
+  Future<void> loadRequest(LoadRequestParams params) async {}
+}
+
+class _AnnouncementNavigationDelegate extends PlatformNavigationDelegate {
+  _AnnouncementNavigationDelegate(super.params) : super.implementation();
+
+  late PageEventCallback pageStarted;
+  late PageEventCallback pageFinished;
+  late UrlChangeCallback urlChange;
+
+  @override
+  Future<void> setOnPageStarted(PageEventCallback callback) async =>
+      pageStarted = callback;
+
+  @override
+  Future<void> setOnPageFinished(PageEventCallback callback) async =>
+      pageFinished = callback;
+
+  @override
+  Future<void> setOnUrlChange(UrlChangeCallback callback) async =>
+      urlChange = callback;
+
+  @override
+  Future<void> setOnNavigationRequest(
+    NavigationRequestCallback callback,
+  ) async {}
+
+  @override
+  Future<void> setOnProgress(ProgressCallback callback) async {}
+
+  @override
+  Future<void> setOnWebResourceError(WebResourceErrorCallback callback) async {}
+}
+
+class _AnnouncementWebWidget extends PlatformWebViewWidget {
+  _AnnouncementWebWidget(super.params) : super.implementation();
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.expand();
 }

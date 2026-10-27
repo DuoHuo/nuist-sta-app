@@ -42,65 +42,136 @@ import 'shell/study/study_page.dart';
 GoRouter buildRouter() => GoRouter(
   routes: [
     StatefulShellRoute.indexedStack(
-      builder: (context, state, navigationShell) =>
-          RootPage(navigationShell: navigationShell),
+      pageBuilder: (context, state, navigationShell) => MaterialPage<void>(
+        key: state.pageKey,
+        child: RootPage(navigationShell: navigationShell),
+      ),
       branches: [
         StatefulShellBranch(
-          routes: [GoRoute(path: '/', builder: (_, _) => const HomePage())],
-        ),
-        StatefulShellBranch(
           routes: [
-            GoRoute(path: '/study', builder: (_, _) => const StudyPage()),
+            GoRoute(
+              path: '/',
+              pageBuilder: (_, state) => MaterialPage<void>(
+                key: state.pageKey,
+                child: const HomePage(),
+              ),
+            ),
           ],
         ),
         StatefulShellBranch(
           routes: [
-            GoRoute(path: '/profile', builder: (_, _) => const ProfilePage()),
+            GoRoute(
+              path: '/study',
+              pageBuilder: (_, state) => MaterialPage<void>(
+                key: state.pageKey,
+                child: const StudyPage(),
+              ),
+            ),
+          ],
+        ),
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/profile',
+              pageBuilder: (_, state) => MaterialPage<void>(
+                key: state.pageKey,
+                child: const ProfilePage(),
+              ),
+            ),
           ],
         ),
       ],
     ),
     GoRoute(
       path: '/apps/:appId',
-      builder: (context, state) {
+      pageBuilder: (context, state) {
         final id = state.pathParameters['appId']!;
         final manifest = appRegistryById[id];
         if (manifest == null) {
-          return _MiniAppNotFoundPage(appId: id);
+          return MaterialPage<void>(
+            key: state.pageKey,
+            child: _MiniAppNotFoundPage(appId: id),
+          );
         }
-        return manifest.isWeb
+        final child = manifest.isWeb
             ? MiniWebViewPage(manifest: manifest)
             : manifest.entry!(context);
+        return MaterialPage<void>(key: state.pageKey, child: child);
       },
     ),
     GoRoute(
       path: '/place/:placeId',
-      builder: (context, state) =>
-          CampusPlaceDetailPage(placeId: state.pathParameters['placeId']!),
+      pageBuilder: (context, state) => MaterialPage<void>(
+        key: state.pageKey,
+        child: CampusPlaceDetailPage(placeId: state.pathParameters['placeId']!),
+      ),
     ),
     GoRoute(
       path: '/portal-bind',
-      builder: (_, _) => const PortalStatusPage(),
+      pageBuilder: (_, state) => MaterialPage<void>(
+        key: state.pageKey,
+        child: const PortalStatusPage(),
+      ),
       routes: [
-        GoRoute(path: 'register', builder: (_, _) => const PortalBindPage()),
-        GoRoute(path: 'export', builder: (_, _) => const PortalExportPage()),
+        GoRoute(
+          path: 'register',
+          pageBuilder: (_, state) => MaterialPage<void>(
+            key: state.pageKey,
+            child: const PortalBindPage(),
+          ),
+        ),
+        GoRoute(
+          path: 'export',
+          pageBuilder: (_, state) => MaterialPage<void>(
+            key: state.pageKey,
+            child: const PortalExportPage(),
+          ),
+        ),
         GoRoute(
           path: 'import',
-          builder: (_, _) => const PortalImportPage(),
+          pageBuilder: (_, state) => MaterialPage<void>(
+            key: state.pageKey,
+            child: const PortalImportPage(),
+          ),
           routes: [
-            GoRoute(path: 'scan', builder: (_, _) => const PortalScanPage()),
+            GoRoute(
+              path: 'scan',
+              pageBuilder: (_, state) => MaterialPage<void>(
+                key: state.pageKey,
+                child: const PortalScanPage(),
+              ),
+            ),
           ],
         ),
       ],
     ),
     GoRoute(
       path: '/innovation-credit',
-      builder: (_, _) => const InnovationCreditPage(),
+      pageBuilder: (_, state) => MaterialPage<void>(
+        key: state.pageKey,
+        child: const InnovationCreditPage(),
+      ),
     ),
-    GoRoute(path: '/labor-score', builder: (_, _) => const LaborScorePage()),
-    GoRoute(path: '/scores', builder: (_, _) => const ScorePage()),
-    GoRoute(path: '/about', builder: (_, _) => const AboutPage()),
-    GoRoute(path: '/settings', builder: (_, _) => const SettingsPage()),
+    GoRoute(
+      path: '/labor-score',
+      pageBuilder: (_, state) =>
+          MaterialPage<void>(key: state.pageKey, child: const LaborScorePage()),
+    ),
+    GoRoute(
+      path: '/scores',
+      pageBuilder: (_, state) =>
+          MaterialPage<void>(key: state.pageKey, child: const ScorePage()),
+    ),
+    GoRoute(
+      path: '/about',
+      pageBuilder: (_, state) =>
+          MaterialPage<void>(key: state.pageKey, child: const AboutPage()),
+    ),
+    GoRoute(
+      path: '/settings',
+      pageBuilder: (_, state) =>
+          MaterialPage<void>(key: state.pageKey, child: const SettingsPage()),
+    ),
   ],
 );
 
