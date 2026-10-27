@@ -190,20 +190,22 @@ void main() {
     expect(fetches, 1);
     expect(await c.onLoginSucceeded(), isFalse);
     expect(await c.manualSync(), isFalse);
-    expect(await c.onAppResumed(), isFalse);
+    // 距上次成功不足 6h：回前台只本地刷新，不参与远程同步的并发拦截。
+    expect(await c.onAppResumed(), isTrue);
+    expect(fetches, 1);
     gate!.complete();
     expect(await first, isTrue);
     expect(fetches, 1);
   });
 
-  test('AS05 resume syncs only after more than 30 min', () async {
+  test('AS05 resume within 6h is local-only and never fetches', () async {
     await c.onAppStart();
     advance(const Duration(minutes: 30));
-    expect(await c.onAppResumed(), isFalse);
+    expect(await c.onAppResumed(), isTrue);
     expect(fetches, 1);
     advance(const Duration(seconds: 1));
     expect(await c.onAppResumed(), isTrue);
-    expect(fetches, 2);
+    expect(fetches, 1, reason: '距上次成功不足 6 小时，回前台只重读本地');
   });
 
   test('autoSyncIfNeeded respects the 10-min throttle', () async {
@@ -230,18 +232,66 @@ void main() {
     expect(fetches, 2);
   });
 
-  test('AS14: resume at 29 min does not sync', () async {
+  test('AS14: resume at 29 min is local-only', () async {
     await c.onAppStart();
     advance(const Duration(minutes: 29));
-    expect(await c.onAppResumed(), isFalse);
+    expect(await c.onAppResumed(), isTrue);
     expect(fetches, 1);
   });
 
-  test('AS15: resume at 31 min syncs', () async {
+  test('AS15: resume at 31 min is still local-only (<6h)', () async {
     await c.onAppStart();
     advance(const Duration(minutes: 31));
     expect(await c.onAppResumed(), isTrue);
-    expect(fetches, 2);
+    expect(fetches, 1);
+  });
+
+  test('resume at 5h59m is still local-only', () async {
+    await c.onAppStart();
+    advance(const Duration(hours: 5, minutes: 59));
+    expect(await c.onAppResumed(), isTrue);
+    await pumpEventQueue();
+    expect(fetches, 1);
+  });
+
+  test('resume after 6h fires silent background remote sync', () async {
+    await c.onAppStart();
+    expect(fetches, 1);
+    advance(TimetableController.resumeRemoteSyncInterval);
+    final completed = c.syncOutcomes.first;
+    expect(await c.onAppResumed(), isTrue);
+    await pumpEventQueue();
+    expect(fetches, 2, reason: '达到 6 小时静默补同步');
+    expect((await completed).automatic, isTrue);
+    expect(c.syncStatus, TimetableSyncStatus.success);
+  });
+
+  test('resume when never synced fires silent remote sync', () async {
+    await c.ensureStarted();
+    expect(c.lastSyncSuccessAt, isNull);
+    final completed = c.syncOutcomes.first;
+    expect(await c.onAppResumed(), isTrue);
+    await pumpEventQueue();
+    expect(fetches, 1, reason: '从未成功同步 → 回前台补远程');
+    expect((await completed).automatic, isTrue);
+    expect(c.lastSyncSuccessAt, isNotNull);
+  });
+
+  test('resume >6h remote does not block onAppResumed return', () async {
+    await c.onAppStart();
+    advance(const Duration(hours: 6, minutes: 1));
+    gate = Completer<void>();
+    final completed = c.syncOutcomes.first;
+    final resumed = c.onAppResumed();
+    expect(await resumed, isTrue);
+    expect(fetches, 1, reason: '远程尚未越过 gate');
+    await pumpEventQueue();
+    expect(fetches, 2, reason: '后台已发起');
+    expect(c.syncStatus, TimetableSyncStatus.syncing);
+    gate!.complete();
+    // 等真实完成事件；固定事件轮数无法保证磁盘 IO 已完成。
+    expect((await completed).automatic, isTrue);
+    expect(c.syncStatus, TimetableSyncStatus.success);
   });
 
   test(
@@ -317,7 +367,7 @@ void main() {
   });
 
   test(
-    'AS16: resume at 31 min syncs even after a timeout failure 5 min ago',
+    'AS16: resume does not retry remotely after a timeout failure',
     () async {
       await c.onAppStart();
       advance(const Duration(minutes: 26));
@@ -327,7 +377,8 @@ void main() {
       advance(const Duration(minutes: 5));
       failWith = null;
       expect(await c.onAppResumed(), isTrue);
-      expect(fetches, 3);
+      expect(fetches, 2, reason: '距上次成功不足 6 小时，回前台不补远程');
+      expect(c.syncStatus, TimetableSyncStatus.failure);
     },
   );
 
@@ -416,12 +467,13 @@ void main() {
       '500': (const JwxtHttpError('kb', 500), TimetableSyncFailure.server),
     }.entries) {
       test(
-        'AS03-ctl ${entry.key} on resume: lastAutoSyncFailed, not offline',
+        'AS03-ctl ${entry.key} on page open: lastAutoSyncFailed, not offline',
         () async {
-          await c.onAppStart();
-          advance(const Duration(minutes: 31));
+          await c.ensureStarted();
+          c.debugSetSnapshot(const TimetableSnapshot()); // needsSync = true
           failWith = entry.value.$1;
-          expect(await c.onAppResumed(), isTrue);
+          await c.autoSyncIfNeeded();
+          expect(fetches, 1);
           expect(c.lastAutoSyncFailed, isTrue);
           expect(c.syncFailure, entry.value.$2);
           expect(c.lastSyncOutcome?.failure, entry.value.$2);
