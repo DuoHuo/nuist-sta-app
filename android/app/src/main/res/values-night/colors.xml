@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 桌面小组件颜色 token（深色，widget-4x2-dark.png） -->
+<resources>
+    <color name="wg_bg">#FF1C1D21</color>
+    <color name="wg_chip">#FF26282D</color>
+    <color name="wg_t1">#FFF2F3F5</color>
+    <color name="wg_t2">#FFC8CBD2</color>
+    <color name="wg_t3">#FF9AA0B4</color>
+    <color name="wg_acc">#FF4DA3FF</color>
+    <color name="wg_link">#FF4DA3FF</color>
+    <color name="wg_brk">#FFFFB74D</color>
+    <color name="wg_brk_text">#FFFFB74D</color>
+    <color name="wg_on_acc">#FFFFFFFF</color>
+    <color name="wg_bar_base">#FFFFFFFF</color>
+</resources>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2×2「当前/下一节」：基准 160×160，最小 110×110；updatePeriodMillis=0，刷新同 4×2
+     由 AlarmManager 在上下课时刻触发 -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_timetable_2x2"
+    android:previewLayout="@layout/widget_timetable_2x2"
+    android:description="@string/wg_2x2_description"
+    android:widgetCategory="home_screen"/>

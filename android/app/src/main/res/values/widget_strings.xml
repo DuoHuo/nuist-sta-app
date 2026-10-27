@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wg_label">今日课表</string>
+    <string name="wg_description">显示今天的课程和上下课倒计时</string>
+    <string name="wg_last_course">今天最后一节</string>
+    <string name="wg_2x2_label">当前/下一节</string>
+    <string name="wg_2x2_description">只显示当前或下一节课和上下课倒计时</string>
+</resources>
