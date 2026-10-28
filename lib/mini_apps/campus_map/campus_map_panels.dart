@@ -1,7 +1,10 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import '../../core/schedule/weekly_classes.dart';
 import 'campus_map_data.dart';
+import 'campus_map_navigation.dart';
 import 'campus_map_schedule.dart';
 import 'campus_map_source.dart';
 import 'campus_map_widgets.dart';
@@ -623,9 +626,19 @@ class CampusPlacePanel extends StatelessWidget {
     final colors = MapPalette.of(context);
     final indoor = floor != null;
     final color = categoryColor(place.category);
+    // 建筑类型比大类更具体（「宿舍」而不是空白、「食堂餐厅」而不是「餐饮」），有就优先显示。
+    final type = buildingTypeIcon(place.buildingType) == null
+        ? null
+        : place.buildingType;
     // 信息标签：只放真实字段，不重复楼名。
     final chips = <Widget>[
-      if (place.category != null || place.kind != null)
+      if (type != null)
+        _InfoChip(
+          icon: buildingTypeIcon(type)!,
+          label: kBuildingTypeLabels[type]!,
+          color: buildingTypeColor(type),
+        )
+      else if (place.category != null || place.kind != null)
         _InfoChip(
           icon: categoryIcon(place.category),
           label: place.category != null
@@ -1936,115 +1949,709 @@ class _CampusRoutePlannerState extends State<CampusRoutePlanner> {
   }
 }
 
-/// 导航结果页（百度风格）：目的地标题 + 摘要卡 + 开始导航 + 路线详情。
-class CampusRoutePreview extends StatelessWidget {
-  const CampusRoutePreview({
+/// 动作对应的箭头图标。
+IconData navManeuverIcon(NavManeuver maneuver) => switch (maneuver) {
+  NavManeuver.depart => Icons.navigation_rounded,
+  NavManeuver.straight => Icons.straight_rounded,
+  NavManeuver.slightLeft => Icons.turn_slight_left_rounded,
+  NavManeuver.left => Icons.turn_left_rounded,
+  NavManeuver.sharpLeft => Icons.turn_sharp_left_rounded,
+  NavManeuver.slightRight => Icons.turn_slight_right_rounded,
+  NavManeuver.right => Icons.turn_right_rounded,
+  NavManeuver.sharpRight => Icons.turn_sharp_right_rounded,
+  NavManeuver.uTurn => Icons.u_turn_left_rounded,
+  NavManeuver.floorChange => Icons.stairs_rounded,
+  NavManeuver.arrive => Icons.flag_rounded,
+};
+
+/// 「16:05」：从 [now] 起步行 [meters] 米后的到达时刻。
+String navArrivalLabel(double meters, {DateTime? now}) {
+  final at = (now ?? DateTime.now()).add(
+    Duration(minutes: navWalkMinutes(meters)),
+  );
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${two(at.hour)}:${two(at.minute)}';
+}
+
+/// 路线预览顶部的起终点卡（仿百度）：返回、起点（可点击更换）、终点。
+class CampusRouteHeader extends StatelessWidget {
+  const CampusRouteHeader({
     super.key,
-    required this.route,
+    required this.originLabel,
     required this.destinationLabel,
-    required this.onStart,
-    required this.onClose,
-    this.destinationSubtitle,
+    required this.onBack,
+    this.onPickOrigin,
   });
-  final CampusRouteResult route;
-  final String destinationLabel;
-  final String? destinationSubtitle;
-  final VoidCallback onStart, onClose;
+  final String originLabel, destinationLabel;
+  final VoidCallback onBack;
+  final VoidCallback? onPickOrigin;
 
   @override
   Widget build(BuildContext context) {
     final colors = MapPalette.of(context);
+    Widget row(
+      Color dot,
+      String text, {
+      bool strong = false,
+      VoidCallback? onTap,
+    }) => InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 6),
+        child: Row(
+          children: [
+            Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: strong ? FontWeight.w600 : FontWeight.w400,
+                  color: strong ? colors.ink : colors.secondary,
+                ),
+              ),
+            ),
+            if (onTap != null)
+              Icon(
+                Icons.edit_location_alt_outlined,
+                size: 18,
+                color: colors.muted,
+              ),
+          ],
+        ),
+      ),
+    );
+    return MapSurface(
+      radius: 20,
+      padding: const EdgeInsets.fromLTRB(4, 8, 12, 8),
+      child: Row(
+        children: [
+          MapIconButton(
+            icon: Icons.arrow_back_rounded,
+            label: '结束路线',
+            onPressed: onBack,
+          ),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                row(const Color(0xFF34A853), originLabel, onTap: onPickOrigin),
+                Divider(height: 1, indent: 28, color: colors.line),
+                row(const Color(0xFFE5484D), destinationLabel, strong: true),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 路线预览面板（仿百度步行方案卡）：大号时间 + 距离 / 步数 / 热量 / 到达时刻、
+/// 途经地点、模拟导航 + 开始导航，以及时间线式的路线详情。
+class CampusRoutePreview extends StatelessWidget {
+  const CampusRoutePreview({
+    super.key,
+    required this.route,
+    required this.originLabel,
+    required this.destinationLabel,
+    required this.onStart,
+    this.onSimulate,
+    this.via = const [],
+    this.now,
+  });
+  final NavRoute route;
+  final String originLabel, destinationLabel;
+  final VoidCallback onStart;
+  final VoidCallback? onSimulate;
+
+  /// 途经的地点名（按经过顺序）。
+  final List<String> via;
+
+  /// 计算到达时刻用的当前时间（测试注入）；默认取系统时间。
+  final DateTime? now;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    final length = route.length;
+    final secondary = TextStyle(fontSize: 13, color: colors.secondary);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            Text(
+              '${navWalkMinutes(length)}',
+              style: TextStyle(
+                fontSize: 36,
+                height: 1,
+                fontWeight: FontWeight.w700,
+                color: colors.ink,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '分钟',
+              style: TextStyle(fontSize: 16, color: colors.ink, height: 1.4),
+            ),
+            const SizedBox(width: 14),
+            Text(
+              navDistanceLabel(length),
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+                color: colors.ink,
+                height: 1.4,
+              ),
+            ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: colors.blue.withValues(alpha: colors.isDark ? .2 : .1),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    destinationLabel,
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w700,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+                  Icon(
+                    Icons.directions_walk_rounded,
+                    size: 16,
+                    color: colors.blue,
                   ),
-                  if (destinationSubtitle != null)
-                    Text(
-                      destinationSubtitle!,
-                      style: TextStyle(fontSize: 13, color: colors.secondary),
+                  const SizedBox(width: 3),
+                  Text(
+                    '步行',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: colors.blue,
                     ),
+                  ),
                 ],
               ),
             ),
-            MapIconButton(
-              icon: Icons.close_rounded,
-              label: '结束路线',
-              onPressed: onClose,
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '预计 ${navArrivalLabel(length, now: now)} 到达 · '
+          '约 ${navSteps(length)} 步 · 消耗 ${navCalories(length)} 千卡',
+          style: secondary,
+        ),
+        if (via.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Icon(Icons.alt_route_rounded, size: 15, color: colors.muted),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  '途经 ${via.join('、')}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: secondary,
+                ),
+              ),
+            ],
+          ),
+        ],
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            if (onSimulate != null) ...[
+              Expanded(
+                flex: 2,
+                child: MapAction(
+                  icon: Icons.play_circle_outline_rounded,
+                  label: '模拟导航',
+                  onPressed: route.isEmpty ? null : onSimulate,
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+            Expanded(
+              flex: 3,
+              child: MapAction(
+                icon: Icons.navigation_rounded,
+                label: '开始导航',
+                primary: true,
+                onPressed: route.isEmpty ? null : onStart,
+              ),
             ),
           ],
         ),
-        const SizedBox(height: 16),
-        // 摘要卡：大号距离 + 段数（仿百度「2小时19分 / 23.9公里」摘要区）。
+        const SizedBox(height: 22),
+        const MapSectionTitle('路线详情'),
         MapSurface(
           radius: 18,
-          padding: const EdgeInsets.all(18),
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: CampusRouteTimeline(
+            route: route,
+            originLabel: originLabel,
+            destinationLabel: destinationLabel,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 时间线式路线详情：起点 → 各转弯 / 换层（带这一段的距离）→ 终点。
+class CampusRouteTimeline extends StatelessWidget {
+  const CampusRouteTimeline({
+    super.key,
+    required this.route,
+    required this.originLabel,
+    required this.destinationLabel,
+  });
+  final NavRoute route;
+  final String originLabel, destinationLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    final steps = route.steps;
+    final rows = <Widget>[];
+    for (var i = 0; i < steps.length; i++) {
+      final step = steps[i];
+      final first = i == 0, last = i == steps.length - 1;
+      final Color dot = first
+          ? const Color(0xFF34A853)
+          : last
+          ? const Color(0xFFE5484D)
+          : colors.blue;
+      final title = first
+          ? originLabel
+          : last
+          ? destinationLabel
+          : step.title;
+      final legLength = last ? 0.0 : steps[i + 1].along - step.along;
+      final note = first
+          ? step.detail ?? '出发'
+          : last
+          ? '到达目的地'
+          : step.detail;
+      rows.add(
+        IntrinsicHeight(
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(Icons.directions_walk_rounded, color: colors.blue, size: 34),
-              const SizedBox(width: 12),
-              Expanded(
+              SizedBox(
+                width: 34,
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      route.summary ?? '路线已规划',
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
+                    Container(
+                      width: 30,
+                      height: 30,
+                      decoration: BoxDecoration(
+                        color: dot.withValues(alpha: colors.isDark ? .25 : .12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        first
+                            ? Icons.trip_origin_rounded
+                            : navManeuverIcon(step.maneuver),
+                        size: 18,
+                        color: dot,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '步行 · ${route.instructions.length} 段指引',
-                      style: TextStyle(fontSize: 12, color: colors.secondary),
-                    ),
+                    if (!last)
+                      Expanded(
+                        child: Container(
+                          width: 2,
+                          margin: const EdgeInsets.symmetric(vertical: 2),
+                          color: colors.line,
+                        ),
+                      ),
                   ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(top: 4, bottom: last ? 0 : 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: first || last
+                              ? FontWeight.w600
+                              : FontWeight.w500,
+                          color: colors.ink,
+                        ),
+                      ),
+                      if (note != null && note != title)
+                        Text(
+                          note,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: colors.secondary,
+                          ),
+                        ),
+                      if (!last && legLength >= 1)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            '步行 ${navDistanceLabel(legLength)}',
+                            style: TextStyle(fontSize: 12, color: colors.muted),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 14),
-        SizedBox(
-          width: double.infinity,
-          child: MapAction(
-            icon: Icons.navigation_rounded,
-            label: '开始导航',
-            primary: true,
-            onPressed: onStart,
+      );
+    }
+    return Column(children: rows);
+  }
+}
+
+/// 导航顶部指引条（仿百度）：大箭头 + 「120 米 后左转」，下方「随后 右转」。
+class CampusNavBanner extends StatelessWidget {
+  const CampusNavBanner({
+    super.key,
+    required this.progress,
+    this.arrived = false,
+    this.rerouting = false,
+  });
+  final NavProgress progress;
+  final bool arrived, rerouting;
+
+  /// 指引条底色：深绿，压在浅色或深色底图上都清楚，不随主题变。
+  static const background = Color(0xFF14533B);
+
+  @override
+  Widget build(BuildContext context) {
+    final next = progress.next;
+    final near = progress.distanceToNext < 15;
+    final String headline, action;
+    if (rerouting) {
+      headline = '已偏离路线';
+      action = '正在重新规划…';
+    } else if (arrived) {
+      headline = '已到达';
+      action = '目的地就在附近';
+    } else {
+      headline = near ? '现在' : navDistanceLabel(progress.distanceToNext);
+      action = near ? next.title : '后${next.title}';
+    }
+    final detail = rerouting || arrived ? null : next.detail;
+    final icon = rerouting
+        ? Icons.sync_rounded
+        : navManeuverIcon(arrived ? NavManeuver.arrive : next.maneuver);
+    final after = rerouting || arrived ? null : progress.after;
+    return Container(
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 24,
+            offset: Offset(0, 8),
           ),
-        ),
-        const SizedBox(height: 16),
-        const MapSectionTitle('路线详情'),
-        MapSurface(
-          radius: 18,
-          child: Column(
-            children: [
-              for (final instruction in route.instructions)
-                ListTile(
-                  leading: Icon(Icons.turn_right_rounded, color: colors.blue),
-                  title: Text(
-                    instruction,
-                    style: const TextStyle(fontSize: 14),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 18, 14),
+            child: Row(
+              children: [
+                Icon(icon, size: 52, color: Colors.white),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: headline,
+                              style: const TextStyle(
+                                fontSize: 30,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const TextSpan(text: ' '),
+                            TextSpan(
+                              text: action,
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          height: 1.2,
+                        ),
+                      ),
+                      if (detail != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          detail,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Color(0xCCFFFFFF),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-            ],
+              ],
+            ),
           ),
+          if (after != null)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
+              decoration: const BoxDecoration(
+                color: Color(0xFF0E3F2C),
+                borderRadius: BorderRadius.vertical(
+                  bottom: Radius.circular(20),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Text(
+                    '随后',
+                    style: TextStyle(fontSize: 14, color: Color(0xB3FFFFFF)),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(
+                    navManeuverIcon(after.maneuver),
+                    size: 20,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    after.title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 导航右侧竖向进度条：底部起点、顶部终点旗，绿色部分是已走过的路程。
+class CampusNavProgressRail extends StatelessWidget {
+  const CampusNavProgressRail({super.key, required this.fraction});
+
+  /// 已走过比例（0~1）。
+  final double fraction;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    final value = fraction.clamp(0.0, 1.0);
+    return Semantics(
+      label: '导航进度',
+      value: '已走 ${(value * 100).round()}%',
+      child: MapSurface(
+        radius: 16,
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 10),
+        child: Column(
+          children: [
+            const Icon(Icons.flag_rounded, size: 16, color: Color(0xFFE5484D)),
+            const SizedBox(height: 6),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, box) {
+                  final h = box.maxHeight;
+                  return Stack(
+                    clipBehavior: Clip.none,
+                    alignment: Alignment.bottomCenter,
+                    children: [
+                      Container(
+                        width: 6,
+                        decoration: BoxDecoration(
+                          color: colors.line,
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                      Container(
+                        width: 6,
+                        height: h * value,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF34A853),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                      Positioned(
+                        bottom: (h * value - 7).clamp(0.0, max(0.0, h - 14)),
+                        child: Container(
+                          width: 14,
+                          height: 14,
+                          decoration: BoxDecoration(
+                            color: colors.blue,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Icon(
+              Icons.trip_origin_rounded,
+              size: 14,
+              color: Color(0xFF34A853),
+            ),
+          ],
         ),
-      ],
+      ),
+    );
+  }
+}
+
+/// 导航底部状态条：剩余距离 / 时间 / 到达时刻 + 退出；到达后换成「完成」。
+class CampusNavStatusBar extends StatelessWidget {
+  const CampusNavStatusBar({
+    super.key,
+    required this.progress,
+    required this.destinationLabel,
+    required this.onExit,
+    required this.onFinish,
+    this.arrived = false,
+    this.simulating = false,
+    this.now,
+  });
+  final NavProgress progress;
+  final String destinationLabel;
+  final VoidCallback onExit, onFinish;
+  final bool arrived;
+
+  /// 模拟导航中：标题前加「模拟」标签。
+  final bool simulating;
+  final DateTime? now;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MapPalette.of(context);
+    final remaining = progress.remaining;
+    return MapSurface(
+      radius: 22,
+      padding: const EdgeInsets.fromLTRB(20, 14, 14, 14),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    if (simulating) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF59E0B),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          '模拟',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    Expanded(
+                      child: Text(
+                        arrived
+                            ? '已到达 $destinationLabel'
+                            : '剩余 ${navDistanceLabel(remaining)} · ${navWalkMinutes(remaining)} 分钟',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: colors.ink,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  arrived
+                      ? '本次步行导航结束'
+                      : '预计 ${navArrivalLabel(remaining, now: now)} 到达 · 去往 $destinationLabel',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 13, color: colors.secondary),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          if (arrived)
+            MapAction(
+              icon: Icons.check_rounded,
+              label: '完成',
+              primary: true,
+              onPressed: onFinish,
+            )
+          else
+            OutlinedButton(
+              onPressed: onExit,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFFE5484D),
+                side: const BorderSide(color: Color(0xFFE5484D)),
+                minimumSize: const Size(72, 46),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              child: const Text(
+                '退出',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -2069,6 +2676,30 @@ Color categoryColor(PlaceCategory? category) => switch (category) {
   PlaceCategory.food => const Color(0xFFF2994A),
   PlaceCategory.sports => const Color(0xFF35B26F),
   PlaceCategory.services => const Color(0xFF9B6BF3),
+};
+
+/// 建筑类型图标：地图楼名旁的类型标志与详情标签共用。
+/// 「其他」和未分类返回 null，地图上只标楼名。
+IconData? buildingTypeIcon(String? type) => switch (type) {
+  'dormitory' => Icons.bed_rounded,
+  'teaching' => Icons.school_rounded,
+  'lab' => Icons.science_rounded,
+  'library' => Icons.local_library_rounded,
+  'canteen' => Icons.restaurant_rounded,
+  'office' => Icons.business_center_rounded,
+  'commercial' => Icons.storefront_rounded,
+  'sports' => Icons.sports_basketball,
+  _ => null,
+};
+
+/// 建筑类型配色；能归入大类的沿用大类颜色，地图图标与筛选标注颜色一致。
+Color buildingTypeColor(String? type) => switch (type) {
+  'dormitory' => const Color(0xFF8E6CEF),
+  'lab' => const Color(0xFF1FA3B3),
+  'library' => const Color(0xFF3F6AD8),
+  'office' => const Color(0xFF5B6B86),
+  'commercial' => const Color(0xFFE0578A),
+  _ => categoryColor(buildingTypeCategory(type)),
 };
 
 /// 搜索栏下方的分类入口：实心彩色圆角徽章 + 名称，选中加描边投影。

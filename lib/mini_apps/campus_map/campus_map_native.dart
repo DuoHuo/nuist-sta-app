@@ -113,6 +113,11 @@ class _CampusMapNativeState extends State<CampusMapNative>
           )
           ..value = 1
           ..addListener(_scheduleShuttleUpdate);
+    // Android 上用 TextureView 承载地图，由 Flutter 当普通纹理层合成。插件默认的
+    // SurfaceView + Virtual Display 在 release 包里时常出现多帧叠成一片、
+    // 地图发白的重影。只影响合成方式，3D 体块、倾斜视角照常渲染；
+    // 必须在第一张地图创建前设好（静态开关，这里早于本组件的 build）。
+    MapLibreMap.useHybridComposition = true;
     _startTimeout();
   }
 
@@ -164,7 +169,13 @@ class _CampusMapNativeState extends State<CampusMapNative>
         old.mapLayer != config.mapLayer ||
         // 面板高度变化时重新内缩，选中目标始终停在可视区中心。
         (config.selectedPlace != null &&
-            old.viewportInsets != config.viewportInsets);
+            old.viewportInsets != config.viewportInsets) ||
+        // 出现 / 更换路线时取景到整条路线；进出导航切换跟随视角。
+        old.showRoute != config.showRoute ||
+        !identical(old.routeGeoJson, config.routeGeoJson) ||
+        old.navigating != config.navigating ||
+        old.fitRoute != config.fitRoute ||
+        (config.navigating && _followMoved(old, config));
     // 样式串变了：插件会原地 setStyle，旧样式上的自绘图层全部失效，
     // 等新样式的 onStyleLoaded 再从头同步（不销毁原生地图视图）。
     if (old.styleUrl != config.styleUrl) {
@@ -177,6 +188,9 @@ class _CampusMapNativeState extends State<CampusMapNative>
     // 图层按组比对签名，只有输入真正变化的组才会重建（见 _sync）。
     final layersChanged = !_sameKeys(_keysFor(old), _keysFor(config));
     if (old.userHeading != config.userHeading) _syncHeading();
+    if (!identical(old.routePassedGeoJson, config.routePassedGeoJson)) {
+      _syncPassedRoute();
+    }
     // 面板拖动只调整相机内缩，不必重建图层。
     if (layersChanged) {
       _enqueue(sync: true);
@@ -981,21 +995,147 @@ class _CampusMapNativeState extends State<CampusMapNative>
                               value.selectedPlace?.id),
           )
         : null;
-    if (route != null) {
-      await _source(c, 'campus-route', route);
-      await c.addLineLayer(
-        'campus-route',
-        'campus-route-line',
-        const LineLayerProperties(
-          lineColor: '#1475F5',
-          lineWidth: 5,
-          lineCap: 'round',
-          lineJoin: 'round',
+    if (route == null) return;
+    await _source(c, 'campus-route', route);
+    // 仿百度：白色描边 + 粗蓝线，压在底图道路上依然醒目。
+    await c.addLineLayer(
+      'campus-route',
+      'campus-route-casing',
+      const LineLayerProperties(
+        lineColor: '#FFFFFF',
+        lineWidth: 11,
+        lineCap: 'round',
+        lineJoin: 'round',
+      ),
+      enableInteraction: false,
+    );
+    _layer('campus-route-casing');
+    await c.addLineLayer(
+      'campus-route',
+      'campus-route-line',
+      const LineLayerProperties(
+        lineColor: '#1475F5',
+        lineWidth: 7,
+        lineCap: 'round',
+        lineJoin: 'round',
+      ),
+      enableInteraction: false,
+    );
+    _layer('campus-route-line');
+    // 导航中已走过的部分：灰线盖在蓝线上，数据由 _syncPassedRoute 原地更新。
+    await _source(
+      c,
+      'campus-route-passed',
+      value.floor == null && value.routePassedGeoJson != null
+          ? value.routePassedGeoJson!
+          : _emptyCollection,
+    );
+    await c.addLineLayer(
+      'campus-route-passed',
+      'campus-route-passed-line',
+      const LineLayerProperties(
+        lineColor: '#A6AFBB',
+        lineWidth: 7,
+        lineCap: 'round',
+        lineJoin: 'round',
+      ),
+      enableInteraction: false,
+    );
+    _layer('campus-route-passed-line');
+    // 起点绿点、终点红点。
+    final ends = _routeEnds(value.routeGeoJson);
+    if (ends != null) {
+      await _source(c, 'campus-route-ends', {
+        'type': 'FeatureCollection',
+        'features': [
+          for (final (kind, point) in [('start', ends.$1), ('end', ends.$2)])
+            {
+              'type': 'Feature',
+              'geometry': {'type': 'Point', 'coordinates': point},
+              'properties': {'kind': kind},
+            },
+        ],
+      });
+      await c.addCircleLayer(
+        'campus-route-ends',
+        'campus-route-ends-dot',
+        const CircleLayerProperties(
+          circleColor: [
+            'match',
+            ['get', 'kind'],
+            'start',
+            '#34A853',
+            '#E5484D',
+          ],
+          circleRadius: 7,
+          circleStrokeColor: '#FFFFFF',
+          circleStrokeWidth: 3,
         ),
         enableInteraction: false,
       );
-      _layer('campus-route-line');
+      _layer('campus-route-ends-dot');
     }
+  }
+
+  static const _emptyCollection = <String, dynamic>{
+    'type': 'FeatureCollection',
+    'features': <Object>[],
+  };
+
+  /// 整条路线的首尾坐标（[经度, 纬度]）；没有可用几何时为 null。
+  static (List<double>, List<double>)? _routeEnds(Map<String, dynamic>? data) {
+    final coordinates = <List<double>>[];
+    for (final feature
+        in (data?['features'] as List? ?? const []).whereType<Map>()) {
+      final geometry = feature['geometry'];
+      if (geometry is! Map) continue;
+      final raw = geometry['coordinates'];
+      final lines = switch (geometry['type']) {
+        'LineString' => [raw],
+        'MultiLineString' when raw is List => raw,
+        _ => const [],
+      };
+      for (final line in lines) {
+        if (line is! List) continue;
+        for (final c in line) {
+          if (c is List && c.length >= 2 && c[0] is num && c[1] is num) {
+            coordinates.add([
+              (c[0] as num).toDouble(),
+              (c[1] as num).toDouble(),
+            ]);
+          }
+        }
+      }
+    }
+    if (coordinates.length < 2) return null;
+    return (coordinates.first, coordinates.last);
+  }
+
+  /// 已走过路线只换数据，不动图层（每次定位都会变）。
+  void _syncPassedRoute() {
+    final c = _controller;
+    if (c == null || !_hasLayer('campus-route-passed-line')) return;
+    final data = config.floor == null && config.routePassedGeoJson != null
+        ? config.routePassedGeoJson!
+        : _emptyCollection;
+    unawaited(
+      c.setGeoJsonSource('campus-route-passed', data).catchError((Object _) {}),
+    );
+  }
+
+  /// 导航跟随点移动 1 米以上或前进方向变化 3° 以上才挪相机，避免抖动。
+  static bool _followMoved(CampusMapCanvas old, CampusMapCanvas now) {
+    final a = old.navPoint, b = now.navPoint;
+    if ((a == null) != (b == null)) return true;
+    if (a != null && b != null) {
+      final dLat = (a.latitude - b.latitude) * 111320;
+      final dLng =
+          (a.longitude - b.longitude) * 111320 * cos(a.latitude * pi / 180);
+      if (dLat * dLat + dLng * dLng >= 1) return true;
+    }
+    final x = old.navBearing, y = now.navBearing;
+    if ((x == null) != (y == null)) return true;
+    return x != null && y != null && headingDelta(x, y).abs() >= 3;
   }
 
   Future<void> _addStreet(
@@ -1448,6 +1588,42 @@ class _CampusMapNativeState extends State<CampusMapNative>
   Future<void> _updateCamera(MapLibreMapController c) async {
     final current = c.cameraPosition;
     _overviewCamera ??= current;
+    // 导航与路线预览独占相机：其余取景请求（定位回中、缩放等）视为已处理，
+    // 退出后不再补放。
+    if (config.navigating || config.showRoute) {
+      _appliedFocus = config.focusToken;
+      _appliedZoom = config.zoomDelta;
+      _appliedReset = config.resetToken;
+      _appliedLayer = config.mapLayer;
+    }
+    if (config.navigating) {
+      await _followCamera(c, current);
+      return;
+    }
+    final bounds = config.showRoute && config.fitRoute
+        ? _routeBounds(config.routeGeoJson)
+        : null;
+    if (bounds != null) {
+      final insets = config.viewportInsets;
+      final update = CameraUpdate.newLatLngBounds(
+        bounds,
+        left: insets.left + 48,
+        top: insets.top + 48,
+        right: insets.right + 48,
+        bottom: insets.bottom + 48,
+      );
+      if (MediaQuery.disableAnimationsOf(context)) {
+        await c.moveCamera(update);
+      } else {
+        await c.animateCamera(
+          update,
+          duration: const Duration(milliseconds: 500),
+        );
+      }
+      return;
+    }
+    // 导航中拖动过地图：保留用户视角，等「继续导航」再接管。
+    if (config.showRoute && !config.fitRoute) return;
     CameraPosition? camera;
     if (config.focusToken != _appliedFocus) {
       final user = config.userPoint;
@@ -1540,6 +1716,63 @@ class _CampusMapNativeState extends State<CampusMapNative>
         );
       }
     }
+  }
+
+  /// 导航跟随：锁定在当前位置，按前进方向旋转、倾斜 50° 看前方（仿百度步行导航）。
+  Future<void> _followCamera(
+    MapLibreMapController c,
+    CameraPosition? current,
+  ) async {
+    final point = config.navPoint ?? config.userPoint;
+    if (point == null || !point.isValid) return;
+    final camera = _insetAware(
+      CameraPosition(
+        target: LatLng(point.latitude, point.longitude),
+        zoom: 18.6,
+        bearing: config.navBearing ?? current?.bearing ?? 0,
+        tilt: 50,
+      ),
+    );
+    final update = CameraUpdate.newCameraPosition(camera);
+    if (MediaQuery.disableAnimationsOf(context)) {
+      await c.moveCamera(update);
+    } else {
+      await c.animateCamera(
+        update,
+        duration: const Duration(milliseconds: 900),
+      );
+    }
+  }
+
+  /// 路线外包框；没有可用几何时为 null。
+  static LatLngBounds? _routeBounds(Map<String, dynamic>? data) {
+    double? south, west, north, east;
+    void visit(Object? node) {
+      if (node is List &&
+          node.length >= 2 &&
+          node[0] is num &&
+          node[1] is num) {
+        final lng = (node[0] as num).toDouble(),
+            lat = (node[1] as num).toDouble();
+        south = south == null ? lat : min(south!, lat);
+        north = north == null ? lat : max(north!, lat);
+        west = west == null ? lng : min(west!, lng);
+        east = east == null ? lng : max(east!, lng);
+      } else if (node is List) {
+        node.forEach(visit);
+      }
+    }
+
+    for (final feature
+        in (data?['features'] as List? ?? const []).whereType<Map>()) {
+      final geometry = feature['geometry'];
+      if (geometry is Map) visit(geometry['coordinates']);
+    }
+    if (south == null || west == null) return null;
+    return LatLngBounds(
+      southwest: LatLng(south!, west!),
+      northeast: LatLng(north!, east!),
+    );
   }
 
   Future<void> _retry() async {

@@ -41,6 +41,11 @@ class CampusMapCanvas extends StatelessWidget {
     this.focusToken = 0,
     this.viewportInsets = EdgeInsets.zero,
     this.markerPlaces = const [],
+    this.routePassedGeoJson,
+    this.navigating = false,
+    this.navPoint,
+    this.navBearing,
+    this.fitRoute = true,
   });
 
   /// 当前完整车辆列表，仅由公共交通图层消费。
@@ -92,6 +97,19 @@ class CampusMapCanvas extends StatelessWidget {
   /// 需要在地图上标注的地点（分类筛选或搜索结果），点击标注即选中。
   /// 调用方应保持列表引用稳定：图层按引用判断是否需要重建。
   final List<CampusPlace> markerPlaces;
+
+  /// 导航中已走过的路线（画成灰色）。只更新数据源，不重建图层。
+  final Map<String, dynamic>? routePassedGeoJson;
+
+  /// 导航中：相机锁定在 [navPoint]，按 [navBearing]（前进方向）旋转并倾斜，
+  /// 随定位持续跟随；不再按选中地点取景。
+  final bool navigating;
+  final GeoPoint? navPoint;
+  final double? navBearing;
+
+  /// 有路线且不在跟随时，是否把相机取景到整条路线（预览、导航「全览」）。
+  /// 为 false 时保留用户手动拖动后的视角（导航中拖动了地图）。
+  final bool fitRoute;
 
   @override
   Widget build(BuildContext context) {

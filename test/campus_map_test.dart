@@ -11,7 +11,9 @@ import 'package:nuist_sta_app/core/schedule/weekly_classes.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_location.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_navigation.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_page.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_panels.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_source.dart';
 
 // Fixtures exercise the repository boundary; no fixture is shipped in the app.
@@ -189,6 +191,82 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('搜索起点'), findsOneWidget); // 起终点卡片里的起点栏
     expect(find.text('导航'), findsOneWidget); // 面板标题
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('route preview and navigation bars show Baidu-style guidance', (
+    tester,
+  ) async {
+    // 东行 100 米后左转，再北行 100 米。
+    List<double> at(double east, double north) => [
+      118.7 + east / (111320 * 0.8462),
+      32.2 + north / 111320,
+    ];
+    final route = NavRoute.fromResult(
+      CampusRouteResult(
+        geoJson: {
+          'type': 'FeatureCollection',
+          'features': [
+            {
+              'type': 'Feature',
+              'geometry': {
+                'type': 'LineString',
+                'coordinates': [at(0, 0), at(100, 0), at(100, 100)],
+              },
+              'properties': const <String, dynamic>{},
+            },
+          ],
+        },
+        instructions: const ['沿校园道路步行', '到达目的地'],
+      ),
+    );
+    final now = DateTime(2026, 10, 24, 16, 0);
+    var started = 0, exited = 0, simulated = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            children: [
+              CampusRoutePreview(
+                route: route,
+                originLabel: '我的位置',
+                destinationLabel: '北辰楼',
+                via: const ['文德楼'],
+                now: now,
+                onStart: () => started++,
+                onSimulate: () => simulated++,
+              ),
+              CampusNavBanner(progress: route.progressAt(40)),
+              CampusNavStatusBar(
+                progress: route.progressAt(40),
+                destinationLabel: '北辰楼',
+                now: now,
+                onExit: () => exited++,
+                onFinish: () {},
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    expect(find.text('3'), findsOneWidget); // 200 米约 3 分钟
+    expect(find.text('预计 16:03 到达 · 约 286 步 · 消耗 10 千卡'), findsOneWidget);
+    expect(find.text('途经 文德楼'), findsOneWidget);
+    // 时间线：起点、左转、终点。
+    expect(find.text('我的位置'), findsOneWidget);
+    expect(find.text('左转'), findsOneWidget);
+    expect(find.text('北辰楼'), findsOneWidget);
+    // 指引条下方的「随后」提示。
+    expect(find.text('随后'), findsOneWidget);
+    // 指引条：距左转还有 60 米。
+    expect(find.text('60 米 后左转', findRichText: true), findsOneWidget);
+    expect(find.text('剩余 160 米 · 2 分钟'), findsOneWidget);
+    await tester.tap(find.text('开始导航'));
+    await tester.tap(find.text('模拟导航'));
+    await tester.tap(find.text('退出'));
+    expect(started, 1);
+    expect(exited, 1);
+    expect(simulated, 1);
     expect(tester.takeException(), isNull);
   });
 

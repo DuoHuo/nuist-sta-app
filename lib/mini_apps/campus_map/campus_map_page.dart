@@ -17,6 +17,7 @@ import 'campus_map_canvas.dart';
 import 'campus_map_data.dart';
 import 'campus_map_heading.dart';
 import 'campus_map_location.dart';
+import 'campus_map_navigation.dart';
 import 'campus_map_panels.dart';
 import 'campus_map_schedule.dart';
 import 'campus_map_source.dart';
@@ -122,6 +123,31 @@ class _CampusMapPageState extends State<CampusMapPage>
   bool _locating = false;
   // 面板实际遮挡的高度（逻辑像素，按 24px 量化以减少重建）。
   double _sheetInset = 0;
+  // 导航态：路线规划好后点「开始导航」进入。相机锁定在自己的位置，
+  // 按前进方向旋转（仿百度步行导航），随定位持续跟随。
+  bool _navigating = false;
+  // 路线展开后的折线与转向点、当前进度、已走过部分（地图上画灰线）。
+  NavRoute? _navRoute;
+  NavProgress? _navProgress;
+  Map<String, dynamic>? _routePassed;
+  // 本次路线的请求：偏航重算时沿用终点。
+  CampusRouteRequest? _routeRequest;
+  bool _arrived = false;
+  bool _rerouting = false;
+  int _offRouteHits = 0;
+  DateTime? _reroutedAt;
+  // 底部状态条 / 顶部卡片占用的高度（含安全区）：相机内缩与定位按钮要躲开。
+  double _navInset = 0;
+  double _topInset = 0;
+  // 导航中拖动了地图 / 点了「全览」：相机暂停跟随，等「继续导航」。
+  bool _followPaused = false;
+  bool _overview = false;
+  Offset? _dragOrigin;
+  // 模拟导航：沿路线每秒前进一段，不依赖真实定位。
+  bool _simulating = false;
+  Timer? _simTimer;
+  // 路线途经的地点名（预览面板展示）。
+  List<String> _routeVia = const [];
 
   @override
   void initState() {
@@ -138,11 +164,15 @@ class _CampusMapPageState extends State<CampusMapPage>
     unawaited(_startLiveLocation());
   }
 
-  /// 随机去一个有名字、有坐标的地方（骰子按钮）。
+  /// 随机去一栋有名字、有坐标的建筑（骰子按钮）。
   void _randomPlace() {
+    // 只随机建筑：室内地点（POI 也带 buildingId）和通用地物都不出。
     final pool = [
       for (final place in _campus.places)
-        if (place.center != null &&
+        if (place.buildingId != null &&
+            place.poiId == null &&
+            place.featureId == null &&
+            place.center != null &&
             place.center!.isValid &&
             place.name.trim().isNotEmpty &&
             !place.name.startsWith('未命名'))
@@ -202,6 +232,7 @@ class _CampusMapPageState extends State<CampusMapPage>
       _userPoint = fix.point;
       _userAccuracy = fix.accuracyM;
       if (focus) _focusToken++;
+      _updateNavProgress();
     });
   }
 
@@ -419,6 +450,7 @@ class _CampusMapPageState extends State<CampusMapPage>
     _shuttle.dispose();
     _shuttleToastTimer?.cancel();
     _shuttleToast?.remove();
+    _simTimer?.cancel();
     _searchTimer?.cancel();
     _sheetTimer?.cancel();
     unawaited(_locationSub?.cancel());
@@ -444,9 +476,12 @@ class _CampusMapPageState extends State<CampusMapPage>
     bool resample = false,
   }) {
     // 后端给没登记名称的楼宇填「未命名建筑 <编号>」占位名，不放进探索推荐。
+    // 随机推荐只出建筑和通用地物，不出 POI。
     final named = [
       for (final place in data.places)
-        if (place.name.trim().isNotEmpty && !place.name.startsWith('未命名'))
+        if (place.poiId == null &&
+            place.name.trim().isNotEmpty &&
+            !place.name.startsWith('未命名'))
           place,
     ];
     final byId = {for (final place in named) place.id: place};
@@ -751,14 +786,14 @@ class _CampusMapPageState extends State<CampusMapPage>
     }
   }
 
-  Future<void> _showRoutePlanner() async {
+  /// 规划路线。起点默认「我的位置」：已有定位就直接规划进入预览；
+  /// 没有定位或 [pickOrigin]（预览页点了起点）时弹起点搜索。
+  Future<void> _showRoutePlanner({bool pickOrigin = false}) async {
     final destination = _place;
     if (destination == null || _routing) return;
-    // 起点默认「我的位置」：已有定位就直接规划进入导航页；
-    // 没有定位立即弹起点搜索，不做任何等待。
     final user = _userPoint;
     CampusRouteRequest? request;
-    if (user != null && user.isValid) {
+    if (!pickOrigin && user != null && user.isValid) {
       request = CampusRouteRequest(
         originPoint: user,
         destinationPlaceId: destination.id,
@@ -793,9 +828,16 @@ class _CampusMapPageState extends State<CampusMapPage>
       setState(() {
         _routing = false;
         _route = result;
+        _navRoute = result == null ? null : NavRoute.fromResult(result);
+        _routeRequest = routeRequest;
+        _navigating = false;
+        _navProgress = null;
+        _routePassed = null;
+        _arrived = false;
         _routeOriginLabel = routeRequest.originPoint != null
             ? '我的位置'
             : _placeName(routeRequest.originPlaceId) ?? '起点';
+        _routeVia = _viaNames(_navRoute, routeRequest);
       });
       if (result == null) {
         _message('暂无可用路线，请稍后再试');
@@ -818,7 +860,11 @@ class _CampusMapPageState extends State<CampusMapPage>
         canPop: _place == null,
         onPopInvokedWithResult: (didPop, _) {
           if (!didPop) {
-            if (_floor != null) {
+            if (_isNavigating) {
+              _stopNavigation();
+            } else if (_route != null) {
+              _endRoute();
+            } else if (_floor != null) {
               _leaveIndoor();
             } else {
               _clearSelection();
@@ -832,8 +878,12 @@ class _CampusMapPageState extends State<CampusMapPage>
               final wide = constraints.maxWidth >= 700;
               final safe = MediaQuery.paddingOf(context);
               return Stack(
+                // 子项几乎都是 Positioned：必须撑满整屏。否则面板收起（导航中）后，
+                // 唯一的非定位子项（隐藏态的定位按钮）会把 Stack 压成 0×0，整页被裁成黑屏。
+                fit: StackFit.expand,
                 children: [
                   Positioned.fill(
+                    key: const ValueKey('campus-map-canvas'),
                     child: _style.trim().isEmpty
                         ? (_loading
                               ? const MapLoadingView()
@@ -871,18 +921,37 @@ class _CampusMapPageState extends State<CampusMapPage>
                             streetCoverage: _layer == CampusMapLayer.streetView,
                             mapLayer: _layer,
                             showRoute: _route != null,
+                            routePassedGeoJson: _isNavigating
+                                ? _routePassed
+                                : null,
+                            navigating: _following,
+                            fitRoute: !_isNavigating || _overview,
+                            navPoint: _navPoint,
+                            navBearing: _isNavigating
+                                ? _navProgress?.bearing
+                                : null,
                             category: _category,
                             resetToken: _resetToken,
                             zoomDelta: _zoomDelta,
-                            userPoint: _userPoint,
+                            userPoint: _navPoint ?? _userPoint,
                             userHeading: _userPoint == null
                                 ? null
                                 : _userHeading,
                             focusToken: _focusToken,
                             markerPlaces: _markerPlaces(),
-                            viewportInsets: wide
-                                ? const EdgeInsets.only(left: 352 + 32)
+                            viewportInsets: _isNavigating
+                                // 导航时把自己放在屏幕偏下处，多看前方的路（同百度）。
+                                ? EdgeInsets.only(
+                                    top: _topInset + 140,
+                                    bottom: _navInset,
+                                  )
+                                : wide
+                                ? EdgeInsets.only(
+                                    left: 352 + 32,
+                                    top: _route == null ? 0 : _topInset,
+                                  )
                                 : EdgeInsets.only(
+                                    top: _route == null ? 0 : _topInset,
                                     bottom: _place == null ? 0 : _sheetInset,
                                   ),
                             onPlaceSelected: _selectPlace,
@@ -898,50 +967,73 @@ class _CampusMapPageState extends State<CampusMapPage>
                             onStreetEntry: _openStreet,
                           ),
                   ),
-                  Positioned(
-                    top: safe.top + 16,
-                    left: 16,
-                    right: 80,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        MapSurface(
-                          radius: 16,
-                          child: MapIconButton(
-                            icon: Icons.chevron_left_rounded,
-                            label: _floor != null
-                                ? '退出室内'
-                                : _place != null
-                                ? '返回校园总览'
-                                : '返回应用',
-                            onPressed: () {
-                              if (_floor != null) {
-                                _leaveIndoor();
-                              } else if (_place != null) {
-                                _clearSelection();
-                              } else {
-                                Navigator.of(context).maybePop();
-                              }
-                            },
-                          ),
-                        ),
-                        if (_place == null && _route == null) ...[
-                          const SizedBox(width: 10),
-                          Expanded(child: _topSearchBar()),
-                        ],
-                      ],
+                  if (_isNavigating)
+                    Positioned.fill(
+                      key: const ValueKey('campus-map-nav-drag'),
+                      child: Listener(
+                        behavior: HitTestBehavior.translucent,
+                        onPointerDown: _onMapPointerDown,
+                        onPointerMove: _onMapPointerMove,
+                      ),
                     ),
-                  ),
-                  Positioned(
-                    top: safe.top + 16,
-                    right: 16,
-                    child: _tools(wide),
-                  ),
+                  // 路线态下左上角不再放返回按钮：它与起终点条位置重叠，
+                  // 结束路线统一由起终点条上的入口负责。
+                  if (_route == null)
+                    Positioned(
+                      key: const ValueKey('campus-map-back'),
+                      top: safe.top + 16,
+                      left: 16,
+                      right: 80,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          MapSurface(
+                            radius: 16,
+                            child: MapIconButton(
+                              icon: Icons.chevron_left_rounded,
+                              label: _floor != null
+                                  ? '退出室内'
+                                  : _place != null
+                                  ? '返回校园总览'
+                                  : '返回应用',
+                              onPressed: () {
+                                if (_floor != null) {
+                                  _leaveIndoor();
+                                } else if (_place != null) {
+                                  _clearSelection();
+                                } else {
+                                  Navigator.of(context).maybePop();
+                                }
+                              },
+                            ),
+                          ),
+                          if (_place == null && _route == null) ...[
+                            const SizedBox(width: 10),
+                            Expanded(child: _topSearchBar()),
+                          ],
+                        ],
+                      ),
+                    ),
+                  // 路线预览 / 导航时顶部卡片占满宽度，图层工具栏让位。
+                  if (_route == null)
+                    Positioned(
+                      key: const ValueKey('campus-map-tools'),
+                      top: safe.top + 16,
+                      right: 16,
+                      child: _tools(wide),
+                    ),
                   if (_floor != null)
                     Positioned(
+                      key: const ValueKey('campus-map-floors'),
                       right: 16,
                       top: safe.top + 120,
-                      bottom: (wide ? 24.0 : constraints.maxHeight * .43) + 16,
+                      bottom:
+                          (wide
+                              ? 24.0
+                              : _isNavigating
+                              ? _navInset
+                              : constraints.maxHeight * .43) +
+                          16,
                       child: AnimatedBuilder(
                         animation: _sheet,
                         builder: (context, child) {
@@ -967,6 +1059,7 @@ class _CampusMapPageState extends State<CampusMapPage>
                     ),
                   if (_layer == CampusMapLayer.streetView)
                     Positioned(
+                      key: const ValueKey('campus-map-street-tip'),
                       top: safe.top + 94,
                       left: wide ? 392 : 16,
                       right: 80,
@@ -996,8 +1089,9 @@ class _CampusMapPageState extends State<CampusMapPage>
                         ),
                       ),
                     ),
-                  if (wide)
+                  if (wide && !_isNavigating)
                     Positioned(
+                      key: const ValueKey('campus-map-side-panel'),
                       left: 16,
                       top: safe.top + 100,
                       bottom: safe.bottom + 24,
@@ -1010,8 +1104,9 @@ class _CampusMapPageState extends State<CampusMapPage>
                         ),
                       ),
                     )
-                  else
+                  else if (!_isNavigating)
                     DraggableScrollableSheet(
+                      key: const ValueKey('campus-map-sheet'),
                       controller: _sheet,
                       initialChildSize: .33,
                       minChildSize: 0,
@@ -1109,16 +1204,23 @@ class _CampusMapPageState extends State<CampusMapPage>
                     ),
                   if (wide)
                     Positioned(
+                      key: const ValueKey('campus-map-locate'),
                       left: 384,
                       bottom: safe.bottom + 24,
-                      child: _locateButton(),
+                      // 导航中相机始终跟随自己，不需要定位按钮。
+                      child: _isNavigating
+                          ? const SizedBox.shrink()
+                          : _locateButton(),
                     )
                   else
                     AnimatedBuilder(
+                      key: const ValueKey('campus-map-locate'),
                       animation: _sheet,
                       builder: (context, _) {
+                        // 导航中相机始终跟随自己，不需要定位按钮。
+                        if (_isNavigating) return const _NoOverlay();
                         final size = _sheet.isAttached ? _sheet.size : .33;
-                        if (size > .5) return const SizedBox.shrink();
+                        if (size > .5) return const _NoOverlay();
                         return Positioned(
                           left: 16,
                           bottom:
@@ -1133,75 +1235,94 @@ class _CampusMapPageState extends State<CampusMapPage>
                         );
                       },
                     ),
-                  // 导航中/预览时的顶部起终点条（仿百度导航页顶栏）。
-                  if (_route != null)
+                  // 顶部：预览时是起终点卡，导航时是转向指引条；高度回报给相机内缩。
+                  if (_route != null && _navRoute != null)
                     Positioned(
+                      key: const ValueKey('campus-map-route-top'),
                       top: safe.top + 12,
-                      left: wide ? 384 : 16,
-                      right: 16,
-                      child: MapSurface(
-                        radius: 18,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 10,
-                        ),
-                        child: Row(
-                          children: [
-                            MapIconButton(
-                              icon: Icons.arrow_back_rounded,
-                              label: '结束路线',
-                              onPressed: _endRoute,
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.circle,
-                                        size: 10,
-                                        color: Color(0xFF34A853),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          _routeOriginLabel,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            color: colors.secondary,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.place_rounded,
-                                        size: 14,
-                                        color: Color(0xFFE15A4E),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Expanded(
-                                        child: Text(
-                                          _room?.name ?? _place?.name ?? '目的地',
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                      left: 16,
+                      right: wide ? null : 16,
+                      width: wide ? 420 : null,
+                      child: _SizeReporter(
+                        onHeight: (height) {
+                          final inset = height + safe.top + 12;
+                          if ((inset - _topInset).abs() < 1) return;
+                          setState(() => _topInset = inset);
+                        },
+                        child: _isNavigating
+                            ? CampusNavBanner(
+                                progress:
+                                    _navProgress ?? _navRoute!.progressAt(0),
+                                arrived: _arrived,
+                                rerouting: _rerouting,
+                              )
+                            : CampusRouteHeader(
+                                originLabel: _routeOriginLabel,
+                                destinationLabel:
+                                    _room?.name ?? _place?.name ?? '目的地',
+                                onBack: _endRoute,
+                                onPickOrigin: () =>
+                                    _showRoutePlanner(pickOrigin: true),
                               ),
+                      ),
+                    ),
+                  // 右侧竖向进度条（仿百度）：已走过的比例。
+                  if (_isNavigating)
+                    Positioned(
+                      key: const ValueKey('campus-map-nav-rail'),
+                      right: 16,
+                      top: _topInset + 24,
+                      bottom: _navInset + 88,
+                      child: CampusNavProgressRail(
+                        fraction:
+                            (_navProgress ?? _navRoute!.progressAt(0)).fraction,
+                      ),
+                    ),
+                  // 左下：跟随时是「全览」，拖动或全览后是「继续导航」。
+                  if (_isNavigating)
+                    Positioned(
+                      key: const ValueKey('campus-map-nav-camera'),
+                      left: 16,
+                      bottom: _navInset + 12,
+                      child: _following
+                          ? MapSurface(
+                              radius: 16,
+                              child: MapIconButton(
+                                icon: Icons.zoom_out_map_rounded,
+                                label: '全览路线',
+                                onPressed: () =>
+                                    setState(() => _overview = true),
+                              ),
+                            )
+                          : MapAction(
+                              icon: Icons.navigation_rounded,
+                              label: '继续导航',
+                              primary: true,
+                              onPressed: _resumeFollow,
                             ),
-                          ],
+                    ),
+                  // 导航底部状态条：剩余距离 / 时间 / 到达时刻 + 退出。
+                  if (_isNavigating)
+                    Positioned(
+                      key: const ValueKey('campus-map-nav-status'),
+                      left: 16,
+                      right: wide ? null : 16,
+                      width: wide ? 420 : null,
+                      bottom: safe.bottom + 16,
+                      child: _SizeReporter(
+                        onHeight: (height) {
+                          final inset = height + safe.bottom + 16;
+                          if ((inset - _navInset).abs() < 1) return;
+                          setState(() => _navInset = inset);
+                        },
+                        child: CampusNavStatusBar(
+                          progress: _navProgress ?? _navRoute!.progressAt(0),
+                          destinationLabel:
+                              _room?.name ?? _place?.name ?? '目的地',
+                          arrived: _arrived,
+                          simulating: _simulating,
+                          onExit: _stopNavigation,
+                          onFinish: _endRoute,
                         ),
                       ),
                     ),
@@ -1221,28 +1342,219 @@ class _CampusMapPageState extends State<CampusMapPage>
     return null;
   }
 
-  /// 开始导航：收起面板，地图全屏呈现路线与顶部起终点条（仿百度导航页）。
+  /// 开始导航：相机锁定到自己的位置并按前进方向旋转，顶部指引条 + 底部状态条。
   void _startNavigation() {
-    if (_sheet.isAttached) {
-      unawaited(
-        _sheet.animateTo(
-          0,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-        ),
-      );
+    if (_navRoute == null) return;
+    if (_userPoint == null) {
+      _message('还没定位到你，导航将从起点开始显示');
+      unawaited(_startLiveLocation(requireReady: false));
+    }
+    setState(() {
+      _navigating = true;
+      _arrived = false;
+      _rerouting = false;
+      _offRouteHits = 0;
+      _navProgress = null;
+      _updateNavProgress();
+    });
+  }
+
+  /// 退出导航：回到路线预览（地图重新取景整条路线）。
+  void _stopNavigation() {
+    _simTimer?.cancel();
+    setState(() {
+      _navigating = false;
+      _simulating = false;
+      _followPaused = false;
+      _overview = false;
+      _navProgress = null;
+      _routePassed = null;
+      _arrived = false;
+      _rerouting = false;
+      _navInset = 0;
+    });
+    _expandSheetAfterFrame(.33);
+  }
+
+  /// 按最新定位推进导航进度；须在 setState 内调用。偏航连续 3 次触发重算，
+  /// 离终点 20 米内视为到达。
+  void _updateNavProgress() {
+    final route = _navRoute;
+    if (!_navigating || _simulating || route == null) return;
+    final user = _userPoint;
+    final previous = _navProgress;
+    final progress = user != null && user.isValid
+        ? route.locate(user, hint: previous?.along)
+        : route.progressAt(previous?.along ?? 0);
+    _navProgress = progress;
+    _routePassed = route.passedGeoJson(progress.along);
+    if (user == null || !user.isValid) return;
+    final end = route.end;
+    if (progress.remaining <= 15 ||
+        (end != null && metersBetween(user, end) <= 20)) {
+      _arrived = true;
+    }
+    if (_arrived) return;
+    if (progress.offRoute > max(30.0, _userAccuracy ?? 0)) {
+      if (++_offRouteHits >= 3) {
+        _offRouteHits = 0;
+        // 重算是异步的，不能在 setState 回调里同步改状态：放到下一个微任务。
+        scheduleMicrotask(() => unawaited(_reroute()));
+      }
+    } else {
+      _offRouteHits = 0;
     }
   }
 
-  /// 结束路线：清除路线并恢复地点面板。
+  /// 偏航重算：以当前位置为起点、沿用原终点重新规划，10 秒内不重复。
+  Future<void> _reroute() async {
+    final request = _routeRequest;
+    final user = _userPoint;
+    final last = _reroutedAt;
+    if (!mounted ||
+        !_navigating ||
+        _rerouting ||
+        request == null ||
+        user == null ||
+        (last != null &&
+            DateTime.now().difference(last) < const Duration(seconds: 10))) {
+      return;
+    }
+    _reroutedAt = DateTime.now();
+    final revision = ++_routeRevision;
+    setState(() => _rerouting = true);
+    final next = CampusRouteRequest(
+      originPoint: user,
+      destinationPlaceId: request.destinationPlaceId,
+      destinationFloorId: request.destinationFloorId,
+      destinationRoomId: request.destinationRoomId,
+      accessible: request.accessible,
+    );
+    try {
+      final result = await widget.source.planRoute(next);
+      if (!mounted || revision != _routeRevision) return;
+      setState(() {
+        _rerouting = false;
+        if (result == null) return;
+        _route = result;
+        _navRoute = NavRoute.fromResult(result);
+        _routeRequest = next;
+        _routeOriginLabel = '我的位置';
+        _routeVia = _viaNames(_navRoute, next);
+        _navProgress = null;
+        _updateNavProgress();
+      });
+      if (result != null) _message('已为你重新规划路线');
+    } catch (_) {
+      if (!mounted || revision != _routeRevision) return;
+      setState(() => _rerouting = false);
+    }
+  }
+
+  /// 结束路线：清除路线与导航状态，恢复地点面板。
   void _endRoute() {
     _routeRevision++;
+    _simTimer?.cancel();
     setState(() {
+      _simulating = false;
+      _followPaused = false;
+      _overview = false;
+      _routeVia = const [];
       _route = null;
+      _navRoute = null;
+      _routeRequest = null;
       _routing = false;
+      _navigating = false;
+      _navProgress = null;
+      _routePassed = null;
+      _arrived = false;
+      _rerouting = false;
+      _navInset = 0;
+      _topInset = 0;
     });
-    _expandSheet(_place == null ? .33 : .43);
+    _expandSheetAfterFrame(_place == null ? .33 : .43);
   }
+
+  /// 是否处于导航态：有路线且已点「开始导航」。
+  bool get _isNavigating => _navigating && _route != null && _navRoute != null;
+
+  /// 导航中蓝点与相机用的位置：离路线不远时吸附到路线上，避免定位抖动偏到路外。
+  GeoPoint? get _navPoint {
+    final progress = _navProgress;
+    if (!_isNavigating || progress == null) return null;
+    final user = _userPoint;
+    if (_simulating || user == null || progress.offRoute <= 20) {
+      return progress.snapped;
+    }
+    return user;
+  }
+
+  /// 相机是否跟随（导航中，且没有拖动地图、没在全览）。
+  bool get _following => _isNavigating && !_followPaused && !_overview;
+
+  /// 路线途经的楼宇名（排除终点），按经过顺序最多 4 个。
+  List<String> _viaNames(NavRoute? route, CampusRouteRequest request) {
+    if (route == null) return const [];
+    return [
+      for (final place in route.placesAlong(
+        _campus.places.where((p) => p.poiId == null && p.featureId == null),
+        excludeId: request.destinationPlaceId,
+      ))
+        place.name,
+    ];
+  }
+
+  /// 模拟导航：从起点出发，每秒沿路线前进 8 米（约 2 倍步行速度），到终点停止。
+  void _startSimulation() {
+    final route = _navRoute;
+    if (route == null || route.isEmpty) return;
+    _simTimer?.cancel();
+    setState(() {
+      _navigating = true;
+      _simulating = true;
+      _arrived = false;
+      _rerouting = false;
+      _followPaused = false;
+      _overview = false;
+      _navProgress = route.progressAt(0);
+      _routePassed = route.passedGeoJson(0);
+    });
+    _simTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      final current = _navRoute;
+      if (!mounted || !_simulating || current == null) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        final along = (_navProgress?.along ?? 0) + 8;
+        final progress = current.progressAt(along);
+        _navProgress = progress;
+        _routePassed = current.passedGeoJson(progress.along);
+        if (progress.remaining <= 0.5) {
+          _arrived = true;
+          timer.cancel();
+        }
+      });
+    });
+  }
+
+  /// 导航中手指在地图上拖动超过 12 像素：暂停跟随，出现「继续导航」。
+  void _onMapPointerDown(PointerDownEvent event) =>
+      _dragOrigin = event.position;
+
+  void _onMapPointerMove(PointerMoveEvent event) {
+    final origin = _dragOrigin;
+    if (!_following || origin == null) return;
+    if ((event.position - origin).distance < 12) return;
+    _dragOrigin = null;
+    setState(() => _followPaused = true);
+  }
+
+  /// 回到跟随视角。
+  void _resumeFollow() => setState(() {
+    _followPaused = false;
+    _overview = false;
+  });
 
   /// 是否是校园总览的「发现」面板（未选地点、无路线、未搜索、未选分类）。
   /// 这时内容很短，面板高度按内容来。
@@ -1292,16 +1604,16 @@ class _CampusMapPageState extends State<CampusMapPage>
   );
 
   Widget _panel() {
-    final route = _route;
-    if (route != null) {
+    final navRoute = _navRoute;
+    if (_route != null && navRoute != null) {
       return CampusRoutePreview(
-        route: route,
+        route: navRoute,
+        originLabel: _routeOriginLabel,
         destinationLabel: _room?.name ?? _place?.name ?? '目的地',
-        destinationSubtitle: _floor != null
-            ? '${_place?.name ?? ''} · ${_floor!.label}'
-            : null,
+        via: _routeVia,
         onStart: _startNavigation,
-        onClose: _endRoute,
+        // 模拟导航只给开发调试用，正式包不显示。
+        onSimulate: kDebugMode ? _startSimulation : null,
       );
     }
     return _place == null
@@ -1771,4 +2083,13 @@ class _SizeReporterState extends State<_SizeReporter> {
     });
     return widget.child;
   }
+}
+
+/// Stack 里「什么都不画」的占位：必须是 Positioned，不能参与 Stack 尺寸计算。
+class _NoOverlay extends StatelessWidget {
+  const _NoOverlay();
+
+  @override
+  Widget build(BuildContext context) =>
+      const Positioned(left: 0, top: 0, child: SizedBox.shrink());
 }
