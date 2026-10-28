@@ -39,6 +39,30 @@ String featureKindLabel(String? kind) {
   return kFeatureKindLabels[kind] ?? kind;
 }
 
+/// 建筑类型 → 中文名。与后端 `buildings.category` 的 CHECK（迁移 000007）、
+/// 管理台下拉项、地图图标（后端 configs/sprites/campus/*.svg）一一对应；
+/// 新增类型要同时改这几处，并在面板里补图标与配色。
+const Map<String, String> kBuildingTypeLabels = {
+  'dormitory': '宿舍',
+  'teaching': '教学楼',
+  'lab': '实验楼',
+  'library': '图书馆',
+  'canteen': '食堂餐厅',
+  'office': '办公楼',
+  'commercial': '商业区',
+  'sports': '体育场馆',
+  'other': '其他',
+};
+
+/// 建筑类型归入 App 的分类筛选；宿舍、办公楼等没有对应分类的返回 null。
+PlaceCategory? buildingTypeCategory(String? type) => switch (type) {
+  'teaching' || 'lab' || 'library' => PlaceCategory.study,
+  'canteen' => PlaceCategory.food,
+  'sports' => PlaceCategory.sports,
+  'commercial' => PlaceCategory.services,
+  _ => null,
+};
+
 /// A geographic coordinate in WGS84, independent of the rendering SDK.
 class GeoPoint {
   const GeoPoint({required this.longitude, required this.latitude});
@@ -101,6 +125,7 @@ class CampusPlace {
     this.floors = const [],
     this.sceneId,
     this.entrance,
+    this.buildingType,
   });
 
   final String id;
@@ -128,6 +153,10 @@ class CampusPlace {
   final String? sceneId;
   final GeoPoint? entrance;
 
+  /// 建筑类型（dormitory / teaching…，见 [kBuildingTypeLabels]），只有建筑带。
+  /// 地图上的类型图标与楼名分档由服务器样式负责，这里只用于分类筛选与详情标签。
+  final String? buildingType;
+
   /// 是否有可打开的详情页（三类地物都有稳定编号，因此都有）。
   bool get hasDetail =>
       buildingId != null || poiId != null || featureId != null;
@@ -149,6 +178,7 @@ class CampusPlace {
     'floors': [for (final floor in floors) floor.toJson()],
     'scene_id': sceneId,
     'entrance': entrance?.toJson(),
+    'building_type': buildingType,
   };
 
   factory CampusPlace.fromJson(Map<String, dynamic> json) {
@@ -181,6 +211,7 @@ class CampusPlace {
               Map<String, dynamic>.from(json['entrance'] as Map),
             )
           : null,
+      buildingType: json['building_type'] as String?,
     );
   }
 }

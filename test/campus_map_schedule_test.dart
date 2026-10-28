@@ -23,6 +23,18 @@ void main() {
     expect(locationInBuilding('北101', '北'), isFalse);
   });
 
+  test('楼名两边都忽略「楼」字', () {
+    // 课表写「北辰N101」、地图叫「北辰楼」，反过来也一样。
+    expect(locationInBuilding('北辰N101', '北辰楼'), isTrue);
+    expect(locationInBuilding('北辰楼N101', '北辰'), isTrue);
+    expect(locationInBuilding('北辰楼N101', '北辰楼'), isTrue);
+    expect(roomCodeIn('北辰N101', '北辰楼'), 'N101');
+    expect(roomCodeIn('北辰楼 N101', '北辰'), 'N101');
+    // 去掉「楼」后只剩一个字的楼名不参与匹配。
+    expect(locationInBuilding('A101', 'A楼'), isFalse);
+    expect(locationInBuilding('南辰N101', '北辰楼'), isFalse);
+  });
+
   test('取楼名后面的门牌号', () {
     expect(roomCodeIn('明德楼A101', '明德楼'), 'A101');
     expect(roomCodeIn('揽江楼 N407', '揽江楼'), 'N407');

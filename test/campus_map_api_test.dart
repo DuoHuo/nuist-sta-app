@@ -139,10 +139,20 @@ void main() {
   late Dio dio;
   late CampusMapApi api;
 
+  /// 内置样式的替身：服务器样式取不到 / 没配置时 App 用它（真实文件见
+  /// assets/map/campus_style.json，由 campus_map_resources_test 校验）。
+  const bundledStyle =
+      '{"version":8,"sources":{"openmaptiles":{"type":"vector",'
+      '"tiles":["/martin/campus/{z}/{x}/{y}"]}},"layers":[]}';
+
   void setup(Handler handler, {String baseUrl = 'http://example.test'}) {
     adapter = FakeAdapter(handler);
     dio = Dio()..httpClientAdapter = adapter;
-    api = CampusMapApi(baseUrl: baseUrl, dio: dio);
+    api = CampusMapApi(
+      baseUrl: baseUrl,
+      dio: dio,
+      bundledStyle: () async => bundledStyle,
+    );
   }
 
   tearDown(() {
@@ -293,8 +303,9 @@ void main() {
         return ok({'pois': []});
       }, baseUrl: 'http://duohuo.org.cn:12345');
       final snapshot = await api.loadCampus();
+      // 没有 style_url：用内置样式，瓦片地址换成服务器给的 tile_url（归一到代理）。
       final style = jsonDecode(snapshot.styleString!) as Map;
-      expect(style['sources']['campus']['tiles'], [
+      expect(style['sources']['openmaptiles']['tiles'], [
         'http://duohuo.org.cn:12345/martin/campus/{z}/{x}/{y}',
       ]);
       expect(snapshot.places, isEmpty);
@@ -438,12 +449,12 @@ void main() {
     expect(features.first['properties']['height_m'], 17);
     expect(features[1]['properties'].containsKey('height_m'), isFalse);
     expect(features[1]['geometry'], feature({})['geometry']);
+    // style_url 为空：用内置样式，瓦片换成服务器给的 tile_url（归一到代理）。
     final style = jsonDecode(snapshot.styleString!) as Map;
-    expect(style['sources']['campus']['tiles'], [
+    expect(style['sources']['openmaptiles']['tiles'], [
       'http://example.test/martin/campus/{z}/{x}/{y}',
     ]);
-    expect(style['sources']['campus']['bounds'], [118.6, 32.1, 118.8, 32.3]);
-    expect(style['sources']['campus']['attribution'], 'Backend attribution');
+    expect(snapshot.attribution, 'Backend attribution');
     expect(style.containsKey('glyphs'), isFalse);
     expect(
       (style['layers'] as List).any(
@@ -454,6 +465,28 @@ void main() {
     expect(snapshot.warning, isNull);
     // 4 份元数据 + 1 次批量几何探测（404）+ 19 栋逐栋几何。
     expect(adapter.requests, hasLength(24));
+  });
+
+  test('falls back to the bundled server style when style URL fails', () async {
+    setup((request) {
+      if (request.uri.path.endsWith('/map/config')) {
+        return ok({'style_url': '/martin/styles/campus'});
+      }
+      if (request.uri.path == '/martin/styles/campus') {
+        return ResponseBody.fromString('down', 502);
+      }
+      if (request.uri.path.endsWith('/buildings')) {
+        return ok({'buildings': []});
+      }
+      return ok({'pois': [], 'features': []});
+    });
+    final snapshot = await api.loadCampus();
+    // 不再出现「底图资源加载失败」：外观与服务器样式一致的内置样式顶上。
+    expect(snapshot.warning, isNull);
+    final style = jsonDecode(snapshot.styleString!) as Map;
+    expect(style['sources']['openmaptiles']['tiles'], [
+      'http://example.test/martin/campus/{z}/{x}/{y}',
+    ]);
   });
 
   test(
@@ -533,6 +566,26 @@ void main() {
       PlaceCategory.sports,
       PlaceCategory.services,
     ]);
+  });
+
+  test('building category maps to app filter', () async {
+    setup((request) {
+      if (request.uri.path.endsWith('/buildings')) {
+        return ok({
+          'buildings': [
+            {...building('b1'), 'category': 'canteen', 'label_weight': 2},
+            {...building('b2'), 'category': 'dormitory', 'label_weight': 1},
+            {...building('b3'), 'label_weight': 9},
+          ],
+        });
+      }
+      return ok({'pois': []});
+    });
+    final places = await api.searchPlaces('楼');
+    expect(places.map((p) => p.category), [PlaceCategory.food, null, null]);
+    expect(places.map((p) => p.buildingType), ['canteen', 'dormitory', null]);
+    final cached = CampusPlace.fromJson(places.first.toJson());
+    expect(cached.buildingType, 'canteen');
   });
 
   test('floor adds context and links rooms by explicit IDs only; no default wall height', () async {

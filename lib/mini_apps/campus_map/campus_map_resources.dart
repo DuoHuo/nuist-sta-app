@@ -2,9 +2,9 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
-import 'campus_map_data.dart';
-
-/// Resolves server-owned style and TileJSON resources before native rendering.
+/// 渲染前解析服务器下发的样式与 TileJSON：只做地址归一（走同源 /martin 代理）、
+/// 探测 sprite、按校园范围设中心。**不改样式内容**——楼名、类型图标、标注字段都
+/// 由服务器样式（数据来自业务库实时瓦片）决定，管理台与 App 看到的是同一份。
 class CampusMapResources {
   CampusMapResources(this.dio, this.apiBase);
   final Dio dio;
@@ -64,11 +64,7 @@ class CampusMapResources {
     return Map<String, dynamic>.from(data);
   }
 
-  Future<String> prepare(
-    String input, {
-    List<double>? bounds,
-    List<CampusPlace> places = const [],
-  }) async {
+  Future<String> prepare(String input, {List<double>? bounds}) async {
     final inline = input.trimLeft().startsWith('{');
     final styleUri = inline ? apiBase : Uri.parse(resolve(input));
     final style = inline
@@ -79,10 +75,25 @@ class CampusMapResources {
         style['layers'] is! List) {
       throw const FormatException('Invalid MapLibre style');
     }
-    for (final key in ['glyphs', 'sprite']) {
-      if (style[key] is String) {
-        style[key] = resolve(style[key] as String, relativeTo: styleUri);
-      }
+    if (style['glyphs'] is String) {
+      style['glyphs'] = resolve(
+        style['glyphs'] as String,
+        relativeTo: styleUri,
+      );
+    }
+    // sprite 可以是单个地址，也可以是多套 [{id, url}]（OSM Bright 自带 + 建筑类型图标）
+    final sprite = style['sprite'];
+    if (sprite is String) {
+      style['sprite'] = resolve(sprite, relativeTo: styleUri);
+    } else if (sprite is List) {
+      style['sprite'] = [
+        for (final entry in sprite)
+          if (entry is Map && entry['url'] is String)
+            {
+              ...entry,
+              'url': resolve(entry['url'] as String, relativeTo: styleUri),
+            },
+      ];
     }
     // Sprite 不可达会让原生端卡住样式加载，先探测；字形只做非空归一。
     _normalizeGlyphs(style);
@@ -140,111 +151,8 @@ class CampusMapResources {
       ];
       style['zoom'] = 15;
     }
-    // 与管理台保持一致：中文标签字段改写 + 注入本库楼名。
-    _applyChineseLabels(style);
-    _injectBuildingNames(style, places);
     style['pitch'] = 0;
     return jsonEncode(style);
-  }
-
-  /// 瓦片的中文常写在 name:nonlatin（tilemaker 可能写进 name:latin），
-  /// 中文优先取本地文字，避免底图显示拉丁转写。
-  void _applyChineseLabels(Map<String, dynamic> style) {
-    const zhField = [
-      'coalesce',
-      ['get', 'name:nonlatin'],
-      ['get', 'name'],
-      ['get', 'name:latin'],
-    ];
-    for (final raw in style['layers'] as List) {
-      if (raw is! Map) continue;
-      final layout = raw['layout'];
-      if (raw['type'] != 'symbol' || layout is! Map) continue;
-      final field = layout['text-field'];
-      if (field == null) continue;
-      if (!jsonEncode(field).contains('name:latin')) continue;
-      layout['text-field'] = zhField;
-    }
-  }
-
-  /// 瓦片 building 层没有楼名字段；用业务库中的命名建筑生成蓝色楼名标注，
-  /// 并排除与之重名的底图 POI 文字（只保留图标），避免同一栋楼出现两份名字。
-  void _injectBuildingNames(
-    Map<String, dynamic> style,
-    List<CampusPlace> places,
-  ) {
-    final named = [
-      for (final place in places)
-        if (place.poiId == null &&
-            place.center != null &&
-            place.center!.isValid &&
-            place.name.trim().isNotEmpty &&
-            !place.name.startsWith('未命名'))
-          place,
-    ];
-    if (named.isEmpty) return;
-    final names = [for (final place in named) place.name];
-    for (final raw in style['layers'] as List) {
-      if (raw is! Map || raw['type'] != 'symbol') continue;
-      if (raw['source-layer'] != 'poi') continue;
-      final existing = raw['filter'];
-      raw['filter'] = [
-        'all',
-        ?existing,
-        ['!in', 'name', ...names],
-        ['!in', 'name:latin', ...names],
-        ['!in', 'name:nonlatin', ...names],
-      ];
-    }
-    final sources = Map<String, dynamic>.from(style['sources'] as Map);
-    sources['campus-building-names'] = {
-      'type': 'geojson',
-      'data': {
-        'type': 'FeatureCollection',
-        'features': [
-          for (final place in named)
-            {
-              'type': 'Feature',
-              'geometry': {
-                'type': 'Point',
-                'coordinates': [
-                  place.center!.longitude,
-                  place.center!.latitude,
-                ],
-              },
-              'properties': {'name': place.name},
-            },
-        ],
-      },
-    };
-    style['sources'] = sources;
-    (style['layers'] as List).add({
-      'id': 'basemap-building-name',
-      'type': 'symbol',
-      'source': 'campus-building-names',
-      'minzoom': 15.5,
-      'layout': {
-        'text-field': ['get', 'name'],
-        'text-font': ['Noto Sans Regular'],
-        'text-size': [
-          'interpolate',
-          ['linear'],
-          ['zoom'],
-          15.5,
-          10.5,
-          19,
-          13.5,
-        ],
-        'text-letter-spacing': 0.05,
-        'text-padding': 4,
-        'text-allow-overlap': false,
-      },
-      'paint': {
-        'text-color': '#16307A',
-        'text-halo-color': 'rgba(255,255,255,0.92)',
-        'text-halo-width': 1.3,
-      },
-    });
   }
 
   /// Sprite 不可达时会让 MapLibre 原生端反复重试甚至卡住样式加载，先探测再丢弃。
@@ -254,10 +162,29 @@ class CampusMapResources {
   /// 字形按需拉取，境外服务偶发超时只影响文字本身，不应拖垮底图。
   Future<void> _dropUnreachableSprite(Map<String, dynamic> style) async {
     final value = style['sprite'];
-    if (value is! String || value.isEmpty) {
-      if (style.containsKey('sprite')) style.remove('sprite');
+    if (value is List) {
+      // 多套 sprite：逐套探测，只留可达的；一套都不可达就整个去掉
+      final reachable = [
+        for (final entry in value)
+          if (entry is Map &&
+              entry['url'] is String &&
+              await _spriteReachable(entry['url'] as String))
+            entry,
+      ];
+      if (reachable.isEmpty) {
+        style.remove('sprite');
+      } else {
+        style['sprite'] = reachable;
+      }
       return;
     }
+    if (value is! String || value.isEmpty || !await _spriteReachable(value)) {
+      style.remove('sprite');
+    }
+  }
+
+  Future<bool> _spriteReachable(String value) async {
+    if (value.isEmpty) return false;
     final probe = '$value.json';
     try {
       final response = await dio.get<dynamic>(
@@ -269,13 +196,12 @@ class CampusMapResources {
           maxRedirects: 4,
         ),
       );
-      if (response.statusCode == 200) return;
+      return response.statusCode == 200;
     } on DioException catch (error) {
-      if (error.response?.statusCode == 200) return;
+      return error.response?.statusCode == 200;
     } catch (_) {
-      // 落到丢弃逻辑
+      return false;
     }
-    style.remove('sprite');
   }
 
   void _normalizeGlyphs(Map<String, dynamic> style) {

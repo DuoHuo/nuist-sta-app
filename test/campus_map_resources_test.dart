@@ -1,13 +1,16 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_api.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_resources.dart';
 
 import 'campus_map_api_test.dart' show FakeAdapter, response;
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test(
     'routes martin resources through the same-origin /martin proxy',
     () async {
@@ -164,15 +167,19 @@ void main() {
     },
   );
 
-  test('injects blue building names and rewrites labels to Chinese', () async {
+  test('leaves style content untouched and keeps reachable sprites', () async {
     final dio = Dio()
       ..httpClientAdapter = FakeAdapter((r) {
-        if (r.uri.path.startsWith('/martin/fonts/')) {
-          return response({'stub': true});
-        }
         if (r.uri.path == '/martin/styles/campus') {
           return response({
             'version': 8,
+            'sprite': [
+              {
+                'id': 'default',
+                'url': 'http://map.test:12345/admin/vendor/sprite/sprite',
+              },
+              {'id': 'campus', 'url': '../sprite/campus'},
+            ],
             'sources': {
               'openmaptiles': {
                 'type': 'vector',
@@ -181,34 +188,27 @@ void main() {
             },
             'layers': [
               {
-                'id': 'poi-level-1',
+                'id': 'building-name-landmark',
                 'type': 'symbol',
-                'source-layer': 'poi',
+                'source': 'openmaptiles',
+                'source-layer': 'building_label',
+                'minzoom': 13.5,
                 'layout': {
                   'text-field': [
                     'coalesce',
                     ['get', 'name'],
-                    ['get', 'name:latin'],
-                  ],
-                },
-              },
-              {
-                'id': 'highway-name-major',
-                'type': 'symbol',
-                'source-layer': 'transportation_name',
-                'layout': {
-                  'text-field': [
-                    'coalesce',
-                    ['get', 'name:latin'],
+                    ['get', 'name_en'],
                   ],
                 },
               },
             ],
           });
         }
-        return response({
-          'tiles': ['http://map.test:12345/martin/campus/{z}/{x}/{y}'],
-        });
+        // 只有建筑类型图标那套 sprite 可达
+        if (r.uri.path == '/martin/sprite/campus.json') {
+          return response({'dormitory': {}});
+        }
+        return ResponseBody.fromString('nope', 404);
       });
     addTearDown(dio.close);
     final resources = CampusMapResources(
@@ -216,56 +216,47 @@ void main() {
       Uri.parse('http://map.test:12345/'),
     );
     final style = jsonDecode(
-      await resources.prepare(
-        'http://map.test:12345/martin/styles/campus',
-        bounds: [118.6, 32.1, 118.8, 32.3],
-        places: const [
-          CampusPlace(
-            id: 'b1',
-            name: '明德楼',
-            category: null,
-            center: GeoPoint(longitude: 118.71, latitude: 32.2),
-          ),
-          CampusPlace(
-            id: 'b2',
-            name: '未命名建筑',
-            category: null,
-            center: GeoPoint(longitude: 118.72, latitude: 32.21),
-          ),
-          CampusPlace(
-            id: 'poi:5',
-            name: '食堂',
-            category: PlaceCategory.food,
-            poiId: 5,
-            center: GeoPoint(longitude: 118.73, latitude: 32.22),
-          ),
-        ],
-      ),
+      await resources.prepare('http://map.test:12345/martin/styles/campus'),
     );
+    // 不可达的那套 sprite 去掉，可达的保留（相对地址按样式地址解析）
+    expect(style['sprite'], [
+      {'id': 'campus', 'url': 'http://map.test:12345/martin/sprite/campus'},
+    ]);
+    // 样式内容原样：不注入楼名、不改写标注字段
     final layers = (style['layers'] as List).cast<Map>();
-    final poi = layers.firstWhere((l) => l['id'] == 'poi-level-1');
-    expect(poi['filter'], [
-      'all',
-      ['!in', 'name', '明德楼'],
-      ['!in', 'name:latin', '明德楼'],
-      ['!in', 'name:nonlatin', '明德楼'],
-    ]);
-    final highway = layers.firstWhere((l) => l['id'] == 'highway-name-major');
-    expect(highway['layout']['text-field'], [
+    expect(layers.map((l) => l['id']), ['building-name-landmark']);
+    expect(layers.single['layout']['text-field'], [
       'coalesce',
-      ['get', 'name:nonlatin'],
       ['get', 'name'],
-      ['get', 'name:latin'],
+      ['get', 'name_en'],
     ]);
-    final label = layers.last;
-    expect(label['id'], 'basemap-building-name');
-    expect(label['minzoom'], 15.5);
-    expect(label['paint']['text-color'], '#16307A');
-    final features =
-        (style['sources']['campus-building-names']['data']['features'] as List);
-    // 未命名建筑与 POI 都不注入楼名。
-    expect(features, hasLength(1));
-    expect(features.single['properties']['name'], '明德楼');
-    expect(features.single['geometry']['coordinates'], [118.71, 32.2]);
+    expect((style['sources'] as Map).keys, ['openmaptiles']);
   });
+
+  test(
+    'bundled style mirrors the server style and needs no TileJSON',
+    () async {
+      final style =
+          jsonDecode(await rootBundle.loadString(kCampusBundledStyle)) as Map;
+      expect(style['version'], 8);
+      final source = style['sources']['openmaptiles'] as Map;
+      // 瓦片模板直接写死：离线兜底时不必再取 TileJSON
+      expect(source['url'], isNull);
+      expect(source['tiles'], ['/martin/campus/{z}/{x}/{y}']);
+      final layers = (style['layers'] as List).cast<Map>();
+      expect(
+        layers.map((l) => l['id']),
+        containsAll([
+          'building',
+          'building-top',
+          'building-name',
+          'building-name-major',
+          'building-name-landmark',
+          'feature-name',
+        ]),
+      );
+      // 静态瓦片时代的 POI 标注层不应再出现
+      expect(layers.map((l) => l['source-layer']), isNot(contains('poi')));
+    },
+  );
 }

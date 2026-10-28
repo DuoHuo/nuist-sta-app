@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart' show rootBundle;
 
 import '../../core/config/campus_config.dart';
 import '../../core/network/vpn_dio.dart';
@@ -15,6 +16,10 @@ const String _runtimeBaseUrl = String.fromEnvironment('CAMPUS_API_BASE_URL');
 final String _defaultBaseUrl = _runtimeBaseUrl.isEmpty
     ? kCampusMapBaseUrl
     : _runtimeBaseUrl;
+
+/// 内置底图样式：服务器样式（后端 configs/style.osm-bright.json）的打包副本，
+/// 服务器样式取不到时用它。服务器样式改了要同步更新这个文件。
+const String kCampusBundledStyle = 'assets/map/campus_style.json';
 
 class CampusMapApiException implements Exception {
   const CampusMapApiException(this.message, {this.code, this.statusCode});
@@ -34,16 +39,22 @@ class CampusMapApi
         CampusMapRemoteSource,
         CampusBuildingModelSource,
         CampusBuildingPhotosSource {
-  CampusMapApi({String? baseUrl, Dio? dio})
-    : _baseUrl = (baseUrl ?? _defaultBaseUrl).replaceFirst(RegExp(r'/+$'), ''),
-      _dio =
-          dio ??
-          vpnDio(
-            options: BaseOptions(connectTimeout: const Duration(seconds: 10)),
-          ),
-      _ownsDio = dio == null;
+  CampusMapApi({
+    String? baseUrl,
+    Dio? dio,
+    Future<String> Function()? bundledStyle,
+  }) : _baseUrl = (baseUrl ?? _defaultBaseUrl).replaceFirst(RegExp(r'/+$'), ''),
+       _bundledStyle =
+           bundledStyle ?? (() => rootBundle.loadString(kCampusBundledStyle)),
+       _dio =
+           dio ??
+           vpnDio(
+             options: BaseOptions(connectTimeout: const Duration(seconds: 10)),
+           ),
+       _ownsDio = dio == null;
 
   final String _baseUrl;
+  final Future<String> Function() _bundledStyle;
   final Dio _dio;
   final bool _ownsDio;
   bool _closed = false;
@@ -59,7 +70,6 @@ class CampusMapApi
 
   CampusMapResources get _resources =>
       CampusMapResources(_dio, Uri.parse('$_baseUrl/'));
-  String _resourceUrl(String value) => _resources.resolve(value);
 
   Uri get _serverRoot {
     final base = Uri.tryParse(_baseUrl);
@@ -204,14 +214,24 @@ class CampusMapApi
     final styleUrl = _text(config['style_url']);
     String? preparedStyle;
     String? warning;
-    try {
-      preparedStyle = await _resources.prepare(
-        styleUrl ?? _basicStyle(config, bounds, attribution),
-        bounds: bounds,
-        places: places,
-      );
-    } catch (_) {
-      warning = '底图资源加载失败，地点和路线仍可使用，请刷新重试';
+    if (styleUrl != null) {
+      try {
+        preparedStyle = await _resources.prepare(styleUrl, bounds: bounds);
+      } catch (_) {
+        // 落到下面的内置样式
+      }
+    }
+    // 服务器没给样式地址、或样式取不到：用打包进 App 的同一份服务器样式（外观
+    // 完全一致，瓦片照样从服务器取），而不是另画一套简陋的兜底样式。
+    if (preparedStyle == null) {
+      try {
+        preparedStyle = await _resources.prepare(
+          await _bundledStyleFor(config),
+          bounds: bounds,
+        );
+      } catch (_) {
+        warning = '底图资源加载失败，地点和路线仍可使用，请刷新重试';
+      }
     }
     return CampusMapSnapshot(
       places: places,
@@ -336,10 +356,11 @@ class CampusMapApi
           elevationM: _number(floor['elevation_m']),
         ),
     ]..sort((a, b) => a.number.compareTo(b.number));
+    final type = _text(data['category']);
     final place = CampusPlace(
       id: id,
       name: _text(data['name']) ?? '',
-      category: null,
+      category: buildingTypeCategory(type),
       buildingId: id,
       center: _point(data['centroid_lng'], data['centroid_lat']),
       entrance: entrance == null
@@ -349,6 +370,7 @@ class CampusMapApi
       hasIndoor: data['has_indoor_map'] == true,
       floors: floors,
       sceneId: _text(data['splat_scene_id']),
+      buildingType: type,
     );
     _places[id] = place;
     return place;
@@ -640,69 +662,14 @@ class CampusMapApi
     if (_ownsDio) _dio.close(force: true);
   }
 
-  String _basicStyle(
-    Map<String, dynamic> config,
-    List<double>? bounds,
-    String? attribution,
-  ) {
+  /// 内置样式（assets/map/campus_style.json，服务器样式的打包副本）。服务器给了
+  /// tile_url 时换成它，其余（图层、配色、sprite、字形）原样使用。
+  Future<String> _bundledStyleFor(Map<String, dynamic> config) async {
+    final style = jsonDecode(await _bundledStyle()) as Map<String, dynamic>;
     final tile = _text(config['tile_url']);
-    final glyphs = _text(config['glyphs_url']);
-    final sprites = _text(config['sprites_url']);
-    return jsonEncode({
-      'version': 8,
-      'name': 'campus-basic',
-      if (bounds != null)
-        'center': [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2],
-      if (bounds != null) 'zoom': 15,
-      if (glyphs != null) 'glyphs': _resourceUrl(glyphs),
-      if (sprites != null) 'sprite': _resourceUrl(sprites),
-      'sources': {
-        if (tile != null)
-          'campus': {
-            'type': 'vector',
-            'tiles': [_resourceUrl(tile)],
-            'bounds': ?bounds,
-            'attribution': ?attribution,
-          },
-      },
-      'layers': [
-        {
-          'id': 'background',
-          'type': 'background',
-          'paint': {'background-color': '#f2efe9'},
-        },
-        if (tile != null) ...[
-          {
-            'id': 'water',
-            'type': 'fill',
-            'source': 'campus',
-            'source-layer': 'water',
-            'paint': {'fill-color': '#a0c8f0'},
-          },
-          {
-            'id': 'road-minor',
-            'type': 'line',
-            'source': 'campus',
-            'source-layer': 'transportation',
-            'filter': [
-              'all',
-              [
-                '!',
-                ['has', 'brunnel'],
-              ],
-            ],
-            'paint': {'line-color': '#ffffff', 'line-width': 1.5},
-          },
-          {
-            'id': 'building',
-            'type': 'fill',
-            'source': 'campus',
-            'source-layer': 'building',
-            'paint': {'fill-color': '#d9d0c7'},
-          },
-        ],
-      ],
-    });
+    final source = (style['sources'] as Map?)?['openmaptiles'];
+    if (tile != null && source is Map) source['tiles'] = [tile];
+    return jsonEncode(style);
   }
 
   static String? _text(dynamic value) {

@@ -10,22 +10,47 @@ import 'campus_map_data.dart';
 String _normalize(String value) =>
     value.replaceAll(RegExp(r'\s+'), '').toUpperCase();
 
-/// [location] 是否在名为 [buildingName] 的楼里（地点以楼名开头）。
-bool locationInBuilding(String location, String buildingName) {
-  final name = _normalize(buildingName);
-  // 单字楼名太容易误配（如「北」），不参与匹配。
-  if (name.length < 2) return false;
-  return _normalize(location).startsWith(name);
+const _lou = '楼';
+
+/// 楼名去掉所有「楼」字后的核心名，如「北辰楼」→「北辰」。
+String _coreName(String buildingName) =>
+    _normalize(buildingName).replaceAll(_lou, '');
+
+/// 地点 [location] 以楼名开头时，返回楼名在地点里结束的位置；否则返回 null。
+///
+/// 两边都忽略「楼」字：「北辰楼」能对上「北辰N101」「北辰楼N101」。只在楼名这段
+/// 前缀里跳过「楼」，后面门牌里的「3楼301」不受影响。
+int? _nameEnd(String location, String buildingName) {
+  final name = _coreName(buildingName);
+  // 单字核心名太容易误配（如「北」），不参与匹配。
+  if (name.length < 2) return null;
+  var i = 0;
+  for (final char in name.split('')) {
+    while (i < location.length && location[i] == _lou) {
+      i++;
+    }
+    if (i >= location.length || location[i] != char) return null;
+    i++;
+  }
+  // 楼名后面紧跟的「楼」也算楼名的一部分。
+  while (i < location.length && location[i] == _lou) {
+    i++;
+  }
+  return i;
 }
 
+/// [location] 是否在名为 [buildingName] 的楼里（地点以楼名开头，忽略「楼」字）。
+bool locationInBuilding(String location, String buildingName) =>
+    _nameEnd(_normalize(location), buildingName) != null;
+
 /// 从地点里取出楼名后面的门牌号，如「明德楼A101」→「A101」、
-/// 「学而楼C303多媒体教室」→「C303」；取不到时返回 null。
+/// 「明德N101」→「N101」、「学而楼C303多媒体教室」→「C303」；取不到时返回 null。
 String? roomCodeIn(String location, String buildingName) {
   final normalized = _normalize(location);
-  final name = _normalize(buildingName);
-  if (!normalized.startsWith(name)) return null;
+  final end = _nameEnd(normalized, buildingName);
+  if (end == null) return null;
   final match = RegExp(r'^[-_#·]*([A-Z]*\d+)')
-      .firstMatch(normalized.substring(name.length));
+      .firstMatch(normalized.substring(end));
   return match?.group(1);
 }
 
