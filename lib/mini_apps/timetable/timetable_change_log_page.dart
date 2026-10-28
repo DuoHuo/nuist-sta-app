@@ -150,51 +150,63 @@ class _LogRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
     final chip = changeTypeChipStyle(record.type, colors);
+    final scope = TimetableChangeFormat.scopeBodyOf(record);
     final detail = TimetableChangeFormat.detailOf(record);
     return Padding(
       key: Key('tt_change_log_row_${group}_$index'),
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            decoration: BoxDecoration(
-              color: chip.fg,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              record.type.labelZh,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: colors.surface,
-              ),
+          Text(
+            record.courseName.isEmpty ? '（无课名）' : record.courseName,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+              color: colors.titleText,
             ),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
+          const SizedBox(height: 6),
+          Semantics(
+            label: '${record.type.labelZh}，影响范围：$scope',
+            excludeSemantics: true,
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  record.courseName.isEmpty ? '（无课名）' : record.courseName,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                    color: colors.titleText,
+                Container(
+                  key: Key('tt_change_log_type_${group}_$index'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: chip.fg,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    record.type.labelZh,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: colors.surface,
+                    ),
                   ),
                 ),
-                if (detail.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    detail,
-                    style: TextStyle(fontSize: 13, color: colors.hint),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    scope,
+                    key: Key('tt_change_log_scope_${group}_$index'),
+                    style: TextStyle(fontSize: 13, color: colors.labelText),
                   ),
-                ],
+                ),
               ],
             ),
           ),
+          if (detail.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(detail, style: TextStyle(fontSize: 13, color: colors.hint)),
+          ],
         ],
       ),
     );

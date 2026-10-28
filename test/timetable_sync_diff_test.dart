@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_change_format.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_sync_diff.dart';
 
@@ -115,6 +116,34 @@ void main() {
       expect(diffs.single.after!['JASMC'], '滨江BS401');
       expect(diffs.single.notified, isFalse);
       expect(diffs.single.fingerprint, startsWith('sha256:'));
+      expect(
+        TimetableChangeFormat.scopeOf(diffs.single),
+        '影响范围：全部周次（第 1–16 周） · 周一 5–6节',
+      );
+    });
+
+    test('同课拆周段变动只标出受影响周，不把其他时段的周次算进去', () {
+      final old = [
+        _jwxt(
+          slots: [
+            _slot(weeks: '00001'),
+            _slot(day: 3),
+          ],
+        ),
+      ];
+      final neu = [
+        _jwxt(
+          slots: [
+            _slot(weeks: '00001', location: '新教室'),
+            _slot(day: 3),
+          ],
+        ),
+      ];
+      final record = TimetableSyncDiff.compute(
+        oldCourses: old,
+        newCourses: neu,
+      ).single;
+      expect(TimetableChangeFormat.scopeOf(record), '影响范围：第 5 周 · 周一 5–6节');
     });
 
     test('教师仅顺序变化 → 忽略', () {
@@ -173,6 +202,49 @@ void main() {
       expect(diffs.single.before!['SKZC'], oldWeeks);
       expect(diffs.single.after!['SKZC'], newWeeks);
       expect(diffs.single.slotKey, contains(newWeeks));
+      expect(
+        TimetableChangeFormat.scopeOf(diffs.single),
+        '影响范围：第 2–16 周（双） · 周一 5–6节',
+      );
+      expect(
+        TimetableChangeFormat.detailOf(diffs.single),
+        '第 1–16 周 · 周一 5–6节 → 第 1–15 周（单） · 周一 5–6节',
+      );
+    });
+
+    test('周次增减只影响增减的周，地点同时变更则包含保留周', () {
+      final old = [
+        _jwxt(slots: [_slot(weeks: '1111')]),
+      ];
+      final neu = [
+        _jwxt(slots: [_slot(weeks: '1110')]),
+      ];
+      final onlyWeeks = TimetableSyncDiff.compute(
+        oldCourses: old,
+        newCourses: neu,
+      ).single;
+      expect(TimetableChangeFormat.scopeOf(onlyWeeks), '影响范围：第 4 周 · 周一 5–6节');
+      final reverse = TimetableSyncDiff.compute(
+        oldCourses: neu,
+        newCourses: old,
+      ).single;
+      expect(
+        TimetableChangeFormat.scopeOf(reverse),
+        TimetableChangeFormat.scopeOf(onlyWeeks),
+      );
+
+      final withLocation = TimetableSyncDiff.compute(
+        oldCourses: old,
+        newCourses: [
+          _jwxt(
+            slots: [_slot(weeks: '1110', location: '新教室')],
+          ),
+        ],
+      ).single;
+      expect(
+        TimetableChangeFormat.scopeOf(withLocation),
+        '影响范围：全部周次（第 1–4 周） · 周一 5–6节',
+      );
     });
 
     test('星期与周次都变 → 仍单条时间变动', () {
@@ -187,6 +259,14 @@ void main() {
       expect(diffs.single.type, TimetableChangeType.timeChanged);
       expect(diffs.single.before!['SKXQ'], 1);
       expect(diffs.single.after!['SKXQ'], 3);
+      expect(
+        TimetableChangeFormat.scopeOf(diffs.single),
+        '影响范围：全部周次（第 1–5、7 周） · 周一 5–6节 → 周三 5–6节',
+      );
+      expect(
+        TimetableChangeFormat.detailOf(diffs.single),
+        '第 1–4 周 · 周一 5–6节 → 第 1–7 周（单） · 周三 5–6节',
+      );
     });
 
     test('纯新增 / 纯删除（不同课程号，无法配对）', () {
@@ -205,6 +285,14 @@ void main() {
       expect(removed.single.type, TimetableChangeType.removed);
       expect(removed.single.after, isNull);
       expect(added.single.before, isNull);
+      expect(
+        TimetableChangeFormat.scopeOf(added.single),
+        '影响范围：全部周次（第 1–16 周） · 周二 5–6节',
+      );
+      expect(
+        TimetableChangeFormat.scopeOf(removed.single),
+        TimetableChangeFormat.scopeOf(added.single),
+      );
     });
 
     test('忽略 rows 顺序', () {
@@ -223,6 +311,23 @@ void main() {
       expect(
         TimetableSyncDiff.compute(oldCourses: [a, b], newCourses: [b, a]),
         isEmpty,
+      );
+    });
+
+    test('影响范围完整展示多个离散周段，保留具体节次', () {
+      final record = TimetableSyncDiff.compute(
+        oldCourses: [_jwxt()],
+        newCourses: [
+          _jwxt(),
+          _jwxt(
+            code: 'new',
+            slots: [_slot(weeks: '11001100010011')],
+          ),
+        ],
+      ).single;
+      expect(
+        TimetableChangeFormat.scopeOf(record),
+        '影响范围：全部周次（第 1–2、5–6、10、13–14 周） · 周一 5–6节',
       );
     });
 
@@ -245,6 +350,33 @@ void main() {
   });
 
   group('fingerprint / 通知去重', () {
+    test('影响范围上下文不参与指纹，不会让已通知变动重复提醒', () {
+      TimetableChangeRecord change({bool withOtherSlot = false}) =>
+          TimetableSyncDiff.compute(
+            oldCourses: [
+              _jwxt(
+                slots: [
+                  _slot(weeks: '1111'),
+                  if (withOtherSlot) _slot(day: 3),
+                ],
+              ),
+            ],
+            newCourses: [
+              _jwxt(
+                slots: [
+                  _slot(weeks: '1111', location: '新教室'),
+                  if (withOtherSlot) _slot(day: 3),
+                ],
+              ),
+            ],
+          ).single;
+      final full = change();
+      final partial = change(withOtherSlot: true);
+      expect(partial.fingerprint, full.fingerprint);
+      expect(TimetableChangeFormat.scopeOf(full), contains('全部周次'));
+      expect(TimetableChangeFormat.scopeOf(partial), '影响范围：第 1–4 周 · 周一 5–6节');
+    });
+
     test('相同实质变动同 fingerprint；再变地点则新 fingerprint', () async {
       final old = [_jwxt()];
       final mid = [
@@ -312,6 +444,20 @@ void main() {
       expect(back.xnxqdm, '2026-2027-1');
       expect(back.before!['JASMC'], '滨江BS413');
       expect(back.after!['JASMC'], 'X');
+      expect(back.courseWeeks, '1111111111111111');
+      expect(back.copyWith(notified: true).courseWeeks, back.courseWeeks);
+      final legacyJson = rec.toJson()..remove('courseWeeks');
+      final legacy = TimetableChangeRecord.fromJson(legacyJson);
+      expect(legacy.courseWeeks, isEmpty);
+      expect(TimetableChangeFormat.scopeOf(legacy), '影响范围：第 1–16 周 · 周一 5–6节');
+      legacyJson['before'] = {'SKXQ': 1, 'KSJC': 5, 'JSJC': 6};
+      legacyJson['after'] = {'SKXQ': 1, 'KSJC': 5, 'JSJC': 6};
+      expect(
+        TimetableChangeFormat.scopeOf(
+          TimetableChangeRecord.fromJson(legacyJson),
+        ),
+        '影响范围：周次未知 · 周一 5–6节',
+      );
     });
   });
 

@@ -10,6 +10,7 @@ import 'package:pointycastle/digests/sha256.dart';
 
 import 'timetable_models.dart';
 import 'timetable_store.dart';
+import 'timetable_week_format.dart';
 
 /// 变动类型（UI 可用 [labelZh]）。
 enum TimetableChangeType {
@@ -72,6 +73,7 @@ class TimetableChangeRecord {
     required this.slotKey,
     required this.fingerprint,
     this.courseName = '',
+    this.courseWeeks = '',
     this.xnxqdm = '',
     this.before,
     this.after,
@@ -89,6 +91,11 @@ class TimetableChangeRecord {
   final String slotKey;
 
   final String courseName;
+
+  /// 变动前后该课程全部固定时段的周次位串，仅用于判断影响范围。
+  /// 旧记录为空时仍可展示快照周次，但不推断「全部周次」。
+  final String courseWeeks;
+
   final String xnxqdm;
 
   /// 相关字段快照；`added` 时为 null，`removed` 时 after 为 null。
@@ -105,6 +112,7 @@ class TimetableChangeRecord {
     slotKey: slotKey,
     fingerprint: fingerprint,
     courseName: courseName,
+    courseWeeks: courseWeeks,
     xnxqdm: xnxqdm,
     before: before,
     after: after,
@@ -117,6 +125,7 @@ class TimetableChangeRecord {
     'type': type.wireName,
     'slotKey': slotKey,
     'courseName': courseName,
+    if (courseWeeks.isNotEmpty) 'courseWeeks': courseWeeks,
     'xnxqdm': xnxqdm,
     'before': before,
     'after': after,
@@ -143,6 +152,7 @@ class TimetableChangeRecord {
       type: type,
       slotKey: '${json['slotKey'] ?? ''}',
       courseName: '${json['courseName'] ?? ''}',
+      courseWeeks: '${json['courseWeeks'] ?? ''}',
       xnxqdm: '${json['xnxqdm'] ?? ''}',
       before: mapOrNull(json['before']),
       after: mapOrNull(json['after']),
@@ -225,6 +235,17 @@ class TimetableSyncDiff {
   static String normalizeLocation(String raw) => raw.trim();
 
   static int normalizeIstk(int? raw) => raw ?? 0;
+
+  static String _allCourseWeeks(Iterable<Course> courses) {
+    final weeks = {
+      for (final course in courses)
+        for (final slot in course.slots)
+          if (slot.hasFixedTime) ...weeksFromBits(slot.weeks),
+    };
+    if (weeks.isEmpty) return '';
+    final last = weeks.reduce((a, b) => a > b ? a : b);
+    return List.generate(last, (i) => weeks.contains(i + 1) ? '1' : '0').join();
+  }
 
   /// 参与 fingerprint / 展示的字段快照（键已排序语义由 [canonicalJson] 保证）。
   static Map<String, dynamic> snapshotOf(Course course, CourseSlot slot) => {
@@ -363,6 +384,7 @@ class TimetableSyncDiff {
           type: type,
           slotKey: neu.slotKey,
           courseName: neu.course.name,
+          courseWeeks: _allCourseWeeks([old.course, neu.course]),
           xnxqdm: xnxqdm,
           before: before,
           after: after,
@@ -453,6 +475,7 @@ class TimetableSyncDiff {
             courseName: a.course.name.isNotEmpty
                 ? a.course.name
                 : r.course.name,
+            courseWeeks: _allCourseWeeks([r.course, a.course]),
             xnxqdm: xnxqdm,
             before: before,
             after: after,
@@ -477,6 +500,7 @@ class TimetableSyncDiff {
           type: TimetableChangeType.removed,
           slotKey: r.slotKey,
           courseName: r.course.name,
+          courseWeeks: _allCourseWeeks([r.course]),
           xnxqdm: xnxqdm,
           before: before,
           after: null,
@@ -499,6 +523,7 @@ class TimetableSyncDiff {
           type: TimetableChangeType.added,
           slotKey: a.slotKey,
           courseName: a.course.name,
+          courseWeeks: _allCourseWeeks([a.course]),
           xnxqdm: xnxqdm,
           before: null,
           after: after,

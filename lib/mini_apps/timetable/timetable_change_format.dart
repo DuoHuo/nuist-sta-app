@@ -42,6 +42,78 @@ abstract final class TimetableChangeFormat {
     return n == 0 ? '否' : '是';
   }
 
+  static Set<int> _weeks(Map<String, dynamic>? snap) =>
+      weeksFromBits('${snap?['SKZC'] ?? ''}').toSet();
+
+  /// 具体受影响的周次和时段，不含「影响范围」前缀。
+  ///
+  /// 有课程周次上下文时标明「全部周次」。
+  static String scopeBodyOf(TimetableChangeRecord r) {
+    final before = _weeks(r.before);
+    final after = _weeks(r.after);
+    final sameTime = timeOf(r.before) == timeOf(r.after);
+    final onlyWeeksChanged =
+        r.type == TimetableChangeType.timeChanged &&
+        sameTime &&
+        locationOf(r.before) == locationOf(r.after) &&
+        teacherOf(r.before) == teacherOf(r.after) &&
+        istkOf(r.before) == istkOf(r.after);
+    final affected = switch (r.type) {
+      TimetableChangeType.added => after,
+      TimetableChangeType.removed => before,
+      _ when onlyWeeksChanged => {
+        ...before.difference(after),
+        ...after.difference(before),
+      },
+      _ => {...before, ...after},
+    };
+    final all = weeksFromBits(r.courseWeeks).toSet();
+    final isAll =
+        affected.length > 1 &&
+        all.length == affected.length &&
+        all.containsAll(affected);
+    final weeks = formatWeeks(affected, maxSegments: null);
+    var time = r.type == TimetableChangeType.added
+        ? timeOf(r.after)
+        : timeOf(r.before ?? r.after);
+    final beforeTime = timeOf(r.before);
+    final afterTime = timeOf(r.after);
+    if (r.type == TimetableChangeType.timeChanged &&
+        beforeTime.isNotEmpty &&
+        afterTime.isNotEmpty &&
+        beforeTime != afterTime) {
+      time = '$beforeTime → $afterTime';
+    }
+    if (weeks.isEmpty && time.isEmpty) return '未知';
+    final parts = [
+      if (weeks.isEmpty) '周次未知' else if (isAll) '全部周次（$weeks）' else weeks,
+      if (time.isNotEmpty) time,
+    ];
+    return parts.join(' · ');
+  }
+
+  /// 带「影响范围」前缀的完整文案。
+  static String scopeOf(TimetableChangeRecord r) => '影响范围：${scopeBodyOf(r)}';
+
+  static String _timeChangeDetail(TimetableChangeRecord r) {
+    final beforeWeeks = _weeks(r.before);
+    final afterWeeks = _weeks(r.after);
+    final weeksChanged =
+        beforeWeeks.length != afterWeeks.length ||
+        !beforeWeeks.containsAll(afterWeeks);
+    if (!weeksChanged) {
+      final beforeTime = timeOf(r.before);
+      final afterTime = timeOf(r.after);
+      if (beforeTime.isEmpty && afterTime.isEmpty) return '';
+      return '$beforeTime → $afterTime';
+    }
+    String schedule(Map<String, dynamic>? snap) => [
+      formatWeeks(_weeks(snap), maxSegments: null),
+      timeOf(snap),
+    ].where((part) => part.isNotEmpty).join(' · ');
+    return '${schedule(r.before)} → ${schedule(r.after)}';
+  }
+
   /// 弹窗单行摘要（不含类型胶囊）。
   static String alertBody(TimetableChangeRecord r) {
     final name = r.courseName.trim();
@@ -61,9 +133,7 @@ abstract final class TimetableChangeFormat {
         ];
         return parts.join(' · ');
       case TimetableChangeType.timeChanged:
-        final b = timeOf(r.before);
-        final a = timeOf(r.after);
-        final arrow = (b.isEmpty && a.isEmpty) ? '' : '$b → $a';
+        final arrow = _timeChangeDetail(r);
         return [
           if (name.isNotEmpty) name,
           if (arrow.isNotEmpty) arrow,
@@ -102,7 +172,7 @@ abstract final class TimetableChangeFormat {
         ];
         return parts.join(' · ');
       case TimetableChangeType.timeChanged:
-        return '${timeOf(r.before)} → ${timeOf(r.after)}';
+        return _timeChangeDetail(r);
       case TimetableChangeType.locationChanged:
         return '${locationOf(r.before)} → ${locationOf(r.after)}';
       case TimetableChangeType.teacherChanged:

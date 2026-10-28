@@ -5,7 +5,8 @@
 /// - 否则按步长 1 合并：长度 ≥2 的段「a–b」，单个「a」，以「、」连接：
 ///   「第 1–4、7、9–12 周」；超过 3 段只取前 3 段并在「周」后加「等」。
 /// - 只用 en dash（U+2013）与全角括号，不输出半角「-」或「(单)」。
-String formatWeeks(Iterable<int> weeks) {
+/// [maxSegments] 限制显示的周段数；为 null 时完整展示，适用于变动影响范围。
+String formatWeeks(Iterable<int> weeks, {int? maxSegments = 3}) {
   final list = weeks.toSet().toList()..sort();
   if (list.isEmpty) return '';
   if (list.length == 1) return '第 ${list.single} 周';
@@ -38,8 +39,8 @@ String formatWeeks(Iterable<int> weeks) {
   }
   flush();
 
-  if (segments.length > 3) {
-    return '第 ${segments.take(3).join('、')} 周等';
+  if (maxSegments != null && segments.length > maxSegments) {
+    return '第 ${segments.take(maxSegments).join('、')} 周等';
   }
   return '第 ${segments.join('、')} 周';
 }

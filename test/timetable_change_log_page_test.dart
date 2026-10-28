@@ -16,6 +16,7 @@ TimetableChangeRecord _rec({
   required String fp,
   String name = '课',
   DateTime? time,
+  String courseWeeks = '',
   Map<String, dynamic>? before,
   Map<String, dynamic>? after,
 }) => TimetableChangeRecord(
@@ -25,6 +26,7 @@ TimetableChangeRecord _rec({
   slotKey: 'k|$id',
   fingerprint: fp,
   courseName: name,
+  courseWeeks: courseWeeks,
   before: before,
   after: after,
 );
@@ -166,4 +168,66 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('tt_change_log_page')), findsOneWidget);
   });
+
+  for (final dark in [false, true]) {
+    testWidgets('影响范围在${dark ? '深色' : '浅色'}小屏和大字体下完整展示', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(375, 812));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      Map<String, dynamic> snap(String weeks, {int day = 3}) => {
+        'SKXQ': day,
+        'KSJC': 5,
+        'JSJC': 6,
+        'SKZC': weeks,
+        'JASMC': '新教室',
+      };
+      TimetableChangeLogStore.debugMemory = [
+        _rec(
+          id: 'all',
+          type: TimetableChangeType.teacherChanged,
+          fp: 'all',
+          name: '全部周次变动',
+          courseWeeks: '1111',
+          before: {...snap('1111'), 'SKJS': '原教师'},
+          after: {...snap('1111'), 'SKJS': '新教师'},
+        ),
+        _rec(
+          id: 'one',
+          type: TimetableChangeType.locationChanged,
+          fp: 'one',
+          name: '某次课变动',
+          courseWeeks: '111111',
+          before: {...snap('00001'), 'JASMC': '原教室'},
+          after: snap('00001'),
+        ),
+      ];
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: dark ? appDarkTheme() : appLightTheme(),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler: TextScaler.linear(2),
+              disableAnimations: true,
+            ),
+            child: child!,
+          ),
+          home: const TimetableChangeLogPage(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      const partialScope = '第 5 周 · 周三 5–6节';
+      const fullScope = '全部周次（第 1–4 周） · 周三 5–6节';
+      expect(find.text(partialScope), findsOneWidget);
+      expect(find.text(fullScope), findsOneWidget);
+      expect(find.textContaining('影响范围：'), findsNothing);
+
+      final typeTop = tester.getTopLeft(find.text('地点变动')).dy;
+      final scopeTop = tester.getTopLeft(find.text(partialScope)).dy;
+      expect((typeTop - scopeTop).abs(), lessThan(4));
+      expect(tester.takeException(), isNull);
+
+      await tester.binding.setSurfaceSize(const Size(812, 375));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+  }
 }
