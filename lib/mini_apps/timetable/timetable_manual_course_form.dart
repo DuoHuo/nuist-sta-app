@@ -18,6 +18,7 @@ Future<Course?> showManualCourseForm(
   Course? initial,
   CourseSlot? initialSlot,
   GridCell? cell,
+  bool autofocusNote = false,
 }) {
   return Navigator.of(context).push<Course>(
     MaterialPageRoute(
@@ -27,6 +28,7 @@ Future<Course?> showManualCourseForm(
         initial: initial,
         initialSlot: initialSlot,
         cell: cell,
+        autofocusNote: autofocusNote,
       ),
     ),
   );
@@ -41,6 +43,7 @@ class ManualCourseForm extends StatefulWidget {
     this.initial,
     this.initialSlot,
     this.cell,
+    this.autofocusNote = false,
   });
 
   final TimetableController controller;
@@ -50,6 +53,9 @@ class ManualCourseForm extends StatefulWidget {
   /// 从周视图某一格进来编辑时传入（第 1 条：保存时可选「只改这一天」）。
   /// 为空时（如从列表进来）按所有周保存，与以前一致。
   final GridCell? cell;
+
+  /// 从详情备注入口进入时自动聚焦备注。
+  final bool autofocusNote;
 
   @override
   State<ManualCourseForm> createState() => _ManualCourseFormState();
@@ -670,6 +676,7 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
             const SizedBox(height: 12),
             TextFormField(
               key: const Key('manual_course_note'),
+              autofocus: widget.autofocusNote,
               controller: _note,
               decoration: const InputDecoration(labelText: '备注（选填）'),
               maxLines: 3,

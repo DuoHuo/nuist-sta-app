@@ -14,6 +14,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_colors.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_color.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_home_card.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
@@ -507,14 +508,16 @@ void _timetableDarkTests() {
       expect(find.text('测试楼 A101'), findsWidgets);
       expect(
         tester
-            .widgetList<DecoratedBox>(find.byType(DecoratedBox))
-            .any(
-              (d) =>
-                  d.decoration is BoxDecoration &&
-                  (d.decoration as BoxDecoration).color ==
-                      TimetableColors.dark.surface,
-            ),
-        isTrue,
+            .widget<Material>(
+              find
+                  .descendant(
+                    of: find.byType(CourseDetailSheet),
+                    matching: find.byType(Material),
+                  )
+                  .first,
+            )
+            .color,
+        TimetableColors.dark.surface,
       );
     });
 

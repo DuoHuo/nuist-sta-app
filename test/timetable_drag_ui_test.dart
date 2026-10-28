@@ -757,6 +757,8 @@ void main() {
       expect(r.status, MoveStatus.moved);
       final cell = c.cellsForDay(_week, 3).single;
       await pumpDetail(tester, cell);
+      await tester.tap(find.byKey(const Key('course_detail_override')));
+      await tester.pumpAndSettle();
       expect(find.text('已调课：原 周一 第 1–2 节'), findsOneWidget);
       expect(find.text('恢复原位置'), findsOneWidget);
       await tester.tap(find.byKey(const Key('course_detail_restore')));

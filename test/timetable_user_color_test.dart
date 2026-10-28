@@ -178,7 +178,7 @@ void main() {
   });
 
   group('UC 课程颜色', () {
-    testWidgets('UC02 色号直接保存到全局：色条、格子与存储同步', (tester) async {
+    testWidgets('UC02 色号直接保存到全局：颜色预览、格子与存储同步', (tester) async {
       _load();
       await _pumpGrid(tester);
       await _openColorPicker(tester, '测试课甲');
@@ -186,10 +186,13 @@ void main() {
       await _chooseColor(tester, preset);
       expect(_c.userColorOf(_a), isNull);
       await _globalScope(tester);
-      final bar = tester.widget<Container>(
-        find.byKey(const Key('course_detail_color_bar')),
-      );
-      expect((bar.decoration! as BoxDecoration).color, preset);
+      for (final key in [
+        'course_detail_color_swatch',
+        'course_detail_color_bar',
+      ]) {
+        final preview = tester.widget<Container>(find.byKey(Key(key)));
+        expect((preview.decoration! as BoxDecoration).color, preset);
+      }
       expect(find.text('颜色（已自选）'), findsNothing);
       expect(_c.userColorOf(_a), preset.toARGB32());
       Navigator.of(tester.element(find.byType(WeekGrid))).pop();
@@ -238,16 +241,13 @@ void main() {
         coursePairFor(_c, _c.cellsForDay(8, 1).single.course).bg,
         original,
       );
-      expect(
-        (tester
-                    .widget<Container>(
-                      find.byKey(const Key('course_detail_color_bar')),
-                    )
-                    .decoration!
-                as BoxDecoration)
-            .color,
-        Color(value),
-      );
+      for (final key in [
+        'course_detail_color_swatch',
+        'course_detail_color_bar',
+      ]) {
+        final preview = tester.widget<Container>(find.byKey(Key(key)));
+        expect((preview.decoration! as BoxDecoration).color, Color(value));
+      }
       await tester.tap(find.byKey(const Key('course_detail_color')));
       await _settleIo(tester);
       expect(
@@ -266,7 +266,7 @@ void main() {
         await _openColorPicker(tester, '测试课甲');
         expect(
           find.byKey(const Key('course_detail_color_swatch')),
-          findsNothing,
+          findsOneWidget,
         );
         await tester.enterText(find.byKey(const Key('tt_color_hex')), '43856B');
         await tester.pump();

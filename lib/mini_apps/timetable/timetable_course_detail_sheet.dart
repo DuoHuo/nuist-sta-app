@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 
 import 'timetable_color_picker.dart';
+import 'timetable_course_color.dart';
 import 'timetable_delete_scope_sheet.dart';
 import 'timetable_course_edit_page.dart';
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
 import 'timetable_overrides.dart';
 import 'timetable_theme.dart';
-import 'timetable_course_color.dart';
 import 'timetable_manual_course_form.dart';
 import 'timetable_week_format.dart';
 
@@ -21,10 +21,12 @@ Future<void> showCourseDetailSheet(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
+    constraints: const BoxConstraints(maxWidth: 560),
     builder: (context) => CourseDetailSheet(cell: cell, controller: controller),
   );
 }
 
+/// 课程详情：紧凑信息、颜色预览与编辑操作。
 class CourseDetailSheet extends StatefulWidget {
   const CourseDetailSheet({
     super.key,
@@ -65,234 +67,328 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
   );
 
   Widget _buildDetail(BuildContext context) {
-    final course = _cell.course;
-    // 教务课不走手动课表单：底部改为 [JwxtCourseDetailActions]（§13.15 编辑 / 删除 /
-    // 已修改 + 恢复原课程，只写本地覆盖层）。
-    final readOnly = course.source == CourseSource.jwxt;
-    final slot = _cell.slot;
-    // 标题色条直接使用课程原始颜色，与颜色入口的色点保持一致。
-    final color = courseRawColorFor(widget.controller, course);
-    // 调过的教务课：「已调课：原 周X 第 a–b 节」+「恢复原位置」（spec §13.2）。
+    final cell = _cell;
+    final course = cell.course;
+    final slot = cell.slot;
+    final colors = TimetableTheme.colorsOf(context);
     final slotIndex = _slotIndexOf(course, slot);
     final overrideInfo = slotIndex < 0
         ? null
         : widget.controller.overrideInfoFor(course, slotIndex);
-    final time = widget.controller.timeForSlot(
-      course,
-      slot,
-      date: widget.cell.date,
-    );
-    final start = time.start ?? '';
-    final end = time.end ?? '';
-    final timeText = slot.startNode == slot.endNode
-        ? '第 ${slot.startNode} 节 $start–$end'
-        : '第 ${slot.startNode}–${slot.endNode} 节 $start–$end';
+    final courseModified =
+        course.source == CourseSource.jwxt &&
+        widget.controller.isJwxtOverridden(courseId: course.id);
+    final time = widget.controller.timeForSlot(course, slot, date: cell.date);
+    final range = slot.startNode == slot.endNode
+        ? '第 ${slot.startNode} 节'
+        : '第 ${slot.startNode}–${slot.endNode} 节';
+    final clock = time.start == null || time.end == null
+        ? range
+        : '${time.start}–${time.end}';
+    final date = cell.date;
+    final dateText = date == null
+        ? ''
+        : '${date.month}月${date.day}日 周${_weekdayCn[date.weekday - 1]}';
+    final weeks = _weeksText(slot);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: TimetableTheme.colorsOf(context).surface,
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+      ),
+      child: Material(
+        color: colors.surface,
         borderRadius: BorderRadius.vertical(
           top: Radius.circular(TimetableTheme.sheetTopRadius),
         ),
-      ),
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.paddingOf(context).bottom + 12,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 8),
-          const SheetDragHandle(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Row(
+        clipBehavior: Clip.antiAlias,
+        child: SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            key: const Key('course_detail_scroll'),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Container(
-                  key: const Key('course_detail_color_bar'),
-                  width: 4,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    course.classId.isEmpty
-                        ? course.displayName
-                        : '${course.displayName}[${course.classId}]',
-                    style: TimetableTheme.titleStyle(
-                      color: TimetableTheme.colorsOf(context).titleText,
+                const Center(child: SheetDragHandle()),
+                const SizedBox(height: 12),
+                Row(
+                  key: const Key('course_detail_header'),
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Container(
+                      key: const Key('course_detail_color_bar'),
+                      width: 4,
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: coursePairFor(
+                          widget.controller,
+                          course,
+                          dark: colors.isDark,
+                        ).bg,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Expanded(child: _courseTitle(course.displayName)),
+                    const SizedBox(width: 8),
+                    Row(
+                      key: const Key('course_detail_actions'),
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CourseColorRow(
+                          controller: widget.controller,
+                          course: course,
+                          cell: cell,
+                        ),
+                        IconButton(
+                          key: Key(
+                            course.isManual
+                                ? 'course_detail_edit'
+                                : 'course_detail_jwxt_edit',
+                          ),
+                          tooltip: '编辑课程',
+                          onPressed: _restoring ? null : () => _edit(course),
+                          constraints: const BoxConstraints.tightFor(
+                            width: 48,
+                            height: 48,
+                          ),
+                          icon: Icon(
+                            Icons.edit_outlined,
+                            size: 20,
+                            color: colors.labelText,
+                          ),
+                        ),
+                        IconButton(
+                          key: Key(
+                            course.isManual
+                                ? 'course_detail_delete'
+                                : 'course_detail_jwxt_delete',
+                          ),
+                          tooltip: '删除课程',
+                          onPressed: _restoring ? null : () => _delete(course),
+                          constraints: const BoxConstraints.tightFor(
+                            width: 48,
+                            height: 48,
+                          ),
+                          icon: Icon(
+                            Icons.delete_outline,
+                            size: 20,
+                            color: colors.danger,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                if (course.isManual) ...[
-                  const _ManualTag(),
-                  const SizedBox(width: 8),
-                ],
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (course.classId.isNotEmpty || course.credit != null)
+                      Text(
+                        [
+                          if (course.classId.isNotEmpty) '课序 ${course.classId}',
+                          if (course.credit != null)
+                            '${_formatCredit(course.credit!)} 学分',
+                        ].join(' · '),
+                        style: TextStyle(fontSize: 12, color: colors.labelText),
+                      ),
+                    if (course.isManual) const _DetailTag(label: '手动添加'),
+                    if (slot.isLab && !course.isPe)
+                      const _DetailTag(
+                        key: Key('course_detail_lab_label'),
+                        label: '实验课',
+                      ),
+                    if (cell.dateEdit != null)
+                      _DetailTag(
+                        key: const Key('course_detail_date_edit'),
+                        label: cell.dateEdit!.isWeeksScoped ? '按周已修改' : '本节已修改',
+                        onTap: _restoring ? null : _showChanges,
+                      ),
+                    if (cell.dateEdit == null && overrideInfo != null)
+                      _DetailTag(
+                        key: const Key('course_detail_override'),
+                        label: '已调课',
+                        onTap: _restoring ? null : _showChanges,
+                      ),
+                    if (cell.dateEdit == null &&
+                        overrideInfo == null &&
+                        courseModified)
+                      _DetailTag(
+                        key: const Key('course_detail_modified'),
+                        label: '课程已修改',
+                        onTap: _restoring ? null : _showChanges,
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _InfoRow(
+                  icon: Icons.access_time,
+                  text: clock,
+                  secondaryText: [
+                    if (dateText.isNotEmpty) dateText,
+                    if (clock != range) range,
+                  ].join(' · '),
+                  emphasized: true,
+                ),
+                _InfoRow(
+                  icon: Icons.place_outlined,
+                  text: slot.location.isEmpty ? '地点未填写' : slot.location,
+                ),
+                _InfoRow(
+                  icon: Icons.person_outline,
+                  text: slot.teacher.isEmpty ? '教师未填写' : slot.teacher,
+                ),
+                if (weeks.isNotEmpty)
+                  _InfoRow(icon: Icons.calendar_today_outlined, text: weeks),
+                _InfoRow(
+                  key: const Key('course_detail_note'),
+                  icon: Icons.notes_outlined,
+                  text: slot.note.isEmpty ? '添加备注…' : slot.note,
+                  onTap: _restoring
+                      ? null
+                      : () => _edit(course, autofocusNote: true),
+                ),
               ],
             ),
           ),
-          // 周次统一由位串（教务 SKZC / 手动选择）格式化，不展示 ZCMC 原文；
-          // 无位串时（未排课）才退回原始描述；都没有则隐藏该行。
-          if (_weeksText(slot).isNotEmpty)
-            _InfoRow(
-              icon: Icons.calendar_today_outlined,
-              text: _weeksText(slot),
-            ),
-          _InfoRow(icon: Icons.access_time, text: timeText),
-          // 实验时段：格内放不下（1 节高）时这里仍能确认是实验课；体育课不打标。
-          if (slot.isLab && !course.isPe)
-            const _InfoRow(
-              key: Key('course_detail_lab_label'),
-              icon: Icons.science_outlined,
-              text: '实验课',
-            ),
-          if (overrideInfo != null)
-            Padding(
-              key: const Key('course_detail_override'),
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.swap_horiz,
-                    size: 20,
-                    color: TimetableTheme.colorsOf(context).hint,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      _overrideText(overrideInfo),
-                      style: TimetableTheme.bodyStyle(
-                        color: TimetableTheme.colorsOf(context).labelText,
-                      ),
-                    ),
-                  ),
-                  TextButton(
-                    key: const Key('course_detail_restore'),
-                    onPressed: _restoring
-                        ? null
-                        : () => _restore(course, slotIndex),
-                    style: TextButton.styleFrom(
-                      foregroundColor: TimetableTheme.colorsOf(context).accent,
-                    ),
-                    child: const Text('恢复原位置'),
-                  ),
-                ],
-              ),
-            ),
-          if (_cell.dateEdit != null)
-            Padding(
-              key: const Key('course_detail_date_edit'),
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.edit_calendar_outlined,
-                    size: 20,
-                    color: TimetableTheme.colorsOf(context).hint,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      _cell.dateEdit?.isWeeksScoped == true
-                          ? '已按周修改'
-                          : '这一天已单独修改',
-                      style: TimetableTheme.bodyStyle(
-                        color: TimetableTheme.colorsOf(context).labelText,
-                      ),
-                    ),
-                  ),
-                  TextButton(
-                    key: const Key('course_detail_restore_day'),
-                    onPressed: _restoring ? null : _restoreDay,
-                    style: TextButton.styleFrom(
-                      foregroundColor: TimetableTheme.colorsOf(context).accent,
-                    ),
-                    child: Text(
-                      _cell.dateEdit?.isWeeksScoped == true ? '恢复' : '恢复这一天',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          _InfoRow(
-            icon: Icons.place_outlined,
-            text: slot.location.isEmpty ? '地点未填写' : slot.location,
-          ),
-          _InfoRow(
-            icon: Icons.person_outline,
-            text: slot.teacher.isEmpty ? '教师未填写' : slot.teacher,
-          ),
-          // 手动课总显示备注行；教务课只在填过备注（本地编辑）时显示。
-          if (!readOnly || slot.note.isNotEmpty)
-            _InfoRow(
-              icon: Icons.notes_outlined,
-              text: slot.note.isEmpty ? '备注（选填）' : slot.note,
-              muted: slot.note.isEmpty,
-            ),
-          // 颜色保存后选择仅本周这一节或课程全局。
-          CourseColorRow(
-            controller: widget.controller,
-            course: course,
-            cell: _cell,
-          ),
-          if (course.credit != null)
-            _InfoRow(
-              icon: Icons.school_outlined,
-              text: '${_formatCredit(course.credit!)} 学分',
-            ),
-          if (readOnly)
-            JwxtCourseDetailActions(controller: widget.controller, cell: _cell),
-          if (!readOnly)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: SizedBox(
-                      height: 44,
-                      child: FilledButton(
-                        onPressed: () => _edit(course),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: TimetableTheme.colorsOf(context)
-                              .chipBg,
-                          foregroundColor: TimetableTheme.colorsOf(context)
-                              .titleText,
-                          elevation: 0,
-                          shape: const StadiumBorder(),
-                        ),
-                        child: const Text('编辑'),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    height: 44,
-                    child: OutlinedButton.icon(
-                      key: const Key('course_detail_delete'),
-                      onPressed: () => _delete(course),
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      label: const Text('删除'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: TimetableTheme.colorsOf(context)
-                            .danger,
-                        shape: const StadiumBorder(),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
 
-  /// 第 1 条：撤销这一格的单日修改。
+  /// 末行过短时稍收窄标题宽度，在不增加行数的前提下均衡自然换行。
+  Widget _courseTitle(String name) {
+    final style = TimetableTheme.titleStyle(
+      color: TimetableTheme.colorsOf(context).titleText,
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final scaler = MediaQuery.textScalerOf(context);
+        final painter = TextPainter(
+          text: TextSpan(
+            text: name,
+            style: DefaultTextStyle.of(context).style.merge(style),
+          ),
+          textDirection: Directionality.of(context),
+          textScaler: scaler,
+        )..layout(maxWidth: constraints.maxWidth);
+        final lines = painter.computeLineMetrics();
+        var width = constraints.maxWidth;
+        if (lines.length > 1 &&
+            lines.length <= 3 &&
+            lines.last.width < width * 0.45 &&
+            !name.contains('\n')) {
+          final balanced =
+              painter.maxIntrinsicWidth / lines.length +
+              scaler.scale(style.fontSize!);
+          if (balanced < width) {
+            painter.layout(maxWidth: balanced);
+            if (painter.computeLineMetrics().length <= lines.length) {
+              width = balanced;
+            }
+          }
+        }
+        painter.dispose();
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: SizedBox(
+            width: width,
+            child: Text(
+              name,
+              key: const Key('course_detail_title'),
+              style: style,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 展开当前课程的本地修改，按原有范围分别提供恢复入口。
+  Future<void> _showChanges() async {
+    final cell = _cell;
+    final course = cell.course;
+    final slotIndex = _slotIndexOf(course, cell.slot);
+    final overrideInfo = slotIndex < 0
+        ? null
+        : widget.controller.overrideInfoFor(course, slotIndex);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: TimetableTheme.colorsOf(context).surface,
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '课程修改',
+                style: TimetableTheme.titleStyle(
+                  color: TimetableTheme.colorsOf(sheetContext).titleText,
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (cell.dateEdit != null)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    cell.dateEdit!.isWeeksScoped ? '已按周修改' : '这一天已单独修改',
+                  ),
+                  subtitle: const Text('恢复这条记录的课程信息、时间和颜色修改'),
+                  trailing: TextButton(
+                    key: const Key('course_detail_restore_day'),
+                    onPressed: () {
+                      Navigator.pop(sheetContext);
+                      _restoreDay();
+                    },
+                    child: Text(cell.dateEdit!.isWeeksScoped ? '恢复' : '恢复这一天'),
+                  ),
+                ),
+              if (overrideInfo != null)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(_overrideText(overrideInfo)),
+                  trailing: TextButton(
+                    key: const Key('course_detail_restore'),
+                    onPressed: () {
+                      Navigator.pop(sheetContext);
+                      _restore(course, slotIndex);
+                    },
+                    child: const Text('恢复原位置'),
+                  ),
+                ),
+              if (course.source == CourseSource.jwxt &&
+                  widget.controller.isJwxtOverridden(courseId: course.id))
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('课程已修改'),
+                  subtitle: const Text('恢复整门课程的编辑、调课和单日修改'),
+                  trailing: TextButton(
+                    key: const Key('course_detail_restore_course'),
+                    onPressed: () {
+                      Navigator.pop(sheetContext);
+                      _restoreCourse(course);
+                    },
+                    child: const Text('恢复原课程'),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 撤销这一格对应的单日或按周修改记录。
   Future<void> _restoreDay() async {
-    final id = _cell.dateEdit?.id;
+    final edit = _cell.dateEdit;
+    final id = edit?.id;
     if (id == null) return;
     setState(() => _restoring = true);
     final navigator = Navigator.of(context);
@@ -304,7 +400,9 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     messenger?.showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
-        content: Text(ok ? '已恢复这一天' : '恢复失败'),
+        content: Text(
+          ok ? (edit!.isWeeksScoped ? '已恢复按周修改' : '已恢复这一天') : '恢复失败',
+        ),
       ),
     );
   }
@@ -350,17 +448,43 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     );
   }
 
-  Future<void> _edit(Course course) async {
+  Future<void> _restoreCourse(Course course) async {
+    setState(() => _restoring = true);
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.maybeOf(context);
-    final saved = await showManualCourseForm(
-      context,
-      controller: widget.controller,
-      initial: course,
-      initialSlot: _cell.slot,
-      cell: _cell,
+    final ok = await widget.controller.restoreJwxtCourse(course.id);
+    if (!mounted) return;
+    setState(() => _restoring = false);
+    if (navigator.canPop()) navigator.pop();
+    messenger?.showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(ok ? '已恢复原课程' : '恢复失败'),
+      ),
     );
-    if (saved == null || !mounted) return;
+  }
+
+  Future<void> _edit(Course course, {bool autofocusNote = false}) async {
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final saved = course.source == CourseSource.jwxt
+        ? await showJwxtCourseEditPage(
+                context,
+                controller: widget.controller,
+                cell: _cell,
+                autofocusNote: autofocusNote,
+              ) ==
+              true
+        : await showManualCourseForm(
+                context,
+                controller: widget.controller,
+                initial: course,
+                initialSlot: _cell.slot,
+                cell: _cell,
+                autofocusNote: autofocusNote,
+              ) !=
+              null;
+    if (!saved || !mounted) return;
     if (navigator.canPop()) navigator.pop();
     messenger?.showSnackBar(
       const SnackBar(behavior: SnackBarBehavior.floating, content: Text('已保存')),
@@ -409,26 +533,42 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
           break;
       }
     }
+    final readOnly = course.source == CourseSource.jwxt;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('删除课程'),
-        content: Text('确定删除「${course.displayName}」吗？此操作不可撤销。'),
+        content: readOnly
+            ? const Text(
+                kJwxtCourseDeleteMessage,
+                key: Key('jwxt_delete_message'),
+              )
+            : Text('确定删除「${course.displayName}」吗？此操作不可撤销。'),
         actions: [
           TextButton(
+            key: readOnly ? const Key('jwxt_delete_cancel') : null,
             onPressed: () => Navigator.pop(ctx, false),
             child: const Text('取消'),
           ),
           TextButton(
-            key: const Key('course_delete_confirm'),
+            key: Key(
+              readOnly ? 'jwxt_delete_confirm' : 'course_delete_confirm',
+            ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('确认删除'),
+            style: TextButton.styleFrom(
+              foregroundColor: TimetableTheme.colorsOf(context).danger,
+            ),
+            child: Text(readOnly ? '删除' : '确认删除'),
           ),
         ],
       ),
     );
     if (confirmed != true || !mounted) return;
-    await widget.controller.deleteManualCourse(course.id);
+    if (readOnly) {
+      await widget.controller.deleteJwxtCourse(course.id);
+    } else {
+      await widget.controller.deleteManualCourse(course.id);
+    }
     if (!mounted) return;
     if (navigator.canPop()) navigator.pop();
     messenger?.showSnackBar(
@@ -467,23 +607,41 @@ class SheetDragHandle extends StatelessWidget {
   }
 }
 
-class _ManualTag extends StatelessWidget {
-  const _ManualTag();
+class _DetailTag extends StatelessWidget {
+  const _DetailTag({super.key, required this.label, this.onTap});
+
+  final String label;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final colors = TimetableTheme.colorsOf(context);
+    final tag = Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: Colors.transparent,
-        border: Border.all(color: TimetableTheme.colorsOf(context).hint),
+        border: Border.all(color: colors.divider),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        '手动添加',
-        style: TextStyle(
-          fontSize: 11,
-          color: TimetableTheme.colorsOf(context).hint,
+        label,
+        style: TextStyle(fontSize: 12, color: colors.labelText),
+      ),
+    );
+    if (onTap == null) return tag;
+    return Semantics(
+      button: true,
+      label: '$label，查看修改与恢复',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [tag],
+          ),
         ),
       ),
     );
@@ -495,35 +653,62 @@ class _InfoRow extends StatelessWidget {
     super.key,
     required this.icon,
     required this.text,
-    this.muted = false,
+    this.secondaryText = '',
+    this.emphasized = false,
+    this.onTap,
   });
 
   final IconData icon;
   final String text;
-  final bool muted;
+  final String secondaryText;
+  final bool emphasized;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 48,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Row(
-          children: [
-            Icon(icon, size: 20, color: TimetableTheme.colorsOf(context).hint),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                text,
-                style: TimetableTheme.bodyStyle(
-                  color: muted
-                      ? TimetableTheme.colorsOf(context).hint
-                      : TimetableTheme.colorsOf(context).labelText,
+    final colors = TimetableTheme.colorsOf(context);
+    final row = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(icon, size: 18, color: colors.labelText),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  text,
+                  style: TextStyle(
+                    fontSize: emphasized ? 15 : 14,
+                    fontWeight: emphasized ? FontWeight.w500 : FontWeight.w400,
+                    color: emphasized ? colors.titleText : colors.labelText,
+                  ),
                 ),
-              ),
+                if (secondaryText.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    secondaryText,
+                    style: TextStyle(fontSize: 12, color: colors.labelText),
+                  ),
+                ],
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
+    );
+    if (onTap == null) return row;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(4),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: row,
       ),
     );
   }

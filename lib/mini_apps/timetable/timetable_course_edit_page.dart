@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'timetable_controller.dart';
 import 'timetable_apply_weeks_sheet.dart';
-import 'timetable_delete_scope_sheet.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
 import 'timetable_week_format.dart';
@@ -17,11 +16,16 @@ Future<bool?> showJwxtCourseEditPage(
   BuildContext context, {
   required TimetableController controller,
   required GridCell cell,
+  bool autofocusNote = false,
 }) {
   return Navigator.of(context).push<bool>(
     MaterialPageRoute(
       fullscreenDialog: true,
-      builder: (_) => JwxtCourseEditPage(controller: controller, cell: cell),
+      builder: (_) => JwxtCourseEditPage(
+        controller: controller,
+        cell: cell,
+        autofocusNote: autofocusNote,
+      ),
     ),
   );
 }
@@ -34,12 +38,16 @@ class JwxtCourseEditPage extends StatefulWidget {
     super.key,
     required this.controller,
     required this.cell,
+    this.autofocusNote = false,
   });
 
   final TimetableController controller;
 
   /// 详情页里的这一格（已套用编辑/调课的生效课程与时段）。
   final GridCell cell;
+
+  /// 从详情备注入口进入时自动聚焦备注。
+  final bool autofocusNote;
 
   @override
   State<JwxtCourseEditPage> createState() => _JwxtCourseEditPageState();
@@ -248,6 +256,7 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
             const SizedBox(height: 8),
             TextFormField(
               key: const Key('jwxt_edit_note'),
+              autofocus: widget.autofocusNote,
               controller: _note,
               minLines: 1,
               maxLines: 3,
@@ -375,199 +384,6 @@ class _ReadOnlyRow extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// 教务课详情弹层底部（spec §13.15）：改过时「已修改」+「恢复原课程」；
-/// 「编辑」「删除」。由 B 的 CourseDetailSheet 在教务课时挂上。
-class JwxtCourseDetailActions extends StatefulWidget {
-  const JwxtCourseDetailActions({
-    super.key,
-    required this.controller,
-    required this.cell,
-  });
-
-  final TimetableController controller;
-  final GridCell cell;
-
-  @override
-  State<JwxtCourseDetailActions> createState() =>
-      _JwxtCourseDetailActionsState();
-}
-
-class _JwxtCourseDetailActionsState extends State<JwxtCourseDetailActions> {
-  bool _busy = false;
-
-  String get _id => widget.cell.course.id;
-
-  void _closeWith(String text) {
-    final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    if (navigator.canPop()) navigator.pop();
-    messenger?.showSnackBar(
-      SnackBar(behavior: SnackBarBehavior.floating, content: Text(text)),
-    );
-  }
-
-  Future<void> _edit() async {
-    final saved = await showJwxtCourseEditPage(
-      context,
-      controller: widget.controller,
-      cell: widget.cell,
-    );
-    if (saved != true || !mounted) return;
-    _closeWith('已保存');
-  }
-
-  Future<void> _delete() async {
-    final cell = widget.cell;
-    final date = cell.date;
-    if (date != null && cell.activeThisWeek) {
-      final week = widget.controller.weekOfDate(date);
-      final scope = await showDeleteScopeSheet(
-        context,
-        week: week,
-        weekday: date.weekday,
-        teacherOrLocationEmpty:
-            cell.slot.teacher.isEmpty || cell.slot.location.isEmpty,
-      );
-      if (scope == null || !mounted) return;
-      setState(() => _busy = true);
-      switch (scope) {
-        case DeleteScope.oneDay:
-          final rec = await widget.controller.deleteOccurrence(cell);
-          if (!mounted) return;
-          _closeWith(rec == null ? '删除失败' : '已删除这一天的课');
-          return;
-        case DeleteScope.weekdayMatch:
-          final rec = await widget.controller.deleteWeekdayMatch(cell);
-          if (!mounted) return;
-          _closeWith(rec == null ? '删除失败' : '已删除同星期匹配的课');
-          return;
-        case DeleteScope.wholeCourse:
-          break;
-      }
-    } else {
-      setState(() => _busy = true);
-    }
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        content: const Text(
-          kJwxtCourseDeleteMessage,
-          key: Key('jwxt_delete_message'),
-        ),
-        actions: [
-          TextButton(
-            key: const Key('jwxt_delete_cancel'),
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            key: const Key('jwxt_delete_confirm'),
-            onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(
-              foregroundColor: TimetableTheme.colorsOf(context).danger,
-            ),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) {
-      if (mounted) setState(() => _busy = false);
-      return;
-    }
-    await widget.controller.deleteJwxtCourse(_id);
-    if (!mounted) return;
-    _closeWith('已删除');
-  }
-
-  Future<void> _restore() async {
-    setState(() => _busy = true);
-    final ok = await widget.controller.restoreJwxtCourse(_id);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    _closeWith(ok ? '已恢复原课程' : '恢复失败');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final overridden = widget.controller.isJwxtOverridden(courseId: _id);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (overridden)
-          Padding(
-            key: const Key('course_detail_modified'),
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.edit_outlined,
-                  size: 20,
-                  color: TimetableTheme.colorsOf(context).hint,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    '已修改',
-                    style: TimetableTheme.bodyStyle(
-                      color: TimetableTheme.colorsOf(context).labelText,
-                    ),
-                  ),
-                ),
-                TextButton(
-                  key: const Key('course_detail_restore_course'),
-                  onPressed: _busy ? null : _restore,
-                  style: TextButton.styleFrom(
-                    foregroundColor: TimetableTheme.colorsOf(context).accent,
-                  ),
-                  child: const Text('恢复原课程'),
-                ),
-              ],
-            ),
-          ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Row(
-            children: [
-              Expanded(
-                child: SizedBox(
-                  height: 44,
-                  child: FilledButton(
-                    key: const Key('course_detail_jwxt_edit'),
-                    onPressed: _busy ? null : _edit,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: TimetableTheme.colorsOf(context).chipBg,
-                      foregroundColor: TimetableTheme.colorsOf(context)
-                          .titleText,
-                      elevation: 0,
-                      shape: const StadiumBorder(),
-                    ),
-                    child: const Text('编辑'),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                height: 44,
-                child: OutlinedButton.icon(
-                  key: const Key('course_detail_jwxt_delete'),
-                  onPressed: _busy ? null : _delete,
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  label: const Text('删除'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: TimetableTheme.colorsOf(context).danger,
-                    shape: const StadiumBorder(),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }

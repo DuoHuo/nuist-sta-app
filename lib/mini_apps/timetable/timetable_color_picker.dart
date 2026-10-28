@@ -567,7 +567,7 @@ Future<EditScope?> showCourseColorScopeSheet(
   },
 );
 
-/// 课程详情的颜色入口，只显示文字与箭头；有具体日期时保存前选择范围。
+/// 课程详情的颜色按钮：预览当前颜色，有具体日期时保存前选择范围。
 class CourseColorRow extends StatelessWidget {
   const CourseColorRow({
     super.key,
@@ -601,15 +601,17 @@ class CourseColorRow extends StatelessWidget {
             ),
             dark: colors.isDark,
           ).bg;
-    return InkWell(
+    return IconButton(
       key: const Key('course_detail_color'),
-      onTap: () async {
+      tooltip: '修改课程颜色',
+      constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+      onPressed: () async {
         final pick = await showTimetableColorPicker(
           context,
           current: raw,
           defaultColor: fallback,
           showReset: user != null,
-          previewTitle: course.name,
+          previewTitle: course.displayName,
           opacity: controller.settings.cellOpacity,
           textColorMode: controller.settings.cellTextColor,
         );
@@ -634,23 +636,14 @@ class CourseColorRow extends StatelessWidget {
           );
         }
       },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 48),
-          child: Row(
-            children: [
-              Icon(Icons.palette_outlined, size: 20, color: colors.hint),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  '颜色',
-                  style: TimetableTheme.bodyStyle(color: colors.labelText),
-                ),
-              ),
-              Icon(Icons.chevron_right, color: colors.chevron),
-            ],
-          ),
+      icon: Container(
+        key: const Key('course_detail_color_swatch'),
+        width: 20,
+        height: 20,
+        decoration: BoxDecoration(
+          color: raw,
+          shape: BoxShape.circle,
+          border: Border.all(color: colors.divider),
         ),
       ),
     );

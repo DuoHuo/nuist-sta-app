@@ -299,6 +299,8 @@ void main() {
       ),
     );
     expect(find.byKey(const Key('course_detail_date_edit')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('course_detail_date_edit')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('course_detail_restore_day')));
     await settleIo(tester);
     expect(c.courseDateEdits, isEmpty);

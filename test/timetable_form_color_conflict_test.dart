@@ -350,7 +350,7 @@ void main() {
   });
 
   group('手动课详情', () {
-    testWidgets('只有编辑/删除；无仅本周/所有周、无复制；标签为 hint 描边透明底', (tester) async {
+    testWidgets('顶部操作不重复范围选项；手动标签使用主题描边与文字', (tester) async {
       final slot = CourseSlot(
         day: 1,
         startNode: 1,
@@ -372,8 +372,8 @@ void main() {
           ),
         ),
       );
-      expect(find.text('编辑'), findsOneWidget);
-      expect(find.text('删除'), findsOneWidget);
+      expect(find.byKey(const Key('course_detail_edit')), findsOneWidget);
+      expect(find.byKey(const Key('course_detail_delete')), findsOneWidget);
       expect(find.text('仅本周'), findsNothing);
       expect(find.text('所有周'), findsNothing);
       expect(find.byIcon(Icons.copy_outlined), findsNothing);
@@ -384,10 +384,16 @@ void main() {
             .first,
       );
       final deco = tagBox.decoration! as BoxDecoration;
-      expect(deco.color, Colors.transparent);
-      expect((deco.border! as Border).top.color, TimetableTheme.hint);
+      expect(deco.color, isNull);
+      expect(
+        (deco.border! as Border).top.color,
+        TimetableTheme.colorsOf(tester.element(find.text('手动添加'))).divider,
+      );
       final tagText = tester.widget<Text>(find.text('手动添加'));
-      expect(tagText.style!.color, TimetableTheme.hint);
+      expect(
+        tagText.style!.color,
+        TimetableTheme.colorsOf(tester.element(find.text('手动添加'))).labelText,
+      );
     });
   });
 

@@ -112,6 +112,6 @@ void main() {
 
   testWidgets('手动课详情保留编辑按钮', (tester) async {
     await tester.pumpWidget(detailFor(CourseSource.manual));
-    expect(find.text('编辑'), findsOneWidget);
+    expect(find.byKey(const Key('course_detail_edit')), findsOneWidget);
   });
 }

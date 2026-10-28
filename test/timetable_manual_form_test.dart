@@ -161,11 +161,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('手动添加'), findsOneWidget);
-    expect(find.text('编辑'), findsOneWidget);
-    expect(find.text('删除'), findsOneWidget);
+    expect(find.byKey(const Key('course_detail_edit')), findsOneWidget);
+    expect(find.byKey(const Key('course_detail_delete')), findsOneWidget);
     expect(find.text('带电脑'), findsOneWidget);
 
-    await tester.tap(find.text('删除'));
+    await tester.tap(find.byKey(const Key('course_detail_delete')));
     await tester.pumpAndSettle();
     expect(find.text('删除课程'), findsOneWidget);
     await tester.tap(find.byKey(const Key('course_delete_confirm')));
@@ -191,7 +191,7 @@ void main() {
     await tester.pumpWidget(_detail(course!));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('编辑'));
+    await tester.tap(find.byKey(const Key('course_detail_edit')));
     await tester.pumpAndSettle();
     expect(find.text('编辑课程'), findsOneWidget);
     expect(find.text('旧名'), findsOneWidget);
@@ -203,14 +203,15 @@ void main() {
     expect(_c.manualCourses.single.slots.single.startNode, 3);
   });
 
-  testWidgets('教务课详情无备注行、无手动添加标签', (tester) async {
+  testWidgets('教务课详情保留空备注入口、无手动添加标签', (tester) async {
     _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
     await tester.pumpWidget(_detail(_snapshot().courses.single));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
     expect(find.text('备注（可不填）'), findsNothing);
     expect(find.text('备注（选填）'), findsNothing);
-    expect(find.byIcon(Icons.notes_outlined), findsNothing);
+    expect(find.byIcon(Icons.notes_outlined), findsOneWidget);
+    expect(find.text('添加备注…'), findsOneWidget);
     expect(find.text('手动添加'), findsNothing);
     // D07 已作废（§24 JE01/JE18）：教务课改为「编辑」「删除」走本地覆盖层，
     // 不是手动课的删除按钮。

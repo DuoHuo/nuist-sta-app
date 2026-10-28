@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -137,7 +138,7 @@ void main() {
       (ctx) => showCourseDetailSheet(ctx, cell: cellOf(id), controller: _c),
     );
 
-    testWidgets('JE01 教务课详情底部有「编辑」「删除」；未修改时无「恢复原课程」', (tester) async {
+    testWidgets('JE01 教务课详情顶部有编辑、删除；未修改时无恢复入口', (tester) async {
       _load(jwxt: [jwxt]);
       await openDetail(tester, 'j1');
       expect(find.byKey(const Key('course_detail_jwxt_edit')), findsOneWidget);
@@ -241,14 +242,16 @@ void main() {
       expect((slot.day, slot.startNode, slot.endNode), (1, 3, 4));
     });
 
-    testWidgets('JE06/JE07 改过的教务课：「已修改」+「恢复原课程」，恢复后回到教务值', (tester) async {
+    testWidgets('JE06/JE07 修改标签打开恢复入口，恢复后回到教务值', (tester) async {
       _load(jwxt: [jwxt]);
       await tester.runAsync(
         () => _c.editJwxtCourse('j1', location: '测试楼 B202'),
       );
       await openDetail(tester, 'j1');
       expect(find.text('测试楼 B202'), findsOneWidget);
-      expect(find.text('已修改'), findsOneWidget);
+      expect(find.text('课程已修改'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('course_detail_modified')));
+      await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('course_detail_restore_course')),
         findsOneWidget,
@@ -270,5 +273,117 @@ void main() {
       expect(find.byKey(const Key('course_detail_jwxt_edit')), findsNothing);
       expect(find.text('恢复原课程'), findsNothing);
     });
+  });
+
+  for (final width in [320.0, 400.0]) {
+    for (final dark in [false, true]) {
+      testWidgets('详情长标题与按钮居中、长备注可滚动（宽 $width，深色 $dark）', (tester) async {
+        tester.view.physicalSize = Size(width * 3, 568 * 3);
+        tester.view.devicePixelRatio = 3;
+        addTearDown(tester.view.reset);
+        final course = _course(
+          'j1',
+          '计算机网络原理与综合实验',
+          source: CourseSource.jwxt,
+        ).copyWith(classId: '02', credit: 3);
+        _load(jwxt: [course]);
+        await tester.runAsync(
+          () => _c.editOccurrence(
+            _c.cellsForDay(_week, 1).single,
+            note: List.filled(12, '请提前准备实验报告并核对课堂安排。').join(),
+          ),
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: appLightTheme(),
+            darkTheme: appDarkTheme(),
+            themeMode: dark ? ThemeMode.dark : ThemeMode.light,
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: const TextScaler.linear(1.6)),
+              child: child!,
+            ),
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => Center(
+                  child: TextButton(
+                    onPressed: () => showCourseDetailSheet(
+                      context,
+                      cell: _c.cellsForDay(_week, 1).single,
+                      controller: _c,
+                    ),
+                    child: const Text('打开详情'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('打开详情'));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        final title = tester.getRect(
+          find.byKey(const Key('course_detail_title')),
+        );
+        final actions = tester.getRect(
+          find.byKey(const Key('course_detail_actions')),
+        );
+        expect(actions.center.dy, closeTo(title.center.dy, 0.5));
+        for (final key in [
+          'course_detail_color',
+          'course_detail_jwxt_edit',
+          'course_detail_jwxt_delete',
+        ]) {
+          final size = tester.getSize(find.byKey(Key(key)));
+          expect(size.width, greaterThanOrEqualTo(48));
+          expect(size.height, greaterThanOrEqualTo(48));
+        }
+        final scroll = tester.state<ScrollableState>(
+          find.descendant(
+            of: find.byKey(const Key('course_detail_scroll')),
+            matching: find.byType(Scrollable),
+          ),
+        );
+        expect(scroll.position.maxScrollExtent, greaterThan(0));
+        await tester.ensureVisible(find.byKey(const Key('course_detail_note')));
+        await tester.tapAt(
+          tester.getTopLeft(find.byKey(const Key('course_detail_note'))) +
+              const Offset(50, 20),
+        );
+        await tester.pumpAndSettle();
+        final note = tester.widget<EditableText>(
+          find.descendant(
+            of: find.byKey(const Key('jwxt_edit_note')),
+            matching: find.byType(EditableText),
+          ),
+        );
+        expect(note.focusNode.hasFocus, isTrue);
+        expect(note.controller.text, contains('实验报告'));
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+
+  testWidgets('空备注入口进入手动课编辑并聚焦备注', (tester) async {
+    _load(manual: [_course('m1', '测试课丙')]);
+    await _pumpLauncher(
+      tester,
+      (context) => showCourseDetailSheet(
+        context,
+        cell: _c.cellsForDay(_week, 1).single,
+        controller: _c,
+      ),
+    );
+    expect(find.text('添加备注…'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('course_detail_note')));
+    await tester.pumpAndSettle();
+    final note = tester.widget<EditableText>(
+      find.descendant(
+        of: find.byKey(const Key('manual_course_note')),
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(note.focusNode.hasFocus, isTrue);
+    expect(note.controller.text, isEmpty);
   });
 }

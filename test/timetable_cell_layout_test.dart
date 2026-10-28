@@ -494,7 +494,7 @@ void main() {
         ),
         findsOneWidget,
       );
-      await tester.tap(find.text('删除'));
+      await tester.tap(find.byKey(const Key('course_detail_delete')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('delete_scope_sheet')), findsOneWidget);
       await tester.tap(find.byKey(const Key('delete_scope_whole_course')));
