@@ -67,7 +67,9 @@ class TimetableStore {
   static Future<void> _writeJson(String name, Map<String, dynamic> data) async {
     final file = await _file(name);
     if (file == null) return;
-    await file.writeAsString(jsonEncode(data), flush: true);
+    // 同步写：异步写在 widget 测试的 fake async 下会停在半途、文件句柄不释放，
+    // Windows 上删临时目录报「文件被占用」；也与本文件其余写入一致。
+    file.writeAsStringSync(jsonEncode(data), flush: true);
   }
 
   static Future<TimetableSnapshot?> readSnapshot() async {
