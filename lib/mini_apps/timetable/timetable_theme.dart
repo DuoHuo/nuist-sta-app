@@ -624,6 +624,14 @@ abstract final class TimetableTheme {
     color: color ?? labelText,
   );
 
+  /// 设置项选中文字：浅色主题适当压深品牌色，确保在浅蓝底上可读。
+  static Color settingsAccentText(BuildContext context) {
+    final colors = colorsOf(context);
+    return colors.isDark
+        ? colors.accent
+        : Color.lerp(colors.accent, colors.titleText, 0.35)!;
+  }
+
   static TextStyle cellStyle({Color? color}) => TextStyle(
     fontSize: cellSize,
     fontWeight: cellWeight,

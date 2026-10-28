@@ -124,15 +124,16 @@ void main() {
   ) async {
     final a = _FakeActions(_perm());
     await pump(tester, a);
-    expect(find.text(TtSettingsText.reminderSevenDayHint), findsOneWidget);
+    expect(find.text(TtSettingsText.reminderIntro), findsNothing);
     expect(sw(tester, 'tt_settings_reminder'), isFalse);
     await tester.tap(find.byKey(const Key('tt_settings_reminder')));
     await tester.pumpAndSettle();
     expect(a.calls, ['enabled:true']);
     expect(sw(tester, 'tt_settings_reminder'), isTrue);
     final lead = find.byKey(const Key('tt_settings_reminder_lead'));
-    Finder seg(int m) =>
-        find.descendant(of: lead, matching: find.byKey(ValueKey('seg_$m')));
+    await tester.tap(lead);
+    await tester.pumpAndSettle();
+    Finder seg(int m) => find.widgetWithText(ListTile, '$m 分钟');
     for (final m in kReminderLeadChoices) {
       expect(seg(m), findsOneWidget);
     }
@@ -140,19 +141,25 @@ void main() {
       find.descendant(of: lead, matching: find.text('20 分钟')),
       findsNothing,
     );
-    expect(tester.widget<ChoiceChip>(seg(15)).selected, isTrue);
+    expect(tester.widget<ListTile>(seg(15)).selected, isTrue);
     await tester.tap(seg(30));
     await tester.pumpAndSettle();
     expect(a.calls.last, 'lead:30');
-    // 提醒卡片底部是 7 天页脚。
+    await settleIo(tester);
+    expect(find.text(TtSettingsText.reminderIntro), findsOneWidget);
     expect(
-      tester.getTopLeft(find.text(TtSettingsText.reminderSevenDayHint)).dy,
-      greaterThan(
-        tester
-            .getTopLeft(find.byKey(const Key('tt_settings_keepalive_entry')))
-            .dy,
-      ),
+      (await tester.runAsync(TimetableStore.readReminderIntroSeen))!,
+      isTrue,
     );
+    ScaffoldMessenger.of(tester.element(find.byType(TimetableSettingsPage)))
+        .removeCurrentSnackBar();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_settings_reminder')));
+    await settleIo(tester);
+    await tester.tap(find.byKey(const Key('tt_settings_reminder')));
+    await settleIo(tester);
+    expect(sw(tester, 'tt_settings_reminder'), isTrue);
+    expect(find.text(TtSettingsText.reminderIntro), findsNothing);
   });
 
   test('不在档位的提前量按 15 显示', () {
@@ -205,10 +212,15 @@ void main() {
     );
   });
 
-  testWidgets('小组件卡片：5 个开关默认全开、每行带说明，可切换', (tester) async {
+  testWidgets('小组件卡片：5 个开关默认全开、无冗余说明，可切换', (tester) async {
     final a = _FakeActions(_perm());
     await pump(tester, a);
-    expect(find.text(TtSettingsText.widgetCard), findsOneWidget);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    expect(
+      find.widgetWithText(AppBar, TtSettingsText.widgetCard),
+      findsOneWidget,
+    );
     expect(WidgetDisplayOption.values.map((o) => o.field), [
       'widgetShowTeacher',
       'widgetShowLocation',
@@ -216,11 +228,8 @@ void main() {
       'widgetShowCountdown',
       'widgetShowCount',
     ]);
-    expect(
-      WidgetDisplayOption.countdown.subtitle,
-      TtSettingsText.showCountdownSub,
-    );
-    expect(WidgetDisplayOption.count.subtitle, TtSettingsText.showCountSub);
+    expect(WidgetDisplayOption.countdown.subtitle, isNull);
+    expect(WidgetDisplayOption.count.subtitle, isNull);
     expect(WidgetDisplayOption.teacher.subtitle, isNull);
     // 「同时显示」在开关之上。
     expect(
@@ -250,23 +259,28 @@ void main() {
   testWidgets('小组件「同时显示」1/2/3 节：默认 2，可切换', (tester) async {
     final a = _FakeActions(_perm());
     await pump(tester, a);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
     final row = find.byKey(const Key('tt_settings_widgetCourseCount'));
     expect(
       find.descendant(of: row, matching: find.text(TtSettingsText.courseCount)),
       findsOneWidget,
     );
-    Finder seg(int n) => find.descendant(
-      of: row,
-      matching: find.byKey(ValueKey('seg_${TtSettingsText.courses(n)}')),
-    );
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    Finder seg(int n) => find.widgetWithText(ListTile, '$n');
     for (final n in kWidgetCourseCountOptions) {
       expect(seg(n), findsOneWidget);
     }
-    expect(tester.widget<ChoiceChip>(seg(2)).selected, isTrue);
+    expect(tester.widget<ListTile>(seg(2)).selected, isTrue);
     await tester.tap(seg(3));
     await settleIo(tester);
     expect(_c.settings.widgetCourseCount, 3);
-    expect(tester.widget<ChoiceChip>(seg(3)).selected, isTrue);
+    expect(find.descendant(of: row, matching: find.text('3')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('tt_widget_preview_course_2')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('保活引导页：品牌说明、强行停止与 7 天提示、电池优化按钮', (tester) async {

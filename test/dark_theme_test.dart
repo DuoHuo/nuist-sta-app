@@ -520,10 +520,7 @@ void _timetableDarkTests() {
 
     testWidgets('DK08 设置页深色：页面底取深色、分组面色取深色，不溢出', (tester) async {
       _ttLoad([_ttCourse('a', '测试课甲')]);
-      await _pumpDark(
-        tester,
-        TimetableSettingsPage(controller: _tt, onOpenAccount: () async {}),
-      );
+      await _pumpDark(tester, TimetableSettingsPage(controller: _tt));
       expect(tester.takeException(), isNull);
       expect(
         tester.widget<Scaffold>(find.byType(Scaffold).first).backgroundColor,

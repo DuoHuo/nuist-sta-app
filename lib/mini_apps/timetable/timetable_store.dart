@@ -15,6 +15,31 @@ class TimetableStore {
   static const _snapshotFile = 'snapshot.json';
   static const _settingsFile = 'settings.json';
 
+  /// 提醒说明的已读标记独立保存，不改变 settings.json 的键集合。
+  static const _reminderIntroFile = 'reminder_intro_seen';
+
+  /// 是否已经展示首次启用说明；存储不可用时按未读处理。
+  static Future<bool> readReminderIntroSeen() async {
+    try {
+      final file = await _file(_reminderIntroFile);
+      return file != null &&
+          file.existsSync() &&
+          file.readAsStringSync() == '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 记录首次提醒说明已展示，写入失败不影响开关与通知功能。
+  static Future<void> saveReminderIntroSeen() async {
+    try {
+      final file = await _file(_reminderIntroFile);
+      file?.writeAsStringSync('1', flush: true);
+    } catch (_) {
+      // 无存储时保持提醒功能可用。
+    }
+  }
+
   /// 手动课程独立存储：同步/清教务缓存/退出登录都不触碰。
   static const _manualFile = 'manual_courses.json';
 

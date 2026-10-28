@@ -321,10 +321,7 @@ class _TimetablePageState extends State<TimetablePage> {
   void _openSettings() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => TimetableSettingsPage(
-          controller: _controller,
-          onOpenAccount: _openLogin,
-        ),
+        builder: (_) => TimetableSettingsPage(controller: _controller),
       ),
     );
   }

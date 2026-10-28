@@ -83,7 +83,7 @@ class ReminderActions {
     });
   }
 
-  /// 小组件一共显示几节（2 / 3，默认 2）。
+  /// 小组件最多显示的课程条目数（1 / 2 / 3，默认 2）。
   int get widgetCourseCount => _settings.widgetCourseCount;
 
   Future<void> setWidgetCourseCount(int n) async {
@@ -102,24 +102,16 @@ enum WidgetDisplayOption {
   teacher('widgetShowTeacher', TtSettingsText.showTeacher),
   location('widgetShowLocation', TtSettingsText.showLocation),
   period('widgetShowPeriod', TtSettingsText.showPeriod),
-  countdown(
-    'widgetShowCountdown',
-    TtSettingsText.showCountdown,
-    TtSettingsText.showCountdownSub,
-  ),
-  count(
-    'widgetShowCount',
-    TtSettingsText.showCount,
-    TtSettingsText.showCountSub,
-  );
+  countdown('widgetShowCountdown', TtSettingsText.showCountdown),
+  count('widgetShowCount', TtSettingsText.showCount);
 
-  const WidgetDisplayOption(this.field, this.title, [this.subtitle]);
+  const WidgetDisplayOption(this.field, this.title);
 
   final String field;
   final String title;
 
   /// 副标题；标题已说清时为空（文案规范第 4 条）。
-  final String? subtitle;
+  String? get subtitle => null;
 }
 
 /// 「同时显示」可选节数（widgetCourseCount，默认 2）。
@@ -198,6 +190,7 @@ class TimetableKeepAliveGuidePage extends StatelessWidget {
                   style: body.copyWith(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 6),
+                Text('· ${TtSettingsText.reminderHolidayHint}', style: small),
                 Text('· ${TtSettingsText.forceStopWarning}', style: small),
                 Text('· ${TtSettingsText.sevenDayWarning}', style: small),
                 Text('· 清理后台（划掉最近任务）一般不影响提醒，但部分机型会连带停止，建议锁定本应用。', style: small),

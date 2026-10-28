@@ -1,36 +1,36 @@
 /// 设置页「上课提醒」「小组件」卡片与后台运行引导页的全部界面文案。
 ///
-/// 文案规范待设计出稿，集中在此便于整体替换；测试也引用这里的常量。
+/// 设置行只保留标题与值，运行限制集中在帮助页和首次开启提示。
 abstract final class TtSettingsText {
   // ---- 外观页 ----
-  static const homeMaxItems = '首页显示课数';
+  static const homeMaxItems = '首页显示课程数量';
   static const headerFontSize = '表头字号';
   static const periodShowTime = '节次显示时间';
 
   // ---- 提醒卡片 ----
-  static const reminderCard = '上课提醒';
+  static const reminderCard = '提醒';
   static const reminderSwitch = '上课提醒';
   static const reminderHolidayHint = '放假期间也会提醒';
-  static const reminderSevenDayHint = '7 天没打开 App，提醒会停';
-  static const reminderLead = '提前';
+  static const reminderIntro = '按课表提醒，放假期间也会提醒；请至少每 7 天打开一次 App，保持后续提醒。';
+  static const reminderLead = '提前时间';
+  static const nextDayReminder = '次日课表提醒';
+  static const nextDayTime = '前一晚提醒时间';
   static String minutes(int m) => '$m $minuteUnit';
   static const minuteUnit = '分钟';
   static const permissionNotification = '通知权限未开启，收不到上课提醒';
   static const permissionExactAlarm = '授予精确闹钟权限可准时提醒';
   static const gotoSettings = '去设置';
-  static const keepAliveEntry = '提醒不准时？后台运行设置';
+  static const keepAliveEntry = '后台运行设置';
 
   // ---- 小组件卡片 ----
-  static const widgetCard = '小组件';
+  static const widgetCard = '桌面小组件';
   static const showTeacher = '显示教师';
   static const showLocation = '显示地点';
   static const showCountdown = '显示倒计时';
-  static const showCountdownSub = '关掉只显示时间';
   static const showCount = '显示剩余节数';
-  static const showCountSub = '例如「还有 2 节」';
   static const showPeriod = '显示节次';
-  static const courseCount = '同时显示';
-  static String courses(int n) => '$n 节';
+  static const courseCount = '显示课程数量';
+  static String courses(int n) => '$n';
 
   // ---- 后台运行引导页 ----
   static const keepAliveTitle = '后台运行设置';

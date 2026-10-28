@@ -113,12 +113,7 @@ void main() {
     Future<void> pumpSettings(WidgetTester tester) async {
       _bigView(tester, size: const Size(1080, 6000));
       await tester.pumpWidget(
-        MaterialApp(
-          home: TimetableSettingsPage(
-            controller: _c,
-            onOpenAccount: () async {},
-          ),
-        ),
+        MaterialApp(home: TimetableSettingsPage(controller: _c)),
       );
       await tester.pump();
     }
@@ -156,10 +151,11 @@ void main() {
       _load();
       await pumpSettings(tester);
       expect(find.widgetWithText(AppBar, '设置'), findsOneWidget);
-      expect(inGroup('home', '首页显示课数'), findsOneWidget);
+      expect(inGroup('home', TtSettingsText.homeMaxItems), findsOneWidget);
       expect(inGroup('home', '显示明天的课'), findsOneWidget);
-      expect(inGroup('other', '教务账号'), findsOneWidget);
-      expect(inGroup('other', '恢复教务课程'), findsOneWidget);
+      expect(find.text('教务账号'), findsNothing);
+      expect(inGroup('management', '课表管理'), findsOneWidget);
+      expect(find.byKey(const Key('tt_settings_group_restore')), findsNothing);
       for (final g in ['display', 'appearance', 'exam']) {
         expect(
           find.byKey(Key('tt_settings_group_$g')),
@@ -249,7 +245,7 @@ void main() {
       final semantics = tester.ensureSemantics();
       _load();
       await pumpSettings(tester);
-      for (final l in ['首页，首页显示课数', '首页，显示明天的课', '其他，教务账号', '其他，恢复教务课程']) {
+      for (final l in ['首页与桌面，首页显示课程数量，2', '首页与桌面，显示明天的课', '课表管理']) {
         expect(
           find.bySemanticsLabel(RegExp('^${RegExp.escape(l)}(\$|\\n)')),
           findsOneWidget,
@@ -362,6 +358,8 @@ void main() {
       expect(r.status, MoveStatus.moved);
       expect(_c.slotOverrides, hasLength(1));
       await pumpSettings(tester);
+      await tester.tap(find.byKey(const Key('tt_settings_management_entry')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tt_settings_restore_jwxt')));
       await tester.pumpAndSettle();
       expect(

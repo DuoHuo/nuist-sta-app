@@ -7,6 +7,7 @@ import 'timetable_colors.dart';
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
+import 'timetable_settings_widgets.dart';
 import 'timetable_week_grid.dart';
 
 /// 课表外观：固定真实课表预览与独立滚动的四组设置，修改后即时刷新。
@@ -249,22 +250,23 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                           key: const Key('tt_appearance_settings_list'),
                           padding: const EdgeInsets.only(bottom: 24),
                           children: [
-                            _ApGroup(
+                            TimetableSettingsGroup(
                               key: const Key('tt_appearance_group'),
                               title: '外观',
                               children: [
-                                _ApRow(
+                                TimetableSettingsChoiceRow<CellTextColorMode>(
+                                  key: const Key(
+                                    'tt_appearance_text_color_row',
+                                  ),
                                   title: '文字颜色',
-                                  trailing: _ApSegments<CellTextColorMode>(
-                                    key: const Key(
-                                      'tt_settings_cell_text_color',
-                                    ),
-                                    options: TimetableAppearancePage
-                                        .cellTextColorLabels,
-                                    selected: s.cellTextColor,
-                                    onSelected: (v) => _update(
-                                      (x) => x.copyWith(cellTextColor: v),
-                                    ),
+                                  segmentsKey: const Key(
+                                    'tt_settings_cell_text_color',
+                                  ),
+                                  options: TimetableAppearancePage
+                                      .cellTextColorLabels,
+                                  selected: s.cellTextColor,
+                                  onSelected: (v) => _update(
+                                    (x) => x.copyWith(cellTextColor: v),
                                   ),
                                 ),
                                 _ApSliderRow(
@@ -328,7 +330,7 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                     },
                                   ),
                                 ),
-                                _ApSwitchRow(
+                                TimetableSettingsSwitchRow(
                                   key: const Key(
                                     'tt_settings_show_period_times',
                                   ),
@@ -365,36 +367,34 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                   ),
                                 ),
                                 // 与「不透明度」等行同级左对齐，勿嵌进滑杆行。
-                                _ApRow(
-                                  title: '格子字号',
-                                  trailing: _ApSegments<CellFontScale>(
-                                    key: const Key('tt_settings_font_scale'),
-                                    options: const {
-                                      CellFontScale.small: '小',
-                                      CellFontScale.standard: '标准',
-                                      CellFontScale.large: '大',
-                                    },
-                                    selected: s.fontScale,
-                                    onSelected: (v) => _update(
-                                      (x) => x.copyWith(fontScale: v),
-                                    ),
+                                TimetableSettingsChoiceRow<CellFontScale>(
+                                  key: const Key(
+                                    'tt_appearance_font_scale_row',
                                   ),
+                                  title: '格子字号',
+                                  segmentsKey: const Key(
+                                    'tt_settings_font_scale',
+                                  ),
+                                  options: const {
+                                    CellFontScale.small: '小',
+                                    CellFontScale.standard: '标准',
+                                    CellFontScale.large: '大',
+                                  },
+                                  selected: s.fontScale,
+                                  onSelected: (v) =>
+                                      _update((x) => x.copyWith(fontScale: v)),
                                 ),
                               ],
                             ),
-                            _ApGroup(
+                            TimetableSettingsGroup(
                               key: const Key('tt_appearance_group_week'),
                               title: '周视图',
                               children: [
-                                _ApRow(
+                                TimetableSettingsRow(
                                   key: const Key('tt_settings_week_start'),
                                   title: '一周起始',
-                                  trailing: Text(
-                                    s.weekStartsOnMonday ? '周一' : '周日',
-                                    style: TimetableTheme.bodyStyle(
-                                      color: colors.hint,
-                                    ),
-                                  ),
+                                  value: s.weekStartsOnMonday ? '周一' : '周日',
+                                  showChevron: true,
                                   onTap: () async {
                                     final monday = await showDialog<bool>(
                                       context: context,
@@ -424,7 +424,7 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                     }
                                   },
                                 ),
-                                _ApSwitchRow(
+                                TimetableSettingsSwitchRow(
                                   key: const Key('tt_settings_saturday'),
                                   title: '显示周六',
                                   value: s.showSaturday,
@@ -432,7 +432,7 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                     (x) => x.copyWith(showSaturday: v),
                                   ),
                                 ),
-                                _ApSwitchRow(
+                                TimetableSettingsSwitchRow(
                                   key: const Key('tt_settings_sunday'),
                                   title: '显示周日',
                                   value: s.showSunday,
@@ -441,57 +441,49 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                 ),
                               ],
                             ),
-                            _ApGroup(
+                            TimetableSettingsGroup(
                               key: const Key('tt_settings_group_exam'),
                               title: '考试',
                               children: [
-                                _ApSwitchRow(
+                                TimetableSettingsSwitchRow(
                                   key: const Key('tt_settings_show_exams'),
                                   title: '显示考试',
                                   value: s.showExams,
                                   onChanged: (v) =>
                                       _update((x) => x.copyWith(showExams: v)),
                                 ),
-                                _ApRow(
+                                TimetableSettingsRow(
                                   key: const Key('tt_settings_exam_color'),
                                   title: '考试颜色',
                                   onTap: () => _pickExamColor(context),
-                                  trailing: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Container(
-                                        key: const Key(
-                                          'tt_settings_exam_color_swatch',
+                                  showChevron: true,
+                                  trailing: ExcludeSemantics(
+                                    child: Container(
+                                      key: const Key(
+                                        'tt_settings_exam_color_swatch',
+                                      ),
+                                      width: 18,
+                                      height: 18,
+                                      decoration: BoxDecoration(
+                                        color: TimetableTheme.examCellBg(
+                                          Color(s.examColor),
+                                          dark: colors.isDark,
                                         ),
-                                        width: 18,
-                                        height: 18,
-                                        decoration: BoxDecoration(
-                                          color: TimetableTheme.examCellBg(
-                                            Color(s.examColor),
-                                            dark: colors.isDark,
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            4,
-                                          ),
-                                          border: Border.all(
-                                            color: colors.divider,
-                                          ),
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(
+                                          color: colors.divider,
                                         ),
                                       ),
-                                      Icon(
-                                        Icons.chevron_right,
-                                        color: colors.hint,
-                                      ),
-                                    ],
+                                    ),
                                   ),
                                 ),
                               ],
                             ),
-                            _ApGroup(
+                            TimetableSettingsGroup(
                               key: const Key('tt_appearance_group_cell_info'),
                               title: '格子信息',
                               children: [
-                                _ApSwitchRow(
+                                TimetableSettingsSwitchRow(
                                   key: const Key('tt_settings_show_location'),
                                   title: '显示地点',
                                   value: s.showLocation,
@@ -499,7 +491,7 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                     (x) => x.copyWith(showLocation: v),
                                   ),
                                 ),
-                                _ApSwitchRow(
+                                TimetableSettingsSwitchRow(
                                   key: const Key('tt_settings_show_teacher'),
                                   title: '显示教师',
                                   value: s.showTeacher,
@@ -507,7 +499,7 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                     (x) => x.copyWith(showTeacher: v),
                                   ),
                                 ),
-                                _ApSwitchRow(
+                                TimetableSettingsSwitchRow(
                                   key: const Key('tt_settings_non_current'),
                                   title: '显示非本周课',
                                   value: s.showNonCurrentWeek,
@@ -532,126 +524,6 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
   }
 }
 
-// ---- 本页私有行组件（与设置页视觉一致，避免循环依赖导出私有类）----
-
-class _ApGroup extends StatelessWidget {
-  const _ApGroup({super.key, required this.title, required this.children});
-  final String title;
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        TimetableTheme.pagePaddingH,
-        12,
-        TimetableTheme.pagePaddingH,
-        0,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
-            child: Text(
-              title,
-              style: TextStyle(
-                fontSize: 13,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          Material(
-            color: TimetableTheme.colorsOf(context).surface,
-            borderRadius: BorderRadius.circular(TimetableTheme.cardRadius),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: children,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ApRow extends StatelessWidget {
-  const _ApRow({super.key, required this.title, this.trailing, this.onTap});
-  final String title;
-  final Widget? trailing;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = TimetableTheme.colorsOf(context);
-    return InkWell(
-      onTap: onTap,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          minHeight: TimetableTheme.listRowHeight,
-          minWidth: double.infinity,
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final label = Text(
-                title,
-                style: TimetableTheme.bodyStyle(color: colors.titleText),
-              );
-              final stacked =
-                  trailing is _ApSegments &&
-                  (constraints.maxWidth < 380 ||
-                      MediaQuery.textScalerOf(context).scale(14) > 20);
-              if (stacked) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [label, const SizedBox(height: 6), ?trailing],
-                  ),
-                );
-              }
-              return Row(
-                children: [
-                  Expanded(child: label),
-                  ?trailing,
-                ],
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ApSwitchRow extends StatelessWidget {
-  const _ApSwitchRow({
-    super.key,
-    required this.title,
-    required this.value,
-    required this.onChanged,
-  });
-
-  final String title;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return _ApRow(
-      title: title,
-      onTap: () => onChanged(!value),
-      trailing: Switch(
-        value: value,
-        activeThumbColor: TimetableTheme.colorsOf(context).accent,
-        onChanged: onChanged,
-      ),
-    );
-  }
-}
-
 class _ApSliderRow extends StatelessWidget {
   const _ApSliderRow({
     required this.title,
@@ -668,7 +540,7 @@ class _ApSliderRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -677,54 +549,20 @@ class _ApSliderRow extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: TimetableTheme.bodyStyle(color: colors.titleText),
+                  style: TimetableSettingsRow.textStyle(context),
                 ),
               ),
               Text(
                 valueLabel,
                 key: valueKey,
-                style: TimetableTheme.bodyStyle(color: colors.hint),
+                style: TimetableSettingsRow.textStyle(context)
+                    .copyWith(color: colors.labelText),
               ),
             ],
           ),
           slider,
         ],
       ),
-    );
-  }
-}
-
-class _ApSegments<T> extends StatelessWidget {
-  const _ApSegments({
-    super.key,
-    required this.options,
-    required this.selected,
-    required this.onSelected,
-  });
-  final Map<T, String> options;
-  final T selected;
-  final ValueChanged<T> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = TimetableTheme.colorsOf(context);
-    return Wrap(
-      spacing: 6,
-      children: [
-        for (final e in options.entries)
-          ChoiceChip(
-            label: Text(e.value),
-            selected: e.key == selected,
-            onSelected: (_) => onSelected(e.key),
-            selectedColor: colors.accent.withValues(alpha: 0.18),
-            labelStyle: TextStyle(
-              color: e.key == selected ? colors.accent : colors.titleText,
-              fontSize: 13,
-            ),
-            visualDensity: VisualDensity.compact,
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-      ],
     );
   }
 }
@@ -748,11 +586,11 @@ class TimetablePalettePage extends StatelessWidget {
           final colors = TimetableTheme.colorsOf(context);
           return ListView(
             children: [
-              _ApGroup(
+              TimetableSettingsGroup(
                 title: '方案',
                 children: [
                   for (final scheme in CoursePaletteScheme.values)
-                    _ApRow(
+                    TimetableSettingsRow(
                       key: Key('tt_palette_${coursePaletteSchemeKey(scheme)}'),
                       title: coursePaletteSchemeLabel(scheme),
                       onTap: () {

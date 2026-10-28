@@ -315,12 +315,15 @@ void main() {
       findsOneWidget,
     );
 
-    // 「其他」行序：教务账号 → 变动记录 → 整天调课 → 恢复教务课程（→ debug 项）。
+    // 课表管理 → 独立恢复操作 → 调试项；移除账号入口。
+    expect(find.byKey(const Key('tt_settings_account')), findsNothing);
+    expect(find.byKey(const Key('tt_settings_restore_jwxt')), findsNothing);
+    await tester.tap(find.byKey(const Key('tt_settings_management_entry')));
+    await tester.pumpAndSettle();
     final otherYs = [
       for (final k in [
-        'tt_settings_account',
-        'tt_settings_change_log',
         'tt_settings_day_swaps',
+        'tt_settings_change_log',
         'tt_settings_restore_jwxt',
       ])
         tester.getTopLeft(find.byKey(Key(k))).dy,
@@ -338,6 +341,8 @@ void main() {
     }
     expect(find.text('教务系统绑定'), findsNothing);
 
+    Navigator.of(tester.element(find.byType(TimetableManagementPage))).pop();
+    await tester.pumpAndSettle();
     await tester.tap(entry);
     await tester.pumpAndSettle();
     expect(find.widgetWithText(AppBar, '外观'), findsOneWidget);

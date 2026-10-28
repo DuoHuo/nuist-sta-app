@@ -150,6 +150,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_settings_management_entry')));
+    await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.byKey(const Key('tt_settings_change_log')),
       200,

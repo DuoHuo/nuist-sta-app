@@ -134,22 +134,36 @@ void main() {
       await tester.pump();
     }
 
-    testWidgets('分段选项：未选中灰描边 #D0D4DC + 正文灰字，选中浅蓝底蓝字无描边', (tester) async {
-      // 设置首页的课数分段沿用此样式；外观页使用独立的分段组件。
+    testWidgets('分段选项：32dp 可见底板、48dp 点击区域，选中状态可读屏', (tester) async {
       await pumpPage(tester);
-      ChoiceChip chip(String label) =>
-          tester.widget<ChoiceChip>(find.byKey(ValueKey('seg_$label')));
-      final s = chip('2');
-      expect(s.selected, isTrue);
-      expect(s.selectedColor, TimetableTheme.accentSoft);
-      expect(s.labelStyle!.color, TimetableTheme.accent);
-      expect(s.side!.color, Colors.transparent);
-      for (final u in ['1', '3', '4']) {
-        final x = chip(u);
-        expect(x.selected, isFalse);
-        expect(x.side!.color, const Color(0xFFD0D4DC));
-        expect(x.labelStyle!.color, TimetableTheme.labelText);
-        expect(x.surfaceTintColor, Colors.transparent);
+      await tester.tap(find.byKey(const Key('tt_settings_appearance_entry')));
+      await tester.pumpAndSettle();
+      final group = find.byKey(const Key('tt_settings_cell_text_color'));
+      final track = find.descendant(
+        of: group,
+        matching: find.byKey(const Key('tt_settings_segment_track')),
+      );
+      expect(tester.getSize(track).height, 32);
+      for (final label in ['自动', '白', '黑']) {
+        final option = find.descendant(
+          of: group,
+          matching: find.byKey(ValueKey('seg_$label')),
+        );
+        expect(tester.getSize(option).width, greaterThanOrEqualTo(48));
+        expect(tester.getSize(option).height, greaterThanOrEqualTo(48));
+        final semantic = tester.widget<Semantics>(
+          find.ancestor(of: option, matching: find.byType(Semantics)).first,
+        );
+        expect(semantic.properties.selected, label == '自动');
+        final text = tester.widget<Text>(
+          find.descendant(of: option, matching: find.text(label)),
+        );
+        expect(
+          text.style!.color,
+          label == '自动'
+              ? TimetableTheme.settingsAccentText(tester.element(group))
+              : TimetableTheme.labelText,
+        );
       }
     });
 

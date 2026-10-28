@@ -50,7 +50,7 @@ void main() {
   });
 
   Future<void> settleIo(WidgetTester tester) async {
-    for (var i = 0; i < 4; i++) {
+    for (var i = 0; i < 20; i++) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),
       );
@@ -58,7 +58,7 @@ void main() {
     }
   }
 
-  testWidgets('RG01 设置首页顺序 外观（单行卡）→首页→小组件→提醒→明日提醒→其他', (tester) async {
+  testWidgets('RG01 设置首页顺序 外观→首页→小组件→提醒→课表管理→恢复', (tester) async {
     tester.view.physicalSize = const Size(1080, 6000);
     tester.view.devicePixelRatio = 2.625;
     addTearDown(tester.view.reset);
@@ -69,11 +69,10 @@ void main() {
     );
     await tester.pump();
     final titles = [
-      '首页',
+      '首页与桌面',
       TtSettingsText.widgetCard,
       TtSettingsText.reminderCard,
-      '明日提醒',
-      '其他',
+      '课表管理',
     ];
     final ys = [
       for (final t in titles) tester.getTopLeft(find.text(t).first).dy,
@@ -100,6 +99,19 @@ void main() {
     );
     expect(find.byKey(const Key('tt_settings_group_display')), findsNothing);
     expect(find.byKey(const Key('tt_settings_group_exam')), findsNothing);
+    expect(find.byKey(const Key('tt_settings_account')), findsNothing);
+    for (final key in [
+      'tt_settings_next_day_reminder',
+      'tt_settings_next_day_time',
+    ]) {
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('tt_settings_group_reminder')),
+          matching: find.byKey(Key(key)),
+        ),
+        findsOneWidget,
+      );
+    }
   });
 
   testWidgets('RG02 周课表无「课表外观」菜单；设置首页外观卡为唯一入口', (tester) async {
@@ -225,5 +237,135 @@ void main() {
     await tester.tap(find.byKey(const Key('tt_settings_show_location')));
     await settleIo(tester);
     expect(_c.settings.showLocation, isFalse);
+  });
+
+  testWidgets('普通手机提前量保持同行和统一行高，开关及分组文字对齐', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    for (final width in [360.0, 390.0, 412.0]) {
+      tester.view.physicalSize = Size(width, 1600);
+      await tester.pumpWidget(
+        MaterialApp(home: TimetableSettingsPage(controller: _c)),
+      );
+      await tester.pumpAndSettle();
+      final lead = find.byKey(const Key('tt_settings_reminder_lead'));
+      expect(
+        find.descendant(of: lead, matching: find.text('15 分钟')),
+        findsOneWidget,
+      );
+      expect(tester.getSize(lead).height, 52);
+      final switches = [
+        'tt_settings_show_tomorrow',
+        'tt_settings_next_day_reminder',
+        'tt_settings_reminder',
+      ];
+      final rightEdges = [
+        for (final key in switches)
+          tester
+              .getRect(
+                find.descendant(
+                  of: find.byKey(Key(key)),
+                  matching: find.byType(Switch),
+                ),
+              )
+              .right,
+      ];
+      expect(rightEdges.toSet(), hasLength(1));
+      expect(
+        tester.getTopLeft(find.text('首页与桌面')).dx,
+        tester.getTopLeft(find.text(TtSettingsText.homeMaxItems).first).dx,
+      );
+      final time = find.byKey(const Key('tt_settings_next_day_time'));
+      expect(tester.getSize(time).height, 52);
+      expect(
+        tester
+            .getCenter(
+              find.descendant(
+                of: time,
+                matching: find.text(TtSettingsText.nextDayTime),
+              ),
+            )
+            .dy,
+        tester
+            .getCenter(find.descendant(of: time, matching: find.text('22:00')))
+            .dy,
+      );
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('窄屏大字号保留当前值，提前量和明日时间都可在滚动弹层选择', (tester) async {
+    _c.debugSetSnapshot(
+      _c.snapshot.copyWith(
+        settings: _c.settings.copyWith(reminderEnabled: true),
+      ),
+      viewingWeek: 1,
+    );
+    tester.view.physicalSize = const Size(320, 480);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: TimetableSettingsPage(controller: _c),
+      ),
+    );
+    final lead = find.byKey(
+      const Key('tt_settings_reminder_lead'),
+      skipOffstage: false,
+    );
+    await tester.scrollUntilVisible(
+      lead,
+      200,
+      scrollable: find.descendant(
+        of: find.byType(ListView),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: lead, matching: find.byType(ChoiceChip)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: lead, matching: find.text('15 分钟')),
+      findsOneWidget,
+    );
+    await tester.tap(lead);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('30 分钟'));
+    await settleIo(tester);
+    expect(_c.settings.reminderLeadMinutes, 30);
+    final time = find.byKey(
+      const Key('tt_settings_next_day_time'),
+      skipOffstage: false,
+    );
+    await tester.scrollUntilVisible(
+      time,
+      100,
+      scrollable: find.descendant(
+        of: find.byType(ListView),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(time);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('23:30'),
+      100,
+      scrollable: find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.tap(find.text('23:30'));
+    await settleIo(tester);
+    expect(_c.settings.nextDayReminderMinute, 1410);
+    expect(tester.takeException(), isNull);
   });
 }

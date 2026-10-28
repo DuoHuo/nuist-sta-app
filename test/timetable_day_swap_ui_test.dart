@@ -212,6 +212,8 @@ void main() {
   testWidgets('SWU06 设置 → 调课记录：空状态；有记录时一句话 +「恢复」', (tester) async {
     load();
     await pumpHost(tester, TimetableSettingsPage(controller: c));
+    await tester.tap(find.byKey(const Key('tt_settings_management_entry')));
+    await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.byKey(const Key('tt_settings_day_swaps')),
       200,

@@ -194,110 +194,65 @@ void main() {
         fetches++;
         throw const SocketException('test');
       };
-      for (final entry in ['settings', 'home']) {
-        await bind(tester, false);
-        final router = GoRouter(
-          routes: [
-            GoRoute(
-              path: '/',
-              builder: (_, _) => entry == 'settings'
-                  ? TimetableSettingsPage(controller: _c)
-                  : const Scaffold(body: TimetableHomeCard()),
-            ),
-            GoRoute(
-              path: '/portal-bind',
-              builder: (context, _) => Scaffold(
-                body: TextButton(
-                  key: const Key('fake_bind_done'),
-                  // 模拟在门户页登录成功（真实页面会自己调 onLoginSucceeded）。
-                  onPressed: () {
-                    TimetableController.bindingCheck = () async => true;
-                    context.pop();
-                  },
-                  child: const Text('done'),
-                ),
+      // 登录入口保留在首页；课表设置已移除全局账号入口。
+      await bind(tester, false);
+      final router = GoRouter(
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (_, _) => const Scaffold(body: TimetableHomeCard()),
+          ),
+          GoRoute(
+            path: '/portal-bind',
+            builder: (context, _) => Scaffold(
+              body: TextButton(
+                key: const Key('fake_bind_done'),
+                // 模拟在门户页登录成功（真实页面会自己调 onLoginSucceeded）。
+                onPressed: () {
+                  TimetableController.bindingCheck = () async => true;
+                  context.pop();
+                },
+                child: const Text('done'),
               ),
             ),
-          ],
-        );
-        addTearDown(router.dispose);
-        await tester.pumpWidget(MaterialApp.router(routerConfig: router));
-        await tester.pump();
-        await tester.tap(
-          find.byKey(
-            Key(
-              entry == 'settings' ? 'tt_settings_account' : 'home_card_login',
-            ),
           ),
-        );
-        await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const Key('fake_bind_done')));
-        await tester.pumpAndSettle();
-        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
-        await tester.pump();
-        expect(_c.portalBound, isTrue, reason: entry);
-        if (entry == 'settings') {
-          expect(find.text('已绑定'), findsOneWidget);
-        }
-        expect(fetches, 0, reason: entry);
-      }
+        ],
+      );
+      addTearDown(router.dispose);
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('home_card_login')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('fake_bind_done')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      expect(_c.portalBound, isTrue);
+      expect(fetches, 0);
     });
 
-    testWidgets('TB04/TB09/TB10/TB12 设置「其他」：教务账号在第 1 行，'
-        '恢复教务课程在普通项最后；点击走原登录/解绑入口', (tester) async {
+    testWidgets('设置仅管理课表，恢复操作独立置底；不显示全局账号入口', (tester) async {
       _bigView(tester, size: const Size(1080, 6000));
       _load();
       await bind(tester, true);
-      var opened = 0;
       await tester.pumpWidget(
-        MaterialApp(
-          home: TimetableSettingsPage(
-            controller: _c,
-            onOpenAccount: () async => opened++,
-          ),
-        ),
+        MaterialApp(home: TimetableSettingsPage(controller: _c)),
       );
       await tester.pump();
-      final other = find.byKey(const Key('tt_settings_group_other'));
-      final account = find.byKey(const Key('tt_settings_account'));
-      final restore = find.byKey(const Key('tt_settings_restore_jwxt'));
-      expect(find.descendant(of: other, matching: account), findsOneWidget);
-      expect(
-        tester.getTopLeft(account).dy < tester.getTopLeft(restore).dy,
-        isTrue,
-      );
-      // 「最下面」= 普通项最后一行，在「整天调课」之后。
-      expect(
-        tester.getTopLeft(restore).dy >
-            tester
-                .getTopLeft(find.byKey(const Key('tt_settings_day_swaps')))
-                .dy,
-        isTrue,
-      );
-      // 设置首页已无考试卡；「其他」仍在首页卡之后。
-      expect(
-        tester.getTopLeft(other).dy >
-            tester
-                .getTopLeft(find.byKey(const Key('tt_settings_group_home')))
-                .dy,
-        isTrue,
-      );
-      expect(find.text('已绑定'), findsOneWidget);
-      await tester.tap(account);
-      await tester.pump();
-      expect(opened, 1);
-      // 解绑后立即变「去登录」。
-      await bind(tester, false);
+      expect(find.byKey(const Key('tt_settings_account')), findsNothing);
       expect(find.text('已绑定'), findsNothing);
+      expect(find.byKey(const Key('tt_settings_restore_jwxt')), findsNothing);
+      await tester.tap(find.byKey(const Key('tt_settings_management_entry')));
+      await tester.pumpAndSettle();
+      final management = find.byKey(const Key('tt_settings_group_management'));
+      final restore = find.byKey(const Key('tt_settings_restore_jwxt'));
+      expect(management, findsOneWidget);
       expect(
-        tester
-            .widget<Text>(find.byKey(const Key('tt_settings_account_state')))
-            .data,
-        '去登录',
+        tester.getTopLeft(restore).dy,
+        greaterThanOrEqualTo(tester.getBottomLeft(management).dy),
       );
-      await tester.tap(account);
-      await tester.pump();
-      expect(opened, 2);
+      await bind(tester, false);
+      expect(find.byKey(const Key('tt_settings_account')), findsNothing);
     });
 
     testWidgets('TB06 点「+」弹底部面板「课程 / 考试 / 其他」（同 EV01）', (tester) async {
@@ -738,9 +693,7 @@ void main() {
       expect(find.text('PORTAL_BIND_PAGE'), findsOneWidget);
     });
 
-    testWidgets('AS-1/TB09 登录已过期：设置「教务账号」右侧红字「已过期」，'
-        '读屏「其他，教务账号，已过期」；点这一行进登录', (tester) async {
-      final semantics = tester.ensureSemantics();
+    testWidgets('登录过期不向课表设置重新加入账号入口', (tester) async {
       _bigView(tester, size: const Size(1080, 6000));
       _load();
       await bind(tester, true);
@@ -748,30 +701,13 @@ void main() {
           throw expiredError;
       await tester.runAsync(_c.manualSync);
       expect(_c.portalSessionExpired, isTrue);
-      var opened = 0;
       await tester.pumpWidget(
-        MaterialApp(
-          home: TimetableSettingsPage(
-            controller: _c,
-            onOpenAccount: () async => opened++,
-          ),
-        ),
+        MaterialApp(home: TimetableSettingsPage(controller: _c)),
       );
       await tester.pump();
-      final state = tester.widget<Text>(
-        find.byKey(const Key('tt_settings_account_state')),
-      );
-      expect(state.data, '已过期');
-      expect(state.style?.color, const Color(0xFFC62828));
-      expect(find.text('已绑定'), findsNothing);
-      expect(
-        find.bySemanticsLabel(RegExp(r'^其他，教务账号，已过期($|\n)')),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const Key('tt_settings_account')));
-      await tester.pump();
-      expect(opened, 1);
-      semantics.dispose();
+      expect(find.byKey(const Key('tt_settings_account')), findsNothing);
+      expect(find.byKey(const Key('tt_settings_account_state')), findsNothing);
+      expect(_c.portalSessionExpired, isTrue);
     });
   });
 
