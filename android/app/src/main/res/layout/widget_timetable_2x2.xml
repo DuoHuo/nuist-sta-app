@@ -1,205 +1,280 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- §14 新版：主课 + 之后四态；不显示倒计时与剩余数量，所有文字单行省略。 -->
+<!-- 同日课程组整体居中、固定间距，仅隔天分隔；最后一节课程靠上、提示贴底。 -->
 <FrameLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/wg2_root"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="@drawable/wg_bg"
-    android:paddingStart="10dp"
-    android:paddingTop="10dp"
-    android:paddingEnd="10dp"
-    android:paddingBottom="8dp">
-    <LinearLayout
+    android:layout_height="match_parent">
+    <FrameLayout
+        android:id="@+id/wg2_surface"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:orientation="vertical">
+        android:background="@drawable/wg_bg"
+        android:padding="12dp">
         <LinearLayout
-            android:id="@+id/wg2_header"
             android:layout_width="match_parent"
-            android:layout_height="18dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-            <TextView
-                android:id="@+id/wg2_header_title"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:maxLines="1"
-                android:ellipsize="end"
-                android:fontFamily="sans-serif"
-                android:textColor="@color/wg_t2"
-                android:textSize="11sp"
-                android:text="我的课表"
-                android:layout_weight="1"/>
-            <TextView
-                android:id="@+id/wg2_header_date"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:maxLines="1"
-                android:ellipsize="end"
-                android:fontFamily="sans-serif"
-                android:textColor="@color/wg_t2"
-                android:textSize="10sp"/>
-            <TextView
-                android:id="@+id/wg2_header_weekday"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:maxLines="1"
-                android:ellipsize="end"
-                android:fontFamily="sans-serif"
-                android:textColor="@color/wg_acc"
-                android:textSize="10sp"
-                android:layout_marginStart="3dp"/>
-        </LinearLayout>
-        <LinearLayout
-            android:id="@+id/wg2_group_main"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:layout_marginTop="6dp"
+            android:layout_height="match_parent"
             android:orientation="vertical">
             <LinearLayout
-                android:id="@+id/wg2_main_area"
                 android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-                <ImageView
-                    android:id="@+id/wg2_main_bar"
-                    android:layout_width="4dp"
-                    android:layout_marginEnd="8dp"
-                    android:layout_height="64dp"
-                    android:src="@drawable/wg_bar"
-                    android:scaleType="fitXY"
-                    android:importantForAccessibility="no"/>
-                <LinearLayout
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:minHeight="16dp"
+                android:id="@+id/wg2_header"
+                android:baselineAligned="true"
+                android:gravity="top">
+                <TextView
+                    android:id="@+id/wg2_header_title"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:orientation="vertical">
-                    <TextView
-                        android:id="@+id/wg2_main_name"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:maxLines="1"
-                        android:ellipsize="end"
-                        android:fontFamily="sans-serif"
-                        android:textColor="@color/wg_t1"
-                        android:textSize="15sp"
-                        android:textStyle="bold"/>
-                    <TextView
-                        android:id="@+id/wg2_main_loc"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:maxLines="1"
-                        android:ellipsize="end"
-                        android:fontFamily="sans-serif"
-                        android:textColor="@color/wg_t2"
-                        android:textSize="11sp"
-                        android:layout_marginTop="3dp"/>
-                    <TextView
-                        android:id="@+id/wg2_main_time"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:maxLines="1"
-                        android:ellipsize="end"
-                        android:fontFamily="sans-serif"
-                        android:textColor="@color/wg_t3"
-                        android:textSize="11sp"
-                        android:layout_marginTop="3dp"/>
-                </LinearLayout>
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:textColor="@color/wg_t2"
+                    android:textSize="11sp"
+                    android:includeFontPadding="false"
+                    android:text="我的课表" />
+                <TextView
+                    android:id="@+id/wg2_header_date"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:maxLines="1"
+                    android:textColor="@color/wg_t2"
+                    android:textSize="10sp"
+                    android:ellipsize="end"
+                    android:text="10/28"
+                    android:includeFontPadding="false"
+                    android:layout_marginStart="4dp" />
+                <TextView
+                    android:id="@+id/wg2_header_weekday"
+                android:translationY="1dp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="3dp"
+                    android:maxLines="1"
+                    android:textColor="@color/wg_weekday"
+                    android:textSize="10sp"
+                    android:includeFontPadding="false"
+                    android:text="周三" />
             </LinearLayout>
             <LinearLayout
-                android:id="@+id/wg2_after"
                 android:layout_width="match_parent"
-                android:layout_height="40dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-                <ImageView
-                    android:id="@+id/wg2_after_bar"
-                    android:layout_width="4dp"
-                    android:layout_marginEnd="8dp"
-                    android:layout_height="34dp"
-                    android:src="@drawable/wg_bar"
-                    android:scaleType="fitXY"
-                    android:importantForAccessibility="no"/>
+                android:layout_height="0dp"
+                android:orientation="vertical"
+                android:layout_weight="1"
+                android:layout_marginTop="4dp"
+                android:id="@+id/wg2_group_main">
                 <LinearLayout
-                    android:layout_width="0dp"
+                    android:id="@+id/wg2_main_space_top"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-                    <TextView
-                        android:id="@+id/wg2_after_name"
+                    android:orientation="vertical"
+                    android:id="@+id/wg2_main_area">
+                    <FrameLayout
+                        android:id="@+id/wg2_main"
                         android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:maxLines="1"
-                        android:ellipsize="end"
-                        android:fontFamily="sans-serif"
-                        android:textColor="@color/wg_t1"
-                        android:textSize="12sp"
-                        android:textStyle="bold"/>
-                    <TextView
-                        android:id="@+id/wg2_after_detail"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:maxLines="1"
-                        android:ellipsize="end"
-                        android:fontFamily="sans-serif"
-                        android:textColor="@color/wg_t3"
-                        android:textSize="10sp"/>
+                        android:layout_height="wrap_content">
+                        <ImageView
+                            android:id="@+id/wg2_main_bar"
+                            android:layout_width="4dp"
+                            android:layout_height="match_parent"
+                            android:src="@drawable/wg_bar"
+                            android:scaleType="fitXY"
+                            android:importantForAccessibility="no" />
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:paddingStart="12dp">
+                            <TextView
+                                android:id="@+id/wg2_main_name"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:maxLines="1"
+                                android:textColor="@color/wg_t1"
+                                android:textSize="16sp"
+                                android:fontFamily="sans-serif-medium"
+                                android:ellipsize="end"
+                                android:text="高等数学 A"
+                                android:includeFontPadding="false" />
+                            <TextView
+                                android:id="@+id/wg2_main_loc"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:maxLines="1"
+                                android:layout_marginTop="2dp"
+                                android:textColor="@color/wg_t3"
+                                android:textSize="11sp"
+                                android:ellipsize="end"
+                                android:text="示例教室 A101"
+                                android:includeFontPadding="false" />
+                            <TextView
+                                android:id="@+id/wg2_main_time"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:maxLines="1"
+                                android:layout_marginTop="2dp"
+                                android:textColor="@color/wg_t3"
+                                android:textSize="11sp"
+                                android:text="10:10–11:50"
+                                android:includeFontPadding="false" />
+                        </LinearLayout>
+                    </FrameLayout>
                 </LinearLayout>
+                <TextView
+                    android:id="@+id/wg2_status"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:maxLines="2"
+                    android:ellipsize="end"
+                    android:textColor="@color/wg_t3"
+                    android:textSize="12sp"
+                    android:includeFontPadding="false"
+                    android:visibility="gone" />
+                <LinearLayout
+                    android:id="@+id/wg2_course_gap"
+                    android:layout_width="match_parent"
+                    android:layout_height="5dp"
+                    android:importantForAccessibility="no" />
+                <ImageView
+                    android:id="@+id/wg2_after_divider"
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="5dp"
+                    android:layout_marginBottom="5dp"
+                    android:background="@color/wg_divider"
+                    android:visibility="gone"
+                    android:importantForAccessibility="no" />
+                <FrameLayout
+                    android:id="@+id/wg2_after"
+                    android:layout_width="match_parent"
+                    android:layout_height="42dp">
+                    <FrameLayout
+                        android:id="@+id/wg2_after_course"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center_vertical">
+                        <ImageView
+                            android:id="@+id/wg2_after_bar"
+                            android:layout_width="4dp"
+                            android:layout_height="match_parent"
+                            android:src="@drawable/wg_bar"
+                            android:scaleType="fitXY"
+                            android:importantForAccessibility="no"
+                            />
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:paddingStart="12dp">
+                            <TextView
+                                android:id="@+id/wg2_after_name"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:maxLines="1"
+                                android:textColor="@color/wg_t1"
+                                android:textSize="12sp"
+                                android:ellipsize="end"
+                                android:fontFamily="sans-serif-medium"
+                                android:text="大学英语"
+                                android:includeFontPadding="false" />
+                            <TextView
+                                android:id="@+id/wg2_after_detail"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:maxLines="1"
+                                android:layout_marginTop="2dp"
+                                android:textColor="@color/wg_t3"
+                                android:textSize="11sp"
+                                android:ellipsize="end"
+                                android:text="之后 13:45 · C102"
+                                android:includeFontPadding="false" />
+                        </LinearLayout>
+                    </FrameLayout>
+                    <TextView
+                        android:id="@+id/wg2_tomorrow_free"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:gravity="center"
+                        android:maxLines="1"
+                        android:ellipsize="end"
+                        android:textColor="@color/wg_t3"
+                        android:textSize="12sp"
+                        android:includeFontPadding="false"
+                        android:visibility="gone"
+                        android:text="明天没课" />
+                </FrameLayout>
+                <LinearLayout
+                    android:id="@+id/wg2_main_space_bottom"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
+                <TextView
+                    android:id="@+id/wg2_last"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:textColor="@color/wg_t3"
+                    android:textSize="10sp"
+                    android:includeFontPadding="false"
+                    android:visibility="gone"
+                    android:text="今天最后一节" />
+            </LinearLayout>
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:orientation="vertical"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:visibility="gone"
+                android:id="@+id/wg2_group_empty">
+                <TextView
+                    android:id="@+id/wg2_empty_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:maxLines="2"
+                    android:textColor="@color/wg_t1"
+                    android:textSize="15sp"
+                    android:ellipsize="end"
+                    android:gravity="center"
+                    android:fontFamily="sans-serif-medium"
+                    android:includeFontPadding="false" />
+                <TextView
+                    android:id="@+id/wg2_empty_sub"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:maxLines="3"
+                    android:textColor="@color/wg_t3"
+                    android:textSize="11sp"
+                    android:ellipsize="end"
+                    android:gravity="center"
+                    android:layout_marginTop="8dp"
+                    android:includeFontPadding="false" />
+                <TextView
+                    android:id="@+id/wg2_empty_button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:maxLines="1"
+                    android:textColor="@color/wg_on_acc"
+                    android:textSize="12sp"
+                    android:minHeight="48dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/wg_button"
+                    android:gravity="center"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:visibility="gone"
+                    android:ellipsize="end"
+                    android:includeFontPadding="false" />
             </LinearLayout>
         </LinearLayout>
-        <!-- 空状态 / 未登录 / 失败：同一 layout 切换，不换布局避免闪烁。 -->
-        <LinearLayout
-            android:id="@+id/wg2_group_empty"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:visibility="gone">
-            <TextView
-                android:id="@+id/wg2_empty_title"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center"
-                android:maxLines="1"
-                android:ellipsize="end"
-                android:fontFamily="sans-serif-medium"
-                android:textColor="@color/wg_t1"
-                android:textSize="14sp"/>
-            <TextView
-                android:id="@+id/wg2_empty_sub"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:gravity="center"
-                android:maxLines="3"
-                android:ellipsize="end"
-                android:textColor="@color/wg_t3"
-                android:textSize="11sp"/>
-            <TextView
-                android:id="@+id/wg2_empty_button"
-                android:layout_width="wrap_content"
-                android:layout_height="24dp"
-                android:layout_marginTop="8dp"
-                android:background="@drawable/wg_button"
-                android:gravity="center"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
-                android:textColor="@color/wg_on_acc"
-                android:textSize="11sp"
-                android:visibility="gone"/>
-            <TextView
-                android:id="@+id/wg2_empty_retry"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:textColor="@color/wg_link"
-                android:textSize="11sp"
-                android:visibility="gone"/>
-        </LinearLayout>
-    </LinearLayout>
+    </FrameLayout>
 </FrameLayout>

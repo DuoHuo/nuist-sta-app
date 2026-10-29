@@ -4,5 +4,5 @@
     <string name="wg_description">显示今天的课程和上下课倒计时</string>
     <string name="wg_last_course">今天最后一节</string>
     <string name="wg_2x2_label">当前/下一节</string>
-    <string name="wg_2x2_description">只显示当前或下一节课和上下课倒计时</string>
+    <string name="wg_2x2_description">显示当前或下一节的课名、地点、时间和之后课程</string>
 </resources>

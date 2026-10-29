@@ -155,7 +155,7 @@ enum WidgetDataState {
   /// 未登录或数据过期（本周不在缓存 / 超过 7 天未同步）。
   needsUpdate,
 
-  /// 最近一次刷新失败；有缓存时仍显示缓存，头部刷新图标标橙。
+  /// 最近一次刷新失败；有历史课程时继续显示课程。
   loadFailed,
 }
 
@@ -183,26 +183,21 @@ class WidgetPrefs {
   /// 主块倒计时；关时原生显示静态「HH:mm 上课 / 下课」。
   final bool showCountdown;
 
-  /// 「还有 N 节 · 点开查看 ›」行 / 矮尺寸时头部「+N」。
+  /// 表头「+N」表示未展示的课程数量。
   final bool showCount;
 
   /// 节次标签（「第3-4节」）；关时 payload 中 nodes=''、periodTime 只剩时间。
   final bool showPeriod;
 
-  /// 小组件同时显示的课程总数 1 / 2 / 3（含当前 / 下一节）：
-  /// 1 = 单块居中，2 = 两个主块样式块（第二块右侧显示开始时间），3 = 主块 + 2 条紧凑行。
+  /// 4×2 最多显示的课程总数 1 / 2 / 3；下一节使用完整块，第三节使用轻量行。
   final int courseCount;
 
-  /// 各显示位置的样式：1 → `[main]`；2 → `[main, main]`；3 → `[main, compact, compact]`。
-  List<WidgetItemStyle> get slotStyles => switch (courseCount) {
-    1 => const [WidgetItemStyle.main],
-    3 => const [
-      WidgetItemStyle.main,
-      WidgetItemStyle.compact,
-      WidgetItemStyle.compact,
-    ],
-    _ => const [WidgetItemStyle.main, WidgetItemStyle.main],
-  };
+  /// 主课和下一节使用相同的详情层级，第三节按剩余高度显示。
+  List<WidgetItemStyle> get slotStyles => [
+    WidgetItemStyle.main,
+    for (var i = 1; i < courseCount; i++)
+      i == 1 ? WidgetItemStyle.main : WidgetItemStyle.compact,
+  ];
 
   Map<String, Object> toJson() => {
     'showTeacher': showTeacher,
@@ -320,22 +315,24 @@ Map<String, Object?> buildWidgetPayload({
   };
 }
 
-/// 小组件布局高度（dp，spec §11）：上 10 + 头部 20 + 6 + 第 1 块 50 + 下 8。
-const int kWidgetFixedDp = 10 + 20 + 6 + 50 + 8;
-const int kWidgetMoreLineDp = 16;
+/// 标准字号下的主课预算：外边距 20 + 表头 16 + 间距 4 + 主课 56。
+/// 原生布局还会按实际 TextView 测量进一步精简，不能用此预算代替原生测量。
+const int kWidgetFixedDp = 20 + 16 + 4 + 56;
 
-/// 第 1 块之后的块间距。
-const int kWidgetBlockGapDp = 4;
+/// 下一节完整课程块的高度，与原生布局一致，容纳默认字号的三行详情。
+const int kWidgetNextCourseDp = 58;
 
-/// 后续块高度：主块样式块 50dp，紧凑行 24dp。
-int widgetFollowDp(WidgetItemStyle style) =>
-    style == WidgetItemStyle.main ? 50 : 24;
+/// 同日课程块之间的固定间距。
+const int kWidgetBlockGapDp = 5;
 
-/// 小组件显示选择（原生 `TimetableWidgetProvider.widgetLayout` 同一规则）。
+/// 精简课程块预算：内边距 4 + 课程名 21 + 行间距 2 + 时间 15。
+const int kWidgetMinimalCourseDp = 42;
+
+/// 小组件标准尺寸下的内容选择；原生按实际字体测量后可以减少后续行。
 ///
 /// - [main]：当前或下一节（今天已无未结束的课为 null），带倒计时。
 /// - [rows]：主块之后显示的课，样式见 [styles]（与 rows 等长）。
-/// - [more]：底行「还有 N 节 · 点开查看 ›」的 N（0 = 不显示）。
+/// - [more]：保留旧接口字段，新布局恒为 0。
 /// - [badge]：头部「+N」的 N（0 = 不显示）。
 ({
   NotifyClass? main,
@@ -402,7 +399,7 @@ selectWidget2x2(
   return (
     main: main,
     after: after,
-    mainText: main?.name ?? '今天的课上完了',
+    mainText: main?.name ?? (today.isEmpty ? '今天没有课程' : '今天的课上完了'),
     afterText: after == null
         ? (main == null ? '明天没课' : '今天最后一节')
         : main == null
@@ -444,10 +441,19 @@ String widgetAfterText(
   return '明天 ${formatHm(tomorrowFirst.start)} ${tomorrowFirst.name}';
 }
 
-/// 与原生 `nextRefreshAt` 同规则的下一次重绘时刻：上下课、上下课前 1 小时
-/// （静态时间切换倒计时）及次日 00:01；只取严格晚于 [now] 的候选。
-/// 原生排闹钟时另加 1 秒，以避开边界；此处返回未经偏移的候选时刻。
-DateTime nextWidgetRefreshAt(DateTime now, List<NotifyClass> windowClasses) {
+/// 从课程开始／结束时间计算剩余分钟，向上取整；过期时返回 0。
+int widgetCountdownMinutes(DateTime now, DateTime target) {
+  final ms = target.difference(now).inMilliseconds;
+  return ms <= 0 ? 0 : (ms + 59999) ~/ 60000;
+}
+
+/// 下一次重绘：上下课、分钟倒计时变化及次日 00:01。
+/// 原生排闹钟时另加 1 秒避开边界；关闭倒计时时不增加分钟刷新。
+DateTime nextWidgetRefreshAt(
+  DateTime now,
+  List<NotifyClass> windowClasses, {
+  bool showCountdown = true,
+}) {
   var next = DateTime(now.year, now.month, now.day + 1, 0, 1);
   for (final c in windowClasses) {
     for (final t in [
@@ -459,39 +465,54 @@ DateTime nextWidgetRefreshAt(DateTime now, List<NotifyClass> windowClasses) {
       if (t.isAfter(now) && t.isBefore(next)) next = t;
     }
   }
+  if (showCountdown) {
+    final today = [
+      for (final c in windowClasses)
+        if (formatDate(c.start) == formatDate(now) && c.end.isAfter(now)) c,
+    ]..sort((a, b) => a.start.compareTo(b.start));
+    final main = today.firstOrNull;
+    if (main != null) {
+      final target = main.start.isAfter(now) ? main.start : main.end;
+      if (target.difference(now) <= const Duration(hours: 1)) {
+        final change = target.subtract(
+          Duration(minutes: widgetCountdownMinutes(now, target) - 1),
+        );
+        if (change.isAfter(now) && change.isBefore(next)) next = change;
+      }
+    }
+  }
   return next;
 }
 
-/// [selectWidgetRows] 的数量部分：主块之后还有 [remaining] 节时，显示几块、底行 N、头部 N。
-///
-/// - 高 < 140dp：只留 1 块，头部 +N（N = 主块之后全部剩余）。
-/// - 2 门全显示 164dp（无底行 148），3 门 162dp（无底行 146）。
-/// - 课程数 1：只显示 1 块；数量开时底行 N = 全部剩余。
-/// - 课程数 2 / 3：主块之后最多 courseCount − 1 块；放不下底行时**先**改为头部 +N，**再**减块。
-/// - 未显示的课都计入 N；数量关时 N 恒为 0；N = 0 不显示。
+/// 4×2 的标准高度预算：优先保留当前课与下一节，空间不足时先精简详情。
+/// [fontScale] 用于预览与边界检查；原生使用 TextView 的真实测量值。
 ({int rows, int more, int badge}) widgetLayout({
   required int remaining,
   int heightDp = 168,
+  int widthDp = 320,
+  double fontScale = 1,
   WidgetPrefs prefs = const WidgetPrefs(),
 }) {
-  int n(int v) => prefs.showCount ? v : 0;
-  if (heightDp < 140) return (rows: 0, more: 0, badge: n(remaining));
-  final follow = prefs.slotStyles.skip(1).toList();
-  final avail = heightDp - kWidgetFixedDp;
-  int used(int k) => k == 0
-      ? 0
-      : kWidgetBlockGapDp +
-            follow.take(k).fold(0, (sum, st) => sum + widgetFollowDp(st));
-  var rows = remaining < follow.length ? remaining : follow.length;
-  final needLine = prefs.showCount && remaining - rows > 0;
-  if (used(rows) + (needLine ? kWidgetMoreLineDp : 0) <= avail) {
-    return (rows: rows, more: n(remaining - rows), badge: 0);
+  final left = remaining < 0 ? 0 : remaining;
+  final scale = fontScale.isFinite && fontScale >= 1 ? fontScale : 1.0;
+  final fixed = 20 + (16 * scale).ceil() + 4 + (56 * scale).ceil();
+  // 同日课程之间不使用分隔线；隔天的上下分区由原生端单独布局。
+  final available = heightDp - fixed - kWidgetBlockGapDp;
+  var rows = available >= kWidgetNextCourseDp ? 1 : 0;
+  if (available >=
+      kWidgetNextCourseDp + kWidgetBlockGapDp + (24 * scale).ceil()) {
+    rows = 2;
   }
-  // 放不下：先改头部 +N，再减块。
-  while (rows > 0 && used(rows) > avail) {
-    rows--;
+  if (rows == 0 &&
+      heightDp >=
+          20 +
+              kWidgetBlockGapDp +
+              2 * (kWidgetMinimalCourseDp * scale).ceil()) {
+    rows = 1;
   }
-  return (rows: rows, more: 0, badge: n(remaining - rows));
+  final wanted = prefs.courseCount.clamp(1, 3) - 1;
+  rows = rows.clamp(0, wanted).clamp(0, left);
+  return (rows: rows, more: 0, badge: prefs.showCount ? left - rows : 0);
 }
 
 String _two(int v) => v.toString().padLeft(2, '0');

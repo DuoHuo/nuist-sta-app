@@ -3,7 +3,9 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_bridge.dart';
@@ -279,8 +281,320 @@ void main() {
     expect(find.descendant(of: row, matching: find.text('3')), findsOneWidget);
     expect(
       find.byKey(const ValueKey('tt_widget_preview_course_2')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('tt_widget_preview_course_1')),
       findsOneWidget,
     );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('tt_widget_preview_time_1')))
+          .data,
+      contains('20:30–21:20'),
+    );
+  });
+
+  testWidgets('4×2 同日课程均分高度、固定间距，详情变少也不在底部堆积留白', (tester) async {
+    for (final dark in [false, true]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: dark ? appDarkTheme() : appLightTheme(),
+          home: TimetableWidgetSettingsPage(controller: _c),
+        ),
+      );
+      await tester.pumpAndSettle();
+      for (final showDetails in [true, false]) {
+        for (final (field, enabled) in [
+          ('widgetShowLocation', _c.settings.widgetShowLocation),
+          ('widgetShowTeacher', _c.settings.widgetShowTeacher),
+        ]) {
+          if (enabled == showDetails) continue;
+          final row = find.byKey(Key('tt_settings_$field'));
+          await tester.ensureVisible(row);
+          await tester.tap(row);
+          await settleIo(tester);
+        }
+        final main = tester.getRect(
+          find.byKey(const Key('tt_widget_preview_main_area')),
+        );
+        final after = tester.getRect(
+          find.byKey(const Key('tt_widget_preview_after_area')),
+        );
+        expect(after.top - main.bottom, closeTo(5, 0.1));
+        expect(main.height, closeTo(after.height, 0.1));
+        final card = tester.getRect(
+          find.byKey(const Key('tt_widget_preview_4x2')),
+        );
+        expect(card.bottom - after.bottom, closeTo(10, 0.1));
+        for (final (index, area) in [(0, main), (1, after)]) {
+          final data = tester.getRect(
+            find.byKey(ValueKey('tt_widget_preview_course_data_$index')),
+          );
+          expect(data.center.dy, closeTo(area.center.dy, 0.1));
+        }
+        expect(
+          find.byKey(const Key('tt_widget_preview_after_divider')),
+          findsNothing,
+        );
+        expect(tester.takeException(), isNull);
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('2×2 预览只展示适用选项，切换尺寸保留偏好', (tester) async {
+    final a = _FakeActions(_perm());
+    await pump(tester, a);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('2×2 当前与下一节'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('tt_widget_preview_2x2')), findsOneWidget);
+    expect(
+      find.byKey(const Key('tt_settings_widgetCourseCount')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('tt_settings_widgetShowCountdown')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('tt_settings_widgetShowPeriod')), findsNothing);
+    expect(find.byKey(const Key('tt_settings_widgetShowCount')), findsNothing);
+    for (final (areaKey, dataKey) in [
+      ('tt_widget_preview_main_area', 'tt_widget_preview_course_data_0'),
+      ('tt_widget_preview_after_area', 'tt_widget_preview_course_data_1'),
+    ]) {
+      final area = tester.getRect(find.byKey(Key(areaKey)));
+      final data = tester.getRect(find.byKey(ValueKey(dataKey)));
+      expect(data.center.dy, closeTo(area.center.dy, 0.1));
+    }
+    final main = tester.getRect(
+      find.byKey(const Key('tt_widget_preview_main_area')),
+    );
+    final after = tester.getRect(
+      find.byKey(const Key('tt_widget_preview_after_area')),
+    );
+    expect(after.top - main.bottom, closeTo(5, 0.1));
+    final card = tester.getRect(find.byKey(const Key('tt_widget_preview_2x2')));
+    // 表头 16dp、与正文间距 4dp、外边距 10dp，课程组两侧留白应相等。
+    expect(
+      main.top - (card.top + 10 + 16 + 4),
+      closeTo(card.bottom - 10 - after.bottom, 0.1),
+    );
+    expect(
+      find.byKey(const Key('tt_widget_preview_after_divider')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const Key('tt_settings_widgetShowLocation')));
+    await settleIo(tester);
+    expect(_c.settings.widgetShowLocation, isFalse);
+    await tester.tap(find.text('4×2 今日课表'));
+    await tester.pumpAndSettle();
+    expect(sw(tester, 'tt_settings_widgetShowLocation'), isFalse);
+    expect(find.byKey(const Key('tt_widget_preview_4x2')), findsOneWidget);
+  });
+
+  testWidgets('两种小组件预览在窄屏与大字号下没有溢出', (tester) async {
+    void checkTimeBounds(bool square) {
+      final card = tester.getRect(
+        find.byKey(
+          Key(square ? 'tt_widget_preview_2x2' : 'tt_widget_preview_4x2'),
+        ),
+      );
+      for (final index in [0, 1]) {
+        final text = find.byKey(ValueKey('tt_widget_preview_time_$index'));
+        if (text.evaluate().isEmpty) continue;
+        final box = tester.renderObject<RenderParagraph>(text);
+        expect(box.didExceedMaxLines, isFalse, reason: '课程 $index 的时间不能被截断');
+        final rect = tester.getRect(text);
+        expect(rect.left, greaterThanOrEqualTo(card.left + 10));
+        expect(rect.right, lessThanOrEqualTo(card.right - 10));
+        expect(rect.top, greaterThanOrEqualTo(card.top + 10));
+        expect(rect.bottom, lessThanOrEqualTo(card.bottom - 10));
+      }
+    }
+
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    for (final size in [const Size(320, 800), const Size(600, 900)]) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      for (final dark in [false, true]) {
+        for (final scale in [1.0, 1.3, 1.5, 2.0]) {
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: dark ? appDarkTheme() : appLightTheme(),
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(scale)),
+                child: child!,
+              ),
+              home: TimetableWidgetSettingsPage(controller: _c),
+            ),
+          );
+          await tester.pumpAndSettle();
+          checkTimeBounds(false);
+          expect(
+            tester.takeException(),
+            isNull,
+            reason: '$size / $dark / $scale / 4×2',
+          );
+          await tester.tap(find.text('最后一节'));
+          await tester.pumpAndSettle();
+          checkTimeBounds(false);
+          expect(
+            tester.takeException(),
+            isNull,
+            reason: '$size / $dark / $scale / 4×2 最后一节',
+          );
+          await tester.tap(find.text('2×2 当前与下一节'));
+          await tester.pumpAndSettle();
+          checkTimeBounds(true);
+          expect(
+            tester.takeException(),
+            isNull,
+            reason: '$size / $dark / $scale / 2×2',
+          );
+          await tester.tap(find.text('有后续课程'));
+          await tester.pumpAndSettle();
+          checkTimeBounds(true);
+          expect(
+            tester.takeException(),
+            isNull,
+            reason: '$size / $dark / $scale / 2×2 后续课程',
+          );
+          await tester.pumpWidget(const SizedBox.shrink());
+        }
+      }
+    }
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
+
+  testWidgets('最后一节课程靠上且提示独立贴底，星期使用强调色', (tester) async {
+    for (final dark in [false, true]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: dark ? appDarkTheme() : appLightTheme(),
+          home: TimetableWidgetSettingsPage(controller: _c),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('最后一节'));
+      await tester.pumpAndSettle();
+      for (final square in [false, true]) {
+        if (square) {
+          await tester.tap(find.text('2×2 当前与下一节'));
+          await tester.pumpAndSettle();
+        }
+        final last = find.byKey(const Key('tt_widget_preview_last'));
+        final name = find.byKey(const ValueKey('tt_widget_preview_course_0'));
+        final weekday = tester.widget<Text>(
+          find.byKey(const Key('tt_widget_preview_weekday')),
+        );
+        expect(
+          weekday.style!.color,
+          (dark ? appDarkTheme() : appLightTheme()).colorScheme.primary,
+        );
+        expect(
+          tester.getTopLeft(last).dx,
+          lessThan(tester.getTopLeft(name).dx),
+        );
+        expect(
+          tester.getTopLeft(last).dy,
+          greaterThan(tester.getBottomLeft(name).dy),
+        );
+        expect(tester.widget<Text>(last).style!.fontSize, 10);
+        final preview = find.byKey(
+          Key(square ? 'tt_widget_preview_2x2' : 'tt_widget_preview_4x2'),
+        );
+        final data = find.byKey(
+          const ValueKey('tt_widget_preview_course_data_0'),
+        );
+        final area = tester.getRect(
+          find.byKey(const Key('tt_widget_preview_main_area')),
+        );
+        final content = tester.getRect(data);
+        expect(content.top - area.top, closeTo(square ? 0 : 2, 0.1));
+        expect(area.height - content.height, closeTo(square ? 0 : 4, 0.1));
+        expect(
+          tester.getBottomLeft(preview).dy - tester.getBottomLeft(last).dy,
+          closeTo(10, 0.1),
+        );
+        expect(
+          tester.getTopLeft(last).dy,
+          greaterThan(tester.getBottomLeft(data).dy),
+        );
+        expect(
+          tester.getTopLeft(data).dy - tester.getTopLeft(preview).dy,
+          lessThan(40),
+        );
+        expect(
+          find.byKey(const Key('tt_widget_preview_after_divider')),
+          findsNothing,
+        );
+        expect(tester.takeException(), isNull);
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('4×2 设置只显示一节时课程靠上，有后续课程也不居中', (tester) async {
+    await tester.runAsync(
+      () => _c.updateSettings(_c.settings.copyWith(widgetCourseCount: 1)),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        home: TimetableWidgetSettingsPage(controller: _c),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final card = tester.getRect(find.byKey(const Key('tt_widget_preview_4x2')));
+    final data = tester.getRect(
+      find.byKey(const ValueKey('tt_widget_preview_course_data_0')),
+    );
+    expect(data.top - card.top, closeTo(32, 0.1));
+    expect(find.byKey(const Key('tt_widget_preview_after_area')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('2×2 表头标题、日期与星期在不同字号下共用文字基线', (tester) async {
+    for (final dark in [false, true]) {
+      for (final scale in [1.0, 1.3]) {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: dark ? appDarkTheme() : appLightTheme(),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: TextScaler.linear(scale)),
+              child: child!,
+            ),
+            home: TimetableWidgetSettingsPage(controller: _c),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('2×2 当前与下一节'));
+        await tester.pumpAndSettle();
+        final baselines = [
+          for (final key in [
+            'tt_widget_preview_header_title',
+            'tt_widget_preview_header_date',
+            'tt_widget_preview_weekday',
+          ])
+            () {
+              final box = tester.renderObject<RenderBox>(find.byKey(Key(key)));
+              return box.localToGlobal(Offset.zero).dy +
+                  box.getDryBaseline(box.constraints, TextBaseline.alphabetic)!;
+            }(),
+        ];
+        expect(baselines[1], closeTo(baselines[0], 0.1));
+        expect(baselines[2], closeTo(baselines[0], 0.1));
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    }
   });
 
   testWidgets('保活引导页：品牌说明、强行停止与 7 天提示、电池优化按钮', (tester) async {

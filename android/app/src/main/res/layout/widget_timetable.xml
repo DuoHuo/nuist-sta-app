@@ -1,414 +1,447 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 4×2「今日课表」（design-widget-4x2/spec-widget-4x2.md，基准 320×168dp，最小 250×110，圆角 16）：控件 id 为原生渲染契约，UI 可调整样式但需保留 id。
-     各状态用 setViewVisibility 切换 wg_group_main / wg_group_empty。 -->
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- 同日课程块均衡占用高度、固定间距，仅隔天分隔；最后一节提示贴底。 -->
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/wg_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/wg_bg"
-    android:paddingStart="12dp"
-    android:paddingTop="10dp"
-    android:paddingEnd="12dp"
-    android:paddingBottom="8dp">
-
+    android:padding="12dp">
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical">
-
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="20dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:minHeight="16dp"
+            android:id="@+id/wg_header"
+            android:baselineAligned="true"
+            android:gravity="top">
             <TextView
                 android:id="@+id/wg_header_title"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:maxLines="1"
-                android:fontFamily="sans-serif-medium"
                 android:textColor="@color/wg_t2"
-                android:textSize="12sp"/>
+                android:textSize="12sp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:text="今日课表"
+                android:includeFontPadding="false" />
             <TextView
                 android:id="@+id/wg_header_more"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:maxLines="1"
                 android:textColor="@color/wg_link"
+                android:textSize="12sp"
+                android:layout_marginStart="8dp"
+                android:visibility="gone"
+                android:includeFontPadding="false" />
+            <TextView
+                android:id="@+id/wg_header_date"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:maxLines="1"
+                android:textColor="@color/wg_t2"
                 android:textSize="11sp"
-                android:visibility="gone"/>
+                android:includeFontPadding="false"
+                android:text="10/28" />
+            <TextView
+                android:id="@+id/wg_header_weekday"
+                android:translationY="1dp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="3dp"
+                android:maxLines="1"
+                android:textColor="@color/wg_weekday"
+                android:textSize="11sp"
+                android:includeFontPadding="false"
+                android:text="周三" />
         </LinearLayout>
-
-        <!-- 主区：头部以下。wg_main_area 占剩余高度并垂直居中（后续行全 GONE 时主块居中，
-             spec §11）；wg_more 固定在底部。 -->
         <LinearLayout
-            android:id="@+id/wg_group_main"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:layout_marginTop="6dp"
-            android:orientation="vertical">
-
+            android:layout_height="0dp"
+            android:orientation="vertical"
+            android:layout_weight="1"
+            android:layout_marginTop="4dp"
+            android:id="@+id/wg_group_main">
             <LinearLayout
-                android:id="@+id/wg_main_area"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
-                android:gravity="center_vertical"
-                android:orientation="vertical">
-
-            <!-- §13 统一主块：课名 + 副行 + 倒计时，最小高度 50dp。 -->
-            <LinearLayout
-                android:id="@+id/wg_main"
-                android:layout_width="match_parent"
-                android:layout_height="50dp"
-                android:minHeight="50dp"
-                android:background="@drawable/wg_chip"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingStart="8dp"
-                android:paddingTop="6dp"
-                android:paddingEnd="8dp"
-                android:paddingBottom="6dp">
-                <ImageView
-                    android:id="@+id/wg_main_bar"
-                    android:layout_width="3dp"
+                android:orientation="vertical"
+                android:gravity="top"
+                android:id="@+id/wg_main_area">
+                <FrameLayout
+                    android:layout_width="match_parent"
                     android:layout_height="match_parent"
-                    android:src="@drawable/wg_bar"
-                    android:scaleType="fitXY"
-                    android:importantForAccessibility="no"/>
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginStart="8dp"
-                    android:orientation="vertical">
-                    <TextView
-                        android:id="@+id/wg_main_name"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:maxLines="1"
-                        android:ellipsize="end"
-                        android:fontFamily="sans-serif-medium"
-                        android:textColor="@color/wg_t1"
-                        android:textSize="15sp"/>
+                    android:id="@+id/wg_main"
+                    android:background="@drawable/wg_chip"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="2dp">
                     <LinearLayout
+                        android:id="@+id/wg_main_content"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal">
-                        <TextView
-                            android:id="@+id/wg_main_loc"
+                        android:orientation="horizontal"
+                        android:layout_gravity="center_vertical"
+                        android:baselineAligned="false"
+                        android:gravity="center_vertical">
+                        <ImageView
+                            android:id="@+id/wg_main_bar"
+                            android:layout_width="4dp"
+                            android:layout_height="match_parent"
+                            android:src="@drawable/wg_bar"
+                            android:scaleType="fitXY"
+                            android:importantForAccessibility="no" />
+                        <LinearLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
+                            android:orientation="vertical"
                             android:layout_weight="1"
-                            android:maxLines="1"
-                            android:ellipsize="end"
-                            android:textColor="@color/wg_t3"
-                            android:textSize="11sp"/>
-                        <TextView
-                            android:id="@+id/wg_main_teacher"
+                            android:layout_marginStart="8dp">
+                            <TextView
+                                android:id="@+id/wg_main_name"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:maxLines="1"
+                                android:textColor="@color/wg_t1"
+                                android:textSize="14sp"
+                                android:fontFamily="sans-serif-medium"
+                                android:ellipsize="end"
+                                android:text="高等数学 A"
+                                android:includeFontPadding="false" />
+                            <TextView
+                                android:id="@+id/wg_main_loc"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:maxLines="1"
+                                android:layout_marginTop="2dp"
+                                android:textColor="@color/wg_t3"
+                                android:textSize="11sp"
+                                android:ellipsize="end"
+                                android:text="示例教室 A101"
+                                android:includeFontPadding="false" />
+                            <!-- 时段混有中文节次，保留字体上下边界，避免系统字体裁切。 -->
+                            <TextView
+                                android:id="@+id/wg_main_time"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:maxLines="1"
+                                android:layout_marginTop="2dp"
+                                android:textColor="@color/wg_t3"
+                                android:textSize="10sp"
+                                android:text="第3–4节 · 10:10–11:50"
+                                android:includeFontPadding="true"
+                                android:fallbackLineSpacing="true" />
+                        </LinearLayout>
+                        <LinearLayout
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:maxLines="1"
-                            android:textColor="@color/wg_t3"
-                            android:textSize="11sp"
-                            android:visibility="gone"/>
-                        <TextView
-                            android:id="@+id/wg_main_time"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:maxLines="1"
-                            android:textColor="@color/wg_t3"
-                            android:textSize="11sp"/>
+                            android:orientation="vertical"
+                            android:minWidth="68dp"
+                            android:layout_marginStart="8dp"
+                            android:gravity="end"
+                            android:id="@+id/wg_main_clock">
+                            <TextView
+                                android:id="@+id/wg_main_label"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:maxLines="1"
+                                android:textColor="@color/wg_acc"
+                                android:textSize="10sp"
+                                android:text="距下课"
+                                android:includeFontPadding="false" />
+                            <TextView
+                                android:id="@+id/wg_main_static"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:maxLines="1"
+                                android:textColor="@color/wg_acc"
+                                android:textSize="17sp"
+                                android:fontFamily="sans-serif"
+                                android:fontFeatureSettings="tnum"
+                                android:textStyle="bold"
+                                android:text="49 分钟"
+                                android:includeFontPadding="false" />
+                        </LinearLayout>
                     </LinearLayout>
-                </LinearLayout>
-                <!-- 倒计时列：固定 64dp，主区先让出宽度，避免秒数 / 时间被截断；
-                     主区 weight=1 先让出宽度。 -->
-                <LinearLayout
-                    android:layout_width="64dp"
-                    android:minWidth="64dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="4dp"
-                    android:gravity="end"
-                    android:orientation="vertical">
-                    <TextView
-                        android:id="@+id/wg_main_label"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:gravity="end"
-                        android:maxLines="1"
-                        android:textColor="@color/wg_acc"
-                        android:textSize="10sp"/>
-                    <Chronometer
-                        android:id="@+id/wg_main_chrono"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:fontFamily="sans-serif"
-                        android:fontFeatureSettings="tnum"
-                        android:gravity="end"
-                        android:maxLines="1"
-                        android:textColor="@color/wg_acc"
-                        android:textStyle="bold"
-                        android:textSize="17sp"/>
-                    <TextView
-                        android:id="@+id/wg_main_static"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:fontFamily="sans-serif"
-                        android:fontFeatureSettings="tnum"
-                        android:gravity="end"
-                        android:maxLines="1"
-                        android:textColor="@color/wg_t2"
-                        android:textSize="17sp"
-                        android:textStyle="bold"
-                        android:visibility="gone"/>
-                </LinearLayout>
+                </FrameLayout>
             </LinearLayout>
-
-            <!-- 同时显示 2 节（widgetCourseCount=2）：第 2 节也用主块样式，块高 50、间距 4，
-                 右列静态「上课 / 13:45」。默认 GONE，由原生端按高度决定是否显示。 -->
-            <LinearLayout
-                android:id="@+id/wg_main2"
+            <TextView
+                android:id="@+id/wg_status"
                 android:layout_width="match_parent"
-                android:layout_height="50dp"
-                android:layout_marginTop="4dp"
-                android:background="@drawable/wg_chip"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingStart="8dp"
-                android:paddingTop="6dp"
-                android:paddingEnd="8dp"
-                android:paddingBottom="6dp"
-                android:visibility="gone">
-                <ImageView
-                    android:id="@+id/wg_main2_bar"
-                    android:layout_width="3dp"
-                    android:layout_height="match_parent"
-                    android:src="@drawable/wg_bar"
-                    android:scaleType="fitXY"
-                    android:importantForAccessibility="no"/>
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:textColor="@color/wg_t3"
+                android:textSize="12sp"
+                android:includeFontPadding="false"
+                android:visibility="gone" />
+            <LinearLayout
+                android:id="@+id/wg_course_gap"
+                android:layout_width="match_parent"
+                android:layout_height="6dp"
+                android:importantForAccessibility="no" />
+            <ImageView
+                android:id="@+id/wg_after_divider"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="5dp"
+                android:layout_marginBottom="5dp"
+                android:background="@color/wg_divider"
+                android:visibility="gone"
+                android:importantForAccessibility="no" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:id="@+id/wg_rows">
+                <FrameLayout
+                    android:id="@+id/wg_row1"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
                     android:layout_weight="1"
-                    android:layout_marginStart="8dp"
-                    android:orientation="vertical">
-                    <TextView
-                        android:id="@+id/wg_main2_name"
+                    android:minHeight="0dp">
+                    <FrameLayout
+                        android:id="@+id/wg_row1_course"
                         android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
+                        android:layout_height="match_parent"
+                        android:minHeight="0dp"
+                        android:background="@drawable/wg_chip"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="2dp"
+                        android:paddingBottom="2dp">
+                        <LinearLayout
+                            android:id="@+id/wg_row1_content"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_gravity="center_vertical"
+                            android:baselineAligned="false"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+                            <ImageView
+                                android:id="@+id/wg_row1_bar"
+                                android:layout_width="4dp"
+                                android:layout_height="match_parent"
+                                android:src="@drawable/wg_bar"
+                                android:scaleType="fitXY"
+                                android:importantForAccessibility="no" />
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:layout_marginStart="8dp"
+                                android:orientation="vertical">
+                                <TextView
+                                    android:id="@+id/wg_row1_name"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:maxLines="1"
+                                    android:ellipsize="end"
+                                    android:fontFamily="sans-serif-medium"
+                                    android:textColor="@color/wg_t1"
+                                    android:textSize="14sp"
+                                    android:includeFontPadding="false"
+                                    android:text="大学英语" />
+                                <TextView
+                                    android:id="@+id/wg_row1_loc"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:maxLines="1"
+                                    android:ellipsize="end"
+                                    android:textColor="@color/wg_t3"
+                                    android:textSize="11sp"
+                                    android:includeFontPadding="false"
+                                    android:text="示例教室 C102" />
+                                <!-- 时段混有中文节次，保留字体上下边界，避免系统字体裁切。 -->
+                                <TextView
+                                    android:id="@+id/wg_row1_range"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:maxLines="1"
+                                    android:ellipsize="end"
+                                    android:textColor="@color/wg_t3"
+                                    android:textSize="10sp"
+                                    android:includeFontPadding="true"
+                                    android:fallbackLineSpacing="true"
+                                    android:text="第5–6节 · 13:45–15:20" />
+                            </LinearLayout>
+                            <LinearLayout
+                                android:id="@+id/wg_row1_clock"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:minWidth="64dp"
+                                android:layout_marginStart="8dp"
+                                android:gravity="end"
+                                android:orientation="vertical">
+                                <TextView
+                                    android:id="@+id/wg_row1_label"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:maxLines="1"
+                                    android:textColor="@color/wg_t3"
+                                    android:textSize="10sp"
+                                    android:includeFontPadding="false"
+                                    android:text="上课" />
+                                <TextView
+                                    android:id="@+id/wg_row1_time"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:maxLines="1"
+                                    android:fontFamily="sans-serif-medium"
+                                    android:fontFeatureSettings="tnum"
+                                    android:textColor="@color/wg_t1"
+                                    android:textSize="15sp"
+                                    android:includeFontPadding="false"
+                                    android:text="13:45" />
+                            </LinearLayout>
+                        </LinearLayout>
+                    </FrameLayout>
+                    <TextView
+                        android:id="@+id/wg_tomorrow_free"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:gravity="center"
                         android:maxLines="1"
                         android:ellipsize="end"
-                        android:fontFamily="sans-serif-medium"
-                        android:textColor="@color/wg_t1"
-                        android:textSize="15sp"/>
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal">
-                        <TextView
-                            android:id="@+id/wg_main2_loc"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:maxLines="1"
-                            android:ellipsize="end"
-                            android:textColor="@color/wg_t3"
-                            android:textSize="11sp"/>
-                        <TextView
-                            android:id="@+id/wg_main2_teacher"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:maxLines="1"
-                            android:textColor="@color/wg_t3"
-                            android:textSize="11sp"
-                            android:visibility="gone"/>
-                        <TextView
-                            android:id="@+id/wg_main2_time"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:maxLines="1"
-                            android:textColor="@color/wg_t3"
-                            android:textSize="11sp"/>
-                    </LinearLayout>
-                </LinearLayout>
-                <!-- 第二主块倒计时列：与主块同宽（64dp），静态开始时间不省略。 -->
-                <LinearLayout
-                    android:layout_width="64dp"
-                    android:minWidth="64dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="4dp"
-                    android:gravity="end"
-                    android:orientation="vertical">
-                    <TextView
-                        android:id="@+id/wg_main2_label"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:gravity="end"
-                        android:maxLines="1"
-                        android:text="上课"
                         android:textColor="@color/wg_t3"
-                        android:textSize="10sp"/>
+                        android:textSize="12sp"
+                        android:visibility="gone"
+                        android:text="明天没课"
+                        android:includeFontPadding="false" />
+                </FrameLayout>
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="5dp"
+                    android:minHeight="24dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:visibility="gone"
+                    android:id="@+id/wg_row2"
+                    android:gravity="center_vertical">
+                    <ImageView
+                        android:id="@+id/wg_row2_bar"
+                        android:layout_width="4dp"
+                        android:layout_height="16dp"
+                        android:src="@drawable/wg_bar"
+                        android:scaleType="fitXY"
+                        android:importantForAccessibility="no" />
                     <TextView
-                        android:id="@+id/wg_main2_start"
+                        android:id="@+id/wg_row2_name"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:maxLines="1"
+                        android:textColor="@color/wg_t1"
+                        android:textSize="13sp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="8dp"
+                        android:ellipsize="end"
+                        android:fontFamily="sans-serif-medium"
+                        android:includeFontPadding="false" />
+                    <TextView
+                        android:id="@+id/wg_row2_loc"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:fontFamily="sans-serif"
-                        android:fontFeatureSettings="tnum"
-                        android:gravity="end"
                         android:maxLines="1"
-                        android:textStyle="bold"
-                        android:textColor="@color/wg_t2"
-                        android:textSize="17sp"/>
+                        android:textColor="@color/wg_t3"
+                        android:textSize="11sp"
+                        android:maxWidth="100dp"
+                        android:layout_marginStart="8dp"
+                        android:ellipsize="end"
+                        android:visibility="gone"
+                        android:includeFontPadding="false" />
+                    <TextView
+                        android:id="@+id/wg_row2_time"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:maxLines="1"
+                        android:textColor="@color/wg_t3"
+                        android:textSize="12sp"
+                        android:layout_marginStart="8dp"
+                        android:includeFontPadding="false" />
                 </LinearLayout>
             </LinearLayout>
-
             <LinearLayout
-                android:id="@+id/wg_rows"
+                android:id="@+id/wg_bottom_space"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:orientation="vertical">
-            <LinearLayout
-                android:id="@+id/wg_row1"
-                android:layout_width="match_parent"
-                android:layout_height="24dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:visibility="gone">
-                <ImageView
-                    android:id="@+id/wg_row1_bar"
-                    android:layout_width="3dp"
-                    android:layout_height="14dp"
-                    android:src="@drawable/wg_bar"
-                    android:scaleType="fitXY"
-                    android:importantForAccessibility="no"/>
-                <TextView
-                    android:id="@+id/wg_row1_name"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:maxLines="1"
-                    android:ellipsize="end"
-                    android:fontFamily="sans-serif-medium"
-                    android:textColor="@color/wg_t1"
-                    android:textSize="13sp"/>
-                <TextView
-                    android:id="@+id/wg_row1_loc"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginStart="8dp"
-                    android:maxLines="1"
-                    android:ellipsize="end"
-                    android:textColor="@color/wg_t3"
-                    android:textSize="11sp"/>
-                <TextView
-                    android:id="@+id/wg_row1_time"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:maxLines="1"
-                    android:textColor="@color/wg_t3"
-                    android:textSize="11sp"/>
-            </LinearLayout>
-            <LinearLayout
-                android:id="@+id/wg_row2"
-                android:layout_width="match_parent"
-                android:layout_height="24dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:visibility="gone">
-                <ImageView
-                    android:id="@+id/wg_row2_bar"
-                    android:layout_width="3dp"
-                    android:layout_height="14dp"
-                    android:src="@drawable/wg_bar"
-                    android:scaleType="fitXY"
-                    android:importantForAccessibility="no"/>
-                <TextView
-                    android:id="@+id/wg_row2_name"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:maxLines="1"
-                    android:ellipsize="end"
-                    android:fontFamily="sans-serif-medium"
-                    android:textColor="@color/wg_t1"
-                    android:textSize="13sp"/>
-                <TextView
-                    android:id="@+id/wg_row2_loc"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginStart="8dp"
-                    android:maxLines="1"
-                    android:ellipsize="end"
-                    android:textColor="@color/wg_t3"
-                    android:textSize="11sp"/>
-                <TextView
-                    android:id="@+id/wg_row2_time"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:maxLines="1"
-                    android:textColor="@color/wg_t3"
-                    android:textSize="11sp"/>
-            </LinearLayout>
-            </LinearLayout>
-            </LinearLayout>
-
-            <!-- §13 统一「之后」行：下一节 / 今天最后一节。 -->
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:importantForAccessibility="no" />
             <TextView
                 android:id="@+id/wg_more"
-                android:ellipsize="end"
                 android:layout_width="match_parent"
-                android:layout_height="16dp"
-                android:paddingStart="11dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:paddingStart="8dp"
                 android:maxLines="1"
-                android:textColor="@color/wg_link"
-                android:textSize="11sp"
-                android:visibility="gone"/>
+                android:ellipsize="end"
+                android:textColor="@color/wg_t3"
+                android:textSize="10sp"
+                android:includeFontPadding="false"
+                android:visibility="gone"
+                android:text="今天最后一节" />
         </LinearLayout>
-
         <LinearLayout
-            android:id="@+id/wg_group_empty"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:gravity="center"
+            android:layout_height="0dp"
             android:orientation="vertical"
-            android:visibility="gone">
+            android:layout_weight="1"
+            android:gravity="center"
+            android:visibility="gone"
+            android:id="@+id/wg_group_empty">
             <TextView
                 android:id="@+id/wg_empty_title"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="sans-serif-medium"
+                android:maxLines="2"
                 android:textColor="@color/wg_t1"
                 android:textSize="15sp"
-                android:text="今日课表"/>
+                android:ellipsize="end"
+                android:gravity="center"
+                android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false" />
             <TextView
                 android:id="@+id/wg_empty_sub"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:maxLines="2"
+                android:maxLines="3"
+                android:textColor="@color/wg_t3"
+                android:textSize="11sp"
                 android:ellipsize="end"
                 android:gravity="center"
-                android:textColor="@color/wg_t3"
-                android:textSize="11sp"/>
+                android:layout_marginTop="8dp"
+                android:includeFontPadding="false" />
             <TextView
                 android:id="@+id/wg_empty_button"
                 android:layout_width="wrap_content"
-                android:layout_height="24dp"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:textColor="@color/wg_on_acc"
+                android:textSize="12sp"
+                android:minHeight="48dp"
                 android:layout_marginTop="8dp"
                 android:background="@drawable/wg_button"
                 android:gravity="center"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
-                android:textColor="@color/wg_on_acc"
-                android:textSize="11sp"
-                android:visibility="gone"/>
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:visibility="gone"
+                android:ellipsize="end"
+                android:includeFontPadding="false" />
         </LinearLayout>
     </LinearLayout>
 </FrameLayout>

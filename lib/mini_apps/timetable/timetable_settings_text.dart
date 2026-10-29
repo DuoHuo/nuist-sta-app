@@ -29,7 +29,7 @@ abstract final class TtSettingsText {
   static const showCountdown = '显示倒计时';
   static const showCount = '显示剩余节数';
   static const showPeriod = '显示节次';
-  static const courseCount = '显示课程数量';
+  static const courseCount = '最多显示课程数量';
   static String courses(int n) => '$n';
 
   // ---- 后台运行引导页 ----

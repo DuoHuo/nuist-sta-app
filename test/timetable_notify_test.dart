@@ -235,102 +235,71 @@ void main() {
       int h = 168,
     ]) => widgetLayout(remaining: remaining, heightDp: h, prefs: prefs);
 
-    test('slotStyles：1 门 = 单块，2 门 = 两个主块，3 门 = 主块 + 2 紧凑行', () {
+    test('下一节保留完整详情，额外课程使用轻量行与表头数量', () {
       expect(p2.slotStyles, [WidgetItemStyle.main, WidgetItemStyle.main]);
       expect(p3.slotStyles, [
         WidgetItemStyle.main,
-        WidgetItemStyle.compact,
+        WidgetItemStyle.main,
         WidgetItemStyle.compact,
       ]);
       expect(offUp.slotStyles, [WidgetItemStyle.main]);
-      expect(p3.toJson()['slotStyles'], ['main', 'compact', 'compact']);
+      final two = selectWidgetRows(six, at9);
+      expect(two.rows.map((c) => c.name), ['课10']);
+      expect(two.styles, [WidgetItemStyle.main]);
+      expect(two.more, 0);
+      expect(two.badge, 4);
+      final three = selectWidgetRows(six, at9, prefs: p3);
+      expect(three.rows.map((c) => c.name), ['课10']);
+      expect(three.more, 0);
+      expect(three.badge, 4);
+      expect(lay(5, offUp), (rows: 0, more: 0, badge: 5));
+      expect(lay(0, p2), (rows: 0, more: 0, badge: 0));
+      expect(lay(1, p2), (rows: 1, more: 0, badge: 0));
+      expect(lay(2, p3), (rows: 1, more: 0, badge: 1));
+      expect(lay(5, const WidgetPrefs(courseCount: 3, showCount: false)), (
+        rows: 1,
+        more: 0,
+        badge: 0,
+      ));
     });
 
-    test('2 门（默认）：两个主块样式块 + 底行（164dp）', () {
-      final r = selectWidgetRows(six, at9);
-      expect(r.main!.name, '课8');
-      expect(r.rows.map((c) => c.name), ['课10']);
-      expect(r.styles, [WidgetItemStyle.main]);
-      expect(r.more, 4);
-      expect(r.badge, 0);
-      expect(lay(5, p2, 164), (rows: 1, more: 4, badge: 0));
-      expect(lay(1, p2, 148), (rows: 1, more: 0, badge: 0));
+    test('小尺寸优先保留当前课与下一节，极小尺寸才减少后续行', () {
+      expect(lay(5, p3, 108), (rows: 0, more: 0, badge: 5));
+      expect(lay(5, p3, 110), (rows: 1, more: 0, badge: 4));
+      expect(lay(5, p3, 120), (rows: 1, more: 0, badge: 4));
+      expect(lay(5, p3, 158), (rows: 1, more: 0, badge: 4));
+      expect(lay(5, p3, 159), (rows: 1, more: 0, badge: 4));
+      expect(lay(5, p3, 187), (rows: 1, more: 0, badge: 4));
+      expect(lay(5, p3, 188), (rows: 2, more: 0, badge: 3));
+      expect(widgetLayout(remaining: 5, widthDp: 250, prefs: p3), (
+        rows: 1,
+        more: 0,
+        badge: 4,
+      ));
+      expect(widgetLayout(remaining: 5, fontScale: 1.5, prefs: p3), (
+        rows: 1,
+        more: 0,
+        badge: 4,
+      ));
+      expect(
+        widgetLayout(remaining: 5, heightDp: 260, fontScale: 1.5, prefs: p3),
+        (rows: 2, more: 0, badge: 3),
+      );
+      expect(lay(5, const WidgetPrefs(showCount: false), 120), (
+        rows: 1,
+        more: 0,
+        badge: 0,
+      ));
       final done = selectWidgetRows(six, DateTime(2026, 10, 20, 23));
       expect(done.main, isNull);
       expect(done.rows, isEmpty);
-    });
-
-    test('3 门：主块 + 2 紧凑行 + 还有 N 节', () {
-      final r = selectWidgetRows(six, at9, prefs: p3);
-      expect(r.rows.map((c) => c.name), ['课10', '课12']);
-      expect(r.styles, [WidgetItemStyle.compact, WidgetItemStyle.compact]);
-      expect(r.more, 3);
-      expect(r.badge, 0);
-    });
-
-    test('课程数 1：只 1 块，数量开时底行 N = 全部剩余，矮尺寸 +N', () {
-      expect(lay(5, offUp), (rows: 0, more: 5, badge: 0));
-      expect(lay(5, offUp, 120), (rows: 0, more: 0, badge: 5));
-    });
-
-    test('课程数 1 + 数量关：只剩主块', () {
-      const off = WidgetPrefs(courseCount: 1, showCount: false);
-      expect(lay(5, off), (rows: 0, more: 0, badge: 0));
-      expect(lay(5, off, 120), (rows: 0, more: 0, badge: 0));
-    });
-
-    test('课程数 2 / 3 + 数量关：照常列块，不显示 N', () {
-      expect(lay(5, const WidgetPrefs(courseCount: 3, showCount: false)), (
-        rows: 2,
-        more: 0,
-        badge: 0,
-      ));
-      expect(lay(5, const WidgetPrefs(showCount: false)), (
-        rows: 1,
-        more: 0,
-        badge: 0,
-      ));
-    });
-
-    test('主块之后无课 / 已全部列出：不显示数量行与 +N', () {
-      expect(lay(0, p2), (rows: 0, more: 0, badge: 0));
-      expect(lay(0, p2, 120), (rows: 0, more: 0, badge: 0));
-      expect(lay(0, offUp), (rows: 0, more: 0, badge: 0));
-      expect(lay(1, p2), (rows: 1, more: 0, badge: 0));
-      expect(lay(2, p3), (rows: 2, more: 0, badge: 0));
-      expect(lay(1, offUp), (rows: 0, more: 1, badge: 0));
-    });
-
-    test('矮尺寸（< 140dp）：只留主块，头部 +N', () {
-      expect(lay(5, p2, 120), (rows: 0, more: 0, badge: 5));
-      expect(lay(5, p3, 120), (rows: 0, more: 0, badge: 5));
-    });
-
-    test('高度不足：先改头部 +N，再减块；未显示的课计入 N', () {
-      // 3 门 162dp 正好放下底行。
-      expect(lay(5, p3, 162), (rows: 2, more: 3, badge: 0));
-      // 3 门，155dp：可用 61，2 行 + 底行 68 放不下 → 改 +N，2 行 52 放得下。
-      expect(lay(5, p3, 155), (rows: 2, more: 0, badge: 3));
-      // 3 门，145dp：可用 51 → 减到 1 行。
-      expect(lay(5, p3, 145), (rows: 1, more: 0, badge: 4));
-      expect(lay(2, p3, 145), (rows: 1, more: 0, badge: 1));
-      // 2 门，150dp：可用 56，第二块 54 + 底行放不下 → +N。
-      expect(lay(5, p2, 150), (rows: 1, more: 0, badge: 4));
-      // 2 门，145dp：第二块放不下 → 只剩 1 块，+N。
-      expect(lay(1, p2, 145), (rows: 0, more: 0, badge: 1));
-      // 数量关：照样减块，不显示 N。
-      expect(lay(5, const WidgetPrefs(courseCount: 3, showCount: false), 145), (
-        rows: 1,
-        more: 0,
-        badge: 0,
-      ));
     });
 
     test('剩余课少于课程数：不渲染空块，不出现 +0', () {
       final two = six.take(2).toList();
       final r3 = selectWidgetRows(two, at9, prefs: p3);
       expect(r3.rows, hasLength(1));
-      expect(r3.styles, [WidgetItemStyle.compact]);
+      expect(r3.styles, [WidgetItemStyle.main]);
       expect(r3.more, 0);
       expect(r3.badge, 0);
       final one = six.take(1).toList();
@@ -353,12 +322,22 @@ void main() {
         prefs: p3,
       );
       expect(r.main!.name, '课10');
-      expect(r.rows.map((c) => c.name), ['课12', '课14']);
-      expect(r.more, 2);
+      expect(r.rows.map((c) => c.name), ['课12']);
+      expect(r.more, 0);
+      expect(r.badge, 3);
       // 课间 11:50：下一节「课12」。
       final b = selectWidgetRows(shuffled, DateTime(2026, 10, 20, 11, 50));
       expect(b.main!.name, '课12');
       expect(b.rows.map((c) => c.name), ['课14']);
+      for (final height in [110, 120, 139, 158, 168]) {
+        final during = selectWidgetRows(
+          shuffled,
+          DateTime(2026, 10, 20, 10, 30),
+          heightDp: height,
+        );
+        expect(during.main!.name, '课10');
+        expect(during.rows.map((c) => c.name), ['课12']);
+      }
     });
 
     test('2×2：主课与之后课程按开始时间选择', () {
@@ -385,6 +364,7 @@ void main() {
       expect(done.main, isNull);
       expect(done.afterText, '明天没课');
       expect(selectWidget2x2(const [], at9).main, isNull);
+      expect(selectWidget2x2(const [], at9).mainText, '今天没有课程');
     });
 
     test('2×2：上下课边界与最后一节的之后状态', () {
@@ -422,7 +402,7 @@ void main() {
         for (final i in (j['days'] as List).first['items'] as List) i['style'],
       ];
       expect(styles(gen(p2)), ['main', 'main', null, null, null, null]);
-      expect(styles(gen(p3)), ['main', 'compact', 'compact', null, null, null]);
+      expect(styles(gen(p3)), ['main', 'main', null, null, null, null]);
       expect(styles(gen(offUp)), ['main', null, null, null, null, null]);
     });
 
@@ -655,9 +635,39 @@ void main() {
       ];
       var now = DateTime(2026, 10, 20, 6);
       for (final expected in boundaries) {
-        expect(nextWidgetRefreshAt(now, [c]), expected);
+        expect(nextWidgetRefreshAt(now, [c], showCountdown: false), expected);
         now = expected;
       }
+    });
+
+    test('距上课按课程时刻计算：17:56 到 18:45 为 49 分钟，并在分钟变化后刷新', () {
+      final now = DateTime(2026, 10, 28, 17, 56);
+      final course = _c('示例晚课', DateTime(2026, 10, 28, 18, 45));
+      expect(widgetCountdownMinutes(now, course.start), 49);
+      expect(
+        widgetCountdownMinutes(
+          now.add(const Duration(seconds: 30)),
+          course.start,
+        ),
+        49,
+      );
+      expect(
+        widgetCountdownMinutes(
+          now.add(const Duration(minutes: 1)),
+          course.start,
+        ),
+        48,
+      );
+      expect(widgetCountdownMinutes(course.start, course.start), 0);
+      expect(widgetCountdownMinutes(course.end, course.start), 0);
+      expect(
+        nextWidgetRefreshAt(now, [course]),
+        DateTime(2026, 10, 28, 17, 57),
+      );
+      expect(
+        nextWidgetRefreshAt(now, [course], showCountdown: false),
+        course.start,
+      );
     });
 
     test('跨零点：23:59 明天早八，00:02 重新选为今天主课', () {
@@ -799,7 +809,7 @@ void main() {
         'showCount': false,
         'showPeriod': false,
         'courseCount': 3,
-        'slotStyles': ['main', 'compact', 'compact'],
+        'slotStyles': ['main', 'main', 'compact'],
       });
       expect(s.widgetPrefs().courseCount, 3);
       await s.setWidgetCourseCount(1);

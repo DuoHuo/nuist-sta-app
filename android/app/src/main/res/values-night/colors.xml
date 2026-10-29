@@ -4,12 +4,15 @@
     <color name="wg_bg">#FF1C1D21</color>
     <color name="wg_chip">#FF26282D</color>
     <color name="wg_t1">#FFF2F3F5</color>
-    <color name="wg_t2">#FFC8CBD2</color>
-    <color name="wg_t3">#FF9AA0B4</color>
-    <color name="wg_acc">#FF4DA3FF</color>
-    <color name="wg_link">#FF4DA3FF</color>
+    <color name="wg_t2">#FFAAB1C1</color>
+    <color name="wg_t3">#FFAAB1C1</color>
+    <color name="wg_acc">#FF70B4FF</color>
+    <color name="wg_weekday">#FF4DA3FF</color>
+    <color name="wg_link">#FF70B4FF</color>
     <color name="wg_brk">#FFFFB74D</color>
-    <color name="wg_brk_text">#FFFFB74D</color>
+    <color name="wg_brk_text">#FFFFC476</color>
+    <color name="wg_divider">#FF363A43</color>
+    <color name="wg_button">#FF075EAC</color>
     <color name="wg_on_acc">#FFFFFFFF</color>
     <color name="wg_bar_base">#FFFFFFFF</color>
 </resources>
