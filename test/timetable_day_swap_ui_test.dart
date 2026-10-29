@@ -78,6 +78,18 @@ void main() {
     }
   }
 
+  /// 轮询等到 [done] 成立（最多约 2 秒）。文件 IO 跑在真实异步里，
+  /// 固定轮数的 [settleIo] 在慢机器上不稳。
+  Future<void> settleUntil(WidgetTester tester, bool Function() done) async {
+    for (var i = 0; i < 100 && !done(); i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await tester.pumpAndSettle();
+  }
+
   Future<void> pumpHost(
     WidgetTester tester,
     Widget child, {
@@ -231,8 +243,10 @@ void main() {
     expect(find.byKey(const Key('day_swaps_empty')), findsNothing);
     expect(find.text('10月12日与10月14日的课程互换'), findsOneWidget);
     await tester.tap(find.byKey(Key('day_swap_restore_${s.id}')));
-    await settleIo(tester);
-    await tester.pumpAndSettle();
+    await settleUntil(
+      tester,
+      () => find.byKey(const Key('day_swaps_empty')).evaluate().isNotEmpty,
+    );
     expect(c.daySwaps, isEmpty);
     expect(find.byKey(const Key('day_swaps_empty')), findsOneWidget);
   });
