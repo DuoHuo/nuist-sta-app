@@ -130,6 +130,7 @@ class CampusMapApi
     Map<String, dynamic>? data,
     Map<String, dynamic>? headers,
     bool raw = false,
+    bool forceVpn = false,
   }) async {
     if (_closed) {
       throw const CampusMapApiException('地图连接已关闭');
@@ -145,6 +146,7 @@ class CampusMapApi
           responseType: ResponseType.plain,
           sendTimeout: const Duration(seconds: 20),
           receiveTimeout: const Duration(seconds: 30),
+          extra: {if (forceVpn) forceVpnKey: true},
         ),
       );
       final body = _object(response.data);
@@ -586,9 +588,11 @@ class CampusMapApi
       roomId: request.destinationRoomId,
       accessible: request.accessible,
     );
+    // 路线规划一律走校园 VPN 访问地图服务器，不按校园网检测结果直连。
     final result = await _request(
       '/route',
       method: 'POST',
+      forceVpn: true,
       data: {
         'origin': origin,
         'destination': destination,

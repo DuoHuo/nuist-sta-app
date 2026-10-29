@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/network/vpn_dio.dart' show forceVpnKey;
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_api.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_source.dart';
@@ -646,6 +647,8 @@ void main() {
     setup((request) {
       expect(request.uri.path, '/api/v1/route');
       expect(request.method, 'POST');
+      // 路线规划强制走校园 VPN。
+      expect(request.extra[forceVpnKey], isTrue);
       expect(request.data, {
         'origin': {'poi_id': 8},
         'destination': {'poi_id': 18},
