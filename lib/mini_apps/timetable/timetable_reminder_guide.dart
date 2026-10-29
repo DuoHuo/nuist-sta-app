@@ -46,6 +46,10 @@ class ReminderActions {
   Future<bool> openBatteryOptimizationSettings() =>
       _svc.openBatteryOptimizationSettings();
 
+  /// 请求桌面固定小组件；false 时设置页改为显示手动添加步骤。
+  Future<bool> pinWidget({required bool square}) =>
+      _svc.pinWidget(square: square);
+
   TimetableSettings get _settings =>
       (controller ?? TimetableController.instance).settings;
 

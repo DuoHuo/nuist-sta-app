@@ -3,7 +3,9 @@ package dev.duohuo.nuist_sta_app
 import android.Manifest
 import android.app.Activity
 import android.app.NotificationManager
+import android.appwidget.AppWidgetManager
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.IntentFilter
 import android.content.Intent
@@ -77,6 +79,7 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
                 "openExactAlarmSettings" -> result.success(openExactAlarm())
                 "openBatteryOptimizationSettings" -> result.success(openBattery())
                 "openNotificationSettings" -> result.success(openNotificationSettings())
+                "pinWidget" -> result.success(pinWidget(call.argument<Boolean>("square") == true))
                 "takeLaunchRoute" -> {
                     val p = NotifyStore.prefs(app)
                     val r = p.getString(NotifyStore.KEY_PENDING_ROUTE, null)
@@ -172,6 +175,20 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
                 .putExtra(Settings.EXTRA_APP_PACKAGE, app.packageName)
         } else appDetails()
         return start(i) || start(appDetails())
+    }
+
+    /**
+     * 请求桌面固定小组件（API 26+），由桌面弹出系统确认框。
+     * 返回 false 表示系统或桌面不支持；返回 true 只代表请求已发出，用户仍可能取消，
+     * 部分国产桌面也可能静默忽略。
+     */
+    private fun pinWidget(square: Boolean): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        val mgr = AppWidgetManager.getInstance(app)
+        if (!mgr.isRequestPinAppWidgetSupported) return false
+        val provider = if (square) TimetableWidget2x2Provider::class.java
+        else TimetableWidgetProvider::class.java
+        return mgr.requestPinAppWidget(ComponentName(app, provider), null, null)
     }
 
     override fun onNewIntent(intent: Intent): Boolean {

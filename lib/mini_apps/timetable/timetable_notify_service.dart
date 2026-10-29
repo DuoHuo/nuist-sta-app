@@ -163,6 +163,9 @@ class TimetableNotifyService {
 
   Future<bool> openNotificationSettings() => _bridge.openNotificationSettings();
 
+  Future<bool> pinWidget({required bool square}) =>
+      _bridge.pinWidget(square: square);
+
   // ---- 计算 ----
 
   /// 某天的课，包含调课、单日编辑及实验/体育的实际时刻。

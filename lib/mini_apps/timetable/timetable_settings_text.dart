@@ -31,6 +31,9 @@ abstract final class TtSettingsText {
   static const showPeriod = '显示节次';
   static const courseCount = '最多显示课程数量';
   static String courses(int n) => '$n';
+  static const pinWidget = '添加到桌面';
+  static const pinWidgetManual =
+      '当前桌面不支持直接添加。请长按桌面空白处，进入「小组件」（或「窗口小工具」「卡片」），找到本应用后选择对应尺寸的课表小组件。';
 
   // ---- 后台运行引导页 ----
   static const keepAliveTitle = '后台运行设置';

@@ -115,6 +115,12 @@ class TimetableNotifyBridge {
   Future<bool> openNotificationSettings() async =>
       await _call<bool>('openNotificationSettings') ?? false;
 
+  /// 请求把小组件固定到桌面（[square] 为 2×2，否则 4×2）。
+  ///
+  /// 返回 false 表示系统或桌面不支持；true 只代表请求已发出，用户仍可能取消。
+  Future<bool> pinWidget({required bool square}) async =>
+      await _call<bool>('pinWidget', {'square': square}) ?? false;
+
   /// 取走（并清除）由通知 / 小组件点击带进来的待打开路由，如 `/apps/timetable`。
   Future<String?> takeLaunchRoute() => _call<String>('takeLaunchRoute');
 

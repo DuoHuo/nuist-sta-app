@@ -301,6 +301,24 @@ class _TimetableWidgetSettingsPageState
   bool _square = false;
   bool _previewLast = false;
 
+  /// 固定当前选中尺寸；系统或桌面不支持时改为说明手动添加步骤。
+  Future<void> _pin(ReminderActions a) async {
+    if (await a.pinWidget(square: _square) || !mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('tt_settings_widget_pin_manual'),
+        content: const Text(TtSettingsText.pinWidgetManual),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = widget.controller ?? TimetableController.instance;
@@ -346,6 +364,13 @@ class _TimetableWidgetSettingsPageState
               settings: c.settings,
               square: _square,
               last: _previewLast,
+            ),
+            TimetableSettingsRow(
+              key: const Key('tt_settings_widget_pin'),
+              title: TtSettingsText.pinWidget,
+              value: _square ? '2×2' : '4×2',
+              showChevron: true,
+              onTap: () => _pin(a),
             ),
           ],
         ),
