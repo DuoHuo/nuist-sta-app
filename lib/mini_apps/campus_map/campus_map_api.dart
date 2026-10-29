@@ -5,6 +5,8 @@ import 'package:flutter/services.dart' show rootBundle;
 
 import '../../core/config/campus_config.dart';
 import '../../core/network/vpn_dio.dart';
+import '../../core/network/vpn_gateway.dart';
+import '../../core/network/vpn_log.dart';
 import 'campus_building_model.dart';
 import 'campus_map_data.dart';
 import 'campus_map_photos.dart';
@@ -48,9 +50,9 @@ class CampusMapApi
            bundledStyle ?? (() => rootBundle.loadString(kCampusBundledStyle)),
        _dio =
            dio ??
-           vpnDio(
+           (vpnDio(
              options: BaseOptions(connectTimeout: const Duration(seconds: 10)),
-           ),
+           )..interceptors.add(_CampusVpnPreparation())),
        _ownsDio = dio == null;
 
   final String _baseUrl;
@@ -130,7 +132,6 @@ class CampusMapApi
     Map<String, dynamic>? data,
     Map<String, dynamic>? headers,
     bool raw = false,
-    bool forceVpn = false,
   }) async {
     if (_closed) {
       throw const CampusMapApiException('地图连接已关闭');
@@ -146,7 +147,6 @@ class CampusMapApi
           responseType: ResponseType.plain,
           sendTimeout: const Duration(seconds: 20),
           receiveTimeout: const Duration(seconds: 30),
-          extra: {if (forceVpn) forceVpnKey: true},
         ),
       );
       final body = _object(response.data);
@@ -588,11 +588,9 @@ class CampusMapApi
       roomId: request.destinationRoomId,
       accessible: request.accessible,
     );
-    // 路线规划一律走校园 VPN 访问地图服务器，不按校园网检测结果直连。
     final result = await _request(
       '/route',
       method: 'POST',
-      forceVpn: true,
       data: {
         'origin': origin,
         'destination': destination,
@@ -771,4 +769,35 @@ class CampusMapApi
   static Map<String, dynamic> _collection(
     List<Map<String, dynamic>> features,
   ) => {'type': 'FeatureCollection', 'features': features};
+}
+
+/// 照课表（[PortalSession] 的客户端）的做法：每个请求发出前先
+/// `VpnGateway.instance.prepare()` 把校园 VPN 连好，再交给 [vpnDio] 选路
+/// （在校直连、校外走 VPN）。地图服务器不是学校系统，这里不带任何门户 Cookie。
+class _CampusVpnPreparation extends Interceptor {
+  @override
+  Future<void> onRequest(
+    RequestOptions options,
+    RequestInterceptorHandler handler,
+  ) async {
+    try {
+      await vpnStage(
+        '${options.uri.host} 准备',
+        VpnGateway.instance.prepare,
+        timeout: const Duration(seconds: 70),
+      );
+      handler.next(options);
+    } catch (error) {
+      handler.reject(
+        error is DioException
+            ? error
+            : DioException(
+                requestOptions: options,
+                type: DioExceptionType.connectionError,
+                error: error,
+              ),
+        true,
+      );
+    }
+  }
 }
