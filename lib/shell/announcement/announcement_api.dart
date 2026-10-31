@@ -1,7 +1,7 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 
 import '../../core/config/api_endpoints.dart';
+import '../../core/logging/app_log.dart';
 import 'announcement_models.dart';
 
 /// 一次公告请求的结果。
@@ -25,6 +25,8 @@ class AnnouncementFetchResult {
 /// 拉取公告。公网接口、无鉴权，不发送任何身份 / 设备 / 版本信息。
 /// 网络或格式错误直接抛出，由调用方静默处理。
 class AnnouncementApi {
+  static final _log = AppLog.logger('shell.announcement.api');
+
   AnnouncementApi({Dio? dio})
     : _dio =
           dio ??
@@ -50,7 +52,13 @@ class AnnouncementApi {
         validateStatus: (s) => s != null && (s >= 200 && s < 300 || s == 304),
       ),
     );
-    if (kDebugMode) debugPrint('[announcement] HTTP ${response.statusCode}');
+    _log.debug(
+      'fetch.response',
+      fields: {
+        'status_code': response.statusCode,
+        'not_modified': response.statusCode == 304,
+      },
+    );
     if (response.statusCode == 304) {
       return const AnnouncementFetchResult(notModified: true);
     }

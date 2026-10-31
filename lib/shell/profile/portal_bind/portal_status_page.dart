@@ -9,6 +9,7 @@ import '../../../core/auth/passkey_store.dart';
 import '../../../core/auth/portal_exceptions.dart';
 import '../../../core/auth/portal_session.dart';
 import '../../../core/colors.dart';
+import '../../../core/logging/app_log.dart';
 import '../../../mini_apps/student_info/student_info_models.dart';
 import '../../../mini_apps/student_info/student_info_store.dart';
 import '../../../mini_apps/timetable/timetable_controller.dart';
@@ -25,6 +26,8 @@ class PortalStatusPage extends StatefulWidget {
 }
 
 class _PortalStatusPageState extends State<PortalStatusPage> {
+  static final _log = AppLog.logger('shell.profile.portal_status');
+
   PasskeyBundle? _bundle;
 
   // 此处展示账号信息
@@ -122,10 +125,12 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
     );
     if (!confirmed) return;
 
-    await PasskeyStore.delete();
-    // 解绑是用户主动断开，WebView 里的登录态也一并清掉，免得看起来还登着。
-    await PortalSession.instance.clear(includeWebView: true);
-    await clearTimetableOnUnbind();
+    await _log.operation('unbind', () async {
+      await PasskeyStore.delete();
+      // 解绑是用户主动断开，WebView 里的登录态也一并清掉，免得看起来还登着。
+      await PortalSession.instance.clear(includeWebView: true);
+      await clearTimetableOnUnbind();
+    });
     if (!mounted) return;
     setState(() {
       _bundle = null;
@@ -181,10 +186,14 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
 
     final stopwatch = Stopwatch()..start();
     try {
-      final landing = await PortalSession.instance.verifyCredential(
-        onStage: (stage) {
-          if (mounted) setState(() => _testStage = _stageText(stage));
-        },
+      final landing = await _log.operation(
+        'credential.verify',
+        () => PortalSession.instance.verifyCredential(
+          onStage: (stage) {
+            if (mounted) setState(() => _testStage = _stageText(stage));
+          },
+        ),
+        failureEvent: 'credential.verify_failed',
       );
       stopwatch.stop();
       final cookies = await PortalSession.instance.debugCookieNames(landing);

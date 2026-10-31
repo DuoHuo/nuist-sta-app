@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/logging/app_log.dart';
 import '../../core/pull_to_refresh.dart';
 import '../../mini_apps/academic/academic_controller.dart';
 import '../../mini_apps/academic/academic_summary_card.dart';
@@ -16,14 +17,17 @@ import '../../mini_apps/student_info/student_info_controller.dart';
 /// 下拉一次并发刷新四张卡。各卡自己处理未绑定 / 加载 / 失败三态。
 class StudyPage extends StatelessWidget {
   const StudyPage({super.key});
+  static final _log = AppLog.logger('shell.study');
 
-  static Future<void> _refreshAll() => Future.wait([
-    StudentInfoController.instance.refresh(),
-    AcademicController.instance.refresh(),
-    InnovationCreditController.instance.refresh(),
-    LaborScoreController.instance.refresh(),
-    ScoreController.instance.refresh(),
-  ]);
+  static Future<void> _refreshAll() => _log.startSpan().run(
+    () => Future.wait([
+      StudentInfoController.instance.refresh(),
+      AcademicController.instance.refresh(),
+      InnovationCreditController.instance.refresh(),
+      LaborScoreController.instance.refresh(),
+      ScoreController.instance.refresh(),
+    ]),
+  );
 
   @override
   Widget build(BuildContext context) {

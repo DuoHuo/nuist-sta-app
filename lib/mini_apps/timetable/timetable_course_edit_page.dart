@@ -1,3 +1,5 @@
+import 'timetable_persistence_feedback.dart';
+
 import 'package:flutter/material.dart';
 
 import 'timetable_controller.dart';
@@ -123,6 +125,14 @@ class _JwxtCourseEditPageState extends State<JwxtCourseEditPage> {
   }
 
   Future<void> _save() async {
+    try {
+      await withTimetablePersistenceFeedback(context, () => _saveUnchecked());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _saveUnchecked() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     final name = _ifChanged(_name, _initName);
     final teacher = _ifChanged(_teacher, _initTeacher);

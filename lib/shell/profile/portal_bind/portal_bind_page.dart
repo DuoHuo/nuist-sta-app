@@ -12,6 +12,7 @@ import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/config/campus_config.dart';
 import '../../../core/auth/passkey_store.dart';
 import '../../../core/colors.dart';
+import '../../../core/logging/app_log.dart';
 
 /// 「绑定统一门户」页：内嵌门户登录，登录后自动跳到「账户安全-通行密钥」，
 /// 注入 assets/js/portal_passkey.js 完成软件 Passkey 注册，私钥包经
@@ -30,6 +31,8 @@ class PortalBindPage extends StatefulWidget {
 }
 
 class _PortalBindPageState extends State<PortalBindPage> {
+  static final _log = AppLog.logger('shell.profile.portal_bind');
+
   static const _channelName = 'NuistPasskey';
   static const _scriptAsset = 'assets/js/portal_passkey.js';
   static const _vconsoleAsset = 'assets/js/vconsole.min.js';
@@ -137,8 +140,12 @@ class _PortalBindPageState extends State<PortalBindPage> {
         '$source\n'
         'window.__vConsole = window.__vConsole || new window.VConsole();',
       );
-    } catch (e) {
-      debugPrint('[vconsole] 注入失败：$e');
+    } catch (error, stackTrace) {
+      _log.warning(
+        'vconsole.inject_failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
   }
 
@@ -198,8 +205,12 @@ class _PortalBindPageState extends State<PortalBindPage> {
       case 'success':
         _onSuccess(msg['bundle']);
       case 'log':
-        // 脚本只上报事件与接口返回码，不含凭据。
-        if (kDebugMode) debugPrint('[portal_passkey] ${msg['message']}');
+        // 原始脚本消息可能包含地址，只提取固定事件和短返回码。
+        final message = msg['message'];
+        final fields = AppLog.scriptEventFields(
+          message is String ? message : '',
+        );
+        _log.debug('passkey.script.${fields['script_event']}', fields: fields);
     }
   }
 

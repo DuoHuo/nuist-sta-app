@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../logging/app_log.dart';
 import 'vpn_auth.dart';
 import 'vpn_http_adapter.dart';
 import 'vpn_log.dart';
@@ -9,6 +10,7 @@ import 'vpn_native.dart';
 
 /// 所有 vpnDio 共享的校园 VPN 会话；首次请求才加载原生库和登录。
 class VpnGateway implements VpnSessionConnector {
+  static final _log = AppLog.logger('core.network.vpn');
   VpnGateway({
     VpnNative? native,
     VpnAuth? auth,
@@ -80,7 +82,7 @@ class VpnGateway implements VpnSessionConnector {
     if (!_isCurrent(attempt)) throw const SocketException('VPN 会话已取消');
   }
 
-  Future<void> _runAttempt(_VpnAttempt attempt) async {
+  Future<void> _runAttempt(_VpnAttempt attempt) => attempt.span.run(() async {
     try {
       final id = await _connect(attempt);
       _checkAttempt(attempt);
@@ -91,36 +93,46 @@ class VpnGateway implements VpnSessionConnector {
       attempt.result.complete(id);
       if (attempt.number case final number?) {
         vpnLog(
-          '启动 S$number 成功 → 隧道 id=$id，'
-          '耗时=${attempt.watch.elapsedMilliseconds}ms，合流请求=${attempt.waiters}'
-          '（心跳 10s，接收超时 30s）',
+          'start.completed',
+          fields: {
+            'attempt': number,
+            'vpn_session_id': id,
+            'duration_ms': attempt.watch.elapsedMilliseconds,
+            'waiters': attempt.waiters,
+          },
         );
       }
     } catch (error, stack) {
       _failAttempt(attempt, error, stack);
     }
-  }
+  });
 
-  void _failAttempt(_VpnAttempt attempt, Object error, StackTrace stack) {
-    if (attempt.result.isCompleted) return;
-    attempt.timer?.cancel();
-    if (identical(_pending, attempt)) {
-      _pending = null;
-      _lastFailure = error;
-      _retryAfter = DateTime.now().add(const Duration(seconds: 2));
-      _auth.cancel();
-    }
-    attempt.result.completeError(error, stack);
-    vpnLog(
-      '${attempt.number == null ? "隧道检查" : "启动 S${attempt.number}"} 失败，'
-      '耗时=${attempt.watch.elapsedMilliseconds}ms，合流请求=${attempt.waiters}，'
-      '类别=${vpnErrorKind(error)}，等待请求已释放'
-      '${attempt.generation == _generation ? "，2s 后允许重试" : "，任务已作废"}',
-    );
-    if (attempt.nativeStartId case final startId?) {
-      unawaited(_discardStart(startId));
-    }
-  }
+  void _failAttempt(_VpnAttempt attempt, Object error, StackTrace stack) =>
+      attempt.span.run(() {
+        if (attempt.result.isCompleted) return;
+        attempt.timer?.cancel();
+        if (identical(_pending, attempt)) {
+          _pending = null;
+          _lastFailure = error;
+          _retryAfter = DateTime.now().add(const Duration(seconds: 2));
+          _auth.cancel();
+        }
+        attempt.result.completeError(error, stack);
+        vpnLog(
+          'start.failed',
+          fields: {
+            'attempt': attempt.number,
+            'duration_ms': attempt.watch.elapsedMilliseconds,
+            'waiters': attempt.waiters,
+            'cancelled': attempt.generation != _generation,
+          },
+          error: error,
+          stackTrace: stack,
+        );
+        if (attempt.nativeStartId case final startId?) {
+          unawaited(_discardStart(startId));
+        }
+      });
 
   Future<Map<String, dynamic>> _control(Map<String, dynamic> request) =>
       _native.call(request).timeout(controlTimeout);
@@ -129,7 +141,11 @@ class VpnGateway implements VpnSessionConnector {
     try {
       await _control({'method': 'cancelStart', 'startId': startId});
     } catch (error) {
-      vpnLog('取消原生启动失败，类别=${vpnErrorKind(error)}');
+      vpnLog(
+        'start.cancel_failed',
+        fields: {'native_start_id': startId},
+        error: error,
+      );
     }
   }
 
@@ -137,7 +153,11 @@ class VpnGateway implements VpnSessionConnector {
     try {
       await _control({'method': 'stop', 'id': id});
     } catch (error) {
-      vpnLog('关闭隧道 id=$id 失败，类别=${vpnErrorKind(error)}');
+      vpnLog(
+        'tunnel.stop_failed',
+        fields: {'vpn_session_id': id},
+        error: error,
+      );
     }
   }
 
@@ -167,11 +187,20 @@ class VpnGateway implements VpnSessionConnector {
     _statusLoggedAt = now;
     // 字段由原生层生成，仅包含状态、计数、耗时和错误类别。
     vpnLog(
-      '隧道 id=$id 状态 alive=${status['alive']} healthy=${status['healthy']} '
-      '原因=${status['exitReason'] ?? "无"} loopIdle=${status['loopIdleMs']}ms '
-      'rxIdle=${status['rxIdleMs']}ms 心跳=${status['heartbeats']} '
-      '收包=${status['receivedBytes']}B 恢复探测=${status['recovering']} '
-      '目标超时 DNS=${status['dnsTimeouts']} TCP=${status['tcpTimeouts']}',
+      'tunnel.status',
+      fields: {
+        'vpn_session_id': id,
+        'alive': status['alive'],
+        'healthy': status['healthy'],
+        'reason': status['exitReason'],
+        'loop_idle_ms': status['loopIdleMs'],
+        'rx_idle_ms': status['rxIdleMs'],
+        'heartbeats': status['heartbeats'],
+        'received_bytes': status['receivedBytes'],
+        'recovering': status['recovering'],
+        'dns_timeouts': status['dnsTimeouts'],
+        'tcp_timeouts': status['tcpTimeouts'],
+      },
     );
   }
 
@@ -179,7 +208,7 @@ class VpnGateway implements VpnSessionConnector {
       status['alive'] == true && status['healthy'] != false;
 
   /// 回前台及定期检查已有隧道；不主动登录，也不让诊断失败冒泡到 UI。
-  Future<void> checkHealth() async {
+  Future<void> checkHealth() => _log.startSpan().run(() async {
     final id = _id;
     if (id == null || _observing) return;
     _observing = true;
@@ -187,15 +216,19 @@ class VpnGateway implements VpnSessionConnector {
       final status = await _control({'method': 'status', 'id': id});
       if (_id == id) _logStatus(id, status);
     } catch (error) {
-      vpnLog('隧道 id=$id 健康检查失败，类别=${vpnErrorKind(error)}');
+      vpnLog(
+        'tunnel.health_failed',
+        fields: {'vpn_session_id': id},
+        error: error,
+      );
     } finally {
       _observing = false;
     }
-  }
+  });
 
   /// 网络出口变化时作废隧道，保留门户 Cookie，下一请求重新建连。
   Future<void> networkChanged() async {
-    vpnLog('网络出口变化，作废已有隧道与连接任务');
+    vpnLog('tunnel.network_changed', fields: {'reason': 'network_changed'});
     _generation++;
     _lastFailure = null;
     _retryAfter = null;
@@ -223,30 +256,47 @@ class VpnGateway implements VpnSessionConnector {
         status = await _control({'method': 'status', 'id': id});
         _logStatus(id, status);
       } catch (error) {
-        vpnLog('隧道 id=$id 状态查询失败，准备重建，类别=${vpnErrorKind(error)}');
+        vpnLog(
+          'tunnel.status_failed',
+          fields: {'vpn_session_id': id},
+          error: error,
+        );
       }
       _checkAttempt(attempt);
       if (status != null && _usable(status)) {
         return id;
       }
       // exitReason 由原生层生成，仅包含 io::ErrorKind，不含服务端数据。
-      vpnLog('隧道 id=$id 已失效，原因=${status?['exitReason'] ?? "线程或收包无进度"}，准备重建');
+      vpnLog(
+        'tunnel.invalidated',
+        fields: {
+          'vpn_session_id': id,
+          'reason': status?['exitReason'] ?? 'worker_stopped',
+        },
+      );
       await _stop(id);
       _checkAttempt(attempt);
       if (_id == id) _id = null;
     }
     attempt.number = ++_attemptSequence;
-    vpnLog('启动 S${attempt.number} 开始，整体期限=${startTimeout.inSeconds}s');
+    vpnLog(
+      'start.started',
+      fields: {
+        'attempt': attempt.number,
+        'timeout_ms': startTimeout.inMilliseconds,
+      },
+    );
     await _control({'method': 'version'});
     _checkAttempt(attempt);
-    vpnLog('启动 S${attempt.number} 原生库可用，开始 VPN 认证');
+    vpnLog('start.native_ready', fields: {'attempt': attempt.number});
     final credentials = await vpnStage(
-      '启动 S${attempt.number} VPN 认证',
+      'vpn.authenticate',
       _auth.obtain,
       timeout: startTimeout,
+      fields: {'attempt': attempt.number, 'service': 'vpn'},
     );
     _checkAttempt(attempt);
-    vpnLog('启动 S${attempt.number} 认证完成，开始建立 TLS 隧道');
+    vpnLog('start.authenticated', fields: {'attempt': attempt.number});
     final reservation = await _control({'method': 'prepareStart'});
     final startId = reservation['startId'] as int;
     attempt.nativeStartId = startId;
@@ -264,8 +314,14 @@ class VpnGateway implements VpnSessionConnector {
           'startId': startId,
         });
         vpnLog(
-          '启动 S${attempt.number} 原生阶段=${status['stage']} '
-          '阶段耗时=${status['stageElapsedMs']}ms 总耗时=${status['elapsedMs']}ms',
+          'start.progress',
+          fields: {
+            'attempt': attempt.number,
+            'native_start_id': startId,
+            'native_stage': vpnNativeStage(status['stage']),
+            'stage_elapsed_ms': status['stageElapsedMs'],
+            'duration_ms': status['elapsedMs'],
+          },
         );
       } catch (_) {
         // 启动刚完成时，登记项可能已经释放。
@@ -296,8 +352,12 @@ class VpnGateway implements VpnSessionConnector {
     _statusLoggedAt = DateTime.now();
     if (result['startup'] case final Map startup) {
       vpnLog(
-        '启动 S${attempt.number} 原生阶段耗时=${startup['timings']} '
-        '总耗时=${startup['elapsedMs']}ms',
+        'start.native_completed',
+        fields: {
+          'attempt': attempt.number,
+          'duration_ms': startup['elapsedMs'],
+          ...vpnNativeTimings(startup['timings']),
+        },
       );
     }
     _monitor?.cancel();
@@ -331,11 +391,15 @@ class VpnGateway implements VpnSessionConnector {
               status = await _control({'method': 'status', 'id': id});
               _logStatus(id, status, force: true);
             } catch (error) {
-              log.write('目标连接失败后无法查询隧道 id=$id，类别=${vpnErrorKind(error)}');
+              log.write(
+                'connection.status_failed',
+                fields: {'vpn_session_id': id},
+                error: error,
+              );
             }
             if (status != null && _usable(status)) rethrow;
             // 尚未交付 Socket、没有发送业务请求体，允许合流重建后重试一次。
-            log.write('隧道 id=$id 在目标建连期间失效，恢复后重试一次');
+            log.write('connection.retry', fields: {'vpn_session_id': id});
             id = await _ensureConnected();
             if (cancelled || generation != _generation) {
               throw const SocketException('VPN 连接已取消');
@@ -369,16 +433,16 @@ class VpnGateway implements VpnSessionConnector {
           } finally {
             bytes.fillRange(0, bytes.length, 0);
           }
-          log.write('TCP/回环就绪，隧道 id=$id，耗时=${log.watch.elapsedMilliseconds}ms');
+          log.write('tcp.ready', fields: {'vpn_session_id': id});
           return socket;
         }().catchError((Object error, StackTrace stack) {
-          log.write('建连失败，类别=${vpnErrorKind(error)}');
+          log.write('connection.failed', error: error);
           Error.throwWithStackTrace(error, stack);
         });
     return ConnectionTask.fromSocket(
       Future.any([opening, cancellation.future]),
       () {
-        log.write('取消当前目标连接');
+        log.write('connection.cancelled', fields: {'cancelled': true});
         cancelled = true;
         local?.destroy();
         if (!cancellation.isCompleted) {
@@ -409,7 +473,7 @@ class VpnGateway implements VpnSessionConnector {
   Future<void> reset() {
     if (_resetting case final resetting?) return resetting;
     _generation++;
-    vpnLog('重置 VPN 会话');
+    vpnLog('session.reset');
     final pending = _pending;
     final id = _id;
     _id = null;
@@ -431,8 +495,8 @@ class VpnGateway implements VpnSessionConnector {
           try {
             if (id != null) await _stop(id);
           } finally {
-            await vpnStage('清理 VPN 认证', _auth.clear, timeout: controlTimeout);
-            vpnLog('VPN 认证状态已清理');
+            await vpnStage('vpn.clear', _auth.clear, timeout: controlTimeout);
+            vpnLog('session.cleared');
           }
         }().whenComplete(() {
           if (identical(_resetting, resetting)) _resetting = null;
@@ -443,6 +507,7 @@ class VpnGateway implements VpnSessionConnector {
 
 class _VpnAttempt {
   _VpnAttempt(this.generation);
+  final AppLogSpan span = VpnGateway._log.startSpan();
   int? number;
   int waiters = 1;
   final int generation;

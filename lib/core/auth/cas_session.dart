@@ -110,12 +110,12 @@ class CasSession {
           check();
           if (credentialError.value case final error?) throw error;
           final http = _http(generation);
-          await vpnStage('CAS 证书预热', () async {
+          await vpnStage('cas.preload', () async {
             await _trust?.preload();
           }, timeout: authenticationTimeout);
           check();
           final bundle = await vpnStage(
-            'CAS 读取绑定凭据',
+            'cas.credential',
             _readCredential,
             timeout: authenticationTimeout,
           );
@@ -125,7 +125,7 @@ class CasSession {
           }
           try {
             final target = await vpnStage(
-              'CAS 登录',
+              'cas.login',
               () => NuistLogin(
                 http: http,
                 bundle: bundle,
@@ -149,7 +149,10 @@ class CasSession {
             if (epoch == _authenticationGeneration) {
               closeClient(resetQueue: true);
             }
-            vpnLog('CAS 认证整体超时（含排队），期限=${authenticationTimeout.inSeconds}s');
+            vpnLog(
+              'cas.authentication_timeout',
+              fields: {'timeout_ms': authenticationTimeout.inMilliseconds},
+            );
             throw const PortalNetworkError('门户认证超时，请检查网络后重试');
           },
         );

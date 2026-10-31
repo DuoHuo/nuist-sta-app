@@ -4,13 +4,13 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/aia_trust.dart';
 import 'package:nuist_sta_app/core/auth/portal_http.dart';
 import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
 import 'package:nuist_sta_app/core/auth/portal_cookie_manager.dart';
 import 'package:cookie_jar/cookie_jar.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/network/vpn_dio.dart';
 import 'package:nuist_sta_app/core/network/vpn_auth.dart';
 import 'package:nuist_sta_app/core/network/vpn_gateway.dart';
@@ -124,8 +124,11 @@ void main() {
   late Uri url;
   late int requests;
   late int responseStatus;
+  late List<Map<String, Object?>> logRecords;
 
   setUp(() async {
+    logRecords = [];
+    AppLog.recordListenerForTesting = logRecords.add;
     requests = 0;
     responseStatus = 200;
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -150,6 +153,7 @@ void main() {
   });
 
   tearDown(() async {
+    AppLog.recordListenerForTesting = null;
     client.close(force: true);
     await server.close(force: true);
   });
@@ -178,162 +182,159 @@ void main() {
   });
 
   test('VPN 日志能独立输出且不泄露 URL 路径、参数和请求体', () async {
-    final original = debugPrint;
     final messages = <String>[];
-    debugPrint = (String? message, {int? wrapWidth}) {
-      if (message != null) messages.add(message);
-    };
+    await client.postUri(
+      url.replace(path: '/private-student', query: 'ticket=secret-ticket'),
+      data: {'token': 'secret-token'},
+    );
+    final requests = logRecords
+        .where((record) => record['scope'] == 'core.network.vpn')
+        .where((record) => '${record['event']}'.startsWith('http.'))
+        .toList();
+    expect(requests, hasLength(2));
+    final completed = requests.last;
+    final attrs = (completed['attrs'] as Map).cast<String, Object?>();
+    expect(completed['event'], 'http.completed');
+    expect(attrs['route'], 'VPN');
+    expect(attrs['status_code'], 200);
+    expect(attrs['request_id'], (requests.first['attrs'] as Map)['request_id']);
+    final logs = jsonEncode(logRecords);
+    for (final secret in ['private-student', 'secret-ticket', 'secret-token']) {
+      expect(logs, isNot(contains(secret)));
+    }
+    messages.clear();
+    final previousLogger = portalLogger;
+    portalLogger = messages.add;
     try {
-      await client.postUri(
+      client.interceptors.add(PortalCookieManager(CookieJar()));
+      await PortalHttp(client).get(
         url.replace(path: '/private-student', query: 'ticket=secret-ticket'),
-        data: {'token': 'secret-token'},
       );
-      final logs = messages.join('\n');
-      expect(logs, contains('出口=VPN'));
-      expect(logs, contains('HTTP 200'));
-      final id = RegExp(r'请求 (R\d+)').firstMatch(logs)!.group(1)!;
-      expect(messages.where((m) => m.contains('请求 $id ')), hasLength(2));
-      for (final secret in [
-        'private-student',
-        'secret-ticket',
-        'secret-token',
-      ]) {
-        expect(logs, isNot(contains(secret)));
-      }
-      messages.clear();
-      final previousLogger = portalLogger;
-      portalLogger = messages.add;
-      try {
-        client.interceptors.add(PortalCookieManager(CookieJar()));
-        await PortalHttp(client).get(
-          url.replace(path: '/private-student', query: 'ticket=secret-ticket'),
-        );
-        final portalLogs = messages.join('\n');
-        expect(portalLogs, contains('HTTP 200'));
-        expect(messages.where((m) => m.contains('HTTP 200')), hasLength(1));
-        expect(portalLogs, isNot(contains('[portal] GET')));
-        expect(portalLogs, isNot(contains('private-student')));
-        expect(portalLogs, isNot(contains('secret-ticket')));
-      } finally {
-        portalLogger = previousLogger;
-      }
+      final portalLogs = messages.join('\n');
+      expect(portalLogs, isEmpty);
+      expect(jsonEncode(logRecords), isNot(contains('private-student')));
+      expect(jsonEncode(logRecords), isNot(contains('secret-ticket')));
     } finally {
-      debugPrint = original;
+      portalLogger = previousLogger;
     }
   });
 
   test('并发请求日志能按编号对应，重用 RequestOptions 也分配新编号', () async {
-    final original = debugPrint;
-    final messages = <String>[];
-    debugPrint = (String? message, {int? wrapWidth}) {
-      if (message != null) messages.add(message);
+    client.interceptors.add(PortalCookieManager(CookieJar()));
+    await Future.wait([
+      client.getUri(url),
+      client.postUri(url, data: 'synthetic'),
+    ]);
+    final starts = logRecords
+        .where((record) => record['event'] == 'http.started')
+        .toList();
+    expect(starts, hasLength(2));
+    final ids = {
+      for (final start in starts) (start['attrs'] as Map)['request_id'],
     };
-    try {
-      client.interceptors.add(PortalCookieManager(CookieJar()));
-      await Future.wait([
-        client.getUri(url),
-        client.postUri(url, data: 'synthetic'),
-      ]);
-      final starts = messages.where((m) => m.endsWith(' 开始')).toList();
-      expect(starts, hasLength(2));
-      final ids = [
-        for (final start in starts)
-          RegExp(r'请求 (R\d+)').firstMatch(start)!.group(1)!,
-      ];
-      expect(ids.toSet(), hasLength(2));
-      for (final id in ids) {
-        final lines = messages.where((m) => m.contains('请求 $id ')).toList();
-        expect(lines, hasLength(2));
-        expect(lines.last, contains('HTTP 200'));
-        expect(lines.last, contains('准备='));
-      }
-      messages.clear();
-      final options = RequestOptions(path: url.toString());
-      await client.fetch<dynamic>(options);
-      await client.fetch<dynamic>(options);
-      final reused = messages.where((m) => m.endsWith(' 开始')).toList();
-      expect(reused, hasLength(2));
-      expect(
-        RegExp(r'请求 (R\d+)').firstMatch(reused.first)!.group(1),
-        isNot(RegExp(r'请求 (R\d+)').firstMatch(reused.last)!.group(1)),
-      );
-    } finally {
-      debugPrint = original;
+    expect(ids, hasLength(2));
+    for (final id in ids) {
+      final lines = logRecords
+          .where((record) => (record['attrs'] as Map?)?['request_id'] == id)
+          .toList();
+      expect(lines, hasLength(2));
+      expect(lines.last['event'], 'http.completed');
+      expect((lines.last['attrs'] as Map)['status_code'], 200);
+      expect((lines.last['attrs'] as Map)['preparation_ms'], isA<int>());
     }
+    logRecords.clear();
+    final options = RequestOptions(path: url.toString());
+    await client.fetch<dynamic>(options);
+    await client.fetch<dynamic>(options);
+    final reused = logRecords
+        .where((record) => record['event'] == 'http.started')
+        .toList();
+    expect(reused, hasLength(2));
+    expect(
+      (reused.first['attrs'] as Map)['request_id'],
+      isNot((reused.last['attrs'] as Map)['request_id']),
+    );
   });
 
   test('403 与 500 保留状态码，传输失败只输出一次请求结果', () async {
-    final original = debugPrint;
     final messages = <String>[];
     final previousLogger = portalLogger;
-    debugPrint = (String? message, {int? wrapWidth}) {
-      if (message != null) messages.add(message);
-    };
     portalLogger = messages.add;
     try {
       client.interceptors.add(PortalCookieManager(CookieJar()));
       responseStatus = 403;
       expect((await PortalHttp(client).get(url)).statusCode, 403);
-      expect(messages.where((m) => m.contains('HTTP 403')), hasLength(1));
+      expect(
+        logRecords.where(
+          (record) =>
+              record['event'] == 'http.completed' &&
+              (record['attrs'] as Map)['status_code'] == 403,
+        ),
+        hasLength(1),
+      );
       messages.clear();
+      logRecords.clear();
       responseStatus = 500;
       await expectLater(
         PortalHttp(client).get(url),
         throwsA(isA<PortalLoginError>()),
       );
-      expect(messages.where((m) => m.contains('HTTP 500')), hasLength(1));
-      expect(messages.join('\n'), isNot(contains('This exception was thrown')));
+      expect(
+        logRecords.where(
+          (record) =>
+              record['event'] == 'http.failed' &&
+              (record['attrs'] as Map)['status_code'] == 500,
+        ),
+        hasLength(1),
+      );
       messages.clear();
+      logRecords.clear();
       connector.fail = true;
       (client.httpClientAdapter as VpnHttpClientAdapter).resetClients();
       await expectLater(
         PortalHttp(client).get(url),
         throwsA(isA<PortalNetworkError>()),
       );
-      final requestLines = messages.where((m) => m.contains('请求 R')).toList();
+      final requestLines = logRecords
+          .where((record) => '${record['event']}'.startsWith('http.'))
+          .toList();
       expect(requestLines, hasLength(2));
-      expect(requestLines.last, contains('失败'));
-      expect(requestLines.last, contains('连接错误'));
+      expect(requestLines.last['event'], 'http.failed');
+      expect(
+        (requestLines.last['attrs'] as Map)['error_kind'],
+        'connection_error',
+      );
     } finally {
       portalLogger = previousLogger;
-      debugPrint = original;
     }
   });
 
   test('内部快速步骤不刷屏，等待与超时仍可定位且不展开异常', () async {
-    final original = debugPrint;
-    final messages = <String>[];
-    debugPrint = (String? message, {int? wrapWidth}) {
-      if (message != null) messages.add(message);
-    };
-    try {
-      await vpnStage('快速步骤', () async {});
-      expect(messages, isEmpty);
-      final gate = Completer<void>();
-      final waiting = vpnStage('测试等待', () => gate.future);
-      await Future<void>.delayed(const Duration(milliseconds: 5050));
-      expect(messages.single, contains('仍在等待'));
-      gate.complete();
-      await waiting;
-      expect(messages.last, contains('完成'));
-      expect(
-        RegExp(r'阶段 (P\d+)').firstMatch(messages.first)!.group(1),
-        RegExp(r'阶段 (P\d+)').firstMatch(messages.last)!.group(1),
-      );
-      messages.clear();
-      final rejected = expectLater(
-        vpnStage(
-          '测试超时',
-          () => Completer<void>().future,
-          timeout: const Duration(milliseconds: 10),
-        ),
-        throwsA(isA<TimeoutException>()),
-      );
-      await rejected;
-      expect(messages.single, contains('整体等待超时'));
-    } finally {
-      debugPrint = original;
-    }
+    await vpnStage('快速步骤', () async {});
+    expect(logRecords, isEmpty);
+    final gate = Completer<void>();
+    final waiting = vpnStage('测试等待', () => gate.future);
+    await Future<void>.delayed(const Duration(milliseconds: 5050));
+    expect(logRecords.single['event'], 'stage.waiting');
+    gate.complete();
+    await waiting;
+    expect(logRecords.last['event'], 'stage.completed');
+    expect(
+      (logRecords.first['attrs'] as Map)['stage_id'],
+      (logRecords.last['attrs'] as Map)['stage_id'],
+    );
+    logRecords.clear();
+    final rejected = expectLater(
+      vpnStage(
+        '测试超时',
+        () => Completer<void>().future,
+        timeout: const Duration(milliseconds: 10),
+      ),
+      throwsA(isA<TimeoutException>()),
+    );
+    await rejected;
+    expect(logRecords.single['event'], 'stage.failed');
+    expect((logRecords.single['attrs'] as Map)['error_kind'], 'timeout');
   });
 
   test('直连与强制 VPN 的连接池隔离，单次参数不影响其他请求', () async {
@@ -622,33 +623,34 @@ void main() {
   });
 
   test('健康复用不增加启动编号，健康状态变化立即记录', () async {
-    final original = debugPrint;
-    final messages = <String>[];
-    debugPrint = (String? message, {int? wrapWidth}) {
-      if (message != null) messages.add(message);
-    };
     final native = FakeNative(0)..startGate.complete();
     final gateway = VpnGateway(native: native, auth: FakeAuth());
     try {
       await gateway.prepare();
-      expect(messages.join('\n'), contains('启动 S1 成功'));
-      messages.clear();
+      final first = logRecords.singleWhere(
+        (record) => record['event'] == 'start.completed',
+      );
+      expect((first['attrs'] as Map)['attempt'], 1);
+      expect((first['attrs'] as Map)['vpn_session_id'], 1);
+      logRecords.clear();
       await Future.wait([gateway.prepare(), gateway.prepare()]);
       await gateway.checkHealth();
-      expect(messages, isEmpty);
+      expect(logRecords, isEmpty);
       native.healthy = false;
       await gateway.checkHealth();
-      expect(messages.single, contains('healthy=false'));
-      messages.clear();
+      expect(logRecords.single['event'], 'tunnel.status');
+      expect((logRecords.single['attrs'] as Map)['healthy'], isFalse);
+      logRecords.clear();
       await gateway.checkHealth();
-      expect(messages, isEmpty);
+      expect(logRecords, isEmpty);
       await gateway.prepare();
-      expect(messages.join('\n'), contains('启动 S2 成功'));
-      expect(messages.join('\n'), isNot(contains('attempt=')));
+      final second = logRecords.singleWhere(
+        (record) => record['event'] == 'start.completed',
+      );
+      expect((second['attrs'] as Map)['attempt'], 2);
       expect(native.starts, 2);
     } finally {
       await gateway.reset();
-      debugPrint = original;
     }
   });
 

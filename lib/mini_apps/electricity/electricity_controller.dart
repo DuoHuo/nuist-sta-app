@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
+import '../../core/logging/app_log.dart';
 import 'electricity_api.dart';
 import 'electricity_models.dart';
 import 'electricity_store.dart';
@@ -14,6 +15,7 @@ class ElectricityController extends ChangeNotifier {
   ElectricityController._();
 
   static final ElectricityController instance = ElectricityController._();
+  static final _log = AppLog.logger('electricity.controller');
 
   static const lowKwhThreshold = 10.0;
 
@@ -67,11 +69,13 @@ class ElectricityController extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final kwh = await ElectricityApi.queryBalance(room);
-      final reading = ElecReading(time: DateTime.now(), kwh: kwh);
-      await ElectricityStore.appendReading(room, reading);
-      // 拉取期间用户可能换了宿舍，那这次结果就不该盖到新宿舍头上。
-      if (identical(_room, room)) _latest = reading;
+      await _log.operation('refresh', () async {
+        final kwh = await ElectricityApi.queryBalance(room);
+        final reading = ElecReading(time: DateTime.now(), kwh: kwh);
+        await ElectricityStore.appendReading(room, reading);
+        // 拉取期间用户可能换了宿舍，那这次结果就不该盖到新宿舍头上。
+        if (identical(_room, room)) _latest = reading;
+      });
     } on PortalException catch (e) {
       _error = e.message;
     } catch (e) {
@@ -83,12 +87,14 @@ class ElectricityController extends ChangeNotifier {
   }
 
   Future<void> bindRoom(ElecRoom room) async {
-    await ElectricityStore.saveRoom(room);
-    _room = room;
-    _latest = await ElectricityStore.latest(room);
-    _error = null;
-    notifyListeners();
-    await refresh();
+    await _log.operation('room.bind', () async {
+      await ElectricityStore.saveRoom(room);
+      _room = room;
+      _latest = await ElectricityStore.latest(room);
+      _error = null;
+      notifyListeners();
+      await refresh();
+    });
   }
 
   Future<List<ElecReading>> history() {

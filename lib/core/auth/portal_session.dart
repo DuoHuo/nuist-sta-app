@@ -3,11 +3,12 @@ import 'dart:io';
 
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show ValueNotifier, visibleForTesting;
 import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../config/campus_config.dart';
+import '../logging/app_log.dart';
 import '../network/vpn_dio.dart';
 import '../network/vpn_gateway.dart';
 import '../network/vpn_log.dart';
@@ -66,6 +67,7 @@ abstract final class PortalServices {
 /// );
 /// ```
 class PortalSession {
+  static final _log = AppLog.logger('core.auth.portal_session');
   PortalSession._({
     CasSession? cas,
     Future<void> Function()? prepareNetwork,
@@ -173,7 +175,18 @@ class PortalSession {
     final cancelToken = CancelToken();
     future =
         _serialize(
-          () => _performLogin(service, generation, onStage, cancelToken),
+          () => _log.operation(
+            'service.login',
+            () => _performLogin(service, generation, onStage, cancelToken),
+            fields: {
+              'service': AppLog.serviceForHost(
+                Uri.tryParse(service)?.host ?? '',
+              ),
+              'force': force,
+            },
+            successLevel: AppLogLevel.debug,
+            failureLevel: AppLogLevel.debug,
+          ),
           onTimeout: () => cancelToken.cancel('业务登录整体超时'),
         ).whenComplete(() {
           if (identical(_pending[service], future)) _pending.remove(service);
@@ -204,26 +217,35 @@ class PortalSession {
   Future<Response<dynamic>> request(
     String service,
     Future<Response<dynamic>> Function(PortalHttp http) send,
-  ) async {
-    _ensureReady();
-    if (_clearing case final clearing?) await clearing;
-    final generation = _cas.cookies.generation;
-    var http = await clientFor(service);
-    _cas.cookies.checkGeneration(generation);
-    var response = await http.followRedirects(await send(http));
-    _cas.cookies.checkGeneration(generation);
-    if (!_looksLikeLoginPage(response)) return response;
+  ) => _log.operation(
+    'service.request',
+    () async {
+      _ensureReady();
+      if (_clearing case final clearing?) await clearing;
+      final generation = _cas.cookies.generation;
+      var http = await clientFor(service);
+      _cas.cookies.checkGeneration(generation);
+      var response = await http.followRedirects(await send(http));
+      _cas.cookies.checkGeneration(generation);
+      if (!_looksLikeLoginPage(response)) return response;
 
-    // 被门户弹回了登录页，说明落盘的会话已经过期，重登一次再放行。
-    portalLog(() => '业务会话已过期，重新登录');
-    http = await clientFor(service, force: true);
-    response = await http.followRedirects(await send(http));
-    _cas.cookies.checkGeneration(generation);
-    if (_looksLikeLoginPage(response)) {
-      throw const PortalLoginError('重新登录后仍被门户拦回登录页，请稍后再试');
-    }
-    return response;
-  }
+      // 被门户弹回了登录页，说明落盘的会话已经过期，重登一次再放行。
+      portalLog('session.expired', fields: {'host': Uri.parse(service).host});
+      http = await clientFor(service, force: true);
+      response = await http.followRedirects(await send(http));
+      _cas.cookies.checkGeneration(generation);
+      if (_looksLikeLoginPage(response)) {
+        throw const PortalLoginError('重新登录后仍被门户拦回登录页，请稍后再试');
+      }
+      return response;
+    },
+    fields: {
+      'service': AppLog.serviceForHost(Uri.tryParse(service)?.host ?? ''),
+    },
+    resultFields: (response) => {'status_code': response.statusCode},
+    successLevel: AppLogLevel.debug,
+    failureLevel: AppLogLevel.debug,
+  );
 
   /// 把 [urls] 各自所需的会话 Cookie 灌进 WebView，让 H5 页面打开即登录态。
   ///
@@ -333,14 +355,18 @@ class PortalSession {
   // ==================== 内部实现 ====================
 
   void _ensureReady() {
-    if (kDebugMode) portalLogger ??= debugPrint;
+    portalEventLogger ??= (event, fields) =>
+        AppLog.logger('core.auth.portal').debug(event, fields: fields);
     final generation = _cas.cookies.generation;
     if (!_ready) {
       _restored = _readEstablished()
           .timeout(
             const Duration(seconds: 5),
             onTimeout: () {
-              vpnLog('业务登录缓存读取超时，按无缓存处理');
+              vpnLog(
+                'session.cache_timeout',
+                fields: {'outcome': 'cache_fallback'},
+              );
               return {};
             },
           )
@@ -383,7 +409,7 @@ class PortalSession {
               beforeRequest: () async {
                 if (_clearing case final clearing?) await clearing;
                 _cas.cookies.checkGeneration(generation);
-                await vpnStage('业务证书预热', trust.preload);
+                await vpnStage('service.preload', trust.preload);
                 await _prepareNetwork();
                 _cas.cookies.checkGeneration(generation);
               },
@@ -398,7 +424,10 @@ class PortalSession {
     final entry = _established[service];
     if (entry == null) return null;
     if (entry.isExpired(establishedTtl)) {
-      portalLog(() => '业务落地缓存超过信任期，重新确认');
+      portalLog(
+        'session.cache_expired',
+        fields: {'host': Uri.parse(service).host},
+      );
       _established.remove(service);
       return null;
     }
@@ -426,11 +455,14 @@ class PortalSession {
     try {
       await _prepareNetwork();
       check();
-      portalLog(() => '恢复业务会话 $host');
+      portalLog('session.restore_started', fields: {'host': host});
       final target = await _cas.authenticate(
         service,
         onStage: (stage) {
-          portalLog(() => '业务会话 $host CAS 阶段: $stage');
+          portalLog(
+            'session.authentication_stage',
+            fields: {'host': host, 'stage': stage},
+          );
           onStage?.call(stage);
         },
       );
@@ -445,7 +477,7 @@ class PortalSession {
       }
       final landing = response.realUri.toString();
       check();
-      portalLog(() => '业务会话恢复成功 $host');
+      portalLog('session.restored', fields: {'host': host});
       _established[service] = EstablishedEntry(
         landing: landing,
         at: DateTime.now(),
@@ -455,12 +487,8 @@ class PortalSession {
       return landing;
     } on PortalCredentialError catch (e) {
       // 凭据被服务端拒绝，记下来让绑定状态页显示「已失效」。
-      portalLog(() => '业务会话 $host 凭据失效: ${e.message}');
       check();
       credentialError.value = e;
-      rethrow;
-    } on PortalException catch (e) {
-      portalLog(() => '业务会话 $host 登录失败(${e.runtimeType}): ${e.message}');
       rethrow;
     } on SocketException {
       throw const PortalNetworkError('无法建立校园网络连接，请检查网络后重试');
@@ -493,7 +521,7 @@ class PortalSession {
           _loginTimeout,
           onTimeout: () {
             onTimeout?.call();
-            vpnLog('业务登录整体超时（含排队），释放登录队列');
+            vpnLog('session.login_timeout');
             throw const PortalNetworkError('业务登录超时，请检查网络后重试');
           },
         );

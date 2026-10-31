@@ -1,3 +1,5 @@
+import 'timetable_persistence_feedback.dart';
+
 import 'package:flutter/material.dart';
 
 import 'timetable_schedule_event.dart';
@@ -132,6 +134,11 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
   }
 
   Future<void> _delete(ScheduleEvent e) async {
+    await withTimetablePersistenceFeedback(context, () => _deleteUnchecked(e));
+    if (mounted) _closing = false;
+  }
+
+  Future<void> _deleteUnchecked(ScheduleEvent e) async {
     if (!await confirmDeleteScheduleEvent(context, e)) return;
     if (!mounted) return;
     final navigator = Navigator.of(context);
@@ -146,6 +153,14 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
   }
 
   Future<void> _restore(String key) async {
+    await withTimetablePersistenceFeedback(
+      context,
+      () => _restoreUnchecked(key),
+    );
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _restoreUnchecked(String key) async {
     setState(() => _busy = true);
     final messenger = ScaffoldMessenger.maybeOf(context);
     final ok = await widget.controller.restoreJwxtExam(key);

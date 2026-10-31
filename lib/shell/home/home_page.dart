@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_info.dart';
 import '../../core/app_manifest.dart';
 import '../../core/colors.dart';
+import '../../core/logging/app_log.dart';
 import '../../core/pull_to_refresh.dart';
 import '../../mini_apps/registry.dart';
 import '../announcement/announcement_overlay.dart';
@@ -13,12 +14,15 @@ import 'app_grid_item.dart';
 /// 全量注册表 [appRegistry]。
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
+  static final _log = AppLog.logger('shell.home');
 
   /// 并发刷新所有提供了 [AppManifest.onHomeRefresh] 的首页卡片。
-  static Future<void> _refreshAll() => Future.wait([
-    for (final app in appRegistry)
-      if (app.onHomeRefresh case final refresh?) refresh(),
-  ]);
+  static Future<void> _refreshAll() => _log.startSpan().run(
+    () => Future.wait([
+      for (final app in appRegistry)
+        if (app.onHomeRefresh case final refresh?) refresh(),
+    ]),
+  );
 
   @override
   Widget build(BuildContext context) {

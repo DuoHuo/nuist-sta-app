@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/app_info.dart';
+import 'core/logging/app_log.dart';
 import 'core/network/vpn_gateway.dart';
 import 'core/schedule/weekly_classes.dart';
 import 'core/theme.dart';
@@ -24,6 +25,7 @@ class NuistApp extends StatefulWidget {
 }
 
 class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
+  static final _log = AppLog.logger('app.lifecycle');
   late final GoRouter _router = buildRouter();
   StreamSubscription<List<ConnectivityResult>>? _networkSubscription;
   String? _network;
@@ -43,18 +45,31 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     if (!kIsWeb && !Platform.environment.containsKey('FLUTTER_TEST')) {
       try {
-        _networkSubscription = Connectivity().onConnectivityChanged.listen((
-          results,
-        ) {
-          final names = results.map((result) => result.name).toList()..sort();
-          final current = names.join(',');
-          final previous = _network;
-          _network = current;
-          if (previous != null && previous != current) {
-            unawaited(VpnGateway.instance.networkChanged());
-          }
-        }, onError: (Object _) {});
-      } catch (_) {
+        _networkSubscription = Connectivity().onConnectivityChanged.listen(
+          (results) {
+            final names = results.map((result) => result.name).toList()..sort();
+            final current = names.join(',');
+            final previous = _network;
+            _network = current;
+            if (previous != null && previous != current) {
+              _log.info('network.changed', fields: {'connection_types': names});
+              unawaited(VpnGateway.instance.networkChanged());
+            }
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            _log.warning(
+              'network.listener_failed',
+              error: error,
+              stackTrace: stackTrace,
+            );
+          },
+        );
+      } catch (error, stackTrace) {
+        _log.warning(
+          'network.listener_unavailable',
+          error: error,
+          stackTrace: stackTrace,
+        );
         // 平台无网络监听时，仍由请求前的健康检查恢复隧道。
       }
     }
@@ -95,6 +110,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _log.debug('state.changed', fields: {'state': state.name});
     if (state == AppLifecycleState.resumed) {
       unawaited(VpnGateway.instance.checkHealth());
     }

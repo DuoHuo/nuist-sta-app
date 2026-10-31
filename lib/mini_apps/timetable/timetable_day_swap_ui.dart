@@ -1,3 +1,5 @@
+import 'timetable_persistence_feedback.dart';
+
 import 'package:flutter/material.dart';
 
 import 'timetable_controller.dart';
@@ -158,6 +160,10 @@ class _TimetableDaySwapsPageState extends State<TimetableDaySwapsPage> {
   }
 
   Future<void> _submit() async {
+    await withTimetablePersistenceFeedback(context, () => _submitUnchecked());
+  }
+
+  Future<void> _submitUnchecked() async {
     final messenger = ScaffoldMessenger.maybeOf(context);
     final a = _from;
     final b = _to;
@@ -292,8 +298,13 @@ class _TimetableDaySwapsPageState extends State<TimetableDaySwapsPage> {
                         ),
                         onPressed: () async {
                           final m = ScaffoldMessenger.maybeOf(context);
-                          final ok = await _c.removeDaySwap(s.id);
-                          _snack(m, ok ? '已恢复' : '恢复失败');
+                          await withTimetablePersistenceFeedback(
+                            context,
+                            () async {
+                              final ok = await _c.removeDaySwap(s.id);
+                              _snack(m, ok ? '已恢复' : '恢复失败');
+                            },
+                          );
                         },
                         child: const Text('恢复'),
                       ),

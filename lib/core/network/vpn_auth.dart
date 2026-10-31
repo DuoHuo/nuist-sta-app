@@ -90,7 +90,7 @@ class VpnAuth {
     }
 
     final bundle = await vpnStage(
-      '读取本机绑定凭据',
+      'vpn.credential',
       _readCredential,
       timeout: const Duration(seconds: 10),
     );
@@ -103,18 +103,19 @@ class VpnAuth {
     final reused = await _obtainWithSession(bundle, http, jar, check);
     check();
     if (reused != null) {
-      vpnLog('复用控制器会话取得隧道凭据');
+      vpnLog('authentication.session_reused');
       return reused;
     }
     await vpnStage(
-      '清理过期控制器 Cookie',
+      'vpn.clear_controller',
       _clearController,
       timeout: const Duration(seconds: 10),
     );
     check();
     final target = await _cas.authenticate(
       service,
-      onStage: (stage) => vpnLog('CAS 阶段: $stage'),
+      onStage: (stage) =>
+          vpnLog('authentication.stage', fields: {'stage': stage}),
     );
     check();
     final response = await http.followRedirects(
@@ -125,7 +126,7 @@ class VpnAuth {
         (response.statusCode ?? 0) >= 400) {
       throw const PortalLoginError('VPN 登录未完成，请稍后再试');
     }
-    vpnLog('VPN CAS 登录完成，检查身份信息');
+    vpnLog('authentication.cas_completed');
     final fresh = await _obtainWithSession(bundle, http, jar, check);
     check();
     if (fresh == null) {
@@ -142,7 +143,7 @@ class VpnAuth {
   ) async {
     check();
     final cookies = await vpnStage(
-      '读取控制器 Cookie',
+      'vpn.read_controller',
       () => jar.loadForRequest(Uri.parse('$controller/')),
       timeout: const Duration(seconds: 10),
     );
@@ -175,7 +176,7 @@ class VpnAuth {
     }
     for (var attempt = 0; attempt < 6; attempt++) {
       check();
-      vpnLog('向控制器获取隧道凭据，第 ${attempt + 1}/6 次');
+      vpnLog('authentication.attempt', fields: {'attempt': attempt + 1});
       final response = await http.get(
         Uri.parse('$controller/enlink/api/client/user/terminal/rules/$uid'),
       );
@@ -220,11 +221,11 @@ class VpnAuth {
             user,
           );
           check();
-          vpnLog('SPA 敲门包已发送');
+          vpnLog('spa.sent');
           await Future<void>.delayed(const Duration(milliseconds: 400));
           check();
         }
-        vpnLog('控制器已下发有效隧道凭据');
+        vpnLog('authentication.credentials_received');
         return VpnCredentials(
           host: endpoint.host,
           port: endpoint.port,
@@ -292,9 +293,13 @@ class VpnAuth {
           options: PortalHttp.options(contentType: Headers.jsonContentType),
         ),
       );
-      vpnLog('虚拟地址登记请求完成');
+      vpnLog('registration.completed');
     } catch (error) {
-      vpnLog('虚拟地址登记失败（不影响隧道）：${vpnErrorKind(error)}');
+      vpnLog(
+        'registration.failed',
+        fields: {'outcome': 'skipped'},
+        error: error,
+      );
       // 网关已经接受握手，不因非必需的维护接口失败中断用户请求。
     }
   }

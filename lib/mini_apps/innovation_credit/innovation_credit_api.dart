@@ -47,7 +47,7 @@ class InnovationCreditApi {
     final session = PortalSession.instance;
     var summary = await _table(session.http, _summaryPage, _summaryTable);
     if (summary == null) {
-      portalLog(() => '双创学分子系统会话失效，重新登录');
+      portalLog('session.expired', fields: {'service': 'innovation'});
       await _login(session);
       summary = await _table(session.http, _summaryPage, _summaryTable);
       if (summary == null) {
@@ -95,7 +95,10 @@ class InnovationCreditApi {
       r'name="__RequestVerificationToken"[^>]*value="([^"]+)"',
     ).firstMatch('${page.data}')?.group(1);
     if (token == null) {
-      portalLog(() => '创新创业平台落地页缺少防伪 token：$landing');
+      portalLog(
+        'authentication.verification_missing',
+        fields: {'service': 'innovation'},
+      );
       throw const PortalLoginError('创新创业平台登录失败，请稍后重试');
     }
     final done = await http.post(
@@ -109,7 +112,13 @@ class InnovationCreditApi {
     );
     final result = _decode(done.data);
     if (result == null || result['Success'] != true) {
-      portalLog(() => '创新创业平台统一认证未完成：${result ?? done.data}');
+      portalLog(
+        'authentication.incomplete',
+        fields: {
+          'service': 'innovation',
+          'response_type': (result ?? done.data).runtimeType.toString(),
+        },
+      );
       throw PortalLoginError(
         prefixedServerMessage(
           '创新创业平台统一认证未完成：',

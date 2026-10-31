@@ -46,15 +46,18 @@ class PortalCookieManager extends CookieManager {
   ) async {
     final log = VpnRequestLog.start(options, managedByInterceptor: true);
     try {
-      final preparation = vpnStage(
-        '${log?.label ?? options.uri.host} 准备',
-        () async {
-          checkSession?.call();
-          await beforeRequest?.call();
-          checkSession?.call();
-          return loadCookies(options);
-        },
-        timeout: preparationTimeout,
+      final preparation = log!.run(
+        () => vpnStage(
+          'request.prepare',
+          () async {
+            checkSession?.call();
+            await beforeRequest?.call();
+            checkSession?.call();
+            return loadCookies(options);
+          },
+          timeout: preparationTimeout,
+          fields: log.requestFields,
+        ),
       );
       final cancelled = options.cancelToken?.whenCancel.then<String>((error) {
         throw error;
@@ -66,8 +69,8 @@ class PortalCookieManager extends CookieManager {
       if (options.cancelToken?.isCancelled == true) {
         throw options.cancelToken!.cancelError!;
       }
-      log?.preparationMs = log.watch.elapsedMilliseconds;
-      log?.route = '直连';
+      log.preparationMs = log.watch.elapsedMilliseconds;
+      log.route = '直连';
       options.headers[HttpHeaders.cookieHeader] = cookies.isNotEmpty
           ? cookies
           : null;

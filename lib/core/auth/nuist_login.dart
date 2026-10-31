@@ -1,7 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../config/campus_config.dart';
 import 'passkey_bundle.dart';
@@ -189,18 +190,16 @@ class NuistLogin {
   }) {
     final body = _asMap(data);
     if (body == null) {
-      if (kDebugMode) {
-        portalLog(
-          () =>
-              'startAssertion 非 JSON 响应: HTTP $statusCode '
-              '格式异常',
-        );
-      }
+      portalLog(
+        'assertion.response_malformed',
+        fields: {'status_code': statusCode},
+      );
       throw const PortalLoginError(kLoginFailedText);
     }
-    if (kDebugMode) {
-      portalLog(() => 'startAssertion 响应: 已收到 JSON');
-    }
+    portalLog(
+      'assertion.response_received',
+      fields: {'status_code': statusCode},
+    );
     if (statusCode != null && statusCode != 200 && statusCode != 401) {
       throw const PortalLoginError(kLoginFailedText);
     }

@@ -2,16 +2,19 @@ import 'dart:developer' as developer;
 
 import 'package:flutter/foundation.dart';
 
+import '../../core/logging/app_log.dart';
+
 /// 课表页首帧性能打点（仅 debug/profile）。
 ///
 /// 测量「进入课表页 → 首帧课程网格绘制完成（缓存数据）」耗时。
 /// release 下所有方法因 `kReleaseMode` 为 const 而成为空操作，可被编译器移除；
-/// 文字日志（debugPrint / developer.log）只在 `kDebugMode` 输出。
+/// 结构化性能日志走 [AppLog]；Timeline 事件在非 release 构建中可供 DevTools 查看。
 class TimetablePerf {
   TimetablePerf._();
 
   static final Stopwatch _sw = Stopwatch();
   static bool _armed = false;
+  static final _log = AppLog.logger('timetable.performance');
 
   /// 是否已 start 且尚未上报（每次打开页面只上报一次）。
   static bool get armed => !kReleaseMode && _armed;
@@ -32,11 +35,10 @@ class TimetablePerf {
     _armed = false;
     _sw.stop();
     final ms = _sw.elapsedMilliseconds;
-    final msg = '[PERF] timetable_first_grid_frame=${ms}ms courses=$courses';
-    if (kDebugMode) {
-      debugPrint(msg);
-      developer.log(msg, name: 'perf');
-    }
+    _log.info(
+      'first_grid_frame',
+      fields: {'duration_ms': ms, 'course_count': courses},
+    );
     developer.Timeline.instantSync(
       'timetable_first_grid_frame',
       arguments: {'ms': ms, 'courses': courses},

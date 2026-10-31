@@ -92,7 +92,7 @@ class TimetableApi {
   /// 拉取 [termCode]（课表同步用的 XNXQDM）的考试安排，解析为 kind=exam、
   /// source=jwxt 的 [ScheduleEvent]。失败（非 2xx、code≠0、非 JSON、会话失效）抛错，
   /// 由调用方保留已有考试。成功且无考试 → 空列表。
-  /// 日志只记跳过的条数与课程号，不记学号、教师或响应正文。
+  /// 日志只记跳过的条数，不记课程号、学号、教师或响应正文。
   static Future<List<ScheduleEvent>> fetchExams(String termCode) async {
     final decoded = await _post(
       _examListUrl,
@@ -105,9 +105,11 @@ class TimetableApi {
     final r = ExamParser.parse(decoded);
     if (r.skippedCourseCodes.isNotEmpty) {
       portalLog(
-        () =>
-            '教务考试 ${r.skippedCourseCodes.length} 条格式不对已跳过'
-            '（KCH：${r.skippedCourseCodes.map((c) => c.isEmpty ? '缺' : c).join('、')}）',
+        'exams.records_skipped',
+        fields: {
+          'service': 'jwxt',
+          'skipped_count': r.skippedCourseCodes.length,
+        },
       );
     }
     return r.exams;
@@ -203,10 +205,22 @@ class TimetableApi {
   ) async {
     try {
       final r = await call();
-      if (r == null) portalLog(() => '教务 $name 非 JSON 响应，跳过（非致命）');
+      if (r == null) {
+        portalLog(
+          'optional.response_malformed',
+          fields: {'service': 'jwxt', 'outcome': 'skipped'},
+        );
+      }
       return r;
     } catch (e) {
-      portalLog(() => '教务 $name 失败，跳过（非致命）：$e');
+      portalLog(
+        'optional.request_failed',
+        fields: {
+          'service': 'jwxt',
+          'outcome': 'skipped',
+          'error_type': e.runtimeType.toString(),
+        },
+      );
       return null;
     }
   }
@@ -221,7 +235,8 @@ class TimetableApi {
   static void logDqzcForm(Map<String, String> form) {
     if (!kDebugMode) return;
     portalLog(
-      () => '教务 dqzc 请求参数 XN=${form['XN']} XQ=${form['XQ']} RQ=${form['RQ']}',
+      'calendar.request_prepared',
+      fields: {'service': 'jwxt', 'field_count': form.length},
     );
   }
 
@@ -358,7 +373,7 @@ class TimetableApi {
         throw const JwxtSessionExpiredError('教务会话失效且本次同步已重登过，请稍后再试');
       }
       _reloginUsed = true;
-      portalLog(() => '教务 wdkb 会话失效，重新登录（本次同步仅一次）');
+      portalLog('session.expired', fields: {'service': 'jwxt'});
       result = await _postOnce(url, form, force: true, app: app);
       if (result is _SessionExpired) {
         throw const JwxtSessionExpiredError('重新登录后教务仍要求登录，请稍后再试');
@@ -405,7 +420,10 @@ class TimetableApi {
       final code = '${decoded['code'] ?? ''}';
       if (code.isNotEmpty && code != '0') {
         // 只记 code：响应正文可能含学号等个人信息，不打印。
-        if (kDebugMode) portalLog(() => '教务接口返回错误 code=$code');
+        portalLog(
+          'response.rejected',
+          fields: {'service': 'jwxt', 'response_code': code},
+        );
         throw PortalLoginError(
           prefixedServerMessage(
             '教务课表接口返回错误：',

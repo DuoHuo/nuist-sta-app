@@ -30,7 +30,7 @@ class ScoreApi {
   static Future<ScoreReport> fetch() async {
     var rows = await _send(force: false);
     if (rows == null) {
-      portalLog(() => '教务 cjcx 会话失效，重新登录');
+      portalLog('session.expired', fields: {'service': 'jwxt'});
       rows = await _send(force: true);
     }
     if (rows == null) {
@@ -82,7 +82,10 @@ class ScoreApi {
       }
       final code = '${decoded['code'] ?? ''}';
       if (code.isNotEmpty && code != '0') {
-        portalLog(() => '教务成绩接口返回错误：$decoded');
+        portalLog(
+          'response.rejected',
+          fields: {'service': 'jwxt', 'response_code': code},
+        );
         throw PortalLoginError(
           prefixedServerMessage(
             '教务成绩接口返回错误：',

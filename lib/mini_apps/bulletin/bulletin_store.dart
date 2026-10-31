@@ -3,10 +3,13 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/logging/app_log.dart';
 import 'bulletin_models.dart';
 
 /// 在应用文档目录中保存公告缓存和订阅状态。
 class BulletinStore {
+  static final _log = AppLog.logger('bulletin.store');
+
   /// 创建公告存储，可注入应用目录解析器。
   BulletinStore({Future<Directory?> Function()? resolveDirectory})
     : _resolveDirectory = resolveDirectory ?? _applicationDirectory;
@@ -17,7 +20,11 @@ class BulletinStore {
   static Future<Directory?> _applicationDirectory() async {
     try {
       return await getApplicationDocumentsDirectory();
-    } catch (_) {
+    } catch (error) {
+      _log.debug(
+        'storage.unavailable',
+        fields: {'error_type': error.runtimeType.toString()},
+      );
       return null;
     }
   }
@@ -31,13 +38,17 @@ class BulletinStore {
       );
       if (!await directory.exists()) await directory.create(recursive: true);
       return File('${directory.path}${Platform.pathSeparator}$_fileName');
-    } catch (_) {
+    } catch (error) {
+      _log.debug(
+        'storage.unavailable',
+        fields: {'error_type': error.runtimeType.toString()},
+      );
       return null;
     }
   }
 
   /// 读取本地数据；不可用时返回空数据。
-  Future<BulletinLocalData> read() async {
+  Future<BulletinLocalData> read() => _log.inSpan(() async {
     try {
       final file = await _file();
       if (file == null || !await file.exists()) {
@@ -47,17 +58,20 @@ class BulletinStore {
       return BulletinLocalData.fromJson(
         json is Map<String, dynamic> ? json : null,
       );
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning('cache.read_failed', error: error, stackTrace: stackTrace);
       return const BulletinLocalData();
     }
-  }
+  });
 
   /// 保存本地数据；存储不可用时安静降级。
-  Future<void> save(BulletinLocalData data) async {
+  Future<void> save(BulletinLocalData data) => _log.inSpan(() async {
     try {
       final file = await _file();
       if (file == null) return;
       await file.writeAsString(jsonEncode(data.toJson()), flush: true);
-    } catch (_) {}
-  }
+    } catch (error, stackTrace) {
+      _log.warning('cache.write_failed', error: error, stackTrace: stackTrace);
+    }
+  });
 }

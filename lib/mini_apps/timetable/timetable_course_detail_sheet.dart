@@ -1,3 +1,5 @@
+import 'timetable_persistence_feedback.dart';
+
 import 'package:flutter/material.dart';
 
 import 'timetable_color_picker.dart';
@@ -387,6 +389,14 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
 
   /// 撤销这一格对应的单日或按周修改记录。
   Future<void> _restoreDay() async {
+    await withTimetablePersistenceFeedback(
+      context,
+      () => _restoreDayUnchecked(),
+    );
+    if (mounted) setState(() => _restoring = false);
+  }
+
+  Future<void> _restoreDayUnchecked() async {
     final edit = _cell.dateEdit;
     final id = edit?.id;
     if (id == null) return;
@@ -433,6 +443,14 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
 
   /// 「恢复原位置」：删掉该时段的全部调课记录，关闭详情（网格随 controller 刷新）。
   Future<void> _restore(Course course, int slotIndex) async {
+    await withTimetablePersistenceFeedback(
+      context,
+      () => _restoreUnchecked(course, slotIndex),
+    );
+    if (mounted) setState(() => _restoring = false);
+  }
+
+  Future<void> _restoreUnchecked(Course course, int slotIndex) async {
     setState(() => _restoring = true);
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.maybeOf(context);
@@ -449,6 +467,14 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
   }
 
   Future<void> _restoreCourse(Course course) async {
+    await withTimetablePersistenceFeedback(
+      context,
+      () => _restoreCourseUnchecked(course),
+    );
+    if (mounted) setState(() => _restoring = false);
+  }
+
+  Future<void> _restoreCourseUnchecked(Course course) async {
     setState(() => _restoring = true);
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.maybeOf(context);
@@ -492,6 +518,13 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
   }
 
   Future<void> _delete(Course course) async {
+    await withTimetablePersistenceFeedback(
+      context,
+      () => _deleteUnchecked(course),
+    );
+  }
+
+  Future<void> _deleteUnchecked(Course course) async {
     final cell = _cell;
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.maybeOf(context);

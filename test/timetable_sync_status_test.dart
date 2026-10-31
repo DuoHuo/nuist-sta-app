@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -35,6 +36,9 @@ void main() {
 
   test('syncStatus: idle → syncing → success', () async {
     await c.ensureStarted();
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
     expect(c.syncStatus, TimetableSyncStatus.idle);
     expect(c.statusIsSuccess, isFalse);
     final seen = <TimetableSyncStatus>[];
@@ -50,15 +54,44 @@ void main() {
     expect(seen.first, TimetableSyncStatus.syncing);
     expect(c.syncStatus, TimetableSyncStatus.success);
     expect(c.statusIsSuccess, isTrue);
+    final completed = records.singleWhere(
+      (record) => record['event'] == 'sync.completed',
+    );
+    final started = records.singleWhere(
+      (record) => record['event'] == 'sync.started',
+    );
+    expect(completed['level'], 'INFO');
+    expect((completed['attrs'] as Map)['course_count'], 1);
+    expect((completed['attrs'] as Map)['duration_ms'], isNonNegative);
+    expect(completed['trace_id'], started['trace_id']);
+    expect(completed['span_id'], started['span_id']);
   });
 
   test('syncStatus: failure', () async {
     await c.ensureStarted();
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
     TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
         throw Exception('boom');
     await c.syncFromJwxt();
     expect(c.syncStatus, TimetableSyncStatus.failure);
     expect(c.statusIsSuccess, isFalse);
+    final syncRecords = records
+        .where(
+          (record) =>
+              record['scope'] == 'timetable.controller' &&
+              '${record['event']}'.startsWith('sync.'),
+        )
+        .toList();
+    expect(syncRecords.map((record) => record['event']), [
+      'sync.started',
+      'sync.failed',
+    ]);
+    expect(syncRecords.last['level'], 'WARNING');
+    expect((syncRecords.last['attrs'] as Map)['duration_ms'], isNonNegative);
+    expect(syncRecords.last['trace_id'], syncRecords.first['trace_id']);
+    expect(syncRecords.last['span_id'], syncRecords.first['span_id']);
   });
 
   test(

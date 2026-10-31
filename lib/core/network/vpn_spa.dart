@@ -78,7 +78,7 @@ class VpnSpa {
   /// 仅在控制器声明启用 SPA 时发送，使用操作系统现有网络出口。
   static Future<void> knock(String host, int port, String user) async {
     if (kVpnSpaKey.isEmpty) {
-      vpnLog('未配置 SPA 密钥，跳过敲门');
+      vpnLog('spa.not_configured', fields: {'outcome': 'skipped'});
       return;
     }
     final addresses = await InternetAddress.lookup(

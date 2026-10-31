@@ -2,12 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../core/logging/app_log.dart';
 import 'bulletin_api.dart';
 import 'bulletin_models.dart';
 import 'bulletin_store.dart';
 
 /// 公告浏览、缓存与订阅动态的共享状态。
 class BulletinController extends ChangeNotifier {
+  static final _log = AppLog.logger('bulletin.controller');
+
   /// 创建公告状态，可注入接口与存储以隔离数据来源。
   BulletinController({BulletinApi? api, BulletinStore? store})
     : _api = api ?? BulletinApi(),
@@ -108,12 +111,20 @@ class BulletinController extends ChangeNotifier {
     _categoryErrors.remove(key);
     notifyListeners();
     try {
-      final page = await _api.fetchPage(category.uri, pageNumber: 1);
-      _pages.removeWhere((entryKey, _) => entryKey.startsWith('$key|'));
-      _pages[cacheKey] = page;
-      await _save();
-    } catch (error) {
-      _categoryErrors[key] = '公告加载失败：$error';
+      await _log.operation(
+        'category.load',
+        () async {
+          final page = await _api.fetchPage(category.uri, pageNumber: 1);
+          _pages.removeWhere((entryKey, _) => entryKey.startsWith('$key|'));
+          _pages[cacheKey] = page;
+          await _save();
+        },
+        fields: {'force_refresh': forceRefresh},
+        successLevel: forceRefresh ? AppLogLevel.info : AppLogLevel.debug,
+        failureEvent: 'category.load_failed',
+      );
+    } catch (_) {
+      _categoryErrors[key] = '公告加载失败，请稍后重试';
     } finally {
       _loadingCategories.remove(key);
       notifyListeners();
@@ -135,14 +146,21 @@ class BulletinController extends ChangeNotifier {
     _categoryErrors.remove(key);
     notifyListeners();
     try {
-      final page = await _api.fetchPage(
-        Uri.parse(nextUrl),
-        pageNumber: (previous?.pageNumber ?? 0) + 1,
+      await _log.operation(
+        'category.load_more',
+        () async {
+          final page = await _api.fetchPage(
+            Uri.parse(nextUrl),
+            pageNumber: (previous?.pageNumber ?? 0) + 1,
+          );
+          _pages[_pageKey(category, page.pageNumber)] = page;
+          await _save();
+        },
+        successLevel: AppLogLevel.debug,
+        failureEvent: 'category.load_more_failed',
       );
-      _pages[_pageKey(category, page.pageNumber)] = page;
-      await _save();
-    } catch (error) {
-      _categoryErrors[key] = '加载更多失败：$error';
+    } catch (_) {
+      _categoryErrors[key] = '加载更多失败，请稍后重试';
     } finally {
       _loadingCategories.remove(key);
       notifyListeners();
@@ -165,6 +183,10 @@ class BulletinController extends ChangeNotifier {
     _feed = _feed.where(_subscription.matches).toList();
     if (enabled && !wasEnabled) _baselineReady = false;
     await _save();
+    _log.info(
+      'subscription.updated',
+      fields: {'enabled': enabled, 'topic_count': topics.length},
+    );
     notifyListeners();
     if (enabled && !_baselineReady) unawaited(refreshFeed());
   }
@@ -177,22 +199,31 @@ class BulletinController extends ChangeNotifier {
     _feedLoading = true;
     notifyListeners();
     try {
-      final latest = await _fetchFeedWithRetry(revision);
-      if (latest == null) return;
-      final newItems = _baselineReady
-          ? latest.items.where((item) => !_knownIds.contains(item.id)).toList()
-          : <Bulletin>[];
-      _knownIds.addAll(latest.items.map((item) => item.id));
-      _baselineReady = true;
-      final matches = newItems.where(_subscription.matches).toList();
-      if (matches.isNotEmpty) _feed = [...matches, ..._feed];
-      if (_knownIds.length > 3000) {
-        _knownIds = _knownIds.skip(_knownIds.length - 2000).toSet();
-      }
-      if (_feed.length > 100) _feed = _feed.take(100).toList();
-      _pages[_pageKey(BulletinCategory.all.first, 1)] = latest;
-      _feedUnavailable = false;
-      await _save();
+      await _log.operation(
+        'feed.refresh',
+        () async {
+          final latest = await _fetchFeedWithRetry(revision);
+          if (latest == null) return;
+          final newItems = _baselineReady
+              ? latest.items
+                    .where((item) => !_knownIds.contains(item.id))
+                    .toList()
+              : <Bulletin>[];
+          _knownIds.addAll(latest.items.map((item) => item.id));
+          _baselineReady = true;
+          final matches = newItems.where(_subscription.matches).toList();
+          if (matches.isNotEmpty) _feed = [...matches, ..._feed];
+          if (_knownIds.length > 3000) {
+            _knownIds = _knownIds.skip(_knownIds.length - 2000).toSet();
+          }
+          if (_feed.length > 100) _feed = _feed.take(100).toList();
+          _pages[_pageKey(BulletinCategory.all.first, 1)] = latest;
+          _feedUnavailable = false;
+          await _save();
+        },
+        successLevel: AppLogLevel.debug,
+        failureEvent: 'feed.refresh_failed',
+      );
     } catch (_) {
       if (_feedRequestIsCurrent(revision)) _feedUnavailable = true;
     } finally {
@@ -218,7 +249,14 @@ class BulletinController extends ChangeNotifier {
           pageNumber: 1,
         );
         return _feedRequestIsCurrent(revision) ? latest : null;
-      } catch (_) {
+      } catch (error) {
+        _log.debug(
+          'feed.retry_failed',
+          fields: {
+            'attempt': attempt + 1,
+            'error_type': error.runtimeType.toString(),
+          },
+        );
         if (!_feedRequestIsCurrent(revision)) return null;
         if (attempt == 2) rethrow;
       }

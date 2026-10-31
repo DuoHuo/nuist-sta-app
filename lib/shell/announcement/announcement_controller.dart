@@ -1,9 +1,9 @@
 import 'dart:io';
 
-import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../../core/logging/app_log.dart';
 import 'announcement_api.dart';
 import 'announcement_models.dart';
 import 'announcement_store.dart';
@@ -18,6 +18,8 @@ typedef AnnouncementFetch = Future<AnnouncementFetchResult> Function({
 ///
 /// 只提供纯状态与已读标记，弹窗编排由 `AnnouncementOverlay` 负责。
 class AnnouncementController extends ChangeNotifier {
+  static final _log = AppLog.logger('shell.announcement.controller');
+
   AnnouncementController._()
     : _fetcher = null,
       _readCache = AnnouncementStore.readCache,
@@ -97,47 +99,49 @@ class AnnouncementController extends ChangeNotifier {
     }
     _notify();
     try {
-      final cache = _cache;
-      final result = await fetch(
-        etag: cache?.etag,
-        lastModified: cache?.lastModified,
-      );
-      if (result.notModified) {
-        if (cache != null) {
-          _cache = AnnouncementCache(
-            items: cache.items,
-            etag: cache.etag,
-            lastModified: cache.lastModified,
-            fetchedAt: _now(),
+      await _log.operation(
+        'refresh',
+        () async {
+          final cache = _cache;
+          final result = await fetch(
+            etag: cache?.etag,
+            lastModified: cache?.lastModified,
           );
-          await _saveCache(_cache!);
-        }
-      } else {
-        // 整体替换：服务端已删除的条目（含不可关闭的）随之从缓存消失。
-        final items = (result.items ?? const <Announcement>[])
-            .take(kMaxAnnouncements)
-            .toList();
-        _cache = AnnouncementCache(
-          items: items,
-          etag: result.etag,
-          lastModified: result.lastModified,
-          fetchedAt: _now(),
-        );
-        await _saveCache(_cache!);
-        final ids = items.map((a) => a.id).toSet();
-        final pruned = _readIds.where(ids.contains).toSet();
-        if (pruned.length != _readIds.length) {
-          _readIds = pruned;
-          await _saveReadIds(_readIds);
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        final kind = e is DioException
-            ? '${e.type.name}，HTTP ${e.response?.statusCode ?? "无响应"}'
-            : '${e.runtimeType}';
-        debugPrint('[announcement] 拉取失败，沿用缓存: $kind');
-      }
+          if (result.notModified) {
+            if (cache != null) {
+              _cache = AnnouncementCache(
+                items: cache.items,
+                etag: cache.etag,
+                lastModified: cache.lastModified,
+                fetchedAt: _now(),
+              );
+              await _saveCache(_cache!);
+            }
+          } else {
+            // 整体替换：服务端已删除的条目（含不可关闭的）随之从缓存消失。
+            final items = (result.items ?? const <Announcement>[])
+                .take(kMaxAnnouncements)
+                .toList();
+            _cache = AnnouncementCache(
+              items: items,
+              etag: result.etag,
+              lastModified: result.lastModified,
+              fetchedAt: _now(),
+            );
+            await _saveCache(_cache!);
+            final ids = items.map((a) => a.id).toSet();
+            final pruned = _readIds.where(ids.contains).toSet();
+            if (pruned.length != _readIds.length) {
+              _readIds = pruned;
+              await _saveReadIds(_readIds);
+            }
+          }
+        },
+        failureEvent: 'refresh.failed_using_cache',
+        errorFields: (_) => {'outcome': 'cache_fallback'},
+      );
+    } catch (_) {
+      // 原 Trace 中已记录失败；继续使用已有缓存。
     }
     _notify();
   }

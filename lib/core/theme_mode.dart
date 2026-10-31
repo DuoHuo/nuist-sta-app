@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'logging/app_log.dart';
+
 /// App 的明暗模式：跟随系统 / 浅色 / 深色。
 ///
 /// 全局单例，[NuistApp] 监听它切换 `MaterialApp.themeMode`。选择存在应用支持
@@ -11,6 +13,7 @@ class AppThemeMode extends ValueNotifier<ThemeMode> {
   AppThemeMode._() : super(ThemeMode.system);
 
   static final instance = AppThemeMode._();
+  static final _log = AppLog.logger('core.theme_mode');
 
   static const _fileName = 'theme_mode';
 
@@ -20,7 +23,11 @@ class AppThemeMode extends ValueNotifier<ThemeMode> {
       final dir = Directory('${base.path}${Platform.pathSeparator}settings');
       if (!await dir.exists()) await dir.create(recursive: true);
       return File('${dir.path}${Platform.pathSeparator}$_fileName');
-    } catch (_) {
+    } catch (error) {
+      _log.debug(
+        'storage.unavailable',
+        fields: {'error_type': error.runtimeType.toString()},
+      );
       // widget 测试等没有平台通道的环境，退化成「没有存储」。
       return null;
     }
@@ -36,7 +43,8 @@ class AppThemeMode extends ValueNotifier<ThemeMode> {
         (m) => m.name == name,
         orElse: () => ThemeMode.system,
       );
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning('load_failed', error: error, stackTrace: stackTrace);
       // 文件损坏就当没选过。
     }
   }
@@ -49,6 +57,8 @@ class AppThemeMode extends ValueNotifier<ThemeMode> {
     if (file == null) return;
     try {
       await file.writeAsString(mode.name, flush: true);
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      _log.warning('save_failed', error: error, stackTrace: stackTrace);
+    }
   }
 }

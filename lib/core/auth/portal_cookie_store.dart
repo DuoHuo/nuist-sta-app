@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:cookie_jar/cookie_jar.dart';
 
+import '../logging/app_log.dart';
 import 'portal_exceptions.dart';
 import 'secure_cookie_storage.dart';
 
@@ -10,6 +11,8 @@ import 'secure_cookie_storage.dart';
 /// 读写串行化，避免冷启动恢复与并发响应相互覆盖；清空时作废旧客户端，
 /// 旧请求即使随后收到响应，也不能把已解绑的会话写回来。
 class PortalCookieStore {
+  static final _log = AppLog.logger('core.auth.cookie_store');
+
   PortalCookieStore({Storage? storage})
     : _jar = PersistCookieJar(
         persistSession: true,
@@ -66,7 +69,12 @@ class PortalCookieStore {
       _forGeneration(generation, () async {
         try {
           await _jar.loadForRequest(uri);
-        } catch (_) {
+        } catch (error, stackTrace) {
+          _log.warning(
+            'persisted_cookie.read_failed',
+            error: error,
+            stackTrace: stackTrace,
+          );
           // 损坏的持久化条目按没有存储处理，后续请求可重新建立会话。
           _jar.hostCookies.remove(uri.host);
           return const [];

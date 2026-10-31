@@ -15,6 +15,8 @@ import 'package:nuist_sta_app/core/auth/portal_cookie_store.dart';
 import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
 import 'package:nuist_sta_app/core/auth/portal_http.dart';
 import 'package:nuist_sta_app/core/auth/portal_session.dart';
+import 'package:nuist_sta_app/core/config/campus_config.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/network/vpn_auth.dart';
 // 与现有 WebView 测试一致，仅使用已安装插件的平台接口模拟 Cookie 写入。
 // ignore: depend_on_referenced_packages
@@ -303,6 +305,28 @@ class _Campus {
 }
 
 void main() {
+  test('业务登录和请求记录服务类别与最终状态，不输出主机或凭据', () async {
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
+    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+    await campus.query(campus.portal(), CampusHosts.jwxt);
+    final login = records.singleWhere(
+      (record) => record['event'] == 'service.login.completed',
+    );
+    final response = records.singleWhere(
+      (record) => record['event'] == 'service.request.completed',
+    );
+    expect((login['attrs'] as Map)['service'], 'jwxt');
+    expect((response['attrs'] as Map)['service'], 'jwxt');
+    expect((response['attrs'] as Map)['status_code'], 200);
+    expect(login['trace_id'], response['trace_id']);
+    final text = jsonEncode(records);
+    expect(text, isNot(contains(CampusHosts.jwxt)));
+    expect(text, isNot(contains('synthetic-ticket')));
+    expect(text, isNot(contains('synthetic-credential')));
+  });
+
   test('冷启动恢复 VPN 和业务会话，CAS 过期也不触发认证', () async {
     final storage = _MemoryStorage();
     final first = _Campus(PortalCookieStore(storage: storage));

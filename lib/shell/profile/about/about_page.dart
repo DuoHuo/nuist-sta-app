@@ -1,8 +1,12 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../../core/app_info.dart';
 import '../../../core/colors.dart';
+import '../../../core/logging/app_log.dart';
 import 'contributor_controller.dart';
 import 'contributor_models.dart';
 
@@ -21,6 +25,8 @@ class AboutPage extends StatefulWidget {
 class _AboutPageState extends State<AboutPage> {
   final _controller = ContributorController();
   String? _version;
+  int _versionTapCount = 0;
+  Timer? _versionTapReset;
 
   @override
   void initState() {
@@ -42,8 +48,34 @@ class _AboutPageState extends State<AboutPage> {
     }
   }
 
+  Future<void> _onVersionTap() async {
+    if (_version == null) return;
+    _versionTapReset?.cancel();
+    _versionTapCount++;
+    if (_versionTapCount < 5) {
+      _versionTapReset = Timer(const Duration(seconds: 3), () {
+        _versionTapCount = 0;
+      });
+      return;
+    }
+    _versionTapCount = 0;
+    if (kDebugMode) {
+      _message('调试构建已默认开启详细日志');
+      return;
+    }
+    await AppLog.enableVerbose();
+    if (mounted) _message('详细日志已开启，将在 30 分钟后自动关闭');
+  }
+
+  void _message(String text) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text)));
+  }
+
   @override
   void dispose() {
+    _versionTapReset?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -78,10 +110,17 @@ class _AboutPageState extends State<AboutPage> {
             ),
           ),
           const SizedBox(height: 4),
-          Text(
-            _version ?? '',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: palette.hint, fontSize: 13),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _onVersionTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                _version ?? '',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: palette.hint, fontSize: 13),
+              ),
+            ),
           ),
           const SizedBox(height: 24),
           Container(

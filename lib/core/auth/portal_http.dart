@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
-import 'package:flutter/foundation.dart';
 
 import '../network/vpn_http_adapter.dart';
 import '../network/vpn_log.dart';
@@ -10,17 +9,20 @@ import 'aia_trust.dart';
 import 'portal_exceptions.dart';
 import 'safe_message.dart';
 
-/// 门户登录相关的日志出口，由 [PortalSession] 在 debug 构建下接到 debugPrint。
+/// 门户登录相关的兼容日志出口，由 [PortalSession] 接到统一日志入口。
 ///
 /// 做成可注入而不是直接 import flutter：让 nuist_login / portal_http 保持纯
 /// Dart，能在桌面用 `dart run` 直接对着真实门户跑验证脚本，不用起模拟器。
-/// 调用方负责不把凭据、Cookie 值、私钥传进来；这里不做脱敏。
+/// 新代码应优先记录结构化事件；该出口仅用于仍需保持纯 Dart 的登录实现。
 void Function(String message)? portalLogger;
 
-/// 只在 debug 构建中求值 [message]，release 下整段日志代码可被 tree-shake。
-void portalLog(String Function() message) {
-  if (!kDebugMode) return;
-  portalLogger?.call('[portal] ${message()}');
+/// 结构化门户日志出口，应用启动时接到统一日志层。
+void Function(String event, Map<String, Object?>? fields)? portalEventLogger;
+
+/// 记录稳定事件；纯 Dart 验证环境的旧出口仅接收事件名。
+void portalLog(String event, {Map<String, Object?>? fields}) {
+  portalEventLogger?.call(event, fields);
+  portalLogger?.call('[portal] $event');
 }
 
 /// 门户请求的公共 HTTP 行为：超时、状态码放行、异常归类、手动跟随重定向。
@@ -130,10 +132,14 @@ class PortalHttp {
       final location = response.headers.value('location');
       if (VpnRequestLog.of(response.requestOptions) == null) {
         portalLog(
-          () =>
-              '${response.requestOptions.method} ${_short(response.realUri)} '
-              '→ HTTP ${response.statusCode}'
-              '${location == null ? '' : ' → ${_short(Uri.parse(location))}'}',
+          'http.completed',
+          fields: {
+            'method': response.requestOptions.method,
+            'host': response.realUri.host,
+            'status_code': response.statusCode,
+            if (location != null)
+              'redirect_host': response.realUri.resolve(location).host,
+          },
         );
       }
       return response;
@@ -141,9 +147,14 @@ class PortalHttp {
       if (e.error case final PortalException error) throw error;
       if (VpnRequestLog.of(e.requestOptions) == null) {
         portalLog(
-          () =>
-              '${e.requestOptions.method} ${_short(e.requestOptions.uri)} '
-              '✗ ${e.type.name}: ${e.error == null ? e.type.name : vpnErrorKind(e.error!)}',
+          'http.failed',
+          fields: {
+            'method': e.requestOptions.method,
+            'host': e.requestOptions.uri.host,
+            'dio_type': e.type.name,
+            'error_kind': vpnErrorKind(e),
+            'status_code': e.response?.statusCode,
+          },
         );
       }
       if (await _repairedChain(e)) return send(request);
@@ -197,7 +208,7 @@ class PortalHttp {
         createHttpClient: trust.createHttpClient,
       );
     }
-    portalLog(() => '已补全 $host 的证书链，重试');
+    portalLog('certificate.repaired_retry', fields: {'host': host});
     return true;
   }
 
@@ -225,12 +236,4 @@ class PortalHttp {
     }
     throw const PortalLoginError('重定向次数过多，疑似陷入跳转循环');
   }
-
-  /// 日志只保留出口主机；路径也可能含账号标识，不能输出。
-  static String _short(Uri uri) =>
-      uri
-          .replace(path: '', query: '', fragment: '', userInfo: '')
-          .toString()
-          .replaceAll(RegExp(r'[?#]+$'), '') +
-      (uri.hasQuery ? '?…' : '');
 }

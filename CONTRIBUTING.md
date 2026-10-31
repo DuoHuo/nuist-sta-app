@@ -116,12 +116,49 @@ cd native/vpn && cargo test --locked --target-dir ../../build/rust-host && cd ..
   `AppColorsDark` 只用于构造主题，业务代码不要直接引用。明暗可由用户手动切换，不要假定浅色
 - Controller 使用 `ChangeNotifier` 单例和幂等的 `ensureStarted()`
 - API 层负责网络和解析，Store 层负责本地 JSON，页面层不直接处理这些细节
-- 日志只允许在 debug 构建输出，不得打印 Cookie、ticket、私钥、学号等敏感信息
+- 日志统一使用 `AppLog`，不得直接调用 `print`、`debugPrint` 或 `developer.log`
 - 不新增遥测、崩溃上报、统计 SDK；除学校业务系统和现有的社团自有服务、校园地图后端、
   小公交接口外，新增网络出口需先与维护者确认，且非学校出口不得携带凭据、Cookie 或学号
 
 新增或升级第三方依赖前，先在 PR 中说明理由，并同时提交 `pubspec.yaml` 和 `pubspec.lock`。
 不要顺手执行 `flutter pub upgrade`。
+
+## 日志与诊断
+
+日志入口位于 `lib/core/logging/app_log.dart`。作用域使用稳定的英文模块名，事件名使用
+`lower_snake_case` 或点分层级；字段只放布尔值、数字、枚举和短小的安全字符串：
+
+```dart
+static final _log = AppLog.logger('free_classroom.controller');
+
+await _log.operation(
+  'query',
+  () async {
+    // 网络请求、解析与缓存写入；内部自动继承同一个 Trace。
+  },
+  fields: {'force': force},
+);
+```
+
+级别约定：
+
+- `DEBUG`：缓存命中、重试、内部阶段，只在开发控制台或用户临时开启详细日志时落盘
+- `INFO`：刷新、同步、导入导出等主要操作完成及耗时
+- `WARNING`：可恢复失败、沿用缓存、存储损坏或降级
+- `ERROR`：业务无法继续、关键持久化失败
+- `FATAL`：未捕获的 Flutter / 平台异常
+
+一次用户操作或后台任务使用一个 Trace，内部 API、Store 与重试使用 Span。不要给每个函数、
+点击、筛选或组件重建创建 Trace，也不要自行把 Trace ID 放入 HTTP 请求头。
+
+禁止把异常直接拼进字符串或记录请求/响应正文。传入 `error` 时日志层只持久化类型、清洗后的
+堆栈和显式 `errorKind`。Cookie、Authorization、ticket、JWT、Passkey、私钥、PIN、学号、
+姓名、成绩、课程、宿舍、搜索词、用户位置、完整 URL 等不得进入日志字段。提交前测试会扫描
+绕过统一入口的输出调用。
+
+release 默认在系统缓存目录轮转保存 INFO 及以上日志，总量约 2 MiB、最长 7 天，不自动上传。
+连续点击「关于」页版本号 5 次可临时开启 30 分钟详细日志；debug 构建默认开启详细日志。
+用户在「设置 → 诊断与日志」主动导出或清除日志。
 
 ## Commit 与分支
 

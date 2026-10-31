@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -12,6 +11,7 @@ import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/auth/passkey_store.dart';
 import '../../../core/auth/passkey_transfer.dart';
 import '../../../core/colors.dart';
+import '../../../core/logging/app_log.dart';
 import 'portal_bind_widgets.dart';
 
 /// 导出通行密钥：设置 PIN → 生成加密文本 → 以二维码 / 复制 / 文件三种方式给出。
@@ -23,6 +23,8 @@ class PortalExportPage extends StatefulWidget {
 }
 
 class _PortalExportPageState extends State<PortalExportPage> {
+  static final _log = AppLog.logger('shell.profile.portal_export');
+
   PasskeyBundle? _bundle;
   bool _loading = true;
   bool _generating = false;
@@ -54,15 +56,12 @@ class _PortalExportPageState extends State<PortalExportPage> {
     if (pin == null || !mounted) return;
 
     setState(() => _generating = true);
-    final stopwatch = Stopwatch()..start();
     try {
-      final text = await PasskeyTransfer.encrypt(bundle, pin);
-      if (kDebugMode) {
-        debugPrint(
-          '[PasskeyTransfer] encrypt ${stopwatch.elapsedMilliseconds} ms, '
-          '${text.length} chars',
-        );
-      }
+      final text = await _log.operation(
+        'encrypt',
+        () => PasskeyTransfer.encrypt(bundle, pin),
+        resultFields: (text) => {'output_chars': text.length},
+      );
       if (!mounted) return;
       setState(() {
         _text = text;

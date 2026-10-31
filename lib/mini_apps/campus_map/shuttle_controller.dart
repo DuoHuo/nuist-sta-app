@@ -2,12 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../core/logging/app_log.dart';
 import 'shuttle_api.dart';
 import 'shuttle_models.dart';
 
 /// 页面持有的当前车辆状态，按公共交通图层和前后台生命周期启停。
 class ShuttleController extends ChangeNotifier {
   ShuttleController(this.source);
+  static final _log = AppLog.logger('campus_map.shuttle.controller');
   final ShuttleSource source;
   List<ShuttleVehicle> _vehicles = const [];
   Map<String, ShuttleDirection> _directions = const {};
@@ -49,7 +51,21 @@ class ShuttleController extends ChangeNotifier {
     final generation = _generation;
     _busy = true;
     try {
-      final result = await source.load();
+      final result = await _log.operation(
+        'vehicles.refresh',
+        source.load,
+        resultFields: (items) => {'vehicle_count': items.length},
+        successLevel: AppLogLevel.debug,
+        failureEvent: 'vehicles.refresh_failed',
+        failureLevelForError: (_) =>
+            !_disposed &&
+                _active &&
+                generation == _generation &&
+                !_hasLoaded &&
+                !_failureNotified
+            ? AppLogLevel.warning
+            : AppLogLevel.debug,
+      );
       if (_disposed || !_active || generation != _generation) return;
       _directions = {
         for (final v in result)

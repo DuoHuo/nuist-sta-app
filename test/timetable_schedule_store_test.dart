@@ -200,6 +200,18 @@ void main() {
   });
 
   group('showExams filtering', () {
+    test('日程写入失败会反馈错误并恢复最后一次保存的状态', () async {
+      await c.ensureStarted();
+      await c.addScheduleEvent(_other('existing'));
+      await Directory('${tmp.path}/schedule_events.json.tmp').create();
+      await expectLater(
+        c.addScheduleEvent(_other('new')),
+        throwsA(isA<TimetablePersistenceException>()),
+      );
+      expect(c.scheduleEvents.map((e) => e.id), ['existing']);
+      await restart();
+      expect(c.scheduleEvents.map((e) => e.id), ['existing']);
+    });
     test(
       'scheduleEventsOn hides exams only; last-item helper follows',
       () async {

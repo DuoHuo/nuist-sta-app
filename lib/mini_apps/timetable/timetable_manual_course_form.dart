@@ -1,3 +1,5 @@
+import 'timetable_persistence_feedback.dart';
+
 import 'package:flutter/material.dart';
 
 import 'timetable_color_picker.dart';
@@ -223,6 +225,14 @@ class _ManualCourseFormState extends State<ManualCourseForm> {
   static String weeksLabelOf(List<int> weeks) => formatWeeks(weeks);
 
   Future<void> _save() async {
+    try {
+      await withTimetablePersistenceFeedback(context, () => _saveUnchecked());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _saveUnchecked() async {
     final ok = _formKey.currentState!.validate();
     if (_weeks.isEmpty) {
       setState(() => _weeksError = '请至少选择一周');

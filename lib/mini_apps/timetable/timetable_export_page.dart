@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/colors.dart';
+import '../../core/logging/app_log.dart';
 import 'timetable_controller.dart';
 import 'timetable_export_api.dart';
 import 'timetable_export_models.dart';
@@ -20,6 +21,8 @@ class TimetableExportPage extends StatefulWidget {
 }
 
 class _TimetableExportPageState extends State<TimetableExportPage> {
+  static final _log = AppLog.logger('timetable.export');
+
   late final TimetableExportApi _api;
   final _cancelToken = CancelToken();
   TimetableExportSnapshot? _snapshot;
@@ -53,14 +56,28 @@ class _TimetableExportPageState extends State<TimetableExportPage> {
       _error = null;
     });
     try {
-      final share = await _api.generate(snapshot, cancelToken: _cancelToken);
+      final share = await _log.operation(
+        'generate',
+        () => _api.generate(snapshot, cancelToken: _cancelToken),
+        fields: {
+          'course_count': snapshot.courseCount,
+          'exam_count': snapshot.examCount,
+          'other_count': snapshot.otherCount,
+          'skipped_count': snapshot.skippedItems.length,
+        },
+        failureEvent: 'generate.failed',
+        failureLevelForError: (error) =>
+            error is DioException && CancelToken.isCancel(error)
+            ? AppLogLevel.debug
+            : AppLogLevel.warning,
+      );
       if (mounted) {
         setState(() => _share = share);
         await _copy(share.shareText, '已复制口令');
       }
     } on TimetableExportException catch (error) {
       if (mounted) setState(() => _error = error.message);
-    } on DioException catch (_) {
+    } on DioException {
       // 页面退出取消请求时，无需提示。
     } catch (_) {
       if (mounted) setState(() => _error = '生成口令失败，请稍后重试');
@@ -76,7 +93,8 @@ class _TimetableExportPageState extends State<TimetableExportPage> {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(message)));
       }
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning('copy.failed', error: error, stackTrace: stackTrace);
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('复制失败，请长按口令手动复制')));

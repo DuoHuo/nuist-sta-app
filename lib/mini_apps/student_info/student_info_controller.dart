@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
+import '../../core/logging/app_log.dart';
 import '../../core/time_format.dart';
 import 'student_info_api.dart';
 import 'student_info_models.dart';
@@ -15,6 +16,7 @@ class StudentInfoController extends ChangeNotifier {
   StudentInfoController._();
 
   static final StudentInfoController instance = StudentInfoController._();
+  static final _log = AppLog.logger('student_info.controller');
 
   StudentInfo? _info;
   bool _loading = false;
@@ -61,9 +63,11 @@ class StudentInfoController extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final info = await StudentInfoApi.fetch();
-      await StudentInfoStore.save(info);
-      _info = info;
+      await _log.operation('refresh', () async {
+        final info = await StudentInfoApi.fetch();
+        await StudentInfoStore.save(info);
+        _info = info;
+      });
     } on PortalException catch (e) {
       _error = e.message;
     } catch (e) {

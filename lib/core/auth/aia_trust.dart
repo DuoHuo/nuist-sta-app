@@ -48,7 +48,7 @@ class AiaTrust {
   Future<void> preload() => _preloading ??= _preload().timeout(
     const Duration(seconds: 5),
     onTimeout: () {
-      portalLog(() => 'AIA 缓存预热超时，继续使用系统证书');
+      portalLog('certificate.preload_timeout');
     },
   );
   Future<void>? _preloading;
@@ -68,13 +68,16 @@ class AiaTrust {
         }
         try {
           context.setTrustedCertificatesBytes(_toPem(der));
-          portalLog(() => 'AIA 缓存预热: ${_subjectCn(der) ?? entry.path}');
+          portalLog('certificate.cache_loaded');
         } catch (_) {
           await entry.delete();
         }
       }
     } catch (e) {
-      portalLog(() => 'AIA 缓存读取失败: $e');
+      portalLog(
+        'certificate.cache_read_failed',
+        fields: {'error_type': e.runtimeType.toString()},
+      );
     }
   }
 
@@ -87,7 +90,10 @@ class AiaTrust {
       await File('${dir.path}${Platform.pathSeparator}$name.der')
           .writeAsBytes(der, flush: true);
     } catch (e) {
-      portalLog(() => 'AIA 缓存写入失败: $e');
+      portalLog(
+        'certificate.cache_write_failed',
+        fields: {'error_type': e.runtimeType.toString()},
+      );
     }
   }
 
@@ -123,7 +129,10 @@ class AiaTrust {
       try {
         issuer = await _fetch(url, createFetchClient: createFetchClient);
       } catch (e) {
-        portalLog(() => 'AIA 拉取失败 $url: $e');
+        portalLog(
+          'certificate.fetch_failed',
+          fields: {'error_type': e.runtimeType.toString()},
+        );
         break;
       }
       if (_isSelfSigned(issuer)) {
@@ -133,9 +142,12 @@ class AiaTrust {
       try {
         context.setTrustedCertificatesBytes(_toPem(issuer));
         added++;
-        portalLog(() => 'AIA 补链: 已加入 ${_subjectCn(issuer) ?? url}');
+        portalLog('certificate.chain_extended');
       } catch (e) {
-        portalLog(() => 'AIA 证书无法加入信任库: $e');
+        portalLog(
+          'certificate.trust_failed',
+          fields: {'error_type': e.runtimeType.toString()},
+        );
         break;
       }
       await _cache(issuer);
@@ -245,26 +257,6 @@ class AiaTrust {
   static String _fingerprint(Uint8List der) {
     final digest = SHA256Digest().process(der);
     return digest.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-  }
-
-  /// 仅用于日志。
-  static String? _subjectCn(Uint8List der) {
-    final (_, subject) = _names(der);
-    if (subject == null) return null;
-    try {
-      final name = ASN1Parser(subject).nextObject() as ASN1Sequence;
-      for (final rdn in name.elements) {
-        final attr = (rdn as ASN1Set).elements.first as ASN1Sequence;
-        final oid = attr.elements.first as ASN1ObjectIdentifier;
-        if (oid.identifier == '2.5.4.3') {
-          return utf8.decode(
-            attr.elements[1].valueBytes(),
-            allowMalformed: true,
-          );
-        }
-      }
-    } catch (_) {}
-    return null;
   }
 
   /// SecurityContext 只认 PEM/PKCS12，DER 要先包一层。

@@ -608,12 +608,17 @@ void main() {
 
     test('EX38 同步后存储文件与日志都不含学号、教师名、XH、XSBH', () async {
       final logs = <String>[];
+      final events = <Map<String, Object?>>[];
       final origLogger = portalLogger;
+      final origEventLogger = portalEventLogger;
       final origDebugPrint = debugPrint;
       portalLogger = logs.add;
+      portalEventLogger = (event, fields) =>
+          events.add({'event': event, 'attrs': fields});
       debugPrint = (String? m, {int? wrapWidth}) => logs.add('$m');
       addTearDown(() {
         portalLogger = origLogger;
+        portalEventLogger = origEventLogger;
         debugPrint = origDebugPrint;
         TimetableApi.debugPost = null;
       });
@@ -628,13 +633,18 @@ void main() {
       };
       await _c.syncFromJwxt();
       expect(jwxtExams(), hasLength(2));
-      expect(logs.join('\n'), contains('00000009'), reason: 'skip log fired');
+      final skipped = events.singleWhere(
+        (event) => event['event'] == 'exams.records_skipped',
+      );
+      expect((skipped['attrs'] as Map)['skipped_count'], 1);
+      expect(logs.join('\n'), isNot(contains('00000009')));
 
       final stored = [
         for (final f in tmp.listSync(recursive: true).whereType<File>())
           f.readAsStringSync(),
       ].join('\n');
-      final logText = logs.join('\n');
+      final logText = '${logs.join('\n')}\n${jsonEncode(events)}';
+      expect(logText, isNot(contains('00000009')));
       for (final s in [
         '202512340001',
         '张老师',

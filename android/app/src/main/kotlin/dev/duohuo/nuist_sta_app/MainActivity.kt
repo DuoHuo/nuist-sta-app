@@ -5,6 +5,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import android.content.pm.ShortcutManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -27,6 +28,33 @@ class MainActivity : FlutterActivity() {
         // 旧版 WidgetPin 动态快捷方式覆盖安装后会残留（id=add_timetable_widget，文案「添加小组件」）。
         clearLegacyShortcuts()
         super.configureFlutterEngine(flutterEngine)
+        // 只接收 Dart 日志层已清洗的摘要，保留 logcat 原生严重程度。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "nuist/diagnostic_logging")
+            .setMethodCallHandler { call, result ->
+                if (call.method != "write") {
+                    result.notImplemented()
+                } else {
+                    val args = call.arguments as? Map<*, *>
+                    val level = (args?.get("level") as? Number)?.toInt()
+                    val message = args?.get("message") as? String
+                    val priority = when (level) {
+                        0 -> Log.DEBUG
+                        1 -> Log.INFO
+                        2 -> Log.WARN
+                        3, 4 -> Log.ERROR
+                        else -> null
+                    }
+                    if (priority == null || message == null) {
+                        result.error("arguments", "日志参数无效", null)
+                    } else {
+                        // 每片最多约 3 KiB UTF-8，避免 logcat 截断长堆栈。
+                        message.lineSequence().forEach { line ->
+                            line.chunked(1000).forEach { Log.println(priority, "flutter.NUIST++", it) }
+                        }
+                        result.success(null)
+                    }
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "nuist/timetable_next_day")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

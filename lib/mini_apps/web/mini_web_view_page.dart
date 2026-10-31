@@ -6,6 +6,7 @@ import '../../core/app_manifest.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/colors.dart';
+import '../../core/logging/app_log.dart';
 
 /// H5 小程序的通用承载页：顶栏显示小程序名，正文加载 [manifest.url]。
 ///
@@ -22,6 +23,8 @@ class MiniWebViewPage extends StatefulWidget {
 }
 
 class _MiniWebViewPageState extends State<MiniWebViewPage> {
+  static final _log = AppLog.logger('web_mini_app.page');
+
   late final WebViewController _controller;
 
   // 页面加载进度，>0 且 <1 时在顶栏下方显示细进度条。
@@ -50,11 +53,21 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
         _error = null;
       });
       try {
-        // 先确保有会话，再灌进 WebView —— 顺序反了就只会同步到一份空 Cookie。
-        // WebView 里没法探测过期再重试，所以磁盘恢复的缓存不采信，让它走一次
-        // SSO 快路径确认。
-        await PortalSession.instance.ensureLoggedIn(url, trustRestored: false);
-        await PortalSession.instance.syncToWebView([url]);
+        await _log.operation(
+          'portal_session.prepare',
+          () async {
+            // 先确保有会话，再灌进 WebView —— 顺序反了就只会同步到一份空 Cookie。
+            // WebView 里没法探测过期再重试，所以磁盘恢复的缓存不采信，让它走一次
+            // SSO 快路径确认。
+            await PortalSession.instance.ensureLoggedIn(
+              url,
+              trustRestored: false,
+            );
+            await PortalSession.instance.syncToWebView([url]);
+          },
+          fields: {'app_id': widget.manifest.id},
+          failureEvent: 'portal_session.prepare_failed',
+        );
       } on PortalException catch (e) {
         if (mounted) {
           setState(() {
@@ -68,7 +81,18 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
       setState(() => _preparing = false);
     }
     if (!mounted) return;
-    await _controller.loadRequest(Uri.parse(url));
+    try {
+      await _controller.loadRequest(Uri.parse(url));
+      _log.info('page.load_started', fields: {'app_id': widget.manifest.id});
+    } catch (error, stackTrace) {
+      _log.warning(
+        'page.load_failed',
+        fields: {'app_id': widget.manifest.id},
+        error: error,
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
   }
 
   @override

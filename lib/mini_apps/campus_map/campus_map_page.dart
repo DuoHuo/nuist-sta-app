@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/logging/app_log.dart';
 import '../../core/schedule/weekly_classes.dart';
 import 'shuttle_api.dart';
 import 'shuttle_controller.dart';
@@ -51,6 +52,8 @@ class CampusMapPage extends StatefulWidget {
 
 class _CampusMapPageState extends State<CampusMapPage>
     with WidgetsBindingObserver {
+  static final _log = AppLog.logger('campus_map.page');
+
   late final ShuttleController _shuttle;
   OverlayEntry? _shuttleToast;
   Timer? _shuttleToastTimer;
@@ -273,12 +276,15 @@ class _CampusMapPageState extends State<CampusMapPage>
     try {
       final classes = await source.thisWeek();
       if (!mounted) return;
-      if (kDebugMode) {
-        // 只打数量，不打课程与地点（日志规范）。
-        debugPrint('[campus-map] 本周有地点的课 ${classes.length} 节');
-      }
+      // 只记数量，不记录课程与地点。
+      _log.debug('week_classes.loaded', fields: {'count': classes.length});
       setState(() => _weekClasses = classes);
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning(
+        'week_classes.load_failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
       // 课表不可用不影响地图。
     }
   }

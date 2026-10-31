@@ -1,3 +1,5 @@
+import 'timetable_persistence_feedback.dart';
+
 import 'package:flutter/material.dart';
 
 import 'timetable_schedule_event.dart';
@@ -186,6 +188,14 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
   }
 
   Future<void> _save() async {
+    try {
+      await withTimetablePersistenceFeedback(context, () => _saveUnchecked());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _saveUnchecked() async {
     setState(() => _triedSave = true);
     final formOk = _formKey.currentState?.validate() ?? false;
     if (!formOk || !_timeValid || _title.text.trim().isEmpty) return;
@@ -219,6 +229,10 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
   }
 
   Future<void> _delete() async {
+    await withTimetablePersistenceFeedback(context, () => _deleteUnchecked());
+  }
+
+  Future<void> _deleteUnchecked() async {
     final i = widget.initial;
     if (i == null) return;
     if (!await confirmDeleteScheduleEvent(context, i)) return;

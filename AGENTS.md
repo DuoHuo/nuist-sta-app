@@ -111,7 +111,19 @@ fix(electricity): 修复只有一条记录时折线图不显示
 - 配色一律用 `AppPalette.of(context)`，它随当前主题明暗返回对应色值；`AppColors` / `AppColorsDark` 只用于构造主题。明暗默认跟随系统，用户也可以在「我的 → 设置」里手动选浅色或深色，所以取色时禁止假定浅色。
 - 注释和文档用中文，公开的类和方法应当写 `///` 文档注释；`lib/` 内部用相对路径 import。
 - 校内主机名一律从 `lib/core/config/campus_config.dart` 的 `CampusHosts` 派生；只模板化 host，路径、大小写、尾斜杠保持服务端原样（CAS 精确匹配 service）。
-- 日志只在 debug 构建输出，禁止打印 Cookie、ticket、私钥、学号等敏感值。
+- `lib/` 内日志必须使用 `lib/core/logging/app_log.dart` 的 `AppLog`，禁止直接调用
+  `print`、`debugPrint` 或 `developer.log`；后者只允许由日志基础设施作为控制台 sink 使用。
+- 日志按结构化事件记录。Controller 记录业务操作，API 记录请求结果，Store 记录损坏与降级；
+  禁止为了“日志齐全”记录组件重建、滚动、普通筛选等高频 UI 行为。
+- 禁止记录 Cookie、Authorization、ticket、JWT、Passkey、私钥、签名、PIN、学号、姓名、
+  成绩、课程名、宿舍号、搜索词、用户位置、请求体、响应体、完整 URL 或未经清洗的异常文本。
+  网络日志只保留服务类别、状态码、耗时与错误分类，主机名由日志层匿名化。
+- 一次用户或后台业务操作创建一个 Trace，内部网络、存储和重试使用 Span；不要给每个函数或
+  纯 UI 操作创建 Trace。Trace ID 默认只在本机日志中使用，禁止向学校系统或其他未明确支持的
+  服务添加 `traceparent` 等追踪请求头。
+- release 构建允许在系统缓存目录保存脱敏后的 INFO 及以上日志；详细日志默认关闭，只能在
+  「关于」页连续点击版本号 5 次后临时开启。debug 构建默认开启详细日志。日志不得自动上传，
+  只能由用户在「设置 → 诊断与日志」主动导出或清除。
 - 禁止引入遥测、崩溃上报、统计类 SDK。网络出口限于学校自己的系统和现有的非学校出口：社团自有服务（`lib/core/config/api_endpoints.dart`）、校园地图后端、小公交公开页面与状态服务。新增出口前必须先问用户；非学校出口禁止携带门户凭据、Cookie、学号等个人数据。
 - 以下内容只在用户明确要求时改动：`pubspec.yaml` 的 `version`、Flutter 版本、`.github/workflows/`、Android 签名配置、`assets/js/vconsole.min.js`。
 - 新增或升级依赖前必须先问；改了依赖要一并提交 `pubspec.lock`。

@@ -18,6 +18,7 @@ lib/
 │   ├── auth/           # 统一门户登录 —— 见 portal-auth.md
 │   ├── config/         # campus_config.dart 校园地址与密钥（hex 编码）—— 见 configuration.md；
 │   │                   # api_endpoints.dart 社团自有服务地址（明文）
+│   ├── logging/        # 结构化日志、Trace/Span、轮转存储与用户导出
 │   ├── network/        # 校园 VPN：vpnDio() 与 Rust 原生库的 FFI 封装
 │   ├── schedule/       # WeeklyClasses：「本周课程」跨小程序接口（课表提供，地图读取）
 │   ├── app_manifest.dart   # AppManifest：小程序描述
@@ -232,6 +233,56 @@ final response = await client.get<String>(
 首次真正发起 VPN 请求时才会加载原生库并完成 VPN 认证，因此使用前必须已经绑定统一门户。
 未绑定或凭据失效会抛出 `PortalCredentialError`，登录流程失败会抛出 `PortalLoginError`，
 网络连接问题仍按 Dio / `PortalNetworkError` 处理；业务层不要把所有异常都当成需要重新绑定。
+
+## 日志与诊断
+
+统一入口位于 `lib/core/logging/app_log.dart`，业务代码通过 `AppLog.logger(scope)` 取得
+带作用域的日志器。`print`、`debugPrint` 和直接 `developer.log` 不属于公开入口；测试会扫描
+是否有绕过。开发构建的首行摘要优先展示请求编号、服务类别、方法、状态码、错误类别与耗时；
+耗时按 ms、s、分钟显示。DevTools 由面板展示级别和作用域，消息首行不重复包装，
+后续详情保留全部安全字段与完整 Trace／Span。Android `logcat` 使用 `flutter.NUIST++` 标签和
+原生 D/I/W/E 级别，兼容独立 `flutter logs`；终端正文保留作用域、事件序号与短 Trace。
+长行分片，WARNING／ERROR 正文分别最多展示 3／8 个安全堆栈帧；
+持久化与详情中的安全堆栈最多 20 帧、2 KiB。框架错误保留安全类别和 library，按 ERROR 记录。
+release 默认只在本机缓存中轮转保存 INFO 及以上事件，用户临时开启详细模式时也可查看控制台输出。
+
+每条记录使用 JSON Lines，主要字段包括时间、序号、级别、scope、event、应用会话 ID、
+Trace ID、Span ID、父 Span ID、耗时与结构化属性。一次用户操作或后台任务创建一个 Trace，
+内部 HTTP 请求、门户登录、VPN 阶段与存储 I/O 使用子 Span；Store 仅在已有业务 Trace 中建立
+子 Span，不为独立的缓存读取创建 Trace。普通筛选、滚动、组件重建等纯 UI
+行为不创建 Trace。上下文通过 Dart Zone 在异步调用中传播，不写入请求参数或全局可变业务状态。
+operation 的失败事件、错误字段和级别选择在原 Span 中完成；业务 catch 只更新状态，避免重复警告。
+原生 isolate 的失败回到主 isolate 后归类，保留业务上下文。
+
+Trace ID 和 Span ID 的长度与 W3C Trace Context 兼容，但默认只用于本机日志。学校系统和其他
+未明确支持的服务不得收到 `traceparent` 等追踪请求头；未来若自有后端接入分布式追踪，也必须
+按出口白名单单独启用。
+
+日志分层：
+
+- Controller：刷新、同步、查询、导入导出等业务操作及最终结果
+- API / 网络层：状态码、耗时、重试、选路与安全错误分类，不记录正文
+- Store：缓存损坏、解析失败、写入失败与无平台存储时的降级
+- 全局入口：`FlutterError.onError` 与 `PlatformDispatcher.instance.onError` 的未捕获异常
+
+日志层不会持久化异常对象或自动调用 `error.toString()`，只保留异常类型、显式安全分类和清洗后
+的有限堆栈。Cookie、Authorization、ticket、JWT、Passkey、私钥、签名、PIN、学号、姓名、
+成绩、课程、宿舍、搜索词、用户位置、请求/响应正文和完整 URL 一律禁止。长数字标识、凭据模式、
+IP 与域名有二次过滤；结构化 host 字段只写匿名别名，并补充 cas、jwxt、icard 等安全服务类别。
+字段采用语义、类型和数值范围白名单：未知业务字段、类型不匹配与超范围值直接丢弃；
+脚本与门户诊断使用固定事件，禁止传入自由文本。读取旧记录和导出时也会重新校验，
+不会将旧版自由文本或未知元信息带入诊断文件。
+
+日志文件放在系统缓存目录：单文件最多 512 KiB，保留四个文件，总量约 2 MiB；初始化、定期维护
+与生成快照时按记录时间清理七天前的事件。写入、维护、快照、导出和清除使用同一串行队列。
+截断的 UTF-8、损坏的 JSON 尾行只丢弃对应记录；文件读取或清理失败不阻断其他文件，
+快照和诊断界面反馈不可读文件数量。活动文件大小有缓存，普通占用统计仅在维护到期时清理。
+release 用户连续点击「我的 → 关于」中的版本号 5 次，可临时开启 30 分钟 DEBUG 日志；
+debug 构建默认记录 DEBUG。用户可在「我的 → 设置 → 诊断与日志」对全部留存事件按模块
+和级别筛选，再显示最近 300 条匹配记录；支持手动刷新、展开堆栈、完整本地日期时间，
+以及明暗主题与大字体下的滚动布局。用户也可查看详细模式剩余时间并提前关闭。导出使用单文件诊断快照和系统分享
+面板；导出副本最多保留三个、总量不超过 8 MiB，并按一天的期限清理。清除会一并删除运行日志与
+应用生成的导出副本，失败时明确反馈。应用不自动上传日志，也不接入遥测或崩溃上报服务。
 
 ## 已知架构债
 

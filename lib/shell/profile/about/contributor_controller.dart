@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../../../core/logging/app_log.dart';
 import 'contributor_api.dart';
 import 'contributor_models.dart';
 import 'contributor_store.dart';
@@ -7,6 +8,8 @@ import 'contributor_store.dart';
 /// 关于页贡献者名单的状态：先展示缓存，无缓存或缓存满 24h 才去拉。
 /// 没有显式刷新；拉取失败但有缓存时静默保留缓存。
 class ContributorController extends ChangeNotifier {
+  static final _log = AppLog.logger('shell.profile.contributors.controller');
+
   ContributorController({
     Future<List<Contributor>> Function()? fetch,
     ContributorStore? store,
@@ -54,10 +57,17 @@ class ContributorController extends ChangeNotifier {
       _notify();
     }
     try {
-      final items = await _fetch();
-      _items = items;
-      _failed = false;
-      await _store.save(ContributorCache(items: items, fetchedAt: _now()));
+      await _log.operation(
+        'refresh',
+        () async {
+          final items = await _fetch();
+          _items = items;
+          _failed = false;
+          await _store.save(ContributorCache(items: items, fetchedAt: _now()));
+        },
+        failureEvent: 'refresh.failed_using_cache',
+        errorFields: (_) => {'has_cache': hasData, 'outcome': 'cache_fallback'},
+      );
     } catch (_) {
       if (!hasData) _failed = true;
     } finally {

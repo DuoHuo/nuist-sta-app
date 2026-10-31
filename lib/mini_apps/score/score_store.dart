@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/logging/app_log.dart';
 import 'score_models.dart';
 
 /// 成绩本地缓存：`scores/report.json`。
@@ -11,6 +12,7 @@ import 'score_models.dart';
 /// widget 测试和首次在线查询。
 class ScoreStore {
   ScoreStore._();
+  static final _log = AppLog.logger('score.store');
 
   static Future<File?> _file() async {
     try {
@@ -18,12 +20,16 @@ class ScoreStore {
       final dir = Directory('${base.path}${Platform.pathSeparator}scores');
       if (!await dir.exists()) await dir.create(recursive: true);
       return File('${dir.path}${Platform.pathSeparator}report.json');
-    } catch (_) {
+    } catch (error) {
+      _log.debug(
+        'storage.unavailable',
+        fields: {'error_type': error.runtimeType.toString()},
+      );
       return null;
     }
   }
 
-  static Future<ScoreReport?> read() async {
+  static Future<ScoreReport?> read() => _log.inSpan(() async {
     final file = await _file();
     if (file == null || !await file.exists()) return null;
     try {
@@ -32,14 +38,19 @@ class ScoreStore {
       final report = ScoreReport.fromJson(decoded);
       if (report.fetchedAt.millisecondsSinceEpoch == 0) return null;
       return report;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning('cache.read_failed', error: error, stackTrace: stackTrace);
       return null;
     }
-  }
+  });
 
-  static Future<void> save(ScoreReport report) async {
+  static Future<void> save(ScoreReport report) => _log.inSpan(() async {
     final file = await _file();
     if (file == null) return;
-    await file.writeAsString(jsonEncode(report.toJson()), flush: true);
-  }
+    try {
+      await file.writeAsString(jsonEncode(report.toJson()), flush: true);
+    } catch (error, stackTrace) {
+      _log.warning('cache.write_failed', error: error, stackTrace: stackTrace);
+    }
+  });
 }

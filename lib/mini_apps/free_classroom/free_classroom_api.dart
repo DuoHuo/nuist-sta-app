@@ -158,14 +158,18 @@ class FreeClassroomApi {
   ) async {
     var body = await _send(name, fields, force: false);
     if (body == null) {
-      portalLog(() => '教务 kxjas 会话失效，重新登录');
+      portalLog('session.expired', fields: {'service': 'jwxt'});
       body = await _send(name, fields, force: true);
     }
     if (body == null) {
       throw const PortalLoginError('重新登录后教务仍未返回数据，请稍后再试');
     }
-    if ('${body['code']}' != '0') {
-      portalLog(() => '教务接口返回错误：$body');
+    final code = '${body['code']}';
+    if (code != '0') {
+      portalLog(
+        'response.rejected',
+        fields: {'service': 'jwxt', 'response_code': code},
+      );
       throw PortalLoginError(
         prefixedServerMessage(
           '教务接口返回错误：',

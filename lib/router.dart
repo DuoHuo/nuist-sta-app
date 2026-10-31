@@ -39,7 +39,7 @@ import 'shell/study/study_page.dart';
 /// - `/place/:placeId`：校园地图的地物详情页（建筑 / POI / 通用地物共用）。
 ///   与壳平级，可深链与分享；页面按编号自行取数，不依赖地图页是否打开。
 /// - `/about`：关于页（应用图标、版本号、贡献者名单），与壳平级。
-/// - `/settings`：App 级设置页（深色模式），与壳平级。
+/// - `/settings`：App 级设置页（外观、诊断日志），与壳平级。
 GoRouter buildRouter() => GoRouter(
   routes: [
     StatefulShellRoute.indexedStack(

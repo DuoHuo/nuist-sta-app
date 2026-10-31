@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
+import '../../core/logging/app_log.dart';
 import 'free_classroom_api.dart';
 import 'free_classroom_models.dart';
 import 'free_classroom_store.dart';
@@ -15,6 +16,7 @@ class FreeClassroomController extends ChangeNotifier {
   FreeClassroomController._();
 
   static final FreeClassroomController instance = FreeClassroomController._();
+  static final _log = AppLog.logger('free_classroom.controller');
 
   bool _portalBound = true;
   bool _started = false;
@@ -174,20 +176,28 @@ class FreeClassroomController extends ChangeNotifier {
     _buildingsError = null;
     notifyListeners();
     try {
-      final list = await FreeClassroomApi.listBuildings();
-      if (list.isNotEmpty) {
-        _buildings = list;
-        await FreeClassroomStore.saveBuildings(list);
-        // 记住的楼已经不在列表里（改名 / 下线）就清掉。
-        if (_building != null && !list.contains(_building)) {
-          _building = null;
-          _result = null;
+      await _log.operation('buildings.refresh', () async {
+        final list = await FreeClassroomApi.listBuildings();
+        if (list.isNotEmpty) {
+          _buildings = list;
+          await FreeClassroomStore.saveBuildings(list);
+          // 记住的楼已经不在列表里（改名 / 下线）就清掉。
+          if (_building != null && !list.contains(_building)) {
+            _building = null;
+            _result = null;
+          }
         }
-      }
-      // 字典是锦上添花，拉不到就用内置表，不影响主流程。
-      try {
-        _occupationNames = await FreeClassroomApi.occupationNames();
-      } catch (_) {}
+        // 字典是锦上添花，拉不到就用内置表，不影响主流程。
+        try {
+          _occupationNames = await FreeClassroomApi.occupationNames();
+        } catch (error, stackTrace) {
+          _log.warning(
+            'occupation_names.failed_using_builtin',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
+      });
     } on PortalException catch (e) {
       _buildingsError = e.message;
     } catch (e) {
@@ -293,25 +303,27 @@ class FreeClassroomController extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final dateKey = dateKeyOf(date);
-      var calendar = force ? null : _calendars[dateKey];
-      calendar ??= await FreeClassroomApi.calendar(date);
-      _calendars[dateKey] = calendar;
-      final rooms = await FreeClassroomApi.classrooms(
-        date: date,
-        calendar: calendar,
-        building: building,
-      );
-      final day = ClassroomDay(
-        date: date,
-        building: building,
-        calendar: calendar,
-        rooms: rooms,
-        fetchedAt: DateTime.now(),
-      );
-      _cache[key] = day;
-      if (seq != _querySeq) return; // 用户已经切走了
-      _setResult(day);
+      await _log.operation('query', () async {
+        final dateKey = dateKeyOf(date);
+        var calendar = force ? null : _calendars[dateKey];
+        calendar ??= await FreeClassroomApi.calendar(date);
+        _calendars[dateKey] = calendar;
+        final rooms = await FreeClassroomApi.classrooms(
+          date: date,
+          calendar: calendar,
+          building: building,
+        );
+        final day = ClassroomDay(
+          date: date,
+          building: building,
+          calendar: calendar,
+          rooms: rooms,
+          fetchedAt: DateTime.now(),
+        );
+        _cache[key] = day;
+        if (seq != _querySeq) return; // 用户已经切走了
+        _setResult(day);
+      }, fields: {'force': force});
     } on PortalException catch (e) {
       if (seq == _querySeq) _error = e.message;
     } catch (e) {

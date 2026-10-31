@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../../core/logging/app_log.dart';
 import 'timetable_date_edits.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_overrides.dart';
@@ -23,6 +24,7 @@ import 'timetable_store.dart';
 ///   portalSessionExpired: bool}`（后者缺失 = false）。
 class ScheduleStore {
   ScheduleStore._();
+  static final _log = AppLog.logger('timetable.schedule_store');
 
   static const scheduleEventsFile = 'schedule_events.json';
   static const courseEditsFile = 'course_edits.json';
@@ -34,19 +36,26 @@ class ScheduleStore {
   /// `course_edits.json` 的内容版本：2 = 含单日修改 `dateEdits`；3 = 含 weeks/scope。
   static const int courseEditsVersion = 3;
 
-  static Future<Map<String, dynamic>> _read(String name) async {
-    final file = await TimetableStore.fileFor(name);
-    if (file == null) return {};
-    if (!await file.exists()) return {};
-    try {
-      final decoded = jsonDecode(await file.readAsString());
-      if (decoded is Map<String, dynamic>) return decoded;
-    } catch (_) {
-      // 落到下面的备份逻辑。
-    }
-    await _backupCorrupt(file);
-    return {};
-  }
+  static Future<Map<String, dynamic>> _read(String name) =>
+      _log.inSpan(() async {
+        final file = await TimetableStore.fileFor(name);
+        if (file == null) return {};
+        if (!await file.exists()) return {};
+        try {
+          final decoded = jsonDecode(await file.readAsString());
+          if (decoded is Map<String, dynamic>) return decoded;
+        } catch (error, stackTrace) {
+          _log.warning(
+            'json.read_failed',
+            fields: {'file_kind': name},
+            error: error,
+            stackTrace: stackTrace,
+          );
+          // 落到下面的备份逻辑。
+        }
+        await _backupCorrupt(file);
+        return {};
+      });
 
   /// 文件损坏（解析失败或顶层不是对象）时先改名留底，再按空继续，
   /// 免得下次保存把用户的编辑 / 删除 / 手动日程覆盖掉。
@@ -60,22 +69,42 @@ class ScheduleStore {
         );
       }
       await file.rename(target.path);
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning(
+        'corrupt_backup.failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
       // 改名失败（只读等）就保持原样，不影响启动。
     }
   }
 
   /// 合并写（保留未知顶层键）+ 原子替换。
-  static Future<void> _write(String name, Map<String, dynamic> values) async {
-    final file = await TimetableStore.fileFor(name);
-    if (file == null) return;
-    final raw = await _read(name);
-    raw.addAll(values);
-    raw['schemaVersion'] = schemaVersion;
-    final tmp = File('${file.path}.tmp');
-    await tmp.writeAsString(jsonEncode(raw), flush: true);
-    await tmp.rename(file.path);
-  }
+  static Future<void> _write(String name, Map<String, dynamic> values) =>
+      _log.inSpan(() async {
+        final file = await TimetableStore.fileFor(name);
+        if (file == null) {
+          TimetableStore.checkStorageAvailable();
+          return;
+        }
+        try {
+          final raw = await _read(name);
+          raw.addAll(values);
+          raw['schemaVersion'] = schemaVersion;
+          final tmp = File('${file.path}.tmp');
+          await tmp.writeAsString(jsonEncode(raw), flush: true);
+          await tmp.rename(file.path);
+        } catch (error, stackTrace) {
+          _log.error(
+            'json.write_failed',
+            fields: {'file_kind': name},
+            error: error,
+            stackTrace: stackTrace,
+            errorKind: 'storage_write',
+          );
+          throw const TimetablePersistenceException();
+        }
+      });
 
   static List<Object?> _list(Map<String, dynamic> raw, String key) {
     final v = raw[key];

@@ -159,8 +159,9 @@ service → 落地 URL 表（`_established`）也经 `EstablishedStore` 落到�
   拉取证书里自带的 CA Issuers 地址。App 整体还有几个非学校出口，都不携带门户凭据或会话：
   社团自有服务 `app.duohuo.org.cn`（公告、贡献者名单）、校园地图后端（`duohuo.org.cn`
   子域）、第三方小公交页面与状态服务
-- 日志在 release 构建下完全静默；URL 打印前会去掉 query（顺带避免 ticket 落进日志）；
-  Cookie 调试接口只返回名字不返回值
+- release 构建只在本机缓存中有限保存经过脱敏的 INFO 及以上诊断日志，不自动上传；详细日志
+  默认关闭，连续点击「关于」页版本号 5 次后临时开启，debug 构建则默认开启。门户日志不记录 URL、Cookie、ticket、JWT、凭据或响应正文，
+  主机名会匿名化；Cookie 调试接口也只返回名字不返回值
 
 ## 已知缺口
 

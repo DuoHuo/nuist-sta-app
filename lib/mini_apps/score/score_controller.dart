@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
+import '../../core/logging/app_log.dart';
 import '../../core/time_format.dart';
 import 'score_api.dart';
 import 'score_models.dart';
@@ -12,6 +13,7 @@ class ScoreController extends ChangeNotifier {
   ScoreController._();
 
   static final ScoreController instance = ScoreController._();
+  static final _log = AppLog.logger('score.controller');
 
   ScoreReport? _report;
   bool _loading = false;
@@ -52,9 +54,11 @@ class ScoreController extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final report = await ScoreApi.fetch();
-      await ScoreStore.save(report);
-      _report = report;
+      await _log.operation('refresh', () async {
+        final report = await ScoreApi.fetch();
+        await ScoreStore.save(report);
+        _report = report;
+      });
     } on PortalException catch (e) {
       _error = e.message;
     } catch (e) {

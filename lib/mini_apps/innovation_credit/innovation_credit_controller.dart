@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
+import '../../core/logging/app_log.dart';
 import '../../core/time_format.dart';
 import 'innovation_credit_api.dart';
 import 'innovation_credit_models.dart';
@@ -16,6 +17,7 @@ class InnovationCreditController extends ChangeNotifier {
 
   static final InnovationCreditController instance =
       InnovationCreditController._();
+  static final _log = AppLog.logger('innovation_credit.controller');
 
   InnovationCredit? _credit;
   bool _loading = false;
@@ -62,9 +64,11 @@ class InnovationCreditController extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final credit = await InnovationCreditApi.fetch();
-      await InnovationCreditStore.save(credit);
-      _credit = credit;
+      await _log.operation('refresh', () async {
+        final credit = await InnovationCreditApi.fetch();
+        await InnovationCreditStore.save(credit);
+        _credit = credit;
+      });
     } on PortalException catch (e) {
       _error = e.message;
     } catch (e) {

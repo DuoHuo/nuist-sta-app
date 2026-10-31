@@ -53,7 +53,7 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
 
   /// 证书上下文更新后关闭旧连接池，保留适配器和选路配置。
   void resetClients() {
-    vpnLog('重建直连与 VPN HTTP 连接池');
+    vpnLog('clients.reset');
     _direct?.close(force: true);
     _vpn?.close(force: true);
     _direct = null;
@@ -78,7 +78,7 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
     }
     if (connector case final VpnSessionConnector session) {
       if (_sessionKnown && _vpnSessionId != session.sessionId) {
-        vpnLog('隧道已变化，关闭旧 VPN HTTP 连接池');
+        vpnLog('clients.session_changed');
         _vpn?.close(force: true);
         _vpn = null;
       }
@@ -115,14 +115,14 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
               onBadCertificate?.call(certificate, uri.host, uri.port) ?? false,
         );
         active = secure;
-        log.write('TLS 就绪，耗时=${log.watch.elapsedMilliseconds}ms');
+        log.write('tls.ready');
         if (cancelled) {
           secure.destroy();
           throw const SocketException('VPN 连接已取消');
         }
         return secure;
       } catch (error) {
-        log.write('TLS 建连失败，类别=${vpnErrorKind(error)}');
+        log.write('tls.failed', error: error);
         raw.destroy();
         rethrow;
       }
@@ -140,7 +140,16 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
-    final log = VpnRequestLog.start(options);
+    final log = VpnRequestLog.start(options)!;
+    return log.run(() => _fetch(options, requestStream, cancelFuture, log));
+  }
+
+  Future<ResponseBody> _fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+    VpnRequestLog? log,
+  ) async {
     var useVpn = false;
     var cancelled = false;
     try {

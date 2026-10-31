@@ -59,7 +59,13 @@ class ElectricityApi {
     final map = data['map'];
     final kwh = _extractSurplus(map);
     if (kwh == null) {
-      portalLog(() => '电费接口未返回剩余电量：${jsonEncode(map)}');
+      portalLog(
+        'response.balance_missing',
+        fields: {
+          'service': 'icard',
+          'field_count': map is Map ? map.length : 0,
+        },
+      );
       throw const PortalLoginError('电费接口未返回剩余电量，请稍后重试');
     }
     return kwh;
@@ -79,11 +85,14 @@ class ElectricityApi {
   static Future<Map<String, dynamic>> _post(Map<String, String> fields) async {
     var result = await _send(fields, force: false);
     if (_looksUnauthorized(result)) {
-      portalLog(() => 'icard token 失效，重新登录');
+      portalLog('session.expired', fields: {'service': 'icard'});
       result = await _send(fields, force: true);
     }
     if (result['code'] != 200) {
-      portalLog(() => '电费接口返回错误：$result');
+      portalLog(
+        'response.rejected',
+        fields: {'service': 'icard', 'response_code': result['code']},
+      );
       throw PortalLoginError(
         prefixedServerMessage(
           '电费接口返回错误：',
@@ -131,7 +140,10 @@ class ElectricityApi {
   static String _tokenFromLanding(String landing) {
     final token = Uri.tryParse(landing)?.queryParameters['synjones-auth'];
     if (token == null || token.isEmpty) {
-      portalLog(() => '未能从一卡通落地页取得 synjones-auth：$landing');
+      portalLog(
+        'authentication.authorization_missing',
+        fields: {'service': 'icard'},
+      );
       throw const PortalLoginError('一卡通登录失败，请稍后重试');
     }
     return 'bearer $token';

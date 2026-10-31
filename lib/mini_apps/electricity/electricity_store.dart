@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/logging/app_log.dart';
 import 'electricity_models.dart';
 
 /// 电费小程序的本地存储：绑定的宿舍 + 历史电量，都是普通 JSON 文件，放在应用
@@ -19,6 +20,7 @@ import 'electricity_models.dart';
 /// ```
 class ElectricityStore {
   ElectricityStore._();
+  static final _log = AppLog.logger('electricity.store');
 
   static Future<Directory?> _dir() async {
     try {
@@ -26,7 +28,11 @@ class ElectricityStore {
       final dir = Directory('${base.path}${Platform.pathSeparator}electricity');
       if (!await dir.exists()) await dir.create(recursive: true);
       return dir;
-    } catch (_) {
+    } catch (error) {
+      _log.debug(
+        'storage.unavailable',
+        fields: {'error_type': error.runtimeType.toString()},
+      );
       // widget 测试等没有平台通道的环境，退化成「没有存储」。
       return null;
     }
@@ -39,22 +45,34 @@ class ElectricityStore {
         : File('${dir.path}${Platform.pathSeparator}$name');
   }
 
-  static Future<Map<String, dynamic>> _readJson(String name) async {
-    final file = await _file(name);
-    if (file == null || !await file.exists()) return {};
-    try {
-      final decoded = jsonDecode(await file.readAsString());
-      return decoded is Map<String, dynamic> ? decoded : {};
-    } catch (_) {
-      return {};
-    }
-  }
+  static Future<Map<String, dynamic>> _readJson(String name) => _log.inSpan(
+    () async {
+      final file = await _file(name);
+      if (file == null || !await file.exists()) return {};
+      try {
+        final decoded = jsonDecode(await file.readAsString());
+        return decoded is Map<String, dynamic> ? decoded : {};
+      } catch (error, stackTrace) {
+        _log.warning('cache.read_failed', error: error, stackTrace: stackTrace);
+        return {};
+      }
+    },
+  );
 
-  static Future<void> _writeJson(String name, Map<String, dynamic> data) async {
-    final file = await _file(name);
-    if (file == null) return;
-    await file.writeAsString(jsonEncode(data), flush: true);
-  }
+  static Future<void> _writeJson(String name, Map<String, dynamic> data) =>
+      _log.inSpan(() async {
+        final file = await _file(name);
+        if (file == null) return;
+        try {
+          await file.writeAsString(jsonEncode(data), flush: true);
+        } catch (error, stackTrace) {
+          _log.warning(
+            'cache.write_failed',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
+      });
 
   // ==================== 宿舍 ====================
 
@@ -65,7 +83,12 @@ class ElectricityStore {
     if (json.isEmpty) return null;
     try {
       return ElecRoom.fromJson(json);
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning(
+        'room_cache.parse_failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
       return null;
     }
   }

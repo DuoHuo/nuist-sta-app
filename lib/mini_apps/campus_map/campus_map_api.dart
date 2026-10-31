@@ -782,9 +782,10 @@ class _CampusVpnPreparation extends Interceptor {
   ) async {
     try {
       await vpnStage(
-        '${options.uri.host} 准备',
+        'map.prepare',
         VpnGateway.instance.prepare,
         timeout: const Duration(seconds: 70),
+        fields: {'host': options.uri.host},
       );
       handler.next(options);
     } catch (error) {

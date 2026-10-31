@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
+import '../../core/logging/app_log.dart';
 import 'timetable_api.dart';
 import 'timetable_colors.dart';
 import 'timetable_date_edits.dart';
@@ -132,6 +133,7 @@ class TimetableController extends ChangeNotifier {
   TimetableController._();
 
   static final TimetableController instance = TimetableController._();
+  static final _log = AppLog.logger('timetable.controller');
 
   bool _started = false;
   Future<void>? _starting;
@@ -819,9 +821,11 @@ class TimetableController extends ChangeNotifier {
     final automatic = _nextSyncAuto;
     _nextSyncAuto = false;
     late final Future<void> f;
-    f = _doSync(automatic: automatic).whenComplete(() {
-      if (identical(_syncInFlight, f)) _syncInFlight = null;
-    });
+    f = _log.startSpan().run(() => _doSync(automatic: automatic)).whenComplete(
+      () {
+        if (identical(_syncInFlight, f)) _syncInFlight = null;
+      },
+    );
     _syncInFlight = f;
     return f;
   }
@@ -830,6 +834,8 @@ class TimetableController extends ChangeNotifier {
   Future<void> syncFromRemote() => syncFromJwxt();
 
   Future<void> _doSync({bool automatic = false}) async {
+    final watch = Stopwatch()..start();
+    _log.debug('sync.started', fields: {'automatic': automatic});
     TimetableSyncOutcome? outcome;
     _loading = true;
     _statusMessage = '正在同步教务课表…';
@@ -933,9 +939,28 @@ class TimetableController extends ChangeNotifier {
       await _setPortalSessionExpired(false);
       outcome = TimetableSyncOutcome.success(automatic: automatic);
       _fireScheduleChanged(ScheduleChangeReason.sync);
-    } catch (e) {
+      _log.info(
+        'sync.completed',
+        fields: {
+          'automatic': automatic,
+          'duration_ms': watch.elapsedMilliseconds,
+          'course_count': _snapshot.courses.length,
+        },
+      );
+    } catch (e, stackTrace) {
       _lastFailureOffline = _isOffline(e);
       _syncFailure = classifySyncError(e);
+      _log.warning(
+        'sync.failed',
+        fields: {
+          'automatic': automatic,
+          'failure_kind': _syncFailure.name,
+          'offline': _lastFailureOffline,
+          'duration_ms': watch.elapsedMilliseconds,
+        },
+        error: e,
+        stackTrace: stackTrace,
+      );
       if (automatic) _lastAutoSyncFailed = true;
       outcome = TimetableSyncOutcome.failure(
         automatic: automatic,
@@ -1071,8 +1096,22 @@ class TimetableController extends ChangeNotifier {
 
   // ---- 手动课程 CRUD（只作用于 isManual 课程）----
 
+  Future<T> _mutateManual<T>(Future<T> Function() action) async {
+    final previous = _manualCourses;
+    try {
+      return await action();
+    } on TimetablePersistenceException {
+      _manualCourses = previous;
+      _colorMap = null;
+      _colorMapJwxt = null;
+      _colorMapScheme = null;
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   /// 新增手动课程；id 为空时自动生成。强制 source=manual。返回保存后的课程。
-  Future<Course> addManualCourse(Course course) async {
+  Future<Course> addManualCourse(Course course) => _mutateManual(() async {
     final id = course.id.isEmpty || _idTaken(course.id)
         ? _newManualId()
         : course.id;
@@ -1081,7 +1120,7 @@ class TimetableController extends ChangeNotifier {
     await _recomputeColors();
     await _persistManual();
     return manualCourseById(saved.id) ?? saved;
-  }
+  });
 
   /// 按 id 更新手动课程；id 不存在或指向教务课程时抛 [StateError]。
   ///
@@ -1093,7 +1132,7 @@ class TimetableController extends ChangeNotifier {
   ///   不沿用选自选色之前留下的旧 assignedColorIndex（可能已和邻居撞色）。
   /// - 时段：表单重建的时段不带 [CourseSlot.splitFrom]；星期/节次没变的时段沿用原
   ///   splitFrom，改了星期/节次的清掉。
-  Future<Course> updateManualCourse(Course course) async {
+  Future<Course> updateManualCourse(Course course) => _mutateManual(() async {
     final index = _manualCourses.indexWhere((c) => c.id == course.id);
     if (index < 0) {
       throw StateError('只能修改手动课程：${course.id}');
@@ -1115,10 +1154,10 @@ class TimetableController extends ChangeNotifier {
     _manualCourses = [..._manualCourses]..[index] = saved;
     await _persistManual();
     return manualCourseById(saved.id) ?? saved;
-  }
+  });
 
   /// 删除手动课程；返回是否删除。教务课程 id 不会被删除（返回 false）。
-  Future<bool> deleteManualCourse(String id) async {
+  Future<bool> deleteManualCourse(String id) => _mutateManual(() async {
     final next = [
       for (final c in _manualCourses)
         if (c.id != id) c,
@@ -1135,7 +1174,7 @@ class TimetableController extends ChangeNotifier {
     }
     await _persistManual();
     return true;
-  }
+  });
 
   /// 新时段没带 splitFrom 时，从同下标（或同位置）的原时段沿用；位置变了不沿用。
   static List<CourseSlot> _carrySplitFrom(
@@ -1183,7 +1222,14 @@ class TimetableController extends ChangeNotifier {
   Future<void> _persistManual([
     ScheduleChangeReason reason = ScheduleChangeReason.manualCourse,
   ]) async {
-    await TimetableStore.saveManualCourses(_manualCourses);
+    try {
+      await TimetableStore.saveManualCourses(_manualCourses);
+    } on TimetablePersistenceException {
+      _manualCourses = await TimetableStore.readManualCourses();
+      _colorMap = null;
+      notifyListeners();
+      rethrow;
+    }
     _clampViewingWeek();
     notifyListeners();
     _fireScheduleChanged(reason);
@@ -1416,15 +1462,23 @@ class TimetableController extends ChangeNotifier {
     final List<ScheduleEvent>? exams;
     try {
       exams = await fetchExams(term);
-    } catch (_) {
-      if (kDebugMode) debugPrint('[timetable] 教务考试拉取失败，保留已有考试');
+    } catch (error, stackTrace) {
+      _log.warning(
+        'exams.fetch_failed_using_existing',
+        error: error,
+        stackTrace: stackTrace,
+      );
       return;
     }
     if (exams == null) return;
     try {
       await replaceJwxtExams(exams);
-    } catch (_) {
-      if (kDebugMode) debugPrint('[timetable] 教务考试保存失败，保留已有考试');
+    } catch (error, stackTrace) {
+      _log.warning(
+        'exams.save_failed_using_existing',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
   }
 
@@ -1513,11 +1567,12 @@ class TimetableController extends ChangeNotifier {
     if (raw == null) return false;
     if (raw.isFromJwxt) {
       final key = raw.jwxtKey!;
-      _examOverrides = Map.unmodifiable({
+      final next = Map<String, ExamOverride>.unmodifiable({
         ..._examOverrides,
         key: ExamOverride.diff(raw, event),
       });
-      await ScheduleStore.saveExamOverrides(_examOverrides);
+      await ScheduleStore.saveExamOverrides(next);
+      _examOverrides = next;
       _notifyEvents();
       return true;
     }
@@ -1545,11 +1600,12 @@ class TimetableController extends ChangeNotifier {
     if (raw == null) return false;
     if (raw.isFromJwxt) {
       final key = raw.jwxtKey!;
-      _examOverrides = Map.unmodifiable({
+      final next = Map<String, ExamOverride>.unmodifiable({
         ..._examOverrides,
         key: ExamOverride(key: key, deleted: true),
       });
-      await ScheduleStore.saveExamOverrides(_examOverrides);
+      await ScheduleStore.saveExamOverrides(next);
+      _examOverrides = next;
       _notifyEvents();
       return true;
     }
@@ -1579,15 +1635,25 @@ class TimetableController extends ChangeNotifier {
         if (keys.contains(o.key)) o.key: o,
     };
     if (keptOverrides.length != _examOverrides.length) {
+      await ScheduleStore.saveExamOverrides(keptOverrides);
       _examOverrides = Map.unmodifiable(keptOverrides);
-      await ScheduleStore.saveExamOverrides(_examOverrides);
     }
     await ScheduleStore.saveEventsAndOtherColors(_scheduleEvents, _otherColors);
     _notifyEvents(ScheduleChangeReason.sync);
   }
 
   Future<void> _persistEvents() async {
-    await ScheduleStore.saveEventsAndOtherColors(_scheduleEvents, _otherColors);
+    try {
+      await ScheduleStore.saveEventsAndOtherColors(
+        _scheduleEvents,
+        _otherColors,
+      );
+    } on TimetablePersistenceException {
+      _scheduleEvents = List.unmodifiable(await ScheduleStore.readEvents());
+      _otherColors = Map.unmodifiable(await ScheduleStore.readOtherColors());
+      notifyListeners();
+      rethrow;
+    }
     _notifyEvents();
   }
 
@@ -1659,8 +1725,8 @@ class TimetableController extends ChangeNotifier {
   }
 
   Future<void> _setCourseEdits(Map<String, CourseEdit> next) async {
+    await ScheduleStore.saveCourseEdits(next);
     _courseEdits = Map.unmodifiable(next);
-    await ScheduleStore.saveCourseEdits(_courseEdits);
     _clampViewingWeek();
     notifyListeners();
   }
@@ -1716,8 +1782,11 @@ class TimetableController extends ChangeNotifier {
   /// 详情页恢复单场教务考试（[examKey] 为原始 key）。没有覆盖返回 false。
   Future<bool> restoreJwxtExam(String examKey) async {
     if (!_examOverrides.containsKey(examKey)) return false;
-    _examOverrides = Map.unmodifiable({..._examOverrides}..remove(examKey));
-    await ScheduleStore.saveExamOverrides(_examOverrides);
+    final next = Map<String, ExamOverride>.unmodifiable(
+      {..._examOverrides}..remove(examKey),
+    );
+    await ScheduleStore.saveExamOverrides(next);
+    _examOverrides = next;
     _notifyEvents(ScheduleChangeReason.restore);
     return true;
   }
@@ -1742,8 +1811,8 @@ class TimetableController extends ChangeNotifier {
       ], fire: false);
     }
     if (_examOverrides.isNotEmpty) {
+      await ScheduleStore.saveExamOverrides(const {});
       _examOverrides = const {};
-      await ScheduleStore.saveExamOverrides(_examOverrides);
     }
     if (_courseEdits.isNotEmpty) await _setCourseEdits(const {});
     await _setOverrides(const [], ScheduleChangeReason.restore);
@@ -2316,8 +2385,8 @@ class TimetableController extends ChangeNotifier {
   }
 
   Future<void> _setDaySwaps(List<DaySwap> next) async {
+    await ScheduleStore.saveDaySwaps(next);
     _daySwaps = List.unmodifiable(next);
-    await ScheduleStore.saveDaySwaps(_daySwaps);
     notifyListeners();
     _fireScheduleChanged(ScheduleChangeReason.daySwap);
   }
@@ -2697,8 +2766,8 @@ class TimetableController extends ChangeNotifier {
     List<CourseDateEdit> next, {
     bool fire = true,
   }) async {
+    await ScheduleStore.saveCourseDateEdits(next);
     _dateEdits = List.unmodifiable(next);
-    await ScheduleStore.saveCourseDateEdits(_dateEdits);
     notifyListeners();
     if (fire) _fireScheduleChanged(ScheduleChangeReason.dateEdit);
   }

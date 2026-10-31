@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../logging/app_log.dart';
+
 /// 一条已建立的会话：service 的落地 URL 与建立时间。
 ///
 /// 落地 URL 不只是"登录成功"的标记——icard 的 JWT 就藏在它的 query 里，
@@ -46,6 +48,7 @@ class EstablishedEntry {
 /// 静默：最坏情况只是冷启动多走一次 SSO 快路径。
 class EstablishedStore {
   EstablishedStore._();
+  static final _log = AppLog.logger('core.auth.established_store');
 
   static const _key = 'portal_established';
   static const _storage = FlutterSecureStorage();
@@ -62,7 +65,8 @@ class EstablishedStore {
         if (key is String && entry != null) entries[key] = entry;
       }
       return entries;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning('read_failed', error: error, stackTrace: stackTrace);
       return {};
     }
   }
@@ -80,6 +84,8 @@ class EstablishedStore {
             key: value.toJson(),
         }),
       );
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      _log.warning('write_failed', error: error, stackTrace: stackTrace);
+    }
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
+import '../../core/logging/app_log.dart';
 import '../../core/time_format.dart';
 import 'labor_score_api.dart';
 import 'labor_score_models.dart';
@@ -15,6 +16,7 @@ class LaborScoreController extends ChangeNotifier {
   LaborScoreController._();
 
   static final LaborScoreController instance = LaborScoreController._();
+  static final _log = AppLog.logger('labor_score.controller');
 
   LaborScore? _score;
   bool _loading = false;
@@ -61,9 +63,11 @@ class LaborScoreController extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final score = await LaborScoreApi.fetch();
-      await LaborScoreStore.save(score);
-      _score = score;
+      await _log.operation('refresh', () async {
+        final score = await LaborScoreApi.fetch();
+        await LaborScoreStore.save(score);
+        _score = score;
+      });
     } on PortalException catch (e) {
       _error = e.message;
     } catch (e) {

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
+import '../../core/logging/app_log.dart';
 import '../../core/time_format.dart';
 import 'academic_api.dart';
 import 'academic_models.dart';
@@ -15,6 +16,7 @@ class AcademicController extends ChangeNotifier {
   AcademicController._();
 
   static final AcademicController instance = AcademicController._();
+  static final _log = AppLog.logger('academic.controller');
 
   AcademicSummary? _summary;
   bool _loading = false;
@@ -61,9 +63,11 @@ class AcademicController extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final summary = await AcademicApi.fetchSummary();
-      await AcademicStore.save(summary);
-      _summary = summary;
+      await _log.operation('refresh', () async {
+        final summary = await AcademicApi.fetchSummary();
+        await AcademicStore.save(summary);
+        _summary = summary;
+      });
     } on PortalException catch (e) {
       _error = e.message;
     } catch (e) {
