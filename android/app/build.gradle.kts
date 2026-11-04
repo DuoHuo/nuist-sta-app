@@ -4,12 +4,17 @@ plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
     namespace = "dev.duohuo.nuist_sta_app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
+
+    buildFeatures {
+        compose = true
+    }
 
     val signingKeyPath = System.getenv("SIGNING_KEY_PATH")
     val signingStorePassword = System.getenv("KEYSTORE_PASSWORD")
@@ -100,6 +105,13 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation("androidx.glance:glance-appwidget:1.2.0")
+    implementation("androidx.glance:glance-material3:1.2.0")
+    implementation("androidx.glance:glance-appwidget-preview:1.2.0")
+    implementation("androidx.glance:glance-preview:1.2.0")
 }
 
 // ===== 校内服务地址：与 Dart 侧共用 lib/core/config/campus_config.dart =====

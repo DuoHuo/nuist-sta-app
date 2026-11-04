@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 仅供桌面选择器预览；运行时完全由 Glance 生成，不承担尺寸计算。 -->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/wg_bg"
+    android:padding="10dp">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="20dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="我的课表"
+            android:textSize="11sp"
+            android:textColor="@color/wg_t2"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:layout_weight="1" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="10/28"
+            android:textSize="10sp"
+            android:textColor="@color/wg_t2"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:ellipsize="end" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="周三"
+            android:textSize="10sp"
+            android:textColor="@color/wg_weekday"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:layout_marginStart="3dp" />
+    </LinearLayout>
+    <LinearLayout
+        android:layout_width="1dp"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:baselineAligned="false">
+        <ImageView
+            android:layout_width="4dp"
+            android:layout_height="50dp"
+            android:src="@drawable/wg_preview_bar"
+            android:importantForAccessibility="no"
+            android:scaleType="fitXY" />
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:layout_marginStart="8dp">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="高等数学 A"
+                android:textSize="16sp"
+                android:textColor="@color/wg_t1"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="示例教室 A101"
+                android:textSize="11sp"
+                android:textColor="@color/wg_t3"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:layout_marginTop="2dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="10:10–11:50"
+                android:textSize="11sp"
+                android:textColor="@color/wg_t3"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
+    </LinearLayout>
+    <LinearLayout
+        android:layout_width="1dp"
+        android:layout_height="5dp" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="42dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:baselineAligned="false">
+        <ImageView
+            android:layout_width="4dp"
+            android:layout_height="30dp"
+            android:src="@drawable/wg_preview_bar"
+            android:importantForAccessibility="no"
+            android:scaleType="fitXY" />
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:layout_marginStart="8dp">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="大学英语"
+                android:textSize="12sp"
+                android:textColor="@color/wg_t1"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="之后 13:45 · C102"
+                android:textSize="11sp"
+                android:textColor="@color/wg_t3"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
+    </LinearLayout>
+    <LinearLayout
+        android:layout_width="1dp"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+</LinearLayout>

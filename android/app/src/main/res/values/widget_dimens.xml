@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android Canonical Layouts 的 2×2 文本与 4×2 列表初始尺寸；格数以 targetCell 为准。 -->
+    <dimen name="wg_2x2_min_width">120dp</dimen>
+    <dimen name="wg_min_height">115dp</dimen>
+    <dimen name="wg_4x2_min_width">256dp</dimen>
+</resources>

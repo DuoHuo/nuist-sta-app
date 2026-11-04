@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- updatePeriodMillis=0：不用系统轮询，刷新由 AlarmManager 在上下课时刻触发 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="250dp"
-    android:minHeight="110dp"
+    android:minWidth="@dimen/wg_4x2_min_width"
+    android:minHeight="@dimen/wg_min_height"
     android:targetCellWidth="4"
     android:targetCellHeight="2"
     android:resizeMode="none"
     android:updatePeriodMillis="0"
-    android:initialLayout="@layout/widget_timetable"
-    android:previewLayout="@layout/widget_timetable"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:previewLayout="@layout/widget_timetable_preview"
     android:description="@string/wg_description"
     android:widgetCategory="home_screen"/>

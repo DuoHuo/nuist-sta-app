@@ -63,7 +63,7 @@
         <!-- 桌面小组件 4×2 今日课表 -->
         <receiver
             android:name=".TimetableWidgetProvider"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/wg_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
@@ -72,11 +72,10 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_timetable_info"/>
         </receiver>
-        <!-- 桌面小组件 2×2 当前/下一节：与 4×2 共用 payload / prefs / 颜色 token，仅布局与渲染不同。
-             同一 Provider 类不能在清单注册两次，故用 TimetableWidget2x2Provider 子类区分组件。 -->
+        <!-- Glance 2×2 当前/下一节，保留已固定小组件的组件标识。 -->
         <receiver
             android:name=".TimetableWidget2x2Provider"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/wg_2x2_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
@@ -97,6 +96,11 @@
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <queries>
+        <!-- 小组件添加按当前默认桌面分流，避免第三方桌面被手机品牌限制。 -->
+        <intent>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.HOME"/>
+        </intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 2×2「当前/下一节」：基准 160×160，最小 110×110；updatePeriodMillis=0，刷新同 4×2
-     由 AlarmManager 在上下课时刻触发 -->
+<!-- Exact 获取宿主区域，卡片取短边正方形并居中，避免不对称留白导致偏上。 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="110dp"
-    android:minHeight="110dp"
+    android:minWidth="@dimen/wg_2x2_min_width"
+    android:minHeight="@dimen/wg_min_height"
     android:targetCellWidth="2"
     android:targetCellHeight="2"
     android:resizeMode="none"
     android:updatePeriodMillis="0"
-    android:initialLayout="@layout/widget_timetable_2x2"
-    android:previewLayout="@layout/widget_timetable_2x2"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:previewLayout="@layout/widget_timetable_2x2_preview"
     android:description="@string/wg_2x2_description"
     android:widgetCategory="home_screen"/>

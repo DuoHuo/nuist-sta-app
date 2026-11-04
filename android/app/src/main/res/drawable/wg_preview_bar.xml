@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 选择器使用静态资源着色；RemoteViews 不支持 AppCompat ImageView。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/wg_acc"/>
+    <corners android:radius="1.5dp"/>
+</shape>
