@@ -1,3 +1,5 @@
+import 'timetable_notify_bridge.dart';
+
 /// 设置页「上课提醒」「小组件」卡片与后台运行引导页的全部界面文案。
 ///
 /// 设置行只保留标题与值，运行限制集中在帮助页和首次开启提示。
@@ -32,8 +34,65 @@ abstract final class TtSettingsText {
   static const courseCount = '最多显示课程数量';
   static String courses(int n) => '$n';
   static const pinWidget = '添加到桌面';
-  static const pinWidgetManual =
-      '当前桌面不支持直接添加。请长按桌面空白处，进入「小组件」（或「窗口小工具」「卡片」），找到本应用后选择对应尺寸的课表小组件。';
+  static const pinWidgetGuideTitle = '手动添加小组件';
+  static const pinWidgetPermissionTitle = '开启桌面快捷方式';
+  static const pinWidgetOpenSettings = '去开启权限';
+  static const pinWidgetSettingsUnavailable = '未能打开系统设置，请按下面步骤手动开启权限。';
+  static const pinWidgetPermissionHint = '开启「添加桌面快捷方式」权限后，请再次点击「添加到桌面」。';
+
+  /// 指引只解释当前添加结果。
+  static String pinWidgetIntro(WidgetPinResult result) => switch (result) {
+    WidgetPinResult.permissionRequired => '一键添加小组件需要「添加桌面快捷方式」权限。',
+    WidgetPinResult.originOsManual => 'OriginOS 需要从桌面组件列表手动添加。',
+    _ => '未能直接添加，可以按下面步骤放到桌面。',
+  };
+
+  /// 仅展示此次选中尺寸的操作步骤。
+  static List<(String, String)> pinWidgetSteps(
+    WidgetPinResult result, {
+    required bool square,
+    bool settingsUnavailable = false,
+  }) {
+    final add = (
+      '添加「${square ? '当前/下一节' : '今日课表'}」',
+      '选择 ${square ? '2×2' : '4×2'}，长按并拖到桌面空白处。',
+    );
+    return switch (result) {
+      WidgetPinResult.permissionRequired => [
+        (
+          '打开应用权限',
+          settingsUnavailable
+              ? '系统设置 → 应用管理 → NUIST++。'
+              : '点击「去开启权限」，进入本应用的权限页。',
+        ),
+        ('允许添加桌面快捷方式', '在「其他权限」中，将该权限设为允许。'),
+        ('返回并重新添加', '回到本页面，再次点击「添加到桌面」。'),
+      ],
+      WidgetPinResult.miuiManual => [
+        ('打开小部件列表', '返回桌面，双指捏合后点击「添加小部件」。'),
+        ('找到 NUIST++', '点击搜索，再进入「安卓小部件」列表。'),
+        add,
+      ],
+      WidgetPinResult.originOsManual => [
+        ('打开原子组件', '返回桌面，长按空白处，进入「原子组件」。'),
+        ('找到 NUIST++', '在底部进入「更多组件」或「应用挂件」。'),
+        add,
+      ],
+      _ => [
+        ('进入桌面编辑', '返回桌面，长按空白处或双指捏合。'),
+        ('找到 NUIST++', '打开「小组件」或「窗口小工具」列表。'),
+        add,
+      ],
+    };
+  }
+
+  /// 次要说明不与主要步骤混排。
+  static String pinWidgetTip(WidgetPinResult result) => switch (result) {
+    WidgetPinResult.permissionRequired => '不同系统版本的权限菜单名称可能略有不同。',
+    WidgetPinResult.miuiManual => '一键添加还需开启「添加桌面快捷方式」权限。',
+    WidgetPinResult.originOsManual => '旧版本可在「桌面挂件」中找到本应用；探索桌面从应用列表顶部进入原子组件。',
+    _ => '桌面需要留出足够空间，菜单名称可能随系统版本变化。',
+  };
 
   // ---- 后台运行引导页 ----
   static const keepAliveTitle = '后台运行设置';

@@ -163,8 +163,12 @@ class TimetableNotifyService {
 
   Future<bool> openNotificationSettings() => _bridge.openNotificationSettings();
 
-  Future<bool> pinWidget({required bool square}) =>
+  Future<WidgetPinResult> pinWidget({required bool square}) =>
       _bridge.pinWidget(square: square);
+
+  /// 确认权限说明后打开系统设置。
+  Future<bool> openWidgetShortcutSettings() =>
+      _bridge.openWidgetShortcutSettings();
 
   // ---- 计算 ----
 

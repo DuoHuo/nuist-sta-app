@@ -44,6 +44,15 @@ class NotifyPermissionStatus {
       );
 }
 
+/// 小组件添加请求的结果；[requested] 不保证桌面实际添加成功。
+enum WidgetPinResult {
+  requested,
+  permissionRequired,
+  miuiManual,
+  originOsManual,
+  manual,
+}
+
 /// 课表提醒 / 桌面小组件的原生通道（`dev.duohuo.nuist_sta_app/notify_widget`）。
 ///
 /// 所有方法在非 Android 或通道缺失时安静降级，不抛异常。
@@ -117,9 +126,18 @@ class TimetableNotifyBridge {
 
   /// 请求把小组件固定到桌面（[square] 为 2×2，否则 4×2）。
   ///
-  /// 返回 false 表示系统或桌面不支持；true 只代表请求已发出，用户仍可能取消。
-  Future<bool> pinWidget({required bool square}) async =>
-      await _call<bool>('pinWidget', {'square': square}) ?? false;
+  /// 原生侧先检查厂商权限，再请求添加或返回手动指引类型。
+  Future<WidgetPinResult> pinWidget({required bool square}) async {
+    final result = await _call<String>('pinWidget', {'square': square});
+    return WidgetPinResult.values.firstWhere(
+      (value) => value.name == result,
+      orElse: () => WidgetPinResult.manual,
+    );
+  }
+
+  /// 用户阅读权限说明并确认后，打开本应用的桌面快捷方式权限设置。
+  Future<bool> openWidgetShortcutSettings() async =>
+      await _call<bool>('openWidgetShortcutSettings') ?? false;
 
   /// 取走（并清除）由通知 / 小组件点击带进来的待打开路由，如 `/apps/timetable`。
   Future<String?> takeLaunchRoute() => _call<String>('takeLaunchRoute');

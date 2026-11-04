@@ -297,26 +297,88 @@ class TimetableWidgetSettingsPage extends StatefulWidget {
 }
 
 class _TimetableWidgetSettingsPageState
-    extends State<TimetableWidgetSettingsPage> {
+    extends State<TimetableWidgetSettingsPage>
+    with WidgetsBindingObserver {
   bool _square = false;
   bool _previewLast = false;
+  bool _pinning = false;
+  bool _permissionSettingsPending = false;
 
-  /// 固定当前选中尺寸；系统或桌面不支持时改为说明手动添加步骤。
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !_permissionSettingsPending) {
+      return;
+    }
+    _permissionSettingsPending = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(TtSettingsText.pinWidgetPermissionHint)),
+      );
+    });
+  }
+
+  /// 原生检查权限，未授权时先解释并等待确认，再打开系统设置。
   Future<void> _pin(ReminderActions a) async {
-    if (await a.pinWidget(square: _square) || !mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        key: const Key('tt_settings_widget_pin_manual'),
-        content: const Text(TtSettingsText.pinWidgetManual),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('知道了'),
+    if (_pinning) return;
+    setState(() => _pinning = true);
+    try {
+      final square = _square;
+      final result = await a.pinWidget(square: square);
+      if (!mounted) return;
+      switch (result) {
+        case WidgetPinResult.requested:
+          break;
+        case WidgetPinResult.permissionRequired:
+          final confirmed = await _showGuide(result, square: square);
+          if (!confirmed || !mounted) return;
+          final opened = await a.openWidgetShortcutSettings();
+          if (!mounted) return;
+          if (opened) {
+            // 返回后再提示重新添加，不让说明在系统设置页打开时消失。
+            _permissionSettingsPending = true;
+          } else {
+            await _showGuide(result, square: square, settingsUnavailable: true);
+          }
+        case WidgetPinResult.miuiManual:
+        case WidgetPinResult.originOsManual:
+        case WidgetPinResult.manual:
+          await _showGuide(result, square: square);
+      }
+    } finally {
+      if (mounted) setState(() => _pinning = false);
+    }
+  }
+
+  Future<bool> _showGuide(
+    WidgetPinResult result, {
+    required bool square,
+    bool settingsUnavailable = false,
+  }) async {
+    return await showModalBottomSheet<bool>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          constraints: const BoxConstraints(maxWidth: 560),
+          builder: (_) => _WidgetPinGuideSheet(
+            result: result,
+            square: square,
+            settingsUnavailable: settingsUnavailable,
           ),
-        ],
-      ),
-    );
+        ) ??
+        false;
   }
 
   @override
@@ -370,6 +432,7 @@ class _TimetableWidgetSettingsPageState
               title: TtSettingsText.pinWidget,
               value: _square ? '2×2' : '4×2',
               showChevron: true,
+              enabled: !_pinning,
               onTap: () => _pin(a),
             ),
           ],
@@ -402,6 +465,172 @@ class _TimetableWidgetSettingsPageState
           ],
         ),
       ],
+    );
+  }
+}
+
+/// 仅由添加失败或指定桌面的添加请求打开，步骤内容可滚动，确认按钮保留在底部。
+class _WidgetPinGuideSheet extends StatelessWidget {
+  const _WidgetPinGuideSheet({
+    required this.result,
+    required this.square,
+    this.settingsUnavailable = false,
+  });
+
+  final WidgetPinResult result;
+  final bool square;
+  final bool settingsUnavailable;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    final permission = result == WidgetPinResult.permissionRequired;
+    final permissionPrompt = permission && !settingsUnavailable;
+    final steps = TtSettingsText.pinWidgetSteps(
+      result,
+      square: square,
+      settingsUnavailable: settingsUnavailable,
+    );
+    final bodyStyle = TimetableTheme.bodyStyle(color: colors.labelText)
+        .copyWith(height: 1.5);
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+      ),
+      child: Material(
+        key: const Key('tt_settings_widget_pin_manual'),
+        color: colors.surface,
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(TimetableTheme.sheetTopRadius),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    width: 32,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: colors.divider,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Semantics(
+                  header: true,
+                  child: Text(
+                    permission
+                        ? TtSettingsText.pinWidgetPermissionTitle
+                        : TtSettingsText.pinWidgetGuideTitle,
+                    style: TimetableTheme.titleStyle(color: colors.titleText)
+                        .copyWith(fontSize: 20),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Flexible(
+                  child: SingleChildScrollView(
+                    key: const Key('tt_widget_pin_guide_scroll'),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          settingsUnavailable
+                              ? TtSettingsText.pinWidgetSettingsUnavailable
+                              : TtSettingsText.pinWidgetIntro(result),
+                          style: bodyStyle,
+                        ),
+                        const SizedBox(height: 24),
+                        for (var index = 0; index < steps.length; index++)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 20),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                ExcludeSemantics(
+                                  child: Container(
+                                    width: 28,
+                                    height: 28,
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      color: colors.accent.withValues(
+                                        alpha: 0.12,
+                                      ),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      '${index + 1}',
+                                      textScaler: TextScaler.noScaling,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        height: 1,
+                                        color: colors.accent,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        steps[index].$1,
+                                        style:
+                                            TimetableTheme.bodyStyle(
+                                              color: colors.titleText,
+                                            ).copyWith(
+                                              fontWeight: FontWeight.w600,
+                                              height: 1.5,
+                                            ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(steps[index].$2, style: bodyStyle),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        Text(
+                          TtSettingsText.pinWidgetTip(result),
+                          style: bodyStyle,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                FilledButton(
+                  key: const Key('tt_widget_pin_guide_close'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  onPressed: () => Navigator.pop(context, permissionPrompt),
+                  child: Text(
+                    permissionPrompt
+                        ? TtSettingsText.pinWidgetOpenSettings
+                        : '知道了',
+                  ),
+                ),
+                if (permissionPrompt)
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('暂不开启'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

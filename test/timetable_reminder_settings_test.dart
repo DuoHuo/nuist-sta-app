@@ -19,6 +19,21 @@ class _FakeActions extends ReminderActions {
 
   NotifyPermissionStatus perm;
   final calls = <String>[];
+  WidgetPinResult pinResult = WidgetPinResult.requested;
+  Completer<WidgetPinResult>? pendingPin;
+  bool shortcutSettingsOpened = true;
+
+  @override
+  Future<bool> openWidgetShortcutSettings() async {
+    calls.add('shortcut-settings');
+    return shortcutSettingsOpened;
+  }
+
+  @override
+  Future<WidgetPinResult> pinWidget({required bool square}) async {
+    calls.add('pin:$square');
+    return pendingPin == null ? pinResult : await pendingPin!.future;
+  }
 
   @override
   Future<NotifyPermissionStatus> setReminderEnabled(bool enabled) async {
@@ -312,6 +327,7 @@ void main() {
           if (enabled == showDetails) continue;
           final row = find.byKey(Key('tt_settings_$field'));
           await tester.ensureVisible(row);
+          await tester.pumpAndSettle();
           await tester.tap(row);
           await settleIo(tester);
         }
@@ -595,6 +611,185 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
       }
     }
+  });
+
+  testWidgets('添加请求保留选中尺寸，等待时不重复请求，也不把请求发出当作成功', (tester) async {
+    final a = _FakeActions(_perm())..pendingPin = Completer<WidgetPinResult>();
+    await pump(tester, a);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    expect(a.calls, isEmpty);
+    expect(find.byKey(const Key('tt_settings_widget_guide')), findsNothing);
+    expect(find.text(TtSettingsText.pinWidgetGuideTitle), findsNothing);
+    await tester.tap(find.text('2×2 当前与下一节'));
+    await tester.pumpAndSettle();
+    final pin = find.byKey(const Key('tt_settings_widget_pin'));
+    await tester.tap(pin);
+    await tester.tap(pin);
+    expect(a.calls, ['pin:true']);
+    a.pendingPin!.complete(WidgetPinResult.requested);
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.byType(SnackBar), findsNothing);
+  });
+
+  testWidgets('小米先说明权限，确认后才跳转，返回提示并允许重新添加', (tester) async {
+    final a = _FakeActions(_perm())
+      ..pinResult = WidgetPinResult.permissionRequired;
+    await pump(tester, a);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    final pin = find.byKey(const Key('tt_settings_widget_pin'));
+    await tester.tap(pin);
+    await tester.pumpAndSettle();
+    expect(a.calls, ['pin:false']);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(find.text('允许添加桌面快捷方式'), findsOneWidget);
+    expect(find.text(TtSettingsText.pinWidgetOpenSettings), findsOneWidget);
+    expect(find.text(TtSettingsText.pinWidgetPermissionHint), findsNothing);
+    await tester.tap(find.text(TtSettingsText.pinWidgetOpenSettings));
+    await tester.pumpAndSettle();
+    expect(a.calls, ['pin:false', 'shortcut-settings']);
+    expect(find.byType(BottomSheet), findsNothing);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(find.text(TtSettingsText.pinWidgetPermissionHint), findsOneWidget);
+    a.pinResult = WidgetPinResult.requested;
+    await tester.tap(pin);
+    await tester.pumpAndSettle();
+    expect(a.calls, ['pin:false', 'shortcut-settings', 'pin:false']);
+  });
+
+  testWidgets('取消权限说明不跳设置；跳转失败时改为手动权限步骤', (tester) async {
+    final a = _FakeActions(_perm())
+      ..pinResult = WidgetPinResult.permissionRequired
+      ..shortcutSettingsOpened = false;
+    await pump(tester, a);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    final pin = find.byKey(const Key('tt_settings_widget_pin'));
+    await tester.tap(pin);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('暂不开启'));
+    await tester.pumpAndSettle();
+    expect(a.calls, ['pin:false']);
+    await tester.tap(pin);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(TtSettingsText.pinWidgetOpenSettings));
+    await tester.pumpAndSettle();
+    expect(a.calls, ['pin:false', 'pin:false', 'shortcut-settings']);
+    expect(
+      find.text(TtSettingsText.pinWidgetSettingsUnavailable),
+      findsOneWidget,
+    );
+    expect(find.text('系统设置 → 应用管理 → NUIST++。'), findsOneWidget);
+    expect(find.text(TtSettingsText.pinWidgetOpenSettings), findsNothing);
+    await tester.tap(find.text('知道了'));
+    await tester.pumpAndSettle();
+  });
+
+  for (final (result, step) in [
+    (WidgetPinResult.permissionRequired, '允许添加桌面快捷方式'),
+    (WidgetPinResult.miuiManual, '点击搜索，再进入「安卓小部件」列表。'),
+    (WidgetPinResult.originOsManual, '打开原子组件'),
+    (WidgetPinResult.manual, '进入桌面编辑'),
+  ]) {
+    testWidgets('添加结果 ${result.name} 显示对应指引', (tester) async {
+      final a = _FakeActions(_perm())..pinResult = result;
+      await pump(tester, a);
+      await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tt_settings_widget_pin')));
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.text(step), findsOneWidget);
+      await tester.tap(
+        find.text(
+          result == WidgetPinResult.permissionRequired ? '暂不开启' : '知道了',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsNothing);
+    });
+  }
+
+  testWidgets('只在添加分流后打开面板，明暗、横屏与大字体下确认按钮始终可见', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    for (final dark in [false, true]) {
+      for (final size in [const Size(375, 600), const Size(800, 375)]) {
+        for (final result in [
+          WidgetPinResult.originOsManual,
+          WidgetPinResult.permissionRequired,
+        ]) {
+          tester.view.physicalSize = size;
+          final a = _FakeActions(_perm())..pinResult = result;
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: dark ? appDarkTheme() : appLightTheme(),
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(2)),
+                child: child!,
+              ),
+              home: TimetableWidgetSettingsPage(controller: _c, actions: a),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(a.calls, isEmpty);
+          expect(
+            find.byKey(const Key('tt_settings_widget_guide')),
+            findsNothing,
+          );
+          final pin = find.byKey(const Key('tt_settings_widget_pin'));
+          await tester.ensureVisible(pin);
+          await tester.pumpAndSettle();
+          await tester.tap(pin);
+          await tester.pumpAndSettle();
+          expect(a.calls, ['pin:false']);
+          expect(
+            find.text(
+              result == WidgetPinResult.permissionRequired
+                  ? '允许添加桌面快捷方式'
+                  : '打开原子组件',
+            ),
+            findsOneWidget,
+          );
+          final close = find.byKey(const Key('tt_widget_pin_guide_close'));
+          final rect = tester.getRect(close);
+          expect(rect.top, greaterThanOrEqualTo(0));
+          expect(rect.bottom, lessThanOrEqualTo(size.height));
+          await tester.tap(
+            result == WidgetPinResult.permissionRequired
+                ? find.text('暂不开启')
+                : close,
+          );
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+          await tester.pumpWidget(const SizedBox.shrink());
+        }
+      }
+    }
+  });
+
+  testWidgets('指引只展示此次选择的尺寸，并支持下拉关闭', (tester) async {
+    final a = _FakeActions(_perm())..pinResult = WidgetPinResult.manual;
+    await pump(tester, a);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('2×2 当前与下一节'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_settings_widget_pin')));
+    await tester.pumpAndSettle();
+    expect(find.text('添加「当前/下一节」'), findsOneWidget);
+    expect(find.text('添加「今日课表」'), findsNothing);
+    await tester.drag(find.byType(BottomSheet), const Offset(0, 700));
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
   });
 
   testWidgets('保活引导页：品牌说明、强行停止与 7 天提示、电池优化按钮', (tester) async {

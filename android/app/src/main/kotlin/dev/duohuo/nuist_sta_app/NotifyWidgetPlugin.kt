@@ -2,6 +2,7 @@ package dev.duohuo.nuist_sta_app
 
 import android.Manifest
 import android.app.Activity
+import android.app.AppOpsManager
 import android.app.NotificationManager
 import android.appwidget.AppWidgetManager
 import android.content.BroadcastReceiver
@@ -79,6 +80,7 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
                 "openExactAlarmSettings" -> result.success(openExactAlarm())
                 "openBatteryOptimizationSettings" -> result.success(openBattery())
                 "openNotificationSettings" -> result.success(openNotificationSettings())
+                "openWidgetShortcutSettings" -> result.success(openMiuiShortcutSettings())
                 "pinWidget" -> result.success(pinWidget(call.argument<Boolean>("square") == true))
                 "takeLaunchRoute" -> {
                     val p = NotifyStore.prefs(app)
@@ -177,18 +179,73 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
         return start(i) || start(appDetails())
     }
 
+    /** 根据当前默认桌面选择指引，使用第三方桌面时不套用手机品牌的限制。 */
+    private fun widgetPinGuide(): String {
+        val home = try {
+            app.packageManager.resolveActivity(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                PackageManager.MATCH_DEFAULT_ONLY,
+            )?.activityInfo?.packageName
+        } catch (_: Exception) {
+            null
+        }
+        return when {
+            home == "com.miui.home" || home == "com.mi.android.globallauncher" -> "miui"
+            home == "com.bbk.launcher2" || home?.startsWith("com.vivo.launcher") == true -> "originOs"
+            home != null && home != "android" -> "generic"
+            Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true) -> "miui"
+            Build.MANUFACTURER.equals("vivo", ignoreCase = true) -> "originOs"
+            else -> "generic"
+        }
+    }
+
     /**
-     * 请求桌面固定小组件（API 26+），由桌面弹出系统确认框。
-     * 返回 false 表示系统或桌面不支持；返回 true 只代表请求已发出，用户仍可能取消，
-     * 部分国产桌面也可能静默忽略。
+     * MIUI / HyperOS 的桌面快捷方式使用厂商 AppOps 10017，而非 Android 运行时权限。
+     * 此重载不是公开 SDK：读取失败或返回默认模式时保留未知，不能冒充已授权或未授权。
      */
-    private fun pinWidget(square: Boolean): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+    private fun miuiShortcutPermission(): Boolean? = try {
+        val manager = app.getSystemService(AppOpsManager::class.java)
+        val mode = AppOpsManager::class.java.getMethod(
+            "checkOpNoThrow", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+            String::class.java,
+        ).invoke(manager, MIUI_OP_INSTALL_SHORTCUT, app.applicationInfo.uid, app.packageName)
+        when (mode) {
+            AppOpsManager.MODE_ALLOWED -> true
+            AppOpsManager.MODE_IGNORED, AppOpsManager.MODE_ERRORED -> false
+            else -> null
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    /** 打开本应用的厂商权限页；不同版本不支持该入口时退回应用详情。 */
+    private fun openMiuiShortcutSettings(): Boolean = start(
+        Intent("miui.intent.action.APP_PERM_EDITOR")
+            .setPackage("com.miui.securitycenter")
+            .putExtra("extra_pkgname", app.packageName),
+    ) || start(appDetails())
+
+    /**
+     * 点击添加时才检查并分流，设置页保持一致。requested 只代表请求发出，不代表添加成功。
+     * 未授权的小米桌面先交给页面解释权限，再由用户确认打开设置；OriginOS 手动添加。
+     */
+    private fun pinWidget(square: Boolean): String {
+        val guide = widgetPinGuide()
+        val manual = when (guide) {
+            "miui" -> "miuiManual"
+            "originOs" -> "originOsManual"
+            else -> "manual"
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return manual
+        if (guide == "originOs") return manual
+        if (guide == "miui" && miuiShortcutPermission() == false) {
+            return "permissionRequired"
+        }
         val mgr = AppWidgetManager.getInstance(app)
-        if (!mgr.isRequestPinAppWidgetSupported) return false
+        if (!mgr.isRequestPinAppWidgetSupported) return manual
         val provider = if (square) TimetableWidget2x2Provider::class.java
         else TimetableWidgetProvider::class.java
-        return mgr.requestPinAppWidget(ComponentName(app, provider), null, null)
+        return if (mgr.requestPinAppWidget(ComponentName(app, provider), null, null)) "requested" else manual
     }
 
     override fun onNewIntent(intent: Intent): Boolean {
@@ -228,5 +285,6 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
     companion object {
         const val CHANNEL = "dev.duohuo.nuist_sta_app/notify_widget"
         private const val REQ_NOTIFY = 0x4E57
+        private const val MIUI_OP_INSTALL_SHORTCUT = 10017
     }
 }

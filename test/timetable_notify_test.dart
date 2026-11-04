@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -44,6 +45,79 @@ class _FakeBridge extends TimetableNotifyBridge {
 }
 
 void main() {
+  group('小组件原生通道', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    const channel = MethodChannel('widget_pin_bridge_test');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final bridge = TimetableNotifyBridge(channel: channel);
+    setUp(() => TimetableNotifyBridge.debugIsAndroid = true);
+    tearDown(() {
+      messenger.setMockMethodCallHandler(channel, null);
+      TimetableNotifyBridge.debugIsAndroid = null;
+    });
+
+    test('传递尺寸并区分添加请求、设置跳转与手动指引', () async {
+      for (final result in WidgetPinResult.values) {
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          expect(call.method, 'pinWidget');
+          expect(call.arguments, {'square': true});
+          return result.name;
+        });
+        expect(await bridge.pinWidget(square: true), result);
+      }
+    });
+
+    test('未知结果、通道缺失或平台错误退化为通用手动指引', () async {
+      for (final response in [
+        'newVendorResult',
+        null,
+        PlatformException(code: 'notify_failed'),
+      ]) {
+        messenger.setMockMethodCallHandler(channel, (_) async {
+          if (response is PlatformException) throw response;
+          return response;
+        });
+        expect(await bridge.pinWidget(square: false), WidgetPinResult.manual);
+      }
+      messenger.setMockMethodCallHandler(channel, null);
+      expect(await bridge.pinWidget(square: false), WidgetPinResult.manual);
+      TimetableNotifyBridge.debugIsAndroid = false;
+      expect(await bridge.pinWidget(square: false), WidgetPinResult.manual);
+    });
+  });
+
+  group('桌面快捷方式权限跳转', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    const channel = MethodChannel('widget_shortcut_settings_test');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final bridge = TimetableNotifyBridge(channel: channel);
+    setUp(() => TimetableNotifyBridge.debugIsAndroid = true);
+    tearDown(() {
+      messenger.setMockMethodCallHandler(channel, null);
+      TimetableNotifyBridge.debugIsAndroid = null;
+    });
+    test('确认后的独立方法返回是否打开，通道缺失和平台错误返回失败', () async {
+      for (final opened in [true, false]) {
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          expect(call.method, 'openWidgetShortcutSettings');
+          return opened;
+        });
+        expect(await bridge.openWidgetShortcutSettings(), opened);
+      }
+      messenger.setMockMethodCallHandler(
+        channel,
+        (_) async => throw PlatformException(code: 'notify_failed'),
+      );
+      expect(await bridge.openWidgetShortcutSettings(), isFalse);
+      messenger.setMockMethodCallHandler(channel, null);
+      expect(await bridge.openWidgetShortcutSettings(), isFalse);
+      TimetableNotifyBridge.debugIsAndroid = false;
+      expect(await bridge.openWidgetShortcutSettings(), isFalse);
+    });
+  });
+
   group('planReminders', () {
     final now = DateTime(2026, 10, 20, 7, 0); // 周二
 
