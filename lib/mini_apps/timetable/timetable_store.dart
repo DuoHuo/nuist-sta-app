@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -13,6 +14,37 @@ import 'timetable_overrides.dart';
 class TimetableStore {
   TimetableStore._();
   static final _log = AppLog.logger('timetable.store');
+  static final _batchZoneKey = Object();
+
+  static _TimetableWriteBatch? get _currentBatch =>
+      Zone.current[_batchZoneKey] as _TimetableWriteBatch?;
+
+  /// 将回调中等待完成的 JSON 保存作为一个批次提交。
+  /// 回调仅准备存储数据；全部准备成功才替换文件，提交失败时恢复已替换的旧文件。
+  /// 仅保证当前进程中的失败回退，不承诺进程崩溃时的多文件原子性。
+  static Future<void> writeBatch(Future<void> Function() stageWrites) async {
+    if (_currentBatch != null) {
+      await stageWrites();
+      return;
+    }
+    final batch = _TimetableWriteBatch();
+    try {
+      await runZoned(stageWrites, zoneValues: {_batchZoneKey: batch});
+      batch.commit();
+    } on TimetablePersistenceException {
+      rethrow;
+    } catch (error, stackTrace) {
+      _log.error(
+        'batch.write_failed',
+        error: error,
+        stackTrace: stackTrace,
+        errorKind: 'storage_write',
+      );
+      throw const TimetablePersistenceException();
+    } finally {
+      batch.closed = true;
+    }
+  }
 
   static const _snapshotFile = 'snapshot.json';
   static const _settingsFile = 'settings.json';
@@ -59,15 +91,19 @@ class TimetableStore {
   @visibleForTesting
   static Directory? debugDirectory;
 
+  /// 测试用：在批次替换第 [index] 个文件前模拟故障，验证已替换文件的回退。
+  @visibleForTesting
+  static void Function(int index)? debugBeforeBatchReplace;
+
   static Future<Directory?> _dir() async {
-    final override = debugDirectory;
-    if (override != null) {
-      if (!await override.exists()) await override.create(recursive: true);
-      return override;
-    }
-    // flutter_test 无可靠平台通道；直接退化，避免 timeout Timer 残留。
-    if (Platform.environment.containsKey('FLUTTER_TEST')) return null;
     try {
+      final override = debugDirectory;
+      if (override != null) {
+        if (!await override.exists()) await override.create(recursive: true);
+        return override;
+      }
+      // flutter_test 无可靠平台通道；直接退化，避免 timeout Timer 残留。
+      if (Platform.environment.containsKey('FLUTTER_TEST')) return null;
       final base = await getApplicationDocumentsDirectory();
       final dir = Directory('${base.path}${Platform.pathSeparator}timetable');
       if (!await dir.exists()) await dir.create(recursive: true);
@@ -81,21 +117,27 @@ class TimetableStore {
     }
   }
 
-  static Future<File?> _file(String name) async {
+  static Future<File?> _file(String name, {bool forWrite = false}) async {
     final dir = await _dir();
+    if (dir == null && forWrite) checkStorageAvailable();
     return dir == null
         ? null
         : File('${dir.path}${Platform.pathSeparator}$name');
   }
 
-  /// 课表目录下的文件（无存储时 null）。供 [ScheduleStore] 等同目录存储复用。
-  static Future<File?> fileFor(String name) => _file(name);
+  /// 课表目录下的文件；读取无存储时返回 null，关键写入传 [forWrite] 时反馈失败。
+  /// 默认无平台存储的 widget 测试仍返回 null，显式指定测试目录时按真机处理。
+  static Future<File?> fileFor(String name, {bool forWrite = false}) =>
+      _file(name, forWrite: forWrite);
 
   static Future<Map<String, dynamic>> _readJson(String name) =>
       _log.inSpan(() async {
-        final file = await _file(name);
-        if (file == null || !await file.exists()) return {};
         try {
+          final file = await _file(name);
+          if (file == null) return {};
+          final staged = _currentBatch?.read(file);
+          if (staged != null) return staged;
+          if (!await file.exists()) return {};
           // 解析放到后台 isolate，避免启动时阻塞主线程。
           final decoded = await compute(_decode, await file.readAsString());
           return decoded is Map<String, dynamic> ? decoded : {};
@@ -114,25 +156,11 @@ class TimetableStore {
 
   static Future<void> _writeJson(String name, Map<String, dynamic> data) =>
       _log.inSpan(() async {
-        final file = await _file(name);
-        if (file == null) {
-          checkStorageAvailable();
-          return;
-        }
+        final file = await _file(name, forWrite: true);
+        if (file == null) return;
         // 同步写：异步写在 widget 测试的 fake async 下会停在半途、文件句柄不释放，
         // Windows 上删临时目录报「文件被占用」；也与本文件其余写入一致。
-        try {
-          file.writeAsStringSync(jsonEncode(data), flush: true);
-        } catch (error, stackTrace) {
-          _log.error(
-            'json.write_failed',
-            fields: {'file_kind': name},
-            error: error,
-            stackTrace: stackTrace,
-            errorKind: 'storage_write',
-          );
-          throw const TimetablePersistenceException();
-        }
+        writeJsonFile(file, data);
       });
 
   static Future<TimetableSnapshot?> readSnapshot() async {
@@ -187,35 +215,88 @@ class TimetableStore {
 
   /// 原样写回 settings.json。
   static Future<void> writeRawSettings(Map<String, dynamic> raw) async {
-    final file = await _file(_settingsFile);
+    final file = await _file(_settingsFile, forWrite: true);
     if (file != null) _writeRawSync(file, raw);
   }
 
   // settings.json 很小：同步读写、当前 isolate 解码（不走 compute）。
   // 读-改-写在一段同步代码内完成，不让出事件循环，连续修改不会互相覆盖。
-  static Map<String, dynamic> _readRawSync(File file) {
+  static Map<String, dynamic> _readRawSync(
+    File file, {
+    bool forWrite = false,
+  }) => readJsonFile(file, forWrite: forWrite);
+
+  /// 读取课表 JSON，优先读取同批次暂存值；合并保存时传 [forWrite]，读取失败不覆盖原文件。
+  /// 供同目录的 [ScheduleStore] 复用；普通读取失败按空数据降级。
+  static Map<String, dynamic> readJsonFile(File file, {bool forWrite = false}) {
     try {
+      final staged = _currentBatch?.read(file);
+      if (staged != null) return staged;
       if (!file.existsSync()) return {};
       final decoded = jsonDecode(file.readAsStringSync());
-      return decoded is Map<String, dynamic> ? decoded : {};
+      if (decoded is Map<String, dynamic>) return decoded;
+      throw const FormatException();
+    } on FormatException catch (error, stackTrace) {
+      _log.warning('json.read_failed', error: error, stackTrace: stackTrace);
+      _backupCorruptSync(file, forWrite: forWrite);
+      return {};
     } catch (error, stackTrace) {
       _log.warning(
         'settings.raw_read_failed',
         error: error,
         stackTrace: stackTrace,
       );
+      if (forWrite) throw const TimetablePersistenceException();
       return {};
     }
   }
 
-  static void _writeRawSync(File file, Map<String, dynamic> raw) {
+  static void _backupCorruptSync(File file, {required bool forWrite}) {
     try {
-      file.writeAsStringSync(jsonEncode(raw), flush: true);
+      final batch = _currentBatch;
+      if (batch != null) {
+        batch.preserveCorrupt(file);
+        return;
+      }
+      var target = File('${file.path}.corrupt');
+      if (target.existsSync()) {
+        target = File(
+          '${file.path}.corrupt.${DateTime.now().microsecondsSinceEpoch}',
+        );
+      }
+      file.renameSync(target.path);
     } catch (error, stackTrace) {
-      _log.error(
-        'settings.raw_write_failed',
+      _log.warning(
+        'corrupt_backup.failed',
         error: error,
         stackTrace: stackTrace,
+      );
+      // 启动读取可以降级；保存时必须先保住原文件，不能用空数据覆盖备份失败的内容。
+      if (forWrite) throw const TimetablePersistenceException();
+    }
+  }
+
+  static void _writeRawSync(File file, Map<String, dynamic> raw) =>
+      writeJsonFile(file, raw);
+
+  /// 原子保存课表 JSON；位于 [writeBatch] 内时只暂存，提交时统一替换文件。
+  /// 供同目录的 [ScheduleStore] 复用，不绕过存储错误反馈。
+  static void writeJsonFile(File file, Map<String, dynamic> raw) {
+    try {
+      final batch = _currentBatch;
+      if (batch != null) {
+        batch.stage(file, raw);
+      } else {
+        _writeRawAtomicSync(file, raw);
+      }
+    } on TimetablePersistenceException {
+      rethrow;
+    } catch (error, stackTrace) {
+      _log.error(
+        'json.write_failed',
+        error: error,
+        stackTrace: stackTrace,
+        errorKind: 'storage_write',
       );
       throw const TimetablePersistenceException();
     }
@@ -225,9 +306,9 @@ class TimetableStore {
   static Future<void> _editRawSettings(
     bool Function(Map<String, dynamic> raw) edit,
   ) async {
-    final file = await _file(_settingsFile);
+    final file = await _file(_settingsFile, forWrite: true);
     if (file == null) return;
-    final raw = _readRawSync(file);
+    final raw = _readRawSync(file, forWrite: true);
     if (edit(raw)) _writeRawSync(file, raw);
   }
 
@@ -306,12 +387,9 @@ class TimetableStore {
   /// 合并写：保留文件里的未知顶层键，以及同 id 课程条目里的未知键。
   /// v2：课程新增可选 colorIndex / assignedColorIndex（0..15）；旧文件缺字段按 null 读取。
   static Future<void> saveManualCourses(List<Course> courses) async {
-    final file = await _file(_manualFile);
-    if (file == null) {
-      checkStorageAvailable();
-      return;
-    }
-    final raw = _readRawSync(file);
+    final file = await _file(_manualFile, forWrite: true);
+    if (file == null) return;
+    final raw = _readRawSync(file, forWrite: true);
     final oldById = <String, Map<String, dynamic>>{};
     final old = raw['courses'];
     if (old is List) {
@@ -347,9 +425,9 @@ class TimetableStore {
 
   /// 合并写：保留文件里的未知顶层键与解析不了的条目，`overrides` 换成 [list]。
   static Future<void> saveOverrides(List<SlotOverride> list) async {
-    final file = await _file(_overridesFile);
+    final file = await _file(_overridesFile, forWrite: true);
     if (file == null) return;
-    final raw = _readRawSync(file);
+    final raw = _readRawSync(file, forWrite: true);
     final old = raw['overrides'];
     final unknown = [
       if (old is List)
@@ -400,13 +478,13 @@ class TimetableStore {
     CoursePaletteScheme scheme,
     Map<String, int> map,
   ) async {
-    final file = await _file(courseColorsFile);
+    final file = await _file(courseColorsFile, forWrite: true);
     if (file == null) return;
-    final raw = _readRawSync(file);
+    final raw = _readRawSync(file, forWrite: true);
     raw['schemaVersion'] = courseColorsSchemaVersion;
     raw['scheme'] = scheme.name;
     raw['map'] = Map<String, int>.of(map);
-    _writeRawAtomicSync(file, raw);
+    writeJsonFile(file, raw);
   }
 
   /// item 9：用户自选课程色，存在 course_colors.json 的顶层键
@@ -435,13 +513,13 @@ class TimetableStore {
 
   /// 合并写用户自选色（保留 scheme / map 等其他键），原子写。
   static Future<void> saveUserCourseColors(Map<String, int> colors) async {
-    final file = await _file(courseColorsFile);
+    final file = await _file(courseColorsFile, forWrite: true);
     if (file == null) return;
-    final raw = _readRawSync(file);
+    final raw = _readRawSync(file, forWrite: true);
     raw[userColorsKey] = {
       for (final e in colors.entries) e.key: {'argb': e.value, 'user': true},
     };
-    _writeRawAtomicSync(file, raw);
+    writeJsonFile(file, raw);
   }
 
   /// 最近成功保存的自定义色（原始 ARGB 列表，最多 6，新的在前）。
@@ -468,9 +546,9 @@ class TimetableStore {
 
   /// 把一次成功保存的自定义色插到最近列表前（去重，最多 [maxRecentCustomColors]）。
   static Future<void> pushRecentCustomColor(int argb) async {
-    final file = await _file(courseColorsFile);
+    final file = await _file(courseColorsFile, forWrite: true);
     if (file == null) return;
-    final raw = _readRawSync(file);
+    final raw = _readRawSync(file, forWrite: true);
     final color = argb | 0xFF000000;
     final prev = <int>[];
     final existing = raw[recentCustomColorsKey];
@@ -487,13 +565,13 @@ class TimetableStore {
       color,
       ...prev.take(maxRecentCustomColors - 1),
     ];
-    _writeRawAtomicSync(file, raw);
+    writeJsonFile(file, raw);
   }
 
   /// 先写同目录临时文件再 rename，写到一半崩溃不会留下半个 JSON。
   static void _writeRawAtomicSync(File file, Map<String, dynamic> raw) {
+    final tmp = File('${file.path}.tmp');
     try {
-      final tmp = File('${file.path}.tmp');
       tmp.writeAsStringSync(jsonEncode(raw), flush: true);
       tmp.renameSync(file.path);
     } catch (error, stackTrace) {
@@ -504,32 +582,213 @@ class TimetableStore {
         errorKind: 'storage_write',
       );
       throw const TimetablePersistenceException();
+    } finally {
+      try {
+        if (tmp.existsSync()) tmp.deleteSync();
+      } catch (error, stackTrace) {
+        _log.warning(
+          'temporary_cleanup.failed',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
     }
   }
 
   /// 测试缺少平台存储时继续降级；真机关键保存必须向调用方反馈失败。
   static void checkStorageAvailable() {
-    if (!Platform.environment.containsKey('FLUTTER_TEST')) {
+    if (debugDirectory != null ||
+        !Platform.environment.containsKey('FLUTTER_TEST')) {
       throw const TimetablePersistenceException();
     }
   }
 
   /// 清除教务快照（保留手动课程与设置）。
   static Future<void> clearJwxtSnapshot() async {
-    final file = await _file(_snapshotFile);
-    if (file == null) return;
     try {
-      if (await file.exists()) await file.delete();
-    } catch (_) {}
+      final file = await _file(_snapshotFile, forWrite: true);
+      if (file == null) return;
+      final type = await FileSystemEntity.type(file.path, followLinks: false);
+      if (type == FileSystemEntityType.notFound) return;
+      if (type == FileSystemEntityType.directory) {
+        throw const TimetablePersistenceException();
+      }
+      await file.delete();
+    } catch (error, stackTrace) {
+      _log.error(
+        'snapshot.delete_failed',
+        error: error,
+        stackTrace: stackTrace,
+        errorKind: 'storage_write',
+      );
+      throw const TimetablePersistenceException();
+    }
   }
 
   /// 清空整个课表目录（**含手动课程**），仅用于彻底重置。
   static Future<void> clearAll() async {
-    final dir = await _dir();
-    if (dir == null) return;
     try {
+      final dir = await _dir();
+      if (dir == null) {
+        checkStorageAvailable();
+        return;
+      }
       if (await dir.exists()) await dir.delete(recursive: true);
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      _log.error(
+        'storage.delete_failed',
+        error: error,
+        stackTrace: stackTrace,
+        errorKind: 'storage_write',
+      );
+      throw const TimetablePersistenceException();
+    }
+  }
+}
+
+class _TimetableWriteBatch {
+  final Map<String, _PendingTimetableJson> _files = {};
+  bool closed = false;
+
+  Map<String, dynamic>? read(File file) {
+    _checkOpen();
+    final encoded = _files[file.path]?.encoded;
+    return encoded == null ? null : jsonDecode(encoded) as Map<String, dynamic>;
+  }
+
+  void stage(File file, Map<String, dynamic> raw) {
+    _checkOpen();
+    final encoded = jsonEncode(raw);
+    final pending = _files.putIfAbsent(
+      file.path,
+      () => _PendingTimetableJson(file),
+    );
+    pending.encoded = encoded;
+  }
+
+  void preserveCorrupt(File file) {
+    _checkOpen();
+    _files
+            .putIfAbsent(file.path, () => _PendingTimetableJson(file))
+            .preserveBackup =
+        true;
+  }
+
+  void _checkOpen() {
+    if (closed) throw const TimetablePersistenceException();
+  }
+
+  void commit() {
+    _checkOpen();
+    final files = _files.values.where((f) => f.encoded != null).toList();
+    try {
+      // 暂存期间如有批次外写入，拒绝覆盖更新后的文件。
+      for (final pending in files) {
+        if (!listEquals(
+          pending.original,
+          _PendingTimetableJson.readOriginal(pending.file),
+        )) {
+          throw const TimetablePersistenceException();
+        }
+      }
+      // 全部新内容与旧内容备份先准备好，再开始替换任何原文件。
+      for (final pending in files) {
+        pending.temporary.writeAsStringSync(pending.encoded!, flush: true);
+      }
+      for (final pending in files) {
+        if (pending.original == null) continue;
+        final suffix = pending.preserveBackup ? 'corrupt' : 'rollback';
+        var backup = File('${pending.file.path}.$suffix');
+        while (FileSystemEntity.typeSync(backup.path, followLinks: false) !=
+            FileSystemEntityType.notFound) {
+          backup = File(
+            '${pending.file.path}.$suffix.${DateTime.now().microsecondsSinceEpoch}',
+          );
+        }
+        pending.backup = backup;
+        backup.writeAsBytesSync(pending.original!, flush: true);
+        pending.backupReady = true;
+      }
+      for (var index = 0; index < files.length; index++) {
+        final pending = files[index];
+        TimetableStore.debugBeforeBatchReplace?.call(index);
+        pending.temporary.renameSync(pending.file.path);
+        pending.replaced = true;
+      }
+    } catch (error, stackTrace) {
+      for (final pending in files.reversed) {
+        if (!pending.replaced) continue;
+        try {
+          if (pending.original == null) {
+            pending.file.deleteSync();
+          } else {
+            pending.backup!.renameSync(pending.file.path);
+          }
+        } catch (rollbackError, rollbackStackTrace) {
+          pending.rollbackFailed = true;
+          TimetableStore._log.error(
+            'batch.rollback_failed',
+            error: rollbackError,
+            stackTrace: rollbackStackTrace,
+            errorKind: 'storage_write',
+          );
+        }
+      }
+      TimetableStore._log.error(
+        'batch.write_failed',
+        error: error,
+        stackTrace: stackTrace,
+        errorKind: 'storage_write',
+      );
+      throw const TimetablePersistenceException();
+    } finally {
+      for (final pending in files) {
+        _cleanUp(pending.temporary);
+        final backup = pending.backup;
+        if (backup != null &&
+            !pending.rollbackFailed &&
+            (!pending.preserveBackup || !pending.backupReady)) {
+          _cleanUp(backup);
+        }
+      }
+    }
+  }
+
+  static void _cleanUp(File file) {
+    try {
+      if (file.existsSync()) file.deleteSync();
+    } catch (error, stackTrace) {
+      TimetableStore._log.warning(
+        'temporary_cleanup.failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+}
+
+class _PendingTimetableJson {
+  _PendingTimetableJson(this.file)
+    : original = readOriginal(file),
+      temporary = File('${file.path}.tmp');
+
+  final File file;
+  final List<int>? original;
+  final File temporary;
+  String? encoded;
+  File? backup;
+  bool preserveBackup = false;
+  bool backupReady = false;
+  bool replaced = false;
+  bool rollbackFailed = false;
+
+  static List<int>? readOriginal(File file) {
+    final type = FileSystemEntity.typeSync(file.path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) return null;
+    if (type != FileSystemEntityType.file) {
+      throw const TimetablePersistenceException();
+    }
+    return file.readAsBytesSync();
   }
 }
 

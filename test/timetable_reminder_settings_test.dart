@@ -38,18 +38,14 @@ class _FakeActions extends ReminderActions {
   @override
   Future<NotifyPermissionStatus> setReminderEnabled(bool enabled) async {
     calls.add('enabled:$enabled');
-    unawaited(
-      _c.updateSettings(_c.settings.copyWith(reminderEnabled: enabled)),
-    );
+    await _c.updateSettings(_c.settings.copyWith(reminderEnabled: enabled));
     return perm;
   }
 
   @override
   Future<void> setReminderLeadMinutes(int minutes) async {
     calls.add('lead:$minutes');
-    unawaited(
-      _c.updateSettings(_c.settings.copyWith(reminderLeadMinutes: minutes)),
-    );
+    await _c.updateSettings(_c.settings.copyWith(reminderLeadMinutes: minutes));
   }
 
   @override
@@ -144,7 +140,7 @@ void main() {
     expect(find.text(TtSettingsText.reminderIntro), findsNothing);
     expect(sw(tester, 'tt_settings_reminder'), isFalse);
     await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-    await tester.pumpAndSettle();
+    await settleIo(tester);
     expect(a.calls, ['enabled:true']);
     expect(sw(tester, 'tt_settings_reminder'), isTrue);
     final lead = find.byKey(const Key('tt_settings_reminder_lead'));
@@ -195,7 +191,7 @@ void main() {
       findsNothing,
     );
     await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-    await tester.pumpAndSettle();
+    await settleIo(tester);
     expect(find.text(TtSettingsText.permissionNotification), findsOneWidget);
     await tester.tap(find.byKey(const Key('tt_settings_reminder_goto')));
     expect(a.calls.last, 'notif');
@@ -205,7 +201,7 @@ void main() {
     final a = _FakeActions(_perm(exact: false));
     await pump(tester, a);
     await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-    await tester.pumpAndSettle();
+    await settleIo(tester);
     expect(find.text(TtSettingsText.permissionExactAlarm), findsOneWidget);
     await tester.tap(find.byKey(const Key('tt_settings_reminder_goto')));
     expect(a.calls.last, 'exact');
@@ -222,7 +218,7 @@ void main() {
     final a = _FakeActions(NotifyPermissionStatus.unsupported);
     await pump(tester, a);
     await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-    await tester.pumpAndSettle();
+    await settleIo(tester);
     expect(
       find.byKey(const Key('tt_settings_reminder_permission')),
       findsNothing,

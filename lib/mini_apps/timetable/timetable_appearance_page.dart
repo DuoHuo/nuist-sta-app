@@ -6,6 +6,7 @@ import 'timetable_color_picker.dart';
 import 'timetable_colors.dart';
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
+import 'timetable_persistence_feedback.dart';
 import 'timetable_theme.dart';
 import 'timetable_settings_widgets.dart';
 import 'timetable_week_grid.dart';
@@ -78,11 +79,17 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
     setState(() => _previewWeek = week);
   }
 
-  void _update(TimetableSettings Function(TimetableSettings s) change) =>
-      _c.updateSettings(change(_c.settings));
+  Future<bool> _update(
+    TimetableSettings Function(TimetableSettings s) change,
+  ) async =>
+      await withTimetablePersistenceFeedback(context, () async {
+        await _c.updateSettings(change(_c.settingsForEditing));
+        return true;
+      }) ==
+      true;
 
   Future<void> _pickExamColor(BuildContext context) async {
-    final pick = await showTimetableColorPicker(
+    await showTimetableColorPicker(
       context,
       current: Color(_c.settings.examColor),
       defaultColor: const Color(kDefaultExamColor),
@@ -92,13 +99,65 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
       showReset: _c.settings.examColor != kDefaultExamColor,
       forExam: true,
       title: '考试颜色',
+      onSave: (pick) async {
+        final argb = pick.reset
+            ? kDefaultExamColor
+            : (pick.color!.toARGB32() | 0xFF000000);
+        if (argb == _c.settings.examColor) return true;
+        await _c.updateSettings(
+          _c.settingsForEditing.copyWith(examColor: argb),
+        );
+        return true;
+      },
     );
-    if (pick == null) return;
-    final argb = pick.reset
-        ? kDefaultExamColor
-        : (pick.color!.toARGB32() | 0xFF000000);
-    if (argb == _c.settings.examColor) return;
-    await _c.updateSettings(_c.settings.copyWith(examColor: argb));
+  }
+
+  Future<void> _pickWeekStart() async {
+    var saving = false;
+    String? saveError;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => SimpleDialog(
+          title: const Text('一周起始'),
+          children: [
+            if (saveError case final message?)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+                child: TimetablePersistenceErrorText(message),
+              ),
+            for (final option in const {true: '周一', false: '周日'}.entries)
+              SimpleDialogOption(
+                onPressed: saving
+                    ? null
+                    : () async {
+                        setDialogState(() {
+                          saving = true;
+                          saveError = null;
+                        });
+                        final saved = await withTimetablePersistenceFeedback(
+                          dialogContext,
+                          () async {
+                            await _c.updateSettings(
+                              _c.settingsForEditing.copyWith(
+                                weekStartsOnMonday: option.key,
+                              ),
+                            );
+                            return true;
+                          },
+                          onError: (message) =>
+                              setDialogState(() => saveError = message),
+                        );
+                        if (!dialogContext.mounted) return;
+                        setDialogState(() => saving = false);
+                        if (saved == true) Navigator.pop(dialogContext);
+                      },
+                child: Text(option.value),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -395,34 +454,7 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                   title: '一周起始',
                                   value: s.weekStartsOnMonday ? '周一' : '周日',
                                   showChevron: true,
-                                  onTap: () async {
-                                    final monday = await showDialog<bool>(
-                                      context: context,
-                                      builder: (context) => SimpleDialog(
-                                        title: const Text('一周起始'),
-                                        children: [
-                                          for (final option in const {
-                                            true: '周一',
-                                            false: '周日',
-                                          }.entries)
-                                            SimpleDialogOption(
-                                              onPressed: () => Navigator.pop(
-                                                context,
-                                                option.key,
-                                              ),
-                                              child: Text(option.value),
-                                            ),
-                                        ],
-                                      ),
-                                    );
-                                    if (monday != null) {
-                                      _update(
-                                        (x) => x.copyWith(
-                                          weekStartsOnMonday: monday,
-                                        ),
-                                      );
-                                    }
-                                  },
+                                  onTap: _pickWeekStart,
                                 ),
                                 TimetableSettingsSwitchRow(
                                   key: const Key('tt_settings_saturday'),
@@ -596,8 +628,11 @@ class TimetablePalettePage extends StatelessWidget {
                       onTap: () {
                         final key = coursePaletteSchemeKey(scheme);
                         if (c.settings.paletteScheme == key) return;
-                        c.updateSettings(
-                          c.settings.copyWith(paletteScheme: key),
+                        withTimetablePersistenceFeedback(
+                          context,
+                          () => c.updateSettings(
+                            c.settingsForEditing.copyWith(paletteScheme: key),
+                          ),
                         );
                       },
                       trailing: Row(

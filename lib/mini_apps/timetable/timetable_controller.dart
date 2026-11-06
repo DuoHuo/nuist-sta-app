@@ -306,6 +306,15 @@ class TimetableController extends ChangeNotifier {
 
   /// item 9：用户自选课程色（课程 id → 原始 ARGB），见 [TimetableStore.readUserCourseColors]。
   Map<String, int> _userColors = const {};
+  Future<void> _appearanceWrites = Future.value();
+  TimetableSettings? _pendingSettings;
+  int _settingsWriteRevision = 0;
+
+  Future<void> _serializeAppearance(Future<void> Function() action) {
+    final result = _appearanceWrites.then((_) => action());
+    _appearanceWrites = result.then<void>((_) {}, onError: (Object _) {});
+    return result;
+  }
 
   /// [c] 的用户自选色（原始 ARGB）；没选过为 null。
   int? userColorOf(Course c) {
@@ -320,26 +329,35 @@ class TimetableController extends ChangeNotifier {
   }
 
   /// 设 / 清（[color] 为 null，即「恢复默认」）某门课的自选色并落盘。不重算其他课的颜色。
-  Future<void> setUserCourseColor(String courseId, int? color) async {
+  Future<void> setUserCourseColor(
+    String courseId,
+    int? color,
+  ) => _serializeAppearance(() async {
     final next = Map<String, int>.of(_userColors);
     if (color == null) {
       next.remove(courseId);
     } else {
       next[courseId] = color | 0xFF000000;
     }
-    _userColors = next;
+    List<Course>? nextManual;
+    Map<String, CourseEdit>? nextCourseEdits;
+    List<CourseDateEdit>? nextDateEdits;
     // 详情页选择“所有课程”颜色时，覆盖该课程各时段已有的局部颜色。
     final manual = manualCourseById(courseId);
     if (manual != null &&
         manual.slots.any((s) => s.color != null || s.useDefaultColor)) {
-      await updateManualCourse(
-        manual.copyWith(
-          slots: [
-            for (final slot in manual.slots)
-              slot.copyWith(clearColor: true, useDefaultColor: false),
-          ],
-        ),
-      );
+      nextManual = [
+        for (final course in _manualCourses)
+          if (course.id == courseId)
+            course.copyWith(
+              slots: [
+                for (final slot in course.slots)
+                  slot.copyWith(clearColor: true, useDefaultColor: false),
+              ],
+            )
+          else
+            course,
+      ];
     }
     final courseEdit = _courseEdits[courseId];
     if (courseEdit != null &&
@@ -347,8 +365,9 @@ class TimetableController extends ChangeNotifier {
           (e) =>
               e.replacements.any((p) => p.color != null || p.useDefaultColor),
         )) {
-      await _setCourseEdit(
-        courseEdit.copyWith(
+      nextCourseEdits = {
+        ..._courseEdits,
+        courseId: courseEdit.copyWith(
           slotEdits: [
             for (final edit in courseEdit.slotEdits)
               CourseSlotEdit(
@@ -365,13 +384,13 @@ class TimetableController extends ChangeNotifier {
               ),
           ],
         ),
-      );
+      };
     }
     // 应用到全局时清除这门课的局部颜色，保留备注、调课等其他修改。
     if (_dateEdits.any(
       (e) => e.courseId == courseId && (e.color != null || e.useDefaultColor),
     )) {
-      await _setDateEdits([
+      nextDateEdits = [
         for (final e in _dateEdits)
           if (e.courseId != courseId || (e.color == null && !e.useDefaultColor))
             e
@@ -379,13 +398,30 @@ class TimetableController extends ChangeNotifier {
               .copyWith(clearColor: true, useDefaultColor: false)
               .isEmpty)
             e.copyWith(clearColor: true, useDefaultColor: false),
-      ]);
+      ];
     }
-    notifyListeners();
-    try {
+    // 全局色与被清除的局部颜色一起保存，任一文件失败都不提前改内存。
+    await TimetableStore.writeBatch(() async {
       await TimetableStore.saveUserCourseColors(next);
-    } catch (_) {}
-  }
+      if (nextManual != null) {
+        await TimetableStore.saveManualCourses(nextManual);
+      }
+      if (nextCourseEdits != null) {
+        await ScheduleStore.saveCourseEdits(nextCourseEdits);
+      }
+      if (nextDateEdits != null) {
+        await ScheduleStore.saveCourseDateEdits(nextDateEdits);
+      }
+    });
+    _userColors = next;
+    if (nextManual != null) _manualCourses = List.unmodifiable(nextManual);
+    if (nextCourseEdits != null) {
+      _courseEdits = Map.unmodifiable(nextCourseEdits);
+    }
+    if (nextDateEdits != null) _dateEdits = List.unmodifiable(nextDateEdits);
+    notifyListeners();
+    _fireScheduleChanged(ScheduleChangeReason.courseEdit);
+  });
 
   /// 自动配色跳过用户自选色的课（不占色号）。
   bool _autoColored(Course c) => !_userColors.containsKey(c.id);
@@ -616,6 +652,10 @@ class TimetableController extends ChangeNotifier {
   List<PeriodTime> get periods =>
       _snapshot.periods.isEmpty ? defaultPeriods() : _snapshot.periods;
   TimetableSettings get settings => _snapshot.settings;
+
+  /// 构造下一次设置编辑时使用的基线，包含排队中的选择。
+  /// 展示、配色及提醒排程读取 [settings]，只使用已成功保存的状态。
+  TimetableSettings get settingsForEditing => _pendingSettings ?? settings;
   int get viewingWeek => _viewingWeek;
   bool get loading => _loading;
   String? get statusMessage => _statusMessage;
@@ -687,7 +727,11 @@ class TimetableController extends ChangeNotifier {
   Future<void> ensureStarted() {
     if (_started) return _starting ?? Future.value();
     _started = true;
-    return _starting = _start();
+    return _starting = _start().catchError((Object error, StackTrace stack) {
+      _started = false;
+      _starting = null;
+      Error.throwWithStackTrace(error, stack);
+    });
   }
 
   /// 只读本地磁盘刷新：从 [TimetableStore] / [ScheduleStore] 重新载入快照、手动课程、
@@ -718,14 +762,22 @@ class TimetableController extends ChangeNotifier {
     await _reloadFromDisk();
     await _loadColorMap();
     if (_fillMissingAssignedColors()) {
-      await TimetableStore.saveManualCourses(_manualCourses);
+      try {
+        await TimetableStore.saveManualCourses(_manualCourses);
+      } on TimetablePersistenceException {
+        // 旧数据色号可以再次推导；回填失败不阻断课表读取。
+      }
     }
     // 旧数据：「其他」日程的名称还没有固定色号 → 补一次并落盘（只写 schedule_events.json）。
     if (_backfillOtherColors()) {
-      await ScheduleStore.saveEventsAndOtherColors(
-        _scheduleEvents,
-        _otherColors,
-      );
+      try {
+        await ScheduleStore.saveEventsAndOtherColors(
+          _scheduleEvents,
+          _otherColors,
+        );
+      } on TimetablePersistenceException {
+        // 保留内存中可用的固定色，下次启动仍可补写。
+      }
     }
     _viewingWeek = _defaultViewingWeek;
     _lastSeenCurrentWeek = currentWeek;
@@ -800,7 +852,9 @@ class TimetableController extends ChangeNotifier {
     _colorMap = _buildFallbackColorMap(scheme);
     try {
       await TimetableStore.saveCourseColors(scheme, _colorMap!);
-    } catch (_) {}
+    } on TimetablePersistenceException {
+      // 配色表是派生缓存；保存失败仍使用本次计算结果。
+    }
   }
 
   void setViewingWeek(int week) {
@@ -815,18 +869,74 @@ class TimetableController extends ChangeNotifier {
   /// 「回到本周」（同 [goToCurrentWeek]；已在本周时不通知）。
   void jumpToCurrentWeek() => goToCurrentWeek();
 
-  Future<void> updateSettings(TimetableSettings next) async {
-    final previous = _snapshot.settings;
-    _snapshot = _snapshot.copyWith(settings: next);
-    if (previous.paletteScheme != next.paletteScheme &&
-        await _recomputeColors()) {
-      await TimetableStore.saveManualCourses(_manualCourses);
-    }
-    // 只把用户实际改动的键合并进原始 settings.json，其余原值/未知键保留。
-    await TimetableStore.mergeSettingsChanges(previous, next);
-    await TimetableStore.saveSnapshot(_snapshot);
-    notifyListeners();
-    _fireScheduleChanged(ScheduleChangeReason.settings);
+  /// 保存本次真正改动的设置；失败时恢复最后成功保存的状态。
+  /// 等待保存期间保留待选值，连续调整不会互相覆盖或漏掉恢复原值的操作。
+  Future<void> updateSettings(TimetableSettings next) {
+    final before = settingsForEditing.toJson();
+    final requested = next.toJson();
+    final changedKeys = {
+      for (final key in {...before.keys, ...requested.keys})
+        if (before.containsKey(key) != requested.containsKey(key) ||
+            before[key] != requested[key])
+          key,
+    };
+    if (changedKeys.isEmpty) return Future.value();
+    final revision = ++_settingsWriteRevision;
+    _pendingSettings = next;
+    return _serializeAppearance(() async {
+      try {
+        final previous = _snapshot.settings;
+        final raw = previous.toJson();
+        // 排队期间其他开关可能已保存，仅合并这次操作涉及的字段。
+        for (final key in changedKeys) {
+          if (requested.containsKey(key)) {
+            raw[key] = requested[key];
+          } else {
+            raw.remove(key);
+          }
+        }
+        final applied = TimetableSettings.fromJson(raw);
+        final snapshot = _snapshot.copyWith(settings: applied);
+        final scheme = coursePaletteSchemeOf(applied.paletteScheme);
+        Map<String, int>? colors;
+        List<Course>? manual;
+        if (previous.paletteScheme != applied.paletteScheme) {
+          colors = assignCourseColors([
+            ...snapshot.courses.where(_autoColored),
+            for (final course in _manualCourses.where(_autoColored))
+              course.copyWith(clearAssignedColor: true),
+          ], scheme: scheme);
+          manual = [
+            for (final course in _manualCourses)
+              if (colors[normalizeCourseName(course.name)] case final index?
+                  when course.colorIndex == null)
+                course.copyWith(assignedColorIndex: index)
+              else
+                course,
+          ];
+        }
+        await TimetableStore.writeBatch(() async {
+          if (colors != null) {
+            await TimetableStore.saveCourseColors(scheme, colors);
+          }
+          if (manual != null) await TimetableStore.saveManualCourses(manual);
+          // 未改动的原始值和未知键仍由 Store 保留。
+          await TimetableStore.mergeSettingsChanges(previous, applied);
+          await TimetableStore.saveSnapshot(snapshot);
+        });
+        _snapshot = snapshot;
+        if (manual != null) _manualCourses = manual;
+        if (colors != null) {
+          _colorMap = colors;
+          _colorMapJwxt = snapshot.courses;
+          _colorMapScheme = scheme;
+        }
+      } finally {
+        if (revision == _settingsWriteRevision) _pendingSettings = null;
+        notifyListeners();
+      }
+      _fireScheduleChanged(ScheduleChangeReason.settings);
+    });
   }
 
   /// 缓存为空或非今日同步 → 需要同步。
@@ -930,8 +1040,31 @@ class TimetableController extends ChangeNotifier {
         syncedAt: DateTime.now(),
         clearError: true,
       );
-      // 同步 diff：在覆盖内存快照前比对旧教务源；失败不影响同步成功态。
-      final previousJwxt = _snapshot.courses;
+      late final List<Course> previousJwxt;
+      // 与设置保存共用队列：落盘后立即发布快照，后续设置不能再写回旧课表。
+      await _serializeAppearance(() async {
+        if (bindingRevision != _portalBindingRevision) return;
+        previousJwxt = _snapshot.courses;
+        snapshot = snapshot.copyWith(
+          settings: snapshot.settings
+              .withDisplayPrefsFrom(settings)
+              .copyWith(scheduleName: settings.scheduleName),
+        );
+        // 快照与学期设置一起落盘，失败时保留原有内存和磁盘数据。
+        await TimetableStore.writeBatch(() async {
+          await TimetableStore.saveSnapshot(snapshot);
+          // 只合并学期四键，保留展示设置的原始值与未知键。
+          await TimetableStore.mergeTermSettings(snapshot.settings);
+          // 绑定变更时取消尚未提交的旧批次；外层按 revision 忽略本次同步。
+          if (bindingRevision != _portalBindingRevision) {
+            throw const TimetablePersistenceException();
+          }
+        });
+        if (bindingRevision != _portalBindingRevision) return;
+        _snapshot = snapshot;
+      });
+      if (bindingRevision != _portalBindingRevision) return;
+      // 变更日志沿用已捕获的旧教务源；I/O 等待不占设置队列，也不再次覆盖快照。
       TimetableSyncDiffResult? syncDiff;
       try {
         syncDiff = await TimetableSyncDiff.applyAfterFetch(
@@ -945,7 +1078,6 @@ class TimetableController extends ChangeNotifier {
       } catch (_) {}
       if (bindingRevision != _portalBindingRevision) return;
       lastSyncDiff = syncDiff;
-      _snapshot = snapshot;
       // SW01（§13.10）：同步成功后停留在正在看的周（只钳到 1..totalWeeks）。
       // 同步前就在看本周、之前周次未知（无开学日）或换了学期时才跟到新的本周。
       if (wasOnCurrentWeek ||
@@ -957,12 +1089,6 @@ class TimetableController extends ChangeNotifier {
       }
       // 系统日期/本周相对上次已变时跟到本周（同周内手动翻周仍由上面 SW01 保留）。
       followCurrentWeekIfChanged();
-      await TimetableStore.saveSnapshot(_snapshot);
-      if (bindingRevision != _portalBindingRevision) return;
-      // settings.json 只合并学期四键（与磁盘一致则不写）；periodHeight 原值、
-      // 开关与未知键原样保留，绝不序列化整个内存设置。
-      await TimetableStore.mergeTermSettings(_snapshot.settings);
-      if (bindingRevision != _portalBindingRevision) return;
       // 教务优先（jwxt §3.2）：原课被删、SKZC 与 origWeeks 不同（含缺 origWeeks
       // 的旧记录）、或原时段星期/节次变了 → 删掉记录，显示教务数据。其余保留。
       // 只在同步成功这里比较；解绑不删。
@@ -984,12 +1110,15 @@ class TimetableController extends ChangeNotifier {
         await ScheduleStore.saveCourseEdits(_courseEdits);
         if (bindingRevision != _portalBindingRevision) return;
       }
-      final colorsChanged = await _recomputeColors();
-      if (bindingRevision != _portalBindingRevision) return;
-      if (colorsChanged) {
-        await TimetableStore.saveManualCourses(_manualCourses);
+      await _serializeAppearance(() async {
         if (bindingRevision != _portalBindingRevision) return;
-      }
+        final colorsChanged = await _recomputeColors();
+        if (bindingRevision != _portalBindingRevision) return;
+        if (colorsChanged) {
+          await TimetableStore.saveManualCourses(_manualCourses);
+        }
+      });
+      if (bindingRevision != _portalBindingRevision) return;
       // 第 11 条：课表成功后拉考试（不受 showExams 影响）。考试失败不影响本次课表
       // 同步结果、成功时间与离线补同步逻辑，已有考试保留。
       await _syncExams(term, bindingRevision: bindingRevision);
@@ -1099,6 +1228,9 @@ class TimetableController extends ChangeNotifier {
     _colorMap = null;
     _colorMapJwxt = null;
     _colorMapScheme = null;
+    _appearanceWrites = Future.value();
+    _pendingSettings = null;
+    _settingsWriteRevision = 0;
     _loading = false;
     _statusMessage = null;
     _syncStatus = TimetableSyncStatus.idle;
@@ -1125,23 +1257,45 @@ class TimetableController extends ChangeNotifier {
     );
     // 解绑不改颜色：配色表原样保留（手动课用已存的 assignedColorIndex），不惰性重建。
     _colorMapJwxt = _snapshot.courses;
-    await TimetableStore.clearJwxtSnapshot();
     // 教务考试一并清掉；手动日程、考试覆盖、课程编辑、调课记录、配色表都保留。
-    if (_scheduleEvents.any((e) => e.isFromJwxt)) {
+    final hadJwxtExams = _scheduleEvents.any((e) => e.isFromJwxt);
+    if (hadJwxtExams) {
       _scheduleEvents = List.unmodifiable([
         for (final e in _scheduleEvents)
           if (!e.isFromJwxt) e,
       ]);
-      await ScheduleStore.saveEventsAndOtherColors(
-        _scheduleEvents,
-        _otherColors,
-      );
     }
-    // 不序列化内存设置：只从原始 settings.json 中删除学期键。
-    await TimetableStore.removeTermSettingKeys();
-    _clampViewingWeek();
-    await updateNextDayReminder();
-    notifyListeners();
+    TimetablePersistenceException? firstFailure;
+    Future<void> attemptCleanup(Future<void> Function() action) async {
+      try {
+        await action();
+      } on TimetablePersistenceException catch (error) {
+        firstFailure ??= error;
+      }
+    }
+
+    try {
+      // 每项清理独立尝试，磁盘失败不能让后面的数据继续残留。
+      await attemptCleanup(TimetableStore.clearJwxtSnapshot);
+      if (hadJwxtExams) {
+        await attemptCleanup(
+          () => ScheduleStore.saveEventsAndOtherColors(
+            _scheduleEvents,
+            _otherColors,
+          ),
+        );
+      }
+      // 不序列化内存设置：只从原始 settings.json 中删除学期键。
+      await attemptCleanup(TimetableStore.removeTermSettingKeys);
+    } finally {
+      _clampViewingWeek();
+      try {
+        await updateNextDayReminder();
+      } finally {
+        notifyListeners();
+      }
+    }
+    if (firstFailure case final error?) throw error;
   }
 
   /// 兼容旧调用（页面 DEBUG 菜单）：仅清教务课程，手动课程保留。
@@ -1158,14 +1312,14 @@ class TimetableController extends ChangeNotifier {
     _syncFailure = TimetableSyncFailure.none;
     _lastAutoSyncFailed = false;
     _lastSyncOutcome = null;
-    await _setPortalSessionExpired(false);
-    // 调课记录保留（jwxt §3.2 第 7 条），重新绑定同步后重新套用。
-    if (clearJwxt) {
-      await clearJwxtCourses();
-    } else {
+    try {
+      await _setPortalSessionExpired(false);
+      // 调课记录保留（jwxt §3.2 第 7 条），重新绑定同步后重新套用。
+      if (clearJwxt) await clearJwxtCourses();
+    } finally {
       notifyListeners();
+      _fireScheduleChanged(ScheduleChangeReason.unbind);
     }
-    _fireScheduleChanged(ScheduleChangeReason.unbind);
   }
 
   // ---- 手动课程 CRUD（只作用于 isManual 课程）----
@@ -2489,8 +2643,8 @@ class TimetableController extends ChangeNotifier {
     List<SlotOverride> next,
     ScheduleChangeReason reason,
   ) async {
+    await TimetableStore.saveOverrides(next);
     _overrides = List.unmodifiable(next);
-    await TimetableStore.saveOverrides(_overrides);
     _clampViewingWeek();
     notifyListeners();
     _fireScheduleChanged(reason);

@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'dart:io';
-
 import '../../core/logging/app_log.dart';
 import 'timetable_date_edits.dart';
 import 'timetable_schedule_event.dart';
@@ -38,12 +35,9 @@ class ScheduleStore {
 
   static Future<Map<String, dynamic>> _read(String name) =>
       _log.inSpan(() async {
-        final file = await TimetableStore.fileFor(name);
-        if (file == null) return {};
-        if (!await file.exists()) return {};
         try {
-          final decoded = jsonDecode(await file.readAsString());
-          if (decoded is Map<String, dynamic>) return decoded;
+          final file = await TimetableStore.fileFor(name);
+          return file == null ? {} : TimetableStore.readJsonFile(file);
         } catch (error, stackTrace) {
           _log.warning(
             'json.read_failed',
@@ -51,49 +45,21 @@ class ScheduleStore {
             error: error,
             stackTrace: stackTrace,
           );
-          // 落到下面的备份逻辑。
+          return {};
         }
-        await _backupCorrupt(file);
-        return {};
       });
-
-  /// 文件损坏（解析失败或顶层不是对象）时先改名留底，再按空继续，
-  /// 免得下次保存把用户的编辑 / 删除 / 手动日程覆盖掉。
-  /// 备份名为 `<name>.corrupt`；已有同名备份时追加毫秒时间戳，不覆盖旧备份。
-  static Future<void> _backupCorrupt(File file) async {
-    try {
-      var target = File('${file.path}.corrupt');
-      if (await target.exists()) {
-        target = File(
-          '${file.path}.corrupt.${DateTime.now().millisecondsSinceEpoch}',
-        );
-      }
-      await file.rename(target.path);
-    } catch (error, stackTrace) {
-      _log.warning(
-        'corrupt_backup.failed',
-        error: error,
-        stackTrace: stackTrace,
-      );
-      // 改名失败（只读等）就保持原样，不影响启动。
-    }
-  }
 
   /// 合并写（保留未知顶层键）+ 原子替换。
   static Future<void> _write(String name, Map<String, dynamic> values) =>
       _log.inSpan(() async {
-        final file = await TimetableStore.fileFor(name);
-        if (file == null) {
-          TimetableStore.checkStorageAvailable();
-          return;
-        }
         try {
-          final raw = await _read(name);
+          final file = await TimetableStore.fileFor(name, forWrite: true);
+          if (file == null) return;
+          // 同一次合并读写不让出事件循环，两个文件键更新不会互相覆盖。
+          final raw = TimetableStore.readJsonFile(file, forWrite: true);
           raw.addAll(values);
           raw['schemaVersion'] = schemaVersion;
-          final tmp = File('${file.path}.tmp');
-          await tmp.writeAsString(jsonEncode(raw), flush: true);
-          await tmp.rename(file.path);
+          TimetableStore.writeJsonFile(file, raw);
         } catch (error, stackTrace) {
           _log.error(
             'json.write_failed',
@@ -123,8 +89,10 @@ class ScheduleStore {
 
   /// 只写 `events`（合并写：`otherColors` 与未知顶层键保留）。
   /// 只写日程；文件里已有的 `otherColors` 原样保留（不丢「其他」固定色）。
-  static Future<void> saveEvents(List<ScheduleEvent> events) async =>
-      saveEventsAndOtherColors(events, await readOtherColors());
+  static Future<void> saveEvents(List<ScheduleEvent> events) =>
+      _write(scheduleEventsFile, {
+        'events': [for (final e in events) e.toJson()],
+      });
 
   /// 「其他」日程按名称固定的色号（`schedule_events.json` 顶层 `otherColors`，
   /// `{名称: 色号}`）。缺失/类型不对 → 空；坏条目跳过。

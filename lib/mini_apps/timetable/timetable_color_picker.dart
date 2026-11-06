@@ -4,6 +4,7 @@ import 'timetable_controller.dart';
 import 'timetable_course_color.dart';
 import 'timetable_date_edits.dart';
 import 'timetable_models.dart';
+import 'timetable_persistence_feedback.dart';
 import 'timetable_theme.dart';
 
 /// 选色结果：原始颜色或恢复默认；关闭面板返回 null。
@@ -18,6 +19,7 @@ class TimetableColorPick {
 
 /// 连续选色面板：实时课表预览、饱和度/明度方盘、色相条和色号输入。
 /// 所有修改先留在面板中，点保存才返回；色号无需键盘提交即可生效。
+/// [onSave] 可在关闭前保存结果；持久化异常在面板内提示，返回 false 时保留输入。
 Future<TimetableColorPick?> showTimetableColorPicker(
   BuildContext context, {
   required Color current,
@@ -28,6 +30,7 @@ Future<TimetableColorPick?> showTimetableColorPicker(
   bool forExam = false,
   int opacity = 100,
   CellTextColorMode textColorMode = CellTextColorMode.auto,
+  Future<bool> Function(TimetableColorPick pick)? onSave,
 }) {
   // ModalBottomSheet 会随键盘高度更新；复用同一个内容实例，避免整棵选色树被重建。
   final picker = _ColorPicker(
@@ -39,6 +42,7 @@ Future<TimetableColorPick?> showTimetableColorPicker(
     forExam: forExam,
     opacity: opacity,
     textColorMode: textColorMode,
+    onSave: onSave,
   );
   return showModalBottomSheet<TimetableColorPick>(
     context: context,
@@ -58,6 +62,7 @@ class _ColorPicker extends StatefulWidget {
     required this.forExam,
     required this.opacity,
     required this.textColorMode,
+    this.onSave,
   });
 
   final Color current;
@@ -68,6 +73,7 @@ class _ColorPicker extends StatefulWidget {
   final bool forExam;
   final int opacity;
   final CellTextColorMode textColorMode;
+  final Future<bool> Function(TimetableColorPick pick)? onSave;
 
   @override
   State<_ColorPicker> createState() => _ColorPickerState();
@@ -78,6 +84,9 @@ class _ColorPickerState extends State<_ColorPicker> {
   late final TextEditingController _hex;
   final _valid = ValueNotifier(true);
   bool _reset = false;
+  bool _saving = false;
+  String? _saveError;
+  final _saveAreaKey = GlobalKey();
 
   @override
   void initState() {
@@ -117,15 +126,41 @@ class _ColorPickerState extends State<_ColorPicker> {
     _reset = true;
   }
 
-  void _save() {
+  void _showSaveError(String message) {
+    setState(() => _saveError = message);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final areaContext = _saveAreaKey.currentContext;
+      if (!mounted || areaContext == null) return;
+      // 键盘打开或面板已滚动时，也要让错误与重试按钮一起进入视口。
+      Scrollable.ensureVisible(areaContext, alignment: 1);
+    });
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
     final color = _parseHex(_hex.text);
     if (color == null) return;
-    Navigator.pop(
-      context,
-      _reset
-          ? const TimetableColorPick.reset()
-          : TimetableColorPick.color(color),
-    );
+    final pick = _reset
+        ? const TimetableColorPick.reset()
+        : TimetableColorPick.color(color);
+    final save = widget.onSave;
+    if (save != null) {
+      setState(() {
+        _saving = true;
+        _saveError = null;
+      });
+      try {
+        final saved = await withTimetablePersistenceFeedback(
+          context,
+          () => save(pick),
+          onError: _showSaveError,
+        );
+        if (saved != true) return;
+      } finally {
+        if (mounted) setState(() => _saving = false);
+      }
+    }
+    if (mounted) Navigator.pop(context, pick);
   }
 
   @override
@@ -298,43 +333,53 @@ class _ColorPickerState extends State<_ColorPicker> {
                       ),
                     ),
                     const SizedBox(height: 20),
-                    Row(
+                    Column(
+                      key: _saveAreaKey,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(
-                          child: SizedBox(
-                            height: 48,
-                            child: TextButton(
-                              key: const Key('tt_color_cancel'),
-                              onPressed: () => Navigator.pop(context),
-                              child: Text(
-                                '取消',
-                                style: TextStyle(color: colors.labelText),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          flex: 2,
-                          child: SizedBox(
-                            height: 48,
-                            child: ValueListenableBuilder<bool>(
-                              valueListenable: _valid,
-                              builder: (context, valid, _) => FilledButton(
-                                key: const Key('tt_color_custom_apply'),
-                                onPressed: valid ? _save : null,
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: colors.accent,
-                                  // 品牌色按钮上的白字保持明暗一致。
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10),
+                        if (_saveError case final message?) ...[
+                          TimetablePersistenceErrorText(message),
+                          const SizedBox(height: 12),
+                        ],
+                        Row(
+                          children: [
+                            Expanded(
+                              child: SizedBox(
+                                height: 48,
+                                child: TextButton(
+                                  key: const Key('tt_color_cancel'),
+                                  onPressed: () => Navigator.pop(context),
+                                  child: Text(
+                                    '取消',
+                                    style: TextStyle(color: colors.labelText),
                                   ),
                                 ),
-                                child: const Text('保存'),
                               ),
                             ),
-                          ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              flex: 2,
+                              child: SizedBox(
+                                height: 48,
+                                child: ValueListenableBuilder<bool>(
+                                  valueListenable: _valid,
+                                  builder: (context, valid, _) => FilledButton(
+                                    key: const Key('tt_color_custom_apply'),
+                                    onPressed: valid && !_saving ? _save : null,
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: colors.accent,
+                                      // 品牌色按钮上的白字保持明暗一致。
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                    ),
+                                    child: const Text('保存'),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -624,23 +669,25 @@ class CourseColorRow extends StatelessWidget {
             : EditScope.allWeeks;
         if (scope == null || !context.mounted) return;
         final value = pick.reset ? null : pick.color!.toARGB32();
-        if (scope == EditScope.thisDay) {
-          final ok = await controller.setOccurrenceColor(
-            occurrence!,
-            value,
-            useDefaultColor: pick.reset && !inheritBaseColor,
-          );
-          if (!ok && context.mounted) {
-            ScaffoldMessenger.maybeOf(
-              context,
-            )?.showSnackBar(const SnackBar(content: Text('颜色保存失败，请重新打开课程后重试')));
+        await withTimetablePersistenceFeedback(context, () async {
+          if (scope == EditScope.thisDay) {
+            final ok = await controller.setOccurrenceColor(
+              occurrence!,
+              value,
+              useDefaultColor: pick.reset && !inheritBaseColor,
+            );
+            if (!ok && context.mounted) {
+              ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                const SnackBar(content: Text('颜色保存失败，请重新打开课程后重试')),
+              );
+            }
+          } else {
+            await controller.setUserCourseColor(
+              base?.course.id ?? course.id,
+              value,
+            );
           }
-        } else {
-          await controller.setUserCourseColor(
-            base?.course.id ?? course.id,
-            value,
-          );
-        }
+        });
       },
       icon: Container(
         key: const Key('course_detail_color_swatch'),

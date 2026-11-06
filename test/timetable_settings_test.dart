@@ -450,8 +450,14 @@ void main() {
       await tester.tap(find.byKey(const Key('tt_settings_week_start')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('周日'));
+      // 选择现在会等落盘成功才关闭；先完成真实 I/O，避免弹层挡住下一页点击。
+      await settleIo(tester);
       await tester.pumpAndSettle();
       await pumpPage(tester, TimetableSettingsPage(controller: _c));
+      expect(
+        find.byKey(const Key('tt_settings_show_tomorrow')).hitTestable(),
+        findsOneWidget,
+      );
       await tester.tap(find.byKey(const Key('tt_settings_show_tomorrow')));
       await settleIo(tester);
       final s = _c.settings;

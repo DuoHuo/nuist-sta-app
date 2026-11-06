@@ -25,8 +25,10 @@ class ReminderActions {
   Future<NotifyPermissionStatus> setReminderEnabled(bool enabled) async {
     if (_useService) return _svc.setReminderEnabled(enabled);
     final c = controller!;
-    if (c.settings.reminderEnabled != enabled) {
-      await c.updateSettings(c.settings.copyWith(reminderEnabled: enabled));
+    if (c.settingsForEditing.reminderEnabled != enabled) {
+      await c.updateSettings(
+        c.settingsForEditing.copyWith(reminderEnabled: enabled),
+      );
     }
     return NotifyPermissionStatus.unsupported;
   }
@@ -34,7 +36,9 @@ class ReminderActions {
   Future<void> setReminderLeadMinutes(int minutes) async {
     if (_useService) return _svc.setReminderLeadMinutes(minutes);
     final c = controller!;
-    await c.updateSettings(c.settings.copyWith(reminderLeadMinutes: minutes));
+    await c.updateSettings(
+      c.settingsForEditing.copyWith(reminderLeadMinutes: minutes),
+    );
   }
 
   Future<NotifyPermissionStatus> permissionStatus() => _svc.permissionStatus();
@@ -81,7 +85,7 @@ class ReminderActions {
       };
     }
     final c = controller!;
-    final s = c.settings;
+    final s = c.settingsForEditing;
     await c.updateSettings(switch (o) {
       WidgetDisplayOption.teacher => s.copyWith(widgetShowTeacher: v),
       WidgetDisplayOption.location => s.copyWith(widgetShowLocation: v),
@@ -98,7 +102,7 @@ class ReminderActions {
     if (_useService) return _svc.setWidgetCourseCount(n);
     final c = controller!;
     await c.updateSettings(
-      c.settings.copyWith(
+      c.settingsForEditing.copyWith(
         widgetCourseCount: TimetableSettings.sanitizeCourseCount(n),
       ),
     );

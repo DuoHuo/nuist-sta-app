@@ -87,9 +87,9 @@ class TimetableNotifyService {
   /// 提醒已退化为非精确）。
   Future<NotifyPermissionStatus> setReminderEnabled(bool enabled) async {
     if (enabled) await _bridge.requestNotificationPermission();
-    if (enabled != reminderEnabled) {
+    if (enabled != _ctl.settingsForEditing.reminderEnabled) {
       await _ctl.updateSettings(
-        _ctl.settings.copyWith(reminderEnabled: enabled),
+        _ctl.settingsForEditing.copyWith(reminderEnabled: enabled),
       );
     }
     return _bridge.permissionStatus();
@@ -98,8 +98,10 @@ class TimetableNotifyService {
   /// 修改提前量：只接受 [kReminderLeadOptions]（5/10/15/30），其他值按 15 处理。
   Future<void> setReminderLeadMinutes(int minutes) async {
     final v = TimetableSettings.sanitizeLeadMinutes(minutes);
-    if (v == reminderLeadMinutes) return;
-    await _ctl.updateSettings(_ctl.settings.copyWith(reminderLeadMinutes: v));
+    if (v == _ctl.settingsForEditing.reminderLeadMinutes) return;
+    await _ctl.updateSettings(
+      _ctl.settingsForEditing.copyWith(reminderLeadMinutes: v),
+    );
   }
 
   // ---- 小组件显示开关（默认全开）----
@@ -131,19 +133,19 @@ class TimetableNotifyService {
   }
 
   Future<void> setWidgetShowTeacher(bool v) =>
-      _setWidgetPref(_ctl.settings.copyWith(widgetShowTeacher: v));
+      _setWidgetPref(_ctl.settingsForEditing.copyWith(widgetShowTeacher: v));
   Future<void> setWidgetShowLocation(bool v) =>
-      _setWidgetPref(_ctl.settings.copyWith(widgetShowLocation: v));
+      _setWidgetPref(_ctl.settingsForEditing.copyWith(widgetShowLocation: v));
   Future<void> setWidgetShowCountdown(bool v) =>
-      _setWidgetPref(_ctl.settings.copyWith(widgetShowCountdown: v));
+      _setWidgetPref(_ctl.settingsForEditing.copyWith(widgetShowCountdown: v));
   Future<void> setWidgetShowCount(bool v) =>
-      _setWidgetPref(_ctl.settings.copyWith(widgetShowCount: v));
+      _setWidgetPref(_ctl.settingsForEditing.copyWith(widgetShowCount: v));
   Future<void> setWidgetShowPeriod(bool v) =>
-      _setWidgetPref(_ctl.settings.copyWith(widgetShowPeriod: v));
+      _setWidgetPref(_ctl.settingsForEditing.copyWith(widgetShowPeriod: v));
 
   /// 同时显示课程数，只接受 1 / 2 / 3；其他值回落到 2。
   Future<void> setWidgetCourseCount(int n) => _setWidgetPref(
-    _ctl.settings.copyWith(
+    _ctl.settingsForEditing.copyWith(
       widgetCourseCount: TimetableSettings.sanitizeCourseCount(n),
     ),
   );

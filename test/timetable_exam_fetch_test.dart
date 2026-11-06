@@ -226,7 +226,6 @@ void main() {
     final origClock = TimetableController.clock;
     final origSyncClock = TimetableController.syncClock;
     final origBinding = TimetableController.bindingCheck;
-    var showExams = true;
     var examCalls = 0;
     Future<List<ScheduleEvent>?> Function(String term) exams = (_) async =>
         const [];
@@ -234,7 +233,6 @@ void main() {
     setUp(() async {
       tmp = await Directory.systemTemp.createTemp('tt_exam_fetch');
       TimetableStore.debugDirectory = tmp;
-      showExams = true;
       examCalls = 0;
       TimetableController.clock = () => DateTime(2026, 12, 1);
       TimetableController.syncClock = () => now;
@@ -257,9 +255,8 @@ void main() {
               ),
             ],
             periods: TimetableController.defaultPeriods(),
-            settings: TimetableSettings(
+            settings: (baseSettings ?? const TimetableSettings()).copyWith(
               termCode: '2026-2027-1',
-              showExams: showExams,
             ),
           );
       TimetableController.fetchExams = (term) {
@@ -301,7 +298,7 @@ void main() {
     });
 
     test('EX08 关闭课表考试显示仍同步入库，考试卡片与列表查询保留数据', () async {
-      showExams = false;
+      await _c.updateSettings(_c.settingsForEditing.copyWith(showExams: false));
       exams = (_) async => _parse('exam_mock.json');
       await _c.syncFromJwxt();
       expect(_c.settings.showExams, isFalse);

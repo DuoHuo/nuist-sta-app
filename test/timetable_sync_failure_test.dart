@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -8,12 +9,36 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 
-Course _course(String id) => Course(
+Course _course(String id, {int day = 1}) => Course(
   id: id,
   name: 'C $id',
   source: CourseSource.jwxt,
-  slots: [CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1' * 16)],
+  slots: [CourseSlot(day: day, startNode: 1, endNode: 2, weeks: '1' * 16)],
 );
+
+class _DelayedChangeLogFile implements File {
+  _DelayedChangeLogFile(this.file, this.entered, this.release);
+
+  final File file;
+  final Completer<void> entered;
+  final Future<void> release;
+
+  @override
+  String get path => file.path;
+
+  @override
+  Future<bool> exists() => file.exists();
+
+  @override
+  Future<String> readAsString({Encoding encoding = utf8}) async {
+    if (!entered.isCompleted) entered.complete();
+    await release;
+    return file.readAsString(encoding: encoding);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 Response<dynamic> _resp(
   Uri url, {
@@ -80,6 +105,30 @@ void main() {
     expect(c.syncStatus, TimetableSyncStatus.failure);
     expect(c.syncFailure, f);
     expect(c.jwxtCourses.map((e) => e.id), ['cached'], reason: 'cache kept');
+  }
+
+  Future<void> whileSyncLogPaused(Future<void> Function() action) async {
+    final log = File('${tmp.path}/sync_changes.json')
+      ..writeAsStringSync('{"changes":[]}');
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    final outsideZone = Zone.current;
+    await IOOverrides.runZoned(
+      () async {
+        final sync = c.syncFromJwxt();
+        try {
+          await entered.future.timeout(const Duration(seconds: 5));
+          await action();
+        } finally {
+          release.complete();
+          await sync;
+        }
+      },
+      createFile: (path) =>
+          path.replaceAll('\\', '/').endsWith('/sync_changes.json')
+          ? _DelayedChangeLogFile(log, entered, release.future)
+          : outsideZone.run(() => File(path)),
+    );
   }
 
   group('classification via debugPost', () {
@@ -226,6 +275,136 @@ void main() {
     await c.syncFromJwxt();
     expect(c.syncStatus, TimetableSyncStatus.success);
     expect(c.syncFailure, TimetableSyncFailure.none);
+  });
+
+  test('学期设置提交失败时回退快照文件，并保留内存中的旧课表', () async {
+    await seedCache();
+    await TimetableStore.saveSnapshot(c.snapshot);
+    final snapshotFile = File('${tmp.path}/snapshot.json');
+    final settingsFile = File('${tmp.path}/settings.json');
+    settingsFile.writeAsStringSync(
+      jsonEncode({
+        'termCode': c.settings.termCode,
+        'periodHeight': 44,
+        'futureKey': 'keep',
+      }),
+    );
+    final previousSnapshot = snapshotFile.readAsStringSync();
+    final previousSettings = settingsFile.readAsStringSync();
+    TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
+        TimetableSnapshot(
+          courses: [_course('new')],
+          settings: const TimetableSettings(termCode: '2026-2027-2'),
+        );
+    TimetableStore.debugBeforeBatchReplace = (index) {
+      if (index == 1) throw const FileSystemException('合成设置提交失败');
+    };
+    addTearDown(() => TimetableStore.debugBeforeBatchReplace = null);
+
+    await c.syncFromJwxt();
+
+    expect(c.syncStatus, TimetableSyncStatus.failure);
+    expect(c.jwxtCourses.map((course) => course.id), ['cached']);
+    expect(c.settings.termCode, '2026-2027-1');
+    expect(c.lastSyncSuccessAt, isNull);
+    expect(snapshotFile.readAsStringSync(), previousSnapshot);
+    expect(settingsFile.readAsStringSync(), previousSettings);
+  });
+
+  test('同步等待变更日志时保存设置，内存、磁盘和重启均保留新课表', () async {
+    await seedCache();
+    await TimetableStore.saveSnapshot(c.snapshot);
+    await TimetableStore.saveSettings(c.settings);
+    TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
+        TimetableSnapshot(
+          courses: [_course('new', day: 2)],
+          settings: baseSettings!,
+        );
+
+    await whileSyncLogPaused(() async {
+      await c.updateSettings(
+        c.settingsForEditing.copyWith(showSaturday: false),
+      );
+    });
+
+    expect(c.syncStatus, TimetableSyncStatus.success);
+    expect(c.jwxtCourses.single.id, 'new');
+    expect(c.settings.showSaturday, isFalse);
+    final saved = (await TimetableStore.readSnapshot())!;
+    expect(saved.courses.single.id, 'new');
+    expect(saved.settings.showSaturday, isFalse);
+    expect((await TimetableStore.readSettings()).showSaturday, isFalse);
+    final originalBinding = TimetableController.bindingCheck;
+    addTearDown(() => TimetableController.bindingCheck = originalBinding);
+    TimetableController.bindingCheck = () async => false;
+    c.debugReset();
+    await c.ensureStarted();
+    expect(c.jwxtCourses.single.id, 'new');
+    expect(c.settings.showSaturday, isFalse);
+  });
+
+  test('远程响应等待期间仍能保存设置，同步保留最新展示偏好和课表名', () async {
+    await seedCache();
+    final entered = Completer<void>();
+    final response = Completer<void>();
+    TimetableController.fetchSnapshot = (term, {baseSettings}) async {
+      entered.complete();
+      await response.future;
+      return TimetableSnapshot(
+        courses: [_course('new')],
+        settings: baseSettings!.copyWith(nodesPerDay: 12),
+      );
+    };
+    final sync = c.syncFromJwxt();
+    try {
+      await entered.future;
+      await c.updateSettings(
+        c.settingsForEditing.copyWith(
+          showSaturday: false,
+          paletteScheme: 'B',
+          scheduleName: '新课表名',
+        ),
+      );
+      expect(c.loading, isTrue);
+      expect(c.settings.showSaturday, isFalse);
+    } finally {
+      response.complete();
+      await sync;
+    }
+
+    expect(c.syncStatus, TimetableSyncStatus.success);
+    expect(c.jwxtCourses.single.id, 'new');
+    for (final settings in [
+      c.settings,
+      (await TimetableStore.readSnapshot())!.settings,
+    ]) {
+      expect(settings.showSaturday, isFalse);
+      expect(settings.paletteScheme, 'B');
+      expect(settings.scheduleName, '新课表名');
+      expect(settings.nodesPerDay, 12);
+    }
+  });
+
+  test('同步等待变更日志期间解绑，不恢复快照也不发布旧同步成功', () async {
+    await seedCache();
+    await TimetableStore.saveSnapshot(c.snapshot);
+    TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
+        TimetableSnapshot(
+          courses: [_course('new', day: 2)],
+          settings: baseSettings!,
+        );
+    late final Future<void> unbound;
+
+    await whileSyncLogPaused(() async {
+      unbound = c.onPortalBindingChanged(false);
+    });
+    await unbound;
+
+    expect(c.portalBound, isFalse);
+    expect(c.jwxtCourses, isEmpty);
+    expect(c.syncStatus, TimetableSyncStatus.idle);
+    expect(c.lastSyncSuccessAt, isNull);
+    expect(await TimetableStore.readSnapshot(), isNull);
   });
 
   test(

@@ -10,6 +10,7 @@ import 'timetable_controller.dart';
 import 'timetable_models.dart';
 import 'timetable_notify_bridge.dart';
 import 'timetable_notify_plan.dart';
+import 'timetable_persistence_feedback.dart';
 import 'timetable_reminder_guide.dart';
 import 'timetable_settings_text.dart';
 import 'timetable_settings_widgets.dart';
@@ -83,37 +84,69 @@ class TimetableSettingsPage extends StatelessWidget {
     BuildContext context,
     TimetableController c,
   ) async {
-    final picked = await showModalBottomSheet<int>(
+    var saving = false;
+    String? saveError;
+    final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
-      builder: (context) => SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final minute in TimetableSettings.nextDayReminderOptions)
-                ListTile(
-                  title: Text(_reminderTime(minute)),
-                  trailing: minute == c.settings.nextDayReminderMinute
-                      ? const Icon(Icons.check)
-                      : null,
-                  onTap: () => Navigator.pop(context, minute),
-                ),
-            ],
+      builder: (_) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) => SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (saveError case final message?)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: TimetablePersistenceErrorText(message),
+                  ),
+                for (final minute in TimetableSettings.nextDayReminderOptions)
+                  ListTile(
+                    title: Text(_reminderTime(minute)),
+                    trailing: minute == c.settings.nextDayReminderMinute
+                        ? const Icon(Icons.check)
+                        : null,
+                    onTap: saving
+                        ? null
+                        : () async {
+                            setSheetState(() {
+                              saving = true;
+                              saveError = null;
+                            });
+                            final saved = await _saveSettingsAction(
+                              sheetContext,
+                              () => c.updateSettings(
+                                c.settingsForEditing.copyWith(
+                                  nextDayReminderMinute: minute,
+                                ),
+                              ),
+                              onError: (message) =>
+                                  setSheetState(() => saveError = message),
+                            );
+                            if (!sheetContext.mounted) return;
+                            setSheetState(() => saving = false);
+                            if (saved) Navigator.pop(sheetContext, true);
+                          },
+                  ),
+              ],
+            ),
           ),
         ),
       ),
     );
-    if (picked == null) return;
-    await c.updateSettings(c.settings.copyWith(nextDayReminderMinute: picked));
+    if (saved != true || !context.mounted) return;
     await NextDayReminderChannel.requestPermission();
   }
 
   @override
   Widget build(BuildContext context) {
     final c = controller ?? TimetableController.instance;
-    void update(TimetableSettings Function(TimetableSettings s) change) =>
-        c.updateSettings(change(c.settings));
+    Future<bool> update(
+      TimetableSettings Function(TimetableSettings s) change,
+    ) => _saveSettingsAction(
+      context,
+      () => c.updateSettings(change(c.settingsForEditing)),
+    );
 
     return Scaffold(
       backgroundColor: TimetableTheme.colorsOf(context).pageBg,
@@ -135,10 +168,12 @@ class TimetableSettingsPage extends StatelessWidget {
                     title: TtSettingsText.nextDayReminder,
                     value: s.nextDayReminderEnabled,
                     onChanged: (v) async {
-                      await c.updateSettings(
-                        c.settings.copyWith(nextDayReminderEnabled: v),
+                      final saved = await update(
+                        (s) => s.copyWith(nextDayReminderEnabled: v),
                       );
-                      if (v) await NextDayReminderChannel.requestPermission();
+                      if (saved && v && context.mounted) {
+                        await NextDayReminderChannel.requestPermission();
+                      }
                     },
                   ),
                   TimetableSettingsRow(
@@ -246,36 +281,77 @@ class TimetableSettingsPage extends StatelessWidget {
   }
 }
 
+/// 设置操作保存成功后才继续关闭面板或发起权限等后续操作。
+Future<bool> _saveSettingsAction(
+  BuildContext context,
+  Future<void> Function() action, {
+  ValueChanged<String>? onError,
+}) async =>
+    await withTimetablePersistenceFeedback(context, () async {
+      await action();
+      return true;
+    }, onError: onError) ==
+    true;
+
 /// 「恢复教务课程」：二次确认后调用 [TimetableController.restoreAllJwxt]。
 Future<void> _confirmRestoreAll(
   BuildContext context,
   TimetableController c,
 ) async {
-  final ok = await showDialog<bool>(
+  var saving = false;
+  String? saveError;
+  final changed = await showDialog<bool>(
     context: context,
-    builder: (dialogContext) => AlertDialog(
-      key: const Key('tt_restore_jwxt_dialog'),
-      content: const Text(TimetableSettingsPage.restoreConfirmText),
-      actions: [
-        TextButton(
-          key: const Key('tt_restore_jwxt_cancel'),
-          onPressed: () => Navigator.pop(dialogContext, false),
-          child: const Text('取消'),
+    builder: (_) => StatefulBuilder(
+      builder: (dialogContext, setDialogState) => AlertDialog(
+        key: const Key('tt_restore_jwxt_dialog'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(TimetableSettingsPage.restoreConfirmText),
+            if (saveError case final message?) ...[
+              const SizedBox(height: 12),
+              TimetablePersistenceErrorText(message),
+            ],
+          ],
         ),
-        TextButton(
-          key: const Key('tt_restore_jwxt_confirm'),
-          style: TextButton.styleFrom(
-            foregroundColor: TimetableTheme.colorsOf(context).danger,
+        actions: [
+          TextButton(
+            key: const Key('tt_restore_jwxt_cancel'),
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
           ),
-          onPressed: () => Navigator.pop(dialogContext, true),
-          child: const Text('恢复'),
-        ),
-      ],
+          TextButton(
+            key: const Key('tt_restore_jwxt_confirm'),
+            style: TextButton.styleFrom(
+              foregroundColor: TimetableTheme.colorsOf(context).danger,
+            ),
+            onPressed: saving
+                ? null
+                : () async {
+                    setDialogState(() {
+                      saving = true;
+                      saveError = null;
+                    });
+                    final changed = await withTimetablePersistenceFeedback(
+                      dialogContext,
+                      c.restoreAllJwxt,
+                      onError: (message) =>
+                          setDialogState(() => saveError = message),
+                    );
+                    if (!dialogContext.mounted) return;
+                    setDialogState(() => saving = false);
+                    if (changed != null) Navigator.pop(dialogContext, changed);
+                  },
+            child: const Text('恢复'),
+          ),
+        ],
+      ),
     ),
   );
-  if (ok != true || !context.mounted) return;
+  if (changed == null || !context.mounted) return;
   final messenger = ScaffoldMessenger.maybeOf(context);
-  final changed = await c.restoreAllJwxt();
   messenger?.showSnackBar(
     SnackBar(
       behavior: SnackBarBehavior.floating,
@@ -450,7 +526,10 @@ class _TimetableWidgetSettingsPageState
                     n: TtSettingsText.courses(n),
                 },
                 selected: a.widgetCourseCount,
-                onSelected: a.setWidgetCourseCount,
+                onSelected: (n) => _saveSettingsAction(
+                  context,
+                  () => a.setWidgetCourseCount(n),
+                ),
               ),
             for (final option in WidgetDisplayOption.values)
               if (!_square ||
@@ -460,7 +539,10 @@ class _TimetableWidgetSettingsPageState
                   key: Key('tt_settings_${option.field}'),
                   title: option.title,
                   value: a.widgetOption(option),
-                  onChanged: (v) => a.setWidgetOption(option, v),
+                  onChanged: (v) => _saveSettingsAction(
+                    context,
+                    () => a.setWidgetOption(option, v),
+                  ),
                 ),
           ],
         ),
@@ -684,7 +766,8 @@ class TimetableManagementPage extends StatelessWidget {
               TimetableSettingsRow(
                 key: const Key('tt_settings_debug_clear'),
                 title: '[DEBUG] 清空本地课表',
-                onTap: () => c.clearCourses(),
+                onTap: () =>
+                    withTimetablePersistenceFeedback(context, c.clearCourses),
               ),
             ],
           ),
@@ -1183,12 +1266,18 @@ class _ReminderCardState extends State<_ReminderCard>
   }
 
   Future<void> _toggle(bool v) async {
+    await withTimetablePersistenceFeedback(context, () => _toggleUnchecked(v));
+  }
+
+  Future<void> _toggleUnchecked(bool v) async {
     final handler = widget.onToggle;
     final c = widget.controller;
     if (handler != null) {
       final result = await handler(context, v);
-      if (result != c.settings.reminderEnabled) {
-        await c.updateSettings(c.settings.copyWith(reminderEnabled: result));
+      if (result != c.settingsForEditing.reminderEnabled) {
+        await c.updateSettings(
+          c.settingsForEditing.copyWith(reminderEnabled: result),
+        );
       }
       await _refreshPermission();
       if (result && mounted) await _showFirstEnableHint();
@@ -1274,7 +1363,10 @@ class _ReminderCardState extends State<_ReminderCard>
           enabled: s.reminderEnabled,
           options: {for (final m in kReminderLeadChoices) m: '$m'},
           selected: displayReminderLead(s.reminderLeadMinutes),
-          onSelected: widget.actions.setReminderLeadMinutes,
+          onSelected: (minutes) => _saveSettingsAction(
+            context,
+            () => widget.actions.setReminderLeadMinutes(minutes),
+          ),
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
