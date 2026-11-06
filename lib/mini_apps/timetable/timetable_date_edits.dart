@@ -6,6 +6,8 @@
 //
 // 展示优先级：单日修改 > 整天调课 > 拖动调课（[SlotOverride]）> 教务原始。
 
+import 'timetable_models.dart';
+
 /// 编辑 / 拖动保存时的应用范围：只改这一天 / 所有周。默认 [thisDay]。
 enum EditScope { thisDay, allWeeks }
 
@@ -77,7 +79,9 @@ class CourseDateEdit {
     this.teacher,
     this.location,
     this.note,
+    this.courseKind,
     this.color,
+    this.useDefaultColor = false,
     this.toDate,
     this.toStart,
     this.toEnd,
@@ -108,9 +112,11 @@ class CourseDateEdit {
   final String? teacher;
   final String? location;
   final String? note;
+  final CourseKind? courseKind;
 
   /// 这次课的自选原始 ARGB；null 时继承课程全局颜色。
   final int? color;
+  final bool useDefaultColor;
   final DateTime? toDate;
   final int? toStart;
   final int? toEnd;
@@ -142,7 +148,9 @@ class CourseDateEdit {
       teacher != null ||
       location != null ||
       note != null ||
-      color != null;
+      courseKind != null ||
+      color != null ||
+      useDefaultColor;
 
   /// 编辑记录什么都没改（应删除）。weekdayMatch 删除不算空。
   bool get isEmpty =>
@@ -198,7 +206,10 @@ class CourseDateEdit {
     String? teacher,
     String? location,
     String? note,
+    CourseKind? courseKind,
+    bool clearCourseKind = false,
     int? color,
+    bool? useDefaultColor,
     bool clearColor = false,
     DateTime? toDate,
     int? toStart,
@@ -226,7 +237,9 @@ class CourseDateEdit {
     teacher: clearTeacher ? null : (teacher ?? this.teacher),
     location: clearLocation ? null : (location ?? this.location),
     note: clearNote ? null : (note ?? this.note),
+    courseKind: clearCourseKind ? null : (courseKind ?? this.courseKind),
     color: clearColor ? null : (color ?? this.color),
+    useDefaultColor: useDefaultColor ?? this.useDefaultColor,
     toDate: clearMove ? null : (toDate ?? this.toDate),
     toStart: clearMove ? null : (toStart ?? this.toStart),
     toEnd: clearMove ? null : (toEnd ?? this.toEnd),
@@ -250,7 +263,9 @@ class CourseDateEdit {
     if (teacher != null) 'teacher': teacher,
     if (location != null) 'location': location,
     if (note != null) 'note': note,
+    if (courseKind != null) 'courseKind': courseKind!.name,
     if (color != null) 'color': color,
+    if (useDefaultColor) 'useDefaultColor': true,
     if (toDate != null) 'toDate': dateKeyOf(toDate!),
     if (toStart != null) 'toStart': toStart,
     if (toEnd != null) 'toEnd': toEnd,
@@ -272,7 +287,9 @@ class CourseDateEdit {
     'teacher',
     'location',
     'note',
+    'courseKind',
     'color',
+    'useDefaultColor',
     'toDate',
     'toStart',
     'toEnd',
@@ -343,6 +360,7 @@ class CourseDateEdit {
         teacher: s('teacher'),
         location: s('location'),
         note: s('note'),
+        courseKind: parseCourseKind(m['courseKind']),
         createdAt: s('createdAt') ?? '',
         extra: {
           for (final e in m.entries)
@@ -381,7 +399,9 @@ class CourseDateEdit {
       teacher: s('teacher'),
       location: s('location'),
       note: s('note'),
+      courseKind: parseCourseKind(m['courseKind']),
       color: i('color') == null ? null : i('color')! | 0xFF000000,
+      useDefaultColor: m['useDefaultColor'] == true,
       toDate: parseDateKey(m['toDate']),
       toStart: ts,
       toEnd: te,

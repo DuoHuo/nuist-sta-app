@@ -2,12 +2,14 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
 
 final _c = TimetableController.instance;
 
@@ -39,7 +41,7 @@ Future<void> _settle(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-/// 打开「添加课程」表单（新建手动课，默认选中全部周次）。
+/// 从课表入口打开添加课程表单。
 Future<void> _openAddForm(WidgetTester tester) async {
   await tester.pumpWidget(const MaterialApp(home: TimetablePage()));
   for (var i = 0; i < 10; i++) {
@@ -55,7 +57,7 @@ Future<void> _openAddForm(WidgetTester tester) async {
 Set<int> _selectedWeeks(WidgetTester tester) => {
   for (var w = 1; w <= 20; w++)
     if (tester
-        .widget<FilterChip>(find.byKey(Key('manual_course_week_$w')))
+        .widget<FilterChip>(find.byKey(Key('course_form_week_$w')))
         .selected)
       w,
 };
@@ -84,15 +86,21 @@ Widget _detail(Course course) => MaterialApp(
 
 void main() {
   late Directory tmp;
+  final origClock = TimetableController.clock;
+  final origBinding = TimetableController.bindingCheck;
 
   setUp(() async {
     tmp = Directory.systemTemp.createTempSync('tt_form');
     TimetableStore.debugDirectory = tmp;
+    TimetableController.clock = () => DateTime(2026, 9, 7, 9);
+    TimetableController.bindingCheck = () async => false;
     _c.debugReset();
   });
 
   tearDown(() {
     TimetableStore.debugDirectory = null;
+    TimetableController.clock = origClock;
+    TimetableController.bindingCheck = origBinding;
     _c.debugReset();
     if (tmp.existsSync()) tmp.deleteSync(recursive: true);
   });
@@ -109,17 +117,28 @@ void main() {
     // EV01：「+」先弹三选一，「课程」进入原手动课表单。
     await tester.tap(find.byKey(const Key('add_entry_course')));
     await tester.pumpAndSettle();
-    expect(find.text('添加课程'), findsOneWidget);
+    expect(find.text('添加课程'), findsWidgets);
+    tester
+        .widget<DropdownButtonFormField<int>>(
+          find.byKey(const Key('manual_course_day')),
+        )
+        .onChanged!(1);
+    await tester.pump();
 
     // 课程名必填。
     await tester.tap(find.byKey(const Key('manual_course_save')));
     await tester.pumpAndSettle();
-    expect(find.text('请输入课程名'), findsOneWidget);
+    expect(find.text('请填写课程名称'), findsOneWidget);
     expect(_c.manualCourses, isEmpty);
 
     await tester.enterText(find.byKey(const Key('manual_course_name')), '自习课');
+    await tester.ensureVisible(find.byKey(const Key('course_form_weeks')));
+    await tester.tap(find.byKey(const Key('course_form_weeks')));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('单周'));
     await tester.pump();
+    await tester.tap(find.byKey(const Key('course_form_weeks_confirm')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('manual_course_save')));
     await _settle(tester);
 
@@ -197,9 +216,11 @@ void main() {
     expect(find.text('旧名'), findsOneWidget);
     await tester.enterText(find.byKey(const Key('manual_course_name')), '新名');
     await tester.tap(find.byKey(const Key('manual_course_save')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('course_form_scope_confirm')));
     await _settle(tester);
     expect(_c.manualCourses.single.id, course.id);
-    expect(_c.manualCourses.single.name, '新名');
+    expect(_c.cellsForDay(1, 2).single.course.name, '新名');
     expect(_c.manualCourses.single.slots.single.startNode, 3);
   });
 
@@ -219,27 +240,32 @@ void main() {
     expect(find.byKey(const Key('course_detail_jwxt_delete')), findsOneWidget);
   });
 
-  testWidgets('周次快捷按钮：全部再次点击清空', (tester) async {
+  testWidgets('周次快捷按钮保持幂等，清空需要单独操作且不能确认', (tester) async {
     _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
     await _openAddForm(tester);
+    await tester.ensureVisible(find.byKey(const Key('course_form_weeks')));
+    await tester.tap(find.byKey(const Key('course_form_weeks')));
+    await tester.pumpAndSettle();
 
     expect(_selectedWeeks(tester), {for (var w = 1; w <= 20; w++) w});
 
     await tester.tap(find.text('全部'));
     await tester.pump();
-    expect(_selectedWeeks(tester), isEmpty);
+    expect(_selectedWeeks(tester), {for (var w = 1; w <= 20; w++) w});
 
-    // 清空后保存应提示至少选一周。
-    await tester.enterText(find.byKey(const Key('manual_course_name')), '自习课');
-    await tester.tap(find.byKey(const Key('manual_course_save')));
+    await tester.tap(find.byKey(const Key('course_form_weeks_clear')));
+    await tester.tap(find.byKey(const Key('course_form_weeks_confirm')));
     await tester.pump();
     expect(find.text('请至少选择一周'), findsOneWidget);
     expect(_c.manualCourses, isEmpty);
   });
 
-  testWidgets('周次快捷按钮：单周再次点击清空', (tester) async {
+  testWidgets('周次快捷按钮：重复点击单周保持选择', (tester) async {
     _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
     await _openAddForm(tester);
+    await tester.ensureVisible(find.byKey(const Key('course_form_weeks')));
+    await tester.tap(find.byKey(const Key('course_form_weeks')));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('单周'));
     await tester.pump();
@@ -247,12 +273,15 @@ void main() {
 
     await tester.tap(find.text('单周'));
     await tester.pump();
-    expect(_selectedWeeks(tester), isEmpty);
+    expect(_selectedWeeks(tester), {for (var w = 1; w <= 20; w += 2) w});
   });
 
   testWidgets('周次快捷按钮：单周/双周/全部互斥切换', (tester) async {
     _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
     await _openAddForm(tester);
+    await tester.ensureVisible(find.byKey(const Key('course_form_weeks')));
+    await tester.tap(find.byKey(const Key('course_form_weeks')));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('单周'));
     await tester.pump();
@@ -266,12 +295,101 @@ void main() {
     await tester.pump();
     expect(_selectedWeeks(tester), {for (var w = 1; w <= 20; w++) w});
 
-    // 双周集合再点一次同样清空。
+    // 再点双周仍保持双周。
     await tester.tap(find.text('双周'));
     await tester.pump();
     expect(_selectedWeeks(tester), {for (var w = 2; w <= 20; w += 2) w});
     await tester.tap(find.text('双周'));
     await tester.pump();
-    expect(_selectedWeeks(tester), isEmpty);
+    expect(_selectedWeeks(tester), {for (var w = 2; w <= 20; w += 2) w});
+  });
+
+  testWidgets('修改开始节次联动结束节次，保留跨度并限制到当天末节', (tester) async {
+    _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
+    await tester.pumpWidget(
+      MaterialApp(home: ManualCourseForm(controller: _c)),
+    );
+    await tester.pumpAndSettle();
+    Finder field(String name) => find.descendant(
+      of: find.byKey(Key('course_form_$name')),
+      matching: find.byType(DropdownButtonFormField<int>),
+    );
+    int? value(String name) =>
+        tester.widget<DropdownButtonFormField<int>>(field(name)).initialValue;
+    Future<void> startAt(int start) async {
+      tester.widget<DropdownButtonFormField<int>>(field('start')).onChanged!(
+        start,
+      );
+      await tester.pump();
+    }
+
+    expect((value('start'), value('end')), (1, 2));
+    await startAt(5);
+    expect((value('start'), value('end')), (5, 6));
+    await startAt(3);
+    expect((value('start'), value('end')), (3, 4));
+    await startAt(_c.lastPeriod);
+    expect((value('start'), value('end')), (_c.lastPeriod, _c.lastPeriod));
+    await startAt(2);
+    expect((value('start'), value('end')), (2, 3), reason: '末节截断后仍记住原连堂跨度');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('窄屏大字深色表单兼容键盘，备注入口仍能获得焦点', (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    tester.view.viewInsets = const FakeViewPadding(bottom: 240);
+    addTearDown(tester.view.reset);
+    _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appDarkTheme(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: const TextScaler.linear(1.6)),
+          child: child!,
+        ),
+        home: ManualCourseForm(controller: _c, autofocusNote: true),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    final note = tester.widget<EditableText>(
+      find.descendant(
+        of: find.byKey(const Key('manual_course_note')),
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(note.focusNode.hasFocus, isTrue);
+    final save = tester.getRect(find.byKey(const Key('manual_course_save')));
+    expect(save.bottom, lessThanOrEqualTo(400));
+  });
+
+  testWidgets('返回时提醒未保存，继续编辑保留内容，放弃不创建课程', (tester) async {
+    _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
+    await _openAddForm(tester);
+    await tester.enterText(
+      find.byKey(const Key('manual_course_name')),
+      '待保存的课程',
+    );
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('course_form_close')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('course_form_discard_cancel')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextFormField>(find.byKey(const Key('manual_course_name')))
+          .controller!
+          .text,
+      '待保存的课程',
+    );
+    await tester.tap(find.byKey(const Key('course_form_close')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('course_form_discard_confirm')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('manual_course_name')), findsNothing);
+    expect(_c.manualCourses, isEmpty);
   });
 }

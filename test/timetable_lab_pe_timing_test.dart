@@ -36,6 +36,61 @@ CourseSlot _slot({bool isLab = false, int start = 5, int end = 6}) =>
 void main() {
   final periods = TimetableController.defaultPeriods();
 
+  group('显式课程类型', () {
+    test('普通类型覆盖教务实验和体育识别，体育项目名也跟随类型', () {
+      const course = Course(
+        id: 'kind',
+        name: '体育Ⅱ',
+        buildingDisplay: '体育板块场地',
+        projectName: '羽毛球',
+      );
+      final old = _slot(isLab: true, start: 1, end: 2);
+      expect(
+        courseDisplayName(course: course.forSlot(old), slot: old),
+        '体育·羽毛球',
+      );
+      for (final kind in CourseKind.values) {
+        final slot = CourseSlot.fromJson(old.copyWith(kind: kind).toJson());
+        final displayed = course.forSlot(slot);
+        expect(courseKindOf(course: displayed, slot: slot), kind);
+        expect(
+          resolveTimingSegments(
+            periods: periods,
+            startNode: 1,
+            endNode: 2,
+            kind: timingKindOf(course: displayed, slot: slot),
+          ).single.end,
+          kind == CourseKind.standard ? '09:40' : '09:30',
+        );
+        expect(
+          courseDisplayName(course: displayed, slot: slot),
+          kind == CourseKind.pe ? '体育·羽毛球' : '体育Ⅱ',
+        );
+      }
+    });
+
+    test('实验与普通相邻时段不合并，复制和拆分保留显式类型', () {
+      const course = Course(id: 'kind', name: '测试课程');
+      final first = _slot(
+        start: 1,
+        end: 1,
+      ).copyWith(kind: CourseKind.lab, nameOverride: '实验安排', color: 0xFF123456);
+      final second = _slot(
+        start: 2,
+        end: 2,
+      ).copyWith(kind: CourseKind.standard);
+      expect(mergeTimingSlots(course, [first, second]), hasLength(2));
+      final copied = first.withSplitFrom(first.ref);
+      expect(copied.kind, CourseKind.lab);
+      expect(copied.nameOverride, '实验安排');
+      expect(copied.color, 0xFF123456);
+      expect(
+        CourseSlot.fromJson({...first.toJson(), 'courseKind': 'unknown'}).kind,
+        isNull,
+      );
+    });
+  });
+
   group('SFSYK 解析', () {
     test('"1" / 1 / true 都解析为实验课', () {
       for (final (i, raw) in <Object>['1', 1, true].indexed) {

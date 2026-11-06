@@ -238,19 +238,22 @@ void main() {
       expect(find.text('课程a'), findsWidgets);
     });
 
-    testWidgets('表单周次：totalWeeks 18 时仍列到第 20 周', (tester) async {
+    testWidgets('表单周次按实际学期列出，不额外补到20周', (tester) async {
       setUpCourses([_course('a', '1' * 18)], today: _mondayOf(3));
       expect(_c.totalWeeks, 18);
       await tester.pumpWidget(
         MaterialApp(home: ManualCourseForm(controller: _c)),
       );
       await tester.pump();
+      await tester.ensureVisible(find.byKey(const Key('course_form_weeks')));
+      await tester.tap(find.byKey(const Key('course_form_weeks')));
+      await tester.pumpAndSettle();
       expect(
-        find.byKey(const Key('manual_course_week_20'), skipOffstage: false),
+        find.byKey(const Key('course_form_week_18'), skipOffstage: false),
         findsOneWidget,
       );
       expect(
-        find.byKey(const Key('manual_course_week_21'), skipOffstage: false),
+        find.byKey(const Key('course_form_week_19'), skipOffstage: false),
         findsNothing,
       );
       expect(tester.takeException(), isNull);

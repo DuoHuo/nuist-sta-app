@@ -152,6 +152,47 @@ void main() {
     expect(find.text('实验'), findsNothing);
   });
 
+  testWidgets('显式课程类型同步改变格子名称、实验标签与详情', (tester) async {
+    final original = _course(
+      name: '体育（1）',
+      building: '体育板块场地',
+    ).copyWith(projectName: '篮球');
+    for (final kind in CourseKind.values) {
+      final course = original.copyWith(
+        slots: [original.slots.single.copyWith(kind: kind)],
+      );
+      final cell = _cell(course);
+      final hasLabLabel = kind == CourseKind.lab;
+      final name = kind == CourseKind.pe ? '体育·篮球' : '体育（1）';
+      await _pumpCell(tester, cell);
+      expect(
+        find.byKey(const Key('course_cell_lab_pill')),
+        hasLabLabel ? findsOneWidget : findsNothing,
+      );
+      expect(
+        tester.widget<CourseNameText>(find.byType(CourseNameText)).name,
+        name,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: CourseDetailSheet(cell: cell, controller: _c),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(
+        find.byKey(const Key('course_detail_lab_label')),
+        hasLabLabel ? findsOneWidget : findsNothing,
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('course_detail_title'))).data,
+        name,
+      );
+    }
+  });
+
   testWidgets('LAB04 与「非本周」同行：「实验」在前、间距 4dp；行宽不够只保留「实验」', (tester) async {
     await _pumpCell(tester, _cell(_course(), active: false));
     final lab = find.byKey(const Key('course_cell_lab_pill'));

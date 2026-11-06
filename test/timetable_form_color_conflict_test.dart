@@ -80,19 +80,30 @@ Future<void> _openForm(WidgetTester tester, {Course? initial}) async {
   );
   await tester.tap(find.text('open'));
   await tester.pumpAndSettle();
+  if (initial == null) {
+    tester
+        .widget<DropdownButtonFormField<int>>(
+          find.byKey(const Key('manual_course_day')),
+        )
+        .onChanged!(1);
+    await tester.pump();
+  }
 }
 
 void main() {
   late Directory tmp;
+  final origClock = TimetableController.clock;
 
   setUp(() {
     tmp = Directory.systemTemp.createTempSync('tt_form2');
     TimetableStore.debugDirectory = tmp;
+    TimetableController.clock = () => DateTime(2026, 9, 7, 9);
     _c.debugReset();
   });
 
   tearDown(() {
     TimetableStore.debugDirectory = null;
+    TimetableController.clock = origClock;
     _c.debugReset();
     if (tmp.existsSync()) tmp.deleteSync(recursive: true);
   });
@@ -104,35 +115,24 @@ void main() {
       expect(courseColorIndex(_c, a.copyWith(colorIndex: 7)), 7);
     });
 
-    testWidgets('表单：保存为 accent 胶囊；周次选中 accent 实底白字', (tester) async {
+    testWidgets('表单常用字段平铺，周次选择器按需打开', (tester) async {
       _setCourses(const []);
       await _openForm(tester);
-      final save = tester.widget<FilledButton>(
-        find.byKey(const Key('manual_course_save')),
-      );
-      expect(
-        save.style!.backgroundColor!.resolve(<WidgetState>{}),
-        TimetableTheme.accent,
-      );
-      expect(
-        save.style!.foregroundColor!.resolve(<WidgetState>{}),
-        Colors.white,
-      );
-      expect(save.style!.shape!.resolve(<WidgetState>{}), isA<StadiumBorder>());
-
-      final chip = tester.widget<FilterChip>(
-        find.byKey(const Key('manual_course_week_1')),
-      );
-      expect(chip.selected, isTrue);
-      expect(chip.selectedColor, TimetableTheme.accent);
-      expect(chip.labelStyle!.color, Colors.white);
-      await tester.tap(find.byKey(const Key('manual_course_week_1')));
+      expect(find.byKey(const Key('manual_course_teacher')), findsOneWidget);
+      expect(find.byKey(const Key('manual_course_note')), findsOneWidget);
+      expect(find.byType(ExpansionTile), findsNothing);
+      expect(find.byKey(const Key('course_form_weeks_sheet')), findsNothing);
+      await tester.ensureVisible(find.byKey(const Key('course_form_weeks')));
+      await tester.tap(find.byKey(const Key('course_form_weeks')));
+      await tester.pumpAndSettle();
+      final chip = find.byKey(const Key('course_form_week_1'));
+      expect(tester.widget<FilterChip>(chip).selected, isTrue);
+      await tester.tap(chip);
       await tester.pump();
-      final off = tester.widget<FilterChip>(
-        find.byKey(const Key('manual_course_week_1')),
-      );
-      expect(off.selected, isFalse);
-      expect(off.backgroundColor, const Color(0xFFF0F1F3));
+      expect(tester.widget<FilterChip>(chip).selected, isFalse);
+      await tester.tap(find.byKey(const Key('course_form_weeks_cancel')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('course_form_scope_sheet')), findsNothing);
     });
 
     testWidgets('暗色选色面板实时预览深色课程', (tester) async {
@@ -155,6 +155,7 @@ void main() {
       );
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('manual_course_color')));
       await tester.tap(find.byKey(const Key('manual_course_color')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('tt_color_sv_panel')), findsOneWidget);
@@ -179,6 +180,7 @@ void main() {
         find.byKey(const Key('manual_course_color_preview')),
         findsNothing,
       );
+      await tester.ensureVisible(find.byKey(const Key('manual_course_color')));
       await tester.tap(find.byKey(const Key('manual_course_color')));
       await tester.pumpAndSettle();
       final preview = tester.widget<Container>(
@@ -199,6 +201,7 @@ void main() {
       _setCourses(const []);
       await _openForm(tester);
       await tester.enterText(find.byKey(const Key('manual_course_name')), '体育');
+      await tester.ensureVisible(find.byKey(const Key('manual_course_color')));
       await tester.tap(find.byKey(const Key('manual_course_color')));
       await tester.pumpAndSettle();
       const preset = Color(0xFF3873A2);
@@ -218,6 +221,7 @@ void main() {
         find.byKey(const Key('manual_course_color_preview')),
         findsNothing,
       );
+      await tester.ensureVisible(find.byKey(const Key('manual_course_color')));
       await tester.tap(find.byKey(const Key('manual_course_color')));
       await tester.pumpAndSettle();
       final preview = tester.widget<Container>(
@@ -291,8 +295,12 @@ void main() {
         _jwxt('大学物理', start: 2, end: 3, weeks: '0' * 8 + '1' * 8),
       ]);
       await _openForm(tester);
-      // 默认：周一 第 1 节、全部周 → 与数据结构冲突（第 1 节不与物理重叠）。
-      expect(find.text('与「数据结构」第 1–16 周冲突'), findsOneWidget);
+      // 默认两节连堂；先改为第1节，验证单门冲突。
+      await tester.tap(find.byKey(const ValueKey('manual_course_end_1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('第 1 节').last);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('与「数据结构」第 1–16 周冲突'), findsOneWidget);
       final defaultSlot = CourseSlot(
         day: 1,
         startNode: 1,
@@ -300,7 +308,7 @@ void main() {
         weeks: '1' * _c.totalWeeks,
       );
       expect(
-        find.text(
+        find.textContaining(
           describeManualConflicts(defaultSlot, _c.conflictsFor(defaultSlot))!,
         ),
         findsOneWidget,
@@ -308,15 +316,14 @@ void main() {
       final hint = tester.widget<Text>(
         find.byKey(const Key('manual_course_conflict')),
       );
-      expect(hint.style!.fontSize, 12);
-      expect(hint.style!.color, TimetableTheme.warning);
+      expect(hint.data, contains('仍可保存'));
 
       // 改结束节为第 2 节 → 两门。
       await tester.tap(find.byKey(const ValueKey('manual_course_end_1')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('第 2 节').last);
       await tester.pumpAndSettle();
-      expect(find.text('与 2 门课冲突'), findsOneWidget);
+      expect(find.textContaining('与 2 门课冲突'), findsOneWidget);
       final twoNodes = CourseSlot(
         day: 1,
         startNode: 1,
@@ -337,7 +344,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('周一').last);
       await tester.pumpAndSettle();
-      expect(find.text('与 2 门课冲突'), findsOneWidget);
+      expect(find.textContaining('与 2 门课冲突'), findsOneWidget);
       await tester.enterText(find.byKey(const Key('manual_course_name')), '自习');
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settle(tester);
@@ -345,7 +352,7 @@ void main() {
 
       // 编辑自身：只剩与教务课的冲突，不把自己算进去。
       await _openForm(tester, initial: _c.manualCourses.single);
-      expect(find.text('与 2 门课冲突'), findsOneWidget);
+      expect(find.textContaining('与 2 门课冲突'), findsOneWidget);
     });
   });
 

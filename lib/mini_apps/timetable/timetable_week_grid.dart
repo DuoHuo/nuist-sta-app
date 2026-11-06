@@ -834,7 +834,9 @@ class _WeekGridState extends State<WeekGrid> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: Text(
-                course.displayName,
+                slot == null
+                    ? course.displayName
+                    : courseDisplayName(course: course, slot: slot),
                 style: TimetableTheme.titleStyle(color: colors.titleText),
               ),
             ),
@@ -926,7 +928,7 @@ class _WeekGridState extends State<WeekGrid> {
             for (final c in cells)
               ListTile(
                 key: ValueKey('stack_item_${c.course.id}'),
-                title: Text(c.course.displayName),
+                title: Text(courseDisplayName(course: c.course, slot: c.slot)),
                 subtitle: Text(
                   '第 ${c.slot.startNode}–${c.slot.endNode} 节'
                   '${c.slot.location.isEmpty ? '' : ' · ${c.slot.location}'}',
@@ -1065,8 +1067,13 @@ class SlotCellGroup {
       cells.map((c) => c.slot.endNode).reduce((a, b) => a > b ? a : b);
 
   static int _byName(GridCell a, GridCell b) {
-    final byName = normalizeCourseName(a.course.displayName)
-        .compareTo(normalizeCourseName(b.course.displayName));
+    final byName =
+        normalizeCourseName(courseDisplayName(course: a.course, slot: a.slot))
+            .compareTo(
+              normalizeCourseName(
+                courseDisplayName(course: b.course, slot: b.slot),
+              ),
+            );
     if (byName != 0) return byName;
     return a.course.id.compareTo(b.course.id);
   }

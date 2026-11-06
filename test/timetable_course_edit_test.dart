@@ -183,9 +183,7 @@ void main() {
       expect(_c.jwxtCourses.single.name, '测试课甲', reason: '教务原数据不变');
     });
 
-    testWidgets('JE18/JE19/JE22 编辑页：4 项可输入；时间与周次只读 + 灰字提示；保存课名', (
-      tester,
-    ) async {
+    testWidgets('教务课可改类型与节次，保存时选择范围，保留其他周', (tester) async {
       _load(jwxt: [jwxt]);
       _bigView(tester);
       await tester.pumpWidget(
@@ -193,53 +191,58 @@ void main() {
           home: JwxtCourseEditPage(controller: _c, cell: cellOf('j1')),
         ),
       );
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(find.byType(TextFormField), findsNWidgets(4));
+      expect(find.byKey(const Key('jwxt_edit_teacher')), findsOneWidget);
+      expect(find.byKey(const Key('jwxt_edit_note')), findsOneWidget);
+      expect(find.byKey(const Key('course_form_scope_sheet')), findsNothing);
+      await tester.enterText(find.byKey(const Key('jwxt_edit_name')), '测试课乙');
+      tester
+          .widget<DropdownButtonFormField<CourseKind>>(
+            find.byKey(const Key('course_form_kind')),
+          )
+          .onChanged!(CourseKind.lab);
+      await tester.pump();
+      final start = find.descendant(
+        of: find.byKey(const Key('course_form_start')),
+        matching: find.byType(DropdownButtonFormField<int>),
+      );
+      tester.widget<DropdownButtonFormField<int>>(start).onChanged!(5);
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('jwxt_edit_save')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('course_form_scope_sheet')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('course_form_scope_cancel')));
+      await tester.pumpAndSettle();
       expect(
         tester
             .widget<TextFormField>(find.byKey(const Key('jwxt_edit_name')))
-            .controller
-            ?.text,
-        '测试课甲',
+            .controller!
+            .text,
+        '测试课乙',
       );
-      expect(find.byKey(const Key('jwxt_edit_time')), findsOneWidget);
-      expect(find.byKey(const Key('jwxt_edit_weeks')), findsOneWidget);
-      final hint = tester.widget<Text>(
-        find.byKey(const Key('jwxt_edit_time_hint')),
-      );
-      expect(hint.data, '拖动课程可调整时间');
-      expect(hint.style?.color, TimetableTheme.hint);
-      // 时间/周次行不在任何输入框里，点了不弹选择器。
-      expect(
-        find.ancestor(
-          of: find.byKey(const Key('jwxt_edit_time')),
-          matching: find.byType(TextField),
-        ),
-        findsNothing,
-      );
-      await tester.tap(find.byKey(const Key('jwxt_edit_time')));
-      await tester.pumpAndSettle();
-      expect(find.byType(Dialog), findsNothing);
-      expect(find.byType(BottomSheet), findsNothing);
-
-      expect(find.byKey(const Key('jwxt_edit_apply_weeks')), findsOneWidget);
-      await tester.enterText(find.byKey(const Key('jwxt_edit_name')), '测试课乙');
-      // 选「全选」→ 所有周，改课程本身。
-      await tester.tap(find.byKey(const Key('jwxt_edit_apply_weeks')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('apply_weeks_sheet')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('apply_weeks_all')));
-      await tester.tap(find.byKey(const Key('apply_weeks_done')));
-      await tester.pumpAndSettle();
+      expect(_c.cellsForDay(_week, 1).single.course.name, '测试课甲');
       await tester.tap(find.byKey(const Key('jwxt_edit_save')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('course_form_scope_once')));
+      await tester.tap(find.byKey(const Key('course_form_scope_confirm')));
       await _settleIo(tester);
-      final edit = _c.courseEditOf('j1')!;
-      expect(edit.name, '测试课乙');
-      expect(edit.teacher, isNull, reason: '未改的字段传 null 保持原样');
-      expect(edit.location, isNull);
-      expect(_c.courses.firstWhere((c) => c.id == 'j1').name, '测试课乙');
-      final slot = _c.courses.firstWhere((c) => c.id == 'j1').slots.single;
-      expect((slot.day, slot.startNode, slot.endNode), (1, 3, 4));
+      final edited = _c.cellsForDay(_week, 1).single;
+      expect(edited.course.name, '测试课乙');
+      expect((edited.slot.startNode, edited.slot.endNode), (5, 6));
+      expect(
+        courseKindOf(course: edited.course, slot: edited.slot),
+        CourseKind.lab,
+      );
+      expect(edited.slot.teacher, '张老师');
+      final other = _c.cellsForDay(_week + 1, 1).single;
+      expect(other.course.name, '测试课甲');
+      expect((other.slot.startNode, other.slot.endNode), (3, 4));
+      expect(
+        courseKindOf(course: other.course, slot: other.slot),
+        CourseKind.standard,
+      );
+      expect(_c.jwxtCourses.single.name, '测试课甲');
     });
 
     testWidgets('JE06/JE07 修改标签打开恢复入口，恢复后回到教务值', (tester) async {

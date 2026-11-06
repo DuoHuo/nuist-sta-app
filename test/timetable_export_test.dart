@@ -143,6 +143,26 @@ void main() {
     expect(item.reason, TimetableExportSkipReason.noFixedTime);
   });
 
+  test('导出按每个时段的课程类型生成名称，保留其他时段的体育项目', () {
+    _loadCourses([
+      Course(
+        id: 'pe',
+        name: '体育（1）',
+        buildingDisplay: '体育板块场地',
+        projectName: '篮球',
+        source: CourseSource.jwxt,
+        slots: [
+          _validSlot.copyWith(kind: CourseKind.standard),
+          _validSlot.copyWith(day: 2, kind: CourseKind.pe),
+          _validSlot.copyWith(day: 0, kind: CourseKind.lab),
+        ],
+      ),
+    ]);
+    final snapshot = TimetableExportSnapshot.fromController(_c);
+    expect(_items(snapshot).map((item) => item['title']), ['体育（1）', '体育·篮球']);
+    expect(snapshot.skippedItems.single.courseName, '体育（1）');
+  });
+
   test('空周次按 emptyWeeks 跳过，缺少时间时优先 noFixedTime', () {
     _loadCourses([
       const Course(

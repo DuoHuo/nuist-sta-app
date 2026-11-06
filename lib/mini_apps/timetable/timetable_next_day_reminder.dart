@@ -75,7 +75,10 @@ NextDayReminderPayload? buildNextDayReminder({
   final when = early
       ? '第${first.slot.startNode}–${first.slot.endNode}节'
       : (time == null || time.isEmpty ? '第$node节' : time);
-  final name = _short(first.course.displayName, 16);
+  final name = _short(
+    courseDisplayName(course: first.course, slot: first.slot),
+    16,
+  );
   final location = _short(first.slot.location, 12);
   final body = courses.length > 1 && !early
       ? '首节 ${time ?? when} · $name；还有 ${courses.length - 1} 节'

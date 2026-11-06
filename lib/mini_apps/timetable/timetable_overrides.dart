@@ -362,6 +362,10 @@ AppliedOverrides applySlotOverrides(
           location: s.location,
           note: s.note,
           isLab: s.isLab,
+          kind: s.kind,
+          nameOverride: s.nameOverride,
+          color: s.color,
+          useDefaultColor: s.useDefaultColor,
         );
         _origins[r] = SlotOrigin(courseId: c.id, original: s, moved: false);
         slots.add(r);
@@ -376,6 +380,10 @@ AppliedOverrides applySlotOverrides(
           location: s.location,
           note: s.note,
           isLab: s.isLab,
+          kind: s.kind,
+          nameOverride: s.nameOverride,
+          color: s.color,
+          useDefaultColor: s.useDefaultColor,
         );
         _origins[m] = SlotOrigin(courseId: c.id, original: s, moved: true);
         slots.add(m);
@@ -420,7 +428,12 @@ List<CourseSlot> moveManualSlots(
         x.endNode == toEnd &&
         x.teacher == s.teacher &&
         x.location == s.location &&
-        x.note == s.note) {
+        x.note == s.note &&
+        x.isLab == s.isLab &&
+        x.kind == s.kind &&
+        x.nameOverride == s.nameOverride &&
+        x.color == s.color &&
+        x.useDefaultColor == s.useDefaultColor) {
       mergeAt = i;
       break;
     }
@@ -441,6 +454,10 @@ List<CourseSlot> moveManualSlots(
       location: t.location,
       note: t.note,
       isLab: t.isLab || s.isLab,
+      kind: t.kind,
+      nameOverride: t.nameOverride,
+      color: t.color,
+      useDefaultColor: t.useDefaultColor,
       splitFrom: t.splitFrom,
     );
   } else {
@@ -453,6 +470,10 @@ List<CourseSlot> moveManualSlots(
       location: s.location,
       note: s.note,
       isLab: s.isLab,
+      kind: s.kind,
+      nameOverride: s.nameOverride,
+      color: s.color,
+      useDefaultColor: s.useDefaultColor,
       splitFrom: keep ? s.ref : s.splitFrom,
     );
   }
@@ -473,6 +494,10 @@ List<CourseSlot> moveManualSlots(
             location: s.location,
             note: s.note,
             isLab: s.isLab,
+            kind: s.kind,
+            nameOverride: s.nameOverride,
+            color: s.color,
+            useDefaultColor: s.useDefaultColor,
             splitFrom: s.splitFrom,
           ),
         ?moved,
@@ -503,6 +528,160 @@ void tagSlotOrigin(CourseSlot slot, SlotOrigin origin) =>
 
 // ===== 教务课编辑 / 删除覆盖层（第 4 条）=====
 
+/// 一段本地安排相对教务原时段的字段差异；空字段继续跟随教务更新。
+class CourseSlotPatch {
+  const CourseSlotPatch({
+    required this.day,
+    required this.startNode,
+    required this.endNode,
+    required this.weeks,
+    this.name,
+    this.teacher,
+    this.location,
+    this.note,
+    this.courseKind,
+    this.color,
+    this.useDefaultColor = false,
+    this.splitFrom,
+  });
+
+  final int day;
+  final int startNode;
+  final int endNode;
+  final String weeks;
+  final String? name;
+  final String? teacher;
+  final String? location;
+  final String? note;
+  final CourseKind? courseKind;
+  final int? color;
+  final bool useDefaultColor;
+  final SlotRef? splitFrom;
+
+  /// 只存真正改过的字段，避免同步后把新的教师、地点等锁在旧值。
+  factory CourseSlotPatch.between(CourseSlot base, CourseSlot value) =>
+      CourseSlotPatch(
+        day: value.day,
+        startNode: value.startNode,
+        endNode: value.endNode,
+        weeks: value.weeks,
+        name: value.nameOverride,
+        teacher: value.teacher == base.teacher ? null : value.teacher,
+        location: value.location == base.location ? null : value.location,
+        note: value.note == base.note ? null : value.note,
+        courseKind: value.kind,
+        color: value.color,
+        useDefaultColor: value.useDefaultColor,
+        splitFrom: value.splitFrom,
+      );
+
+  /// 将差异应用到本次同步的原时段。
+  CourseSlot apply(CourseSlot base) => base.copyWith(
+    day: day,
+    startNode: startNode,
+    endNode: endNode,
+    weeks: weeks,
+    weeksLabel: '',
+    nameOverride: name,
+    teacher: teacher,
+    location: location,
+    note: note,
+    kind: courseKind,
+    color: color,
+    useDefaultColor: useDefaultColor,
+    splitFrom: splitFrom,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'day': day,
+    'startNode': startNode,
+    'endNode': endNode,
+    'weeks': weeks,
+    if (name != null) 'name': name,
+    if (teacher != null) 'teacher': teacher,
+    if (location != null) 'location': location,
+    if (note != null) 'note': note,
+    if (courseKind != null) 'courseKind': courseKind!.name,
+    if (color != null) 'color': color,
+    if (useDefaultColor) 'useDefaultColor': true,
+    if (splitFrom != null) 'splitFrom': splitFrom!.toJson(),
+  };
+
+  /// 损坏条目不参与展示。
+  static CourseSlotPatch? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final d = raw['day'], s = raw['startNode'], e = raw['endNode'];
+    final w = raw['weeks'];
+    if (d is! int ||
+        d < 1 ||
+        d > 7 ||
+        s is! int ||
+        s < 1 ||
+        e is! int ||
+        e < s ||
+        w is! String ||
+        !RegExp(r'^[01]+$').hasMatch(w)) {
+      return null;
+    }
+    String? field(String key) => raw[key] is String ? raw[key] as String : null;
+    return CourseSlotPatch(
+      day: d,
+      startNode: s,
+      endNode: e,
+      weeks: w,
+      name: field('name'),
+      teacher: field('teacher'),
+      location: field('location'),
+      note: field('note'),
+      courseKind: parseCourseKind(raw['courseKind']),
+      color: raw['color'] is int ? (raw['color'] as int) | 0xFF000000 : null,
+      useDefaultColor: raw['useDefaultColor'] == true,
+      splitFrom: SlotRef.tryParse(raw['splitFrom']),
+    );
+  }
+}
+
+/// 对一个教务原始时段的本地替换，支持调整重复周次与拆分安排。
+class CourseSlotEdit {
+  const CourseSlotEdit({
+    required this.original,
+    required this.originalWeeks,
+    required this.replacements,
+  });
+
+  final SlotRef original;
+  final String originalWeeks;
+  final List<CourseSlotPatch> replacements;
+
+  bool matches(CourseSlot slot) =>
+      original.matches(slot) && originalWeeks == slot.weeks;
+
+  Map<String, dynamic> toJson() => {
+    'original': original.toJson(),
+    'originalWeeks': originalWeeks,
+    'replacements': [for (final patch in replacements) patch.toJson()],
+  };
+
+  static CourseSlotEdit? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final ref = SlotRef.tryParse(raw['original']);
+    final weeks = raw['originalWeeks'];
+    final list = raw['replacements'];
+    if (ref == null || weeks is! String || list is! List) return null;
+    final patches = <CourseSlotPatch>[];
+    for (final item in list) {
+      final patch = CourseSlotPatch.tryParse(item);
+      if (patch == null) return null;
+      patches.add(patch);
+    }
+    return CourseSlotEdit(
+      original: ref,
+      originalWeeks: weeks,
+      replacements: patches,
+    );
+  }
+}
+
 /// 教务课时段指纹：每个时段「星期-起-止-SKZC」排序拼接。同步后与
 /// [CourseEdit.origFingerprint] 不同（周次或时间变了）→ 编辑记录失效。
 String courseFingerprint(Course c) {
@@ -513,7 +692,7 @@ String courseFingerprint(Course c) {
 }
 
 /// 一门教务课的本地编辑 / 删除记录（与调课记录 [SlotOverride] 分开存）。
-/// 字段为 null 表示该项未改。课时间与周次不可编辑（调课只靠拖动）。
+/// 字段为 null 表示该项未改；[slotEdits] 可分别修改原时段的字段、时间与重复周次。
 class CourseEdit {
   const CourseEdit({
     required this.courseId,
@@ -523,6 +702,8 @@ class CourseEdit {
     this.teacher,
     this.location,
     this.note,
+    this.courseKind,
+    this.slotEdits = const [],
     this.deleted = false,
     this.updatedAt = '',
   });
@@ -538,11 +719,20 @@ class CourseEdit {
   final String? teacher;
   final String? location;
   final String? note;
+  final CourseKind? courseKind;
+
+  /// 按教务原始时段定位的本地安排，保留同门课的其他时段。
+  final List<CourseSlotEdit> slotEdits;
   final bool deleted;
   final String updatedAt;
 
   bool get hasFieldEdits =>
-      name != null || teacher != null || location != null || note != null;
+      name != null ||
+      teacher != null ||
+      location != null ||
+      note != null ||
+      courseKind != null ||
+      slotEdits.isNotEmpty;
 
   bool get isEmpty => !deleted && !hasFieldEdits;
 
@@ -551,6 +741,8 @@ class CourseEdit {
     String? teacher,
     String? location,
     String? note,
+    CourseKind? courseKind,
+    List<CourseSlotEdit>? slotEdits,
     bool? deleted,
     String? updatedAt,
   }) => CourseEdit(
@@ -561,6 +753,8 @@ class CourseEdit {
     teacher: teacher ?? this.teacher,
     location: location ?? this.location,
     note: note ?? this.note,
+    courseKind: courseKind ?? this.courseKind,
+    slotEdits: slotEdits ?? this.slotEdits,
     deleted: deleted ?? this.deleted,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -573,6 +767,9 @@ class CourseEdit {
     if (teacher != null) 'teacher': teacher,
     if (location != null) 'location': location,
     if (note != null) 'note': note,
+    if (courseKind != null) 'courseKind': courseKind!.name,
+    if (slotEdits.isNotEmpty)
+      'slotEdits': [for (final edit in slotEdits) edit.toJson()],
     'deleted': deleted,
     'updatedAt': updatedAt,
   };
@@ -591,6 +788,12 @@ class CourseEdit {
       teacher: s('teacher'),
       location: s('location'),
       note: s('note'),
+      courseKind: parseCourseKind(raw['courseKind']),
+      slotEdits: [
+        if (raw['slotEdits'] is List)
+          for (final item in raw['slotEdits'] as List)
+            ?CourseSlotEdit.tryParse(item),
+      ],
       deleted: raw['deleted'] == true,
       updatedAt: s('updatedAt') ?? '',
     );
@@ -638,7 +841,35 @@ List<Course> applyCourseEdits(
       continue;
     }
     final slots = <CourseSlot>[];
+    final replaced = <CourseSlotEdit>{};
     for (final s in c.slots) {
+      final original = slotOriginOf(s)?.original ?? s;
+      CourseSlotEdit? slotEdit;
+      for (final edit in e.slotEdits) {
+        if (edit.matches(original)) slotEdit = edit;
+      }
+      if (slotEdit != null) {
+        if (!replaced.add(slotEdit)) continue;
+        final base = original.copyWith(
+          teacher: e.teacher,
+          location: e.location,
+          note: e.note,
+          kind: e.courseKind,
+        );
+        for (final patch in slotEdit.replacements) {
+          final replacement = patch.apply(base);
+          tagSlotOrigin(
+            replacement,
+            SlotOrigin(
+              courseId: c.id,
+              original: original,
+              moved: replacement.ref != original.ref,
+            ),
+          );
+          slots.add(replacement);
+        }
+        continue;
+      }
       final n = CourseSlot(
         day: s.day,
         startNode: s.startNode,
@@ -649,6 +880,10 @@ List<Course> applyCourseEdits(
         location: e.location ?? s.location,
         note: e.note ?? s.note,
         isLab: s.isLab,
+        kind: e.courseKind ?? s.kind,
+        nameOverride: s.nameOverride,
+        color: s.color,
+        useDefaultColor: s.useDefaultColor,
         splitFrom: s.splitFrom,
       );
       tagSlotOrigin(

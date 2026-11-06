@@ -123,8 +123,8 @@ class CourseCell extends StatelessWidget {
         _weekCount(cell.slot.weeks) > 1;
     final stacked = stackCount > 1;
     final showOffWeek = !active;
-    // 实验标签按「时段」判定：体育课即使时段带 isLab 也不打标。
-    final labSlot = cell.slot.isLab && !cell.course.isPe;
+    // 显式类型优先；旧体育数据即使带实验标记，也保持原有的不打标行为。
+    final labSlot = _showsLabLabel;
     // 1 节高的格子放不下底部标签行：格内省略「实验」，改由课程详情标注「实验课」。
     final showLab = labSlot && cell.slot.span > 1;
     // 有「实验」时底部只留一行：居中，「实验」在前，其余角标依次靠后（放不下就省略）。
@@ -346,7 +346,7 @@ class CourseCell extends StatelessWidget {
     final hasTeacher = settings.showTeacher && teacher.isNotEmpty;
     final locText = hasLoc ? cellLocationText(cell.slot.location) : '';
     final plan = planCellContent(
-      name: cell.course.displayName,
+      name: courseDisplayName(course: cell.course, slot: cell.slot),
       location: locText,
       hasClass: cell.course.classId.isNotEmpty,
       hasTeacher: hasTeacher,
@@ -374,7 +374,7 @@ class CourseCell extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CourseNameText(
-            name: cell.course.displayName,
+            name: courseDisplayName(course: cell.course, slot: cell.slot),
             style: nameStyle,
             maxLines: plan.nameLines,
           ),
@@ -504,13 +504,17 @@ class CourseCell extends StatelessWidget {
     return width + paddingH * 2 + 2;
   }
 
+  bool get _showsLabLabel =>
+      courseKindOf(course: cell.course, slot: cell.slot) == CourseKind.lab &&
+      (cell.slot.kind != null || !cell.course.isPe);
+
   String _semanticsLabel(bool showBadge, WeekParity parity) {
     final parts = <String>[
       if (!cell.activeThisWeek) '非本周',
-      cell.course.displayName,
+      courseDisplayName(course: cell.course, slot: cell.slot),
       '第${cell.slot.startNode}-${cell.slot.endNode}节',
       if (cell.slot.location.isNotEmpty) cell.slot.location,
-      if (cell.slot.isLab && !cell.course.isPe) '实验课',
+      if (_showsLabLabel) '实验课',
       if (showBadge) (parity == WeekParity.odd ? '单周' : '双周'),
       if (stackCount > 1) '本时段 $stackCount 门课',
     ];

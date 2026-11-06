@@ -610,7 +610,7 @@ class _CourseRow extends StatelessWidget {
                     children: [
                       // 长课名换行显示，不截断。
                       Text(
-                        item.course.displayName,
+                        courseDisplayName(course: item.course, slot: item.slot),
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,

@@ -51,9 +51,11 @@ CourseTimingKind timingKindOf({
   required Course course,
   required CourseSlot slot,
 }) {
-  if (slot.isLab) return CourseTimingKind.lab;
-  if (course.isPe) return CourseTimingKind.pe;
-  return CourseTimingKind.standard;
+  return switch (courseKindOf(course: course, slot: slot)) {
+    CourseKind.standard => CourseTimingKind.standard,
+    CourseKind.lab => CourseTimingKind.lab,
+    CourseKind.pe => CourseTimingKind.pe,
+  };
 }
 
 int? _hhmmToMinutes(String hhmm) {
@@ -268,6 +270,11 @@ List<CourseSlot> mergeTimingSlots(Course course, List<CourseSlot> slots) {
     if (prev == null ||
         prev.day != s.day ||
         prev.endNode + 1 != s.startNode ||
+        courseKindOf(course: course, slot: prev) !=
+            courseKindOf(course: course, slot: s) ||
+        prev.nameOverride != s.nameOverride ||
+        prev.color != s.color ||
+        prev.useDefaultColor != s.useDefaultColor ||
         timingKindOf(course: course, slot: prev) == CourseTimingKind.standard ||
         timingKindOf(course: course, slot: s) == CourseTimingKind.standard) {
       out.add(s);
@@ -284,6 +291,10 @@ List<CourseSlot> mergeTimingSlots(Course course, List<CourseSlot> slots) {
       note: {prev.note, s.note}.where((v) => v.isNotEmpty).join('；'),
       istk: prev.istk,
       isLab: prev.isLab || s.isLab,
+      kind: prev.kind,
+      nameOverride: prev.nameOverride,
+      color: prev.color,
+      useDefaultColor: prev.useDefaultColor,
     );
   }
   return out;

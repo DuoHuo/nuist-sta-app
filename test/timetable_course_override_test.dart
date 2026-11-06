@@ -134,6 +134,383 @@ void main() {
 
   Course shown(String id) => c.courses.firstWhere((x) => x.id == id);
 
+  GridCell cellAt(String id, int week, int day) => c
+      .cellsForDay(week, day)
+      .firstWhere((value) => value.activeThisWeek && value.course.id == id);
+
+  Future<Course?> saveForm(
+    GridCell cell, {
+    String? name,
+    String? teacher,
+    String? location,
+    String? note,
+    CourseKind? kind,
+    int? day,
+    int? start,
+    int? end,
+    List<int>? weeks,
+    List<int>? applyWeeks,
+    int? color,
+    bool colorChanged = false,
+  }) {
+    final base = c.baseOccurrenceOf(cell)!;
+    return c.saveCourseForm(
+      initial: cell.course,
+      initialSlot: cell.slot,
+      cell: cell,
+      name: name ?? cell.course.name,
+      teacher: teacher ?? cell.slot.teacher,
+      location: location ?? cell.slot.location,
+      note: note ?? cell.slot.note,
+      kind: kind ?? courseKindOf(course: cell.course, slot: cell.slot),
+      day: day ?? cell.slot.day,
+      startNode: start ?? cell.slot.startNode,
+      endNode: end ?? cell.slot.endNode,
+      courseWeeks: weeks ?? weeksOf(base.course.slots[base.slotIndex]),
+      applyWeeks: applyWeeks,
+      userArgb: color,
+      colorChanged: colorChanged,
+    );
+  }
+
+  group('统一课程编辑数据', () {
+    test('同起始节次的重叠时段不会借用另一时段的类型名称或颜色', () async {
+      await seed([
+        _jwxt('overlap', '原始课程').copyWith(
+          slots: [
+            _jwxt('x', 'x', end: 2).slots.single,
+            _jwxt('x', 'x', end: 3).slots.single,
+          ],
+        ),
+      ]);
+      final opening = c
+          .cellsForDay(2, 1)
+          .firstWhere(
+            (cell) =>
+                cell.activeThisWeek &&
+                cell.course.id == 'overlap' &&
+                cell.slot.endNode == 2,
+          );
+      await saveForm(
+        opening,
+        kind: CourseKind.lab,
+        name: '本周实验',
+        colorChanged: true,
+        color: 0xFF123456,
+        applyWeeks: [2],
+      );
+      final today = c.coursesOnDate(_monday);
+      expect(today, hasLength(2));
+      final lab = today.singleWhere((item) => item.slot.endNode == 2);
+      final standard = today.singleWhere((item) => item.slot.endNode == 3);
+      expect(courseKindOf(course: lab.course, slot: lab.slot), CourseKind.lab);
+      expect(lab.course.name, '本周实验');
+      expect(c.userColorOf(lab.course), 0xFF123456);
+      expect(
+        courseKindOf(course: standard.course, slot: standard.slot),
+        CourseKind.standard,
+      );
+      expect(standard.course.name, '原始课程');
+      expect(c.userColorOf(standard.course), isNull);
+      expect(
+        c.timeForSlot(standard.course, standard.slot, date: _monday).end,
+        '10:55',
+      );
+    });
+
+    for (final manual in [false, true]) {
+      test('${manual ? '手动' : '教务'}混合课程只修改当前时段的类型名称颜色与重复安排', () async {
+        final source = _jwxt('mixed', '测试课程', weeks: '1111').copyWith(
+          source: manual ? CourseSource.manual : CourseSource.jwxt,
+          slots: [
+            _jwxt('x', 'x', weeks: '1111').slots.single,
+            const CourseSlot(
+              day: 3,
+              startNode: 1,
+              endNode: 2,
+              weeks: '1111',
+              isLab: true,
+              teacher: '实验教师',
+              location: '实验室',
+            ),
+          ],
+        );
+        await seed(manual ? [] : [source], manual: manual ? [source] : []);
+        expect(
+          await saveForm(
+            cellAt('mixed', 2, 1),
+            kind: CourseKind.pe,
+            name: '体育训练',
+            teacher: '',
+            day: 2,
+            start: 3,
+            end: 4,
+            weeks: [2, 4, 5],
+            colorChanged: true,
+            color: 0xFF123456,
+          ),
+          isNotNull,
+        );
+        expect(c.cellsForDay(1, 1).where((e) => e.activeThisWeek), isEmpty);
+        for (final week in [2, 4, 5]) {
+          final edited = cellAt('mixed', week, 2);
+          expect(edited.course.name, '体育训练');
+          expect(edited.slot.teacher, '');
+          expect(edited.slot.startNode, 3);
+          expect(
+            courseKindOf(course: edited.course, slot: edited.slot),
+            CourseKind.pe,
+          );
+          expect(c.userColorOf(edited.course), 0xFF123456);
+        }
+        final lab = cellAt('mixed', 2, 3);
+        expect(lab.course.name, '测试课程');
+        expect(lab.slot.teacher, '实验教师');
+        expect(
+          courseKindOf(course: lab.course, slot: lab.slot),
+          CourseKind.lab,
+        );
+        expect(c.userColorOf(lab.course), isNull);
+        await restart();
+        expect(cellAt('mixed', 5, 2).slot.kind, CourseKind.pe);
+        expect(cellAt('mixed', 2, 3).slot.kind, isNull);
+        if (!manual) {
+          expect(c.jwxtCourses.single.slots.first.day, 1);
+          expect(await c.restoreJwxtCourse('mixed'), isTrue);
+          expect(cellAt('mixed', 1, 1).slot.kind, isNull);
+          expect(c.cellsForDay(5, 2).where((e) => e.activeThisWeek), isEmpty);
+        }
+      });
+    }
+
+    test('指定周类型和清空颜色不串到同课程同节次的另一天', () async {
+      final source = _jwxt('mixed', '测试课程', weeks: '1111').copyWith(
+        slots: [
+          _jwxt('x', 'x', weeks: '1111').slots.single,
+          _jwxt('x', 'x', day: 3, weeks: '1111').slots.single,
+        ],
+      );
+      await seed([source]);
+      await c.setUserCourseColor('mixed', 0xFF123456);
+      await saveForm(
+        cellAt('mixed', 2, 1),
+        kind: CourseKind.lab,
+        note: '周一备注',
+        applyWeeks: [2, 3],
+        colorChanged: true,
+      );
+      await saveForm(
+        cellAt('mixed', 2, 3),
+        kind: CourseKind.pe,
+        note: '周三备注',
+        applyWeeks: [2, 3],
+      );
+      for (final w in [2, 3]) {
+        final monday = cellAt('mixed', w, 1), wednesday = cellAt('mixed', w, 3);
+        expect(monday.slot.kind, CourseKind.lab);
+        expect(monday.slot.note, '周一备注');
+        expect(c.userColorOf(monday.course), isNull);
+        expect(wednesday.slot.kind, CourseKind.pe);
+        expect(wednesday.slot.note, '周三备注');
+        expect(c.userColorOf(wednesday.course), 0xFF123456);
+      }
+      expect(cellAt('mixed', 1, 1).slot.kind, isNull);
+      expect(c.userColorOf(cellAt('mixed', 4, 1).course), 0xFF123456);
+      await restart();
+      expect(cellAt('mixed', 3, 1).slot.kind, CourseKind.lab);
+      expect(c.userColorOf(cellAt('mixed', 3, 1).course), isNull);
+    });
+
+    test('从局部改名备注进入只改全部周类型，不扩散局部字段', () async {
+      await seed([_jwxt('j1', '原始名称')]);
+      await saveForm(
+        cellAt('j1', 2, 1),
+        name: '本周名称',
+        note: '本周备注',
+        kind: CourseKind.lab,
+        applyWeeks: [2],
+      );
+      await saveForm(cellAt('j1', 2, 1), kind: CourseKind.pe);
+      expect(cellAt('j1', 2, 1).course.name, '本周名称');
+      expect(cellAt('j1', 2, 1).slot.note, '本周备注');
+      expect(cellAt('j1', 3, 1).course.name, '原始名称');
+      expect(cellAt('j1', 3, 1).slot.note, '');
+      expect(cellAt('j1', 2, 1).slot.kind, CourseKind.pe);
+      expect(cellAt('j1', 3, 1).slot.kind, CourseKind.pe);
+    });
+
+    test('先改类型再拖动及恢复位置保留类型和字段', () async {
+      await seed([_jwxt('j1', '测试课程')]);
+      await saveForm(cellAt('j1', 2, 1), kind: CourseKind.lab, note: '备课说明');
+      final course = shown('j1');
+      expect(
+        (await c.moveSlot(
+          course,
+          0,
+          toDay: 4,
+          toStartPeriod: 3,
+          week: 2,
+          scope: MoveScope.thisWeek,
+        )).ok,
+        isTrue,
+      );
+      expect(cellAt('j1', 2, 4).slot.kind, CourseKind.lab);
+      expect(cellAt('j1', 2, 4).slot.note, '备课说明');
+      expect(cellAt('j1', 3, 1).slot.kind, CourseKind.lab);
+      await restart();
+      final moved = shown('j1');
+      final index = moved.slots.indexWhere((slot) => slot.day == 4);
+      expect(await c.restoreOverride(moved, index), isTrue);
+      expect(shown('j1').slots, hasLength(1));
+      expect(cellAt('j1', 2, 1).slot.kind, CourseKind.lab);
+      expect(cellAt('j1', 2, 1).slot.note, '备课说明');
+    });
+
+    test('已有拖动后表单只改类型，其他周与另一分段的时间保持', () async {
+      await seed([_jwxt('j1', '测试课程')]);
+      await c.moveSlot(
+        shown('j1'),
+        0,
+        toDay: 4,
+        toStartPeriod: 3,
+        week: 2,
+        scope: MoveScope.thisWeek,
+      );
+      await saveForm(cellAt('j1', 2, 4), kind: CourseKind.lab);
+      expect(cellAt('j1', 2, 4).slot.kind, CourseKind.lab);
+      expect(cellAt('j1', 2, 4).slot.startNode, 3);
+      expect(cellAt('j1', 3, 1).slot.kind, isNull);
+      expect(cellAt('j1', 3, 1).slot.startNode, 1);
+      await restart();
+      expect(cellAt('j1', 2, 4).slot.kind, CourseKind.lab);
+    });
+
+    test('类型覆盖跨同步保留，未改的老师继续同步，教务改周次后覆盖失效', () async {
+      await seed([_jwxt('j1', '测试课程', weeks: '1111')]);
+      await saveForm(cellAt('j1', 2, 1), kind: CourseKind.lab);
+      nextFetch = [
+        _jwxt('j1', '测试课程', weeks: '1111').copyWith(
+          slots: [
+            _jwxt(
+              'x',
+              'x',
+              weeks: '1111',
+            ).slots.single.copyWith(teacher: '新任教师'),
+          ],
+        ),
+      ];
+      await c.syncFromJwxt();
+      expect(cellAt('j1', 2, 1).slot.kind, CourseKind.lab);
+      expect(cellAt('j1', 2, 1).slot.teacher, '新任教师');
+      nextFetch = [_jwxt('j1', '测试课程', weeks: '11111')];
+      await c.syncFromJwxt();
+      expect(cellAt('j1', 2, 1).slot.kind, isNull);
+      expect(c.courseEditOf('j1'), isNull);
+    });
+
+    test('新建体育课颜色可从原始课程读取并在重启后保留', () async {
+      await seed([]);
+      final added = await c.saveCourseForm(
+        name: '训练',
+        teacher: '',
+        location: '',
+        note: '',
+        kind: CourseKind.pe,
+        day: 1,
+        startNode: 1,
+        endNode: 2,
+        courseWeeks: [1, 2],
+        userArgb: 0xFF123456,
+        colorChanged: true,
+      );
+      expect(added, isNotNull);
+      expect(c.userColorOf(c.manualCourses.single), 0xFF123456);
+      expect(c.manualCourses.single.slots.single.kind, CourseKind.pe);
+      await restart();
+      expect(c.userColorOf(c.manualCourses.single), 0xFF123456);
+    });
+
+    test('全课程配色覆盖表单局部颜色与默认色，类型和备注仍保留', () async {
+      await seed([_jwxt('j1', '测试课程')]);
+      await saveForm(
+        cellAt('j1', 2, 1),
+        kind: CourseKind.lab,
+        colorChanged: true,
+        color: 0xFF123456,
+      );
+      await saveForm(
+        cellAt('j1', 2, 1),
+        note: '本周备注',
+        applyWeeks: [2],
+        colorChanged: true,
+      );
+      await c.setUserCourseColor('j1', 0xFF654321);
+      for (final week in [2, 3]) {
+        final cell = cellAt('j1', week, 1);
+        expect(c.userColorOf(cell.course), 0xFF654321);
+        expect(cell.slot.kind, CourseKind.lab);
+      }
+      expect(cellAt('j1', 2, 1).slot.note, '本周备注');
+    });
+
+    test('详情仅这次恢复默认色覆盖时段颜色，同时保留局部类型和备注', () async {
+      await seed([_jwxt('j1', '测试课程')]);
+      await saveForm(cellAt('j1', 2, 1), colorChanged: true, color: 0xFF123456);
+      await saveForm(
+        cellAt('j1', 2, 1),
+        kind: CourseKind.lab,
+        note: '本周备注',
+        applyWeeks: [2],
+      );
+      expect(
+        await c.setOccurrenceColor(
+          cellAt('j1', 2, 1),
+          null,
+          useDefaultColor: true,
+        ),
+        isTrue,
+      );
+      final reset = cellAt('j1', 2, 1);
+      expect(c.userColorOf(reset.course), isNull);
+      expect(reset.slot.kind, CourseKind.lab);
+      expect(reset.slot.note, '本周备注');
+      expect(c.userColorOf(cellAt('j1', 3, 1).course), 0xFF123456);
+      expect(
+        await c.setOccurrenceColor(
+          cellAt('j1', 4, 1),
+          null,
+          useDefaultColor: true,
+        ),
+        isTrue,
+      );
+      expect(c.userColorOf(cellAt('j1', 4, 1).course), isNull);
+    });
+
+    test('全部周只清当前时段与旧多周覆盖的交集，其他时段的记录保留', () async {
+      await seed([
+        _jwxt('j1', '测试课程', weeks: '1100').copyWith(
+          slots: [
+            _jwxt('x', 'x', weeks: '1100').slots.single,
+            _jwxt('x', 'x', weeks: '0011').slots.single,
+          ],
+        ),
+      ]);
+      await c.editOccurrenceWeeks(
+        cellAt('j1', 2, 1),
+        weeks: [2, 3],
+        note: '跨段备注',
+      );
+      await saveForm(cellAt('j1', 1, 1), note: '前半段备注', kind: CourseKind.lab);
+      expect(cellAt('j1', 1, 1).slot.note, '前半段备注');
+      expect(cellAt('j1', 2, 1).slot.note, '前半段备注');
+      expect(cellAt('j1', 3, 1).slot.note, '跨段备注');
+      expect(cellAt('j1', 3, 1).slot.kind, isNull);
+      expect(cellAt('j1', 4, 1).slot.note, '');
+      await restart();
+      expect(cellAt('j1', 3, 1).slot.note, '跨段备注');
+    });
+  });
+
   // ===== §24 补充用例（FC / JE / EV / EX / SW01）=====
 
   ScheduleEvent manualExam() => ScheduleEvent(

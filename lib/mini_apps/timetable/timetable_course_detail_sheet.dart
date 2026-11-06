@@ -132,7 +132,11 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Expanded(child: _courseTitle(course.displayName)),
+                    Expanded(
+                      child: _courseTitle(
+                        courseDisplayName(course: course, slot: slot),
+                      ),
+                    ),
                     const SizedBox(width: 8),
                     Row(
                       key: const Key('course_detail_actions'),
@@ -199,7 +203,9 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                         style: TextStyle(fontSize: 12, color: colors.labelText),
                       ),
                     if (course.isManual) const _DetailTag(label: '手动添加'),
-                    if (slot.isLab && !course.isPe)
+                    if (courseKindOf(course: course, slot: slot) ==
+                            CourseKind.lab &&
+                        (slot.kind != null || !course.isPe))
                       const _DetailTag(
                         key: Key('course_detail_lab_label'),
                         label: '实验课',
@@ -576,7 +582,9 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                 kJwxtCourseDeleteMessage,
                 key: Key('jwxt_delete_message'),
               )
-            : Text('确定删除「${course.displayName}」吗？此操作不可撤销。'),
+            : Text(
+                '确定删除「${courseDisplayName(course: course, slot: cell.slot)}」吗？此操作不可撤销。',
+              ),
         actions: [
           TextButton(
             key: readOnly ? const Key('jwxt_delete_cancel') : null,

@@ -120,6 +120,62 @@ void main() {
           as Map<String, dynamic>;
 
   group('第 1 条 只改这一天', () {
+    test('从旧多周记录只移动第3周，继承备注并保留第2周记录', () async {
+      await seed();
+      await c.editOccurrenceWeeks(
+        cellOf(_mon2, 'MATH|01'),
+        weeks: [2, 3],
+        note: '多周备注',
+      );
+      expect(
+        await c.editOccurrence(cellOf(_mon3, 'MATH|01'), toDay: 4),
+        isNotNull,
+      );
+      expect(
+        cellOf(_mon3.add(const Duration(days: 3)), 'MATH|01').slot.note,
+        '多周备注',
+      );
+      expect(cellOf(_mon2, 'MATH|01').slot.note, '多周备注');
+      expect(active(_mon3).any((cell) => cell.course.id == 'MATH|01'), isFalse);
+    });
+
+    test('旧多周记录第3周仅改类型，不能误改模板所在的第2周', () async {
+      await seed();
+      await c.editOccurrenceWeeks(
+        cellOf(_mon2, 'MATH|01'),
+        weeks: [2, 3],
+        note: '多周备注',
+      );
+      final opening = cellOf(_mon3, 'MATH|01');
+      final base = c.baseOccurrenceOf(opening)!;
+      expect(base.week, 3);
+      expect(
+        await c.saveCourseForm(
+          initial: opening.course,
+          initialSlot: opening.slot,
+          cell: opening,
+          name: opening.course.name,
+          teacher: opening.slot.teacher,
+          location: opening.slot.location,
+          note: opening.slot.note,
+          kind: CourseKind.lab,
+          day: opening.slot.day,
+          startNode: opening.slot.startNode,
+          endNode: opening.slot.endNode,
+          courseWeeks: weeksOf(base.course.slots[base.slotIndex]),
+          applyWeeks: [base.week],
+        ),
+        isNotNull,
+      );
+      expect(cellOf(_mon3, 'MATH|01').slot.kind, CourseKind.lab);
+      expect(cellOf(_mon3, 'MATH|01').slot.note, '多周备注');
+      expect(cellOf(_mon2, 'MATH|01').slot.kind, isNull);
+      expect(cellOf(_mon2, 'MATH|01').slot.note, '多周备注');
+      await restart();
+      expect(cellOf(_mon3, 'MATH|01').slot.kind, CourseKind.lab);
+      expect(cellOf(_mon2, 'MATH|01').slot.kind, isNull);
+    });
+
     test('教务课：只改这一天只影响那一天；落盘 version=3；重启仍在', () async {
       await seed();
       final cell = cellOf(_mon2, 'MATH|01');
@@ -297,6 +353,43 @@ void main() {
   });
 
   group('第 8 条 整天调课', () {
+    test('跨周整天互换后仅修改这次类型，按原教学周定位并保留显示日期', () async {
+      await seed();
+      final destination = _mon3.add(const Duration(days: 2));
+      await c.addDaySwap(_mon2, destination);
+      final opening = cellOf(destination, 'MATH|01');
+      final base = c.baseOccurrenceOf(opening)!;
+      expect(c.weekOfDate(opening.date!), 3);
+      expect(base.week, 2);
+      expect(
+        await c.saveCourseForm(
+          initial: opening.course,
+          initialSlot: opening.slot,
+          cell: opening,
+          name: opening.course.name,
+          teacher: opening.slot.teacher,
+          location: opening.slot.location,
+          note: opening.slot.note,
+          kind: CourseKind.lab,
+          day: opening.slot.day,
+          startNode: opening.slot.startNode,
+          endNode: opening.slot.endNode,
+          courseWeeks: weeksOf(base.course.slots[base.slotIndex]),
+          applyWeeks: [base.week],
+        ),
+        isNotNull,
+      );
+      expect(cellOf(destination, 'MATH|01').slot.kind, CourseKind.lab);
+      expect(cellOf(_mon3, 'MATH|01').slot.kind, isNull);
+      expect(cellOf(destination, 'MATH|01').swappedFrom, _mon2);
+      await restart();
+      expect(cellOf(destination, 'MATH|01').slot.kind, CourseKind.lab);
+      expect(cellOf(_mon3, 'MATH|01').slot.kind, isNull);
+      final edit = cellOf(destination, 'MATH|01').dateEdit!;
+      expect(await c.restoreDateEdit(edit.id), isTrue);
+      expect(cellOf(destination, 'MATH|01').slot.kind, isNull);
+    });
+
     test('两天课程互换，考试留在原日期；表头「调」；落盘、重启、恢复', () async {
       final mid = await seed();
       await c.addScheduleEvent(

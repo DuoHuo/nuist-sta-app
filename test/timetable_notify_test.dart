@@ -979,6 +979,43 @@ void main() {
       );
     });
 
+    test('课程类型覆盖同步用于小组件名称与实际结束时间', () {
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: [
+            Course(
+              id: 'pe-overridden',
+              name: '体育（3）',
+              buildingDisplay: '体育板块场地',
+              projectName: '篮球',
+              slots: [
+                for (final (i, kind) in CourseKind.values.indexed)
+                  CourseSlot(
+                    day: i + 1,
+                    startNode: 1,
+                    endNode: 2,
+                    weeks: '11',
+                    kind: kind,
+                  ),
+              ],
+            ),
+          ],
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(termStartDate: termStart),
+        ),
+      );
+      final service = svc(_FakeBridge());
+      for (final (i, kind) in CourseKind.values.indexed) {
+        final date = DateTime(2026, 9, 7 + i);
+        final item = service.classesOn(date).single;
+        expect(item.name, kind == CourseKind.pe ? '体育·篮球' : '体育（3）');
+        expect(
+          item.end,
+          DateTime(2026, 9, 7 + i, 9, kind == CourseKind.standard ? 40 : 30),
+        );
+      }
+    });
+
     test('小组件 payload 来自控制器', () {
       final p = svc(_FakeBridge()).currentWidgetPayload();
       final today = (p['days'] as List).first as Map;

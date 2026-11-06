@@ -188,7 +188,7 @@ class TimetableNotifyService {
     final end = _at(date, time.end);
     if (start == null || end == null) return null;
     return NotifyClass(
-      name: item.course.displayName,
+      name: courseDisplayName(course: item.course, slot: item.slot),
       location: item.slot.location,
       start: start,
       end: end,

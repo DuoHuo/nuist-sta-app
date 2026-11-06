@@ -171,6 +171,21 @@ void main() {
     expect(pe.name, '体育（3）');
   });
 
+  test('明日提醒按本次课程类型决定是否显示体育项目', () {
+    final item = course(3, name: '体育（3）');
+    for (final kind in CourseKind.values) {
+      final changed = TodayCourseItem(
+        course: item.course.copyWith(projectName: '篮球'),
+        slot: item.slot.copyWith(kind: kind),
+        status: item.status,
+      );
+      expect(
+        payload([changed])!.body,
+        kind == CourseKind.pe ? '10:10 · 体育·篮球' : '10:10 · 体育（3）',
+      );
+    }
+  });
+
   test('长课名截断、换行折叠，通知正文保持单行', () {
     final p = payload([
       course(3, name: '${'长' * 30}\n课程', location: '测试\n教室'),

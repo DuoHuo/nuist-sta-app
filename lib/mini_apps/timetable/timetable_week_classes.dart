@@ -1,5 +1,6 @@
 import '../../core/schedule/weekly_classes.dart';
 import 'timetable_controller.dart';
+import 'timetable_models.dart';
 
 /// 课表对外提供「本周课程」：按本教学周的实际格子（已套用调课、单日修改）导出，
 /// 只保留本周真的要上、且写了地点的课。
@@ -19,7 +20,7 @@ class TimetableWeeklyClasses implements WeeklyClassSource {
         if (!cell.activeThisWeek || location.isEmpty) continue;
         classes.add(
           WeeklyClass(
-            courseName: cell.course.displayName,
+            courseName: courseDisplayName(course: cell.course, slot: cell.slot),
             location: location,
             weekday: day,
             startNode: cell.slot.startNode,

@@ -368,6 +368,65 @@ void main() {
       );
     });
 
+    for (final hasOccurrenceColor in [false, true]) {
+      testWidgets('详情仅这次恢复颜色与预览一致（已有单次色=$hasOccurrenceColor）', (tester) async {
+        final course = _a.copyWith(
+          slots: [
+            _a.slots.single.copyWith(
+              kind: CourseKind.lab,
+              note: '课程备注',
+              color: 0xFF43856B,
+            ),
+            _a.slots.single.copyWith(day: 3, color: 0xFF386F95),
+          ],
+        );
+        _c.debugSetSnapshot(
+          TimetableSnapshot(
+            courses: [course],
+            periods: TimetableController.defaultPeriods(),
+            settings: TimetableSettings(termStartDate: _termStart),
+          ),
+          viewingWeek: 7,
+        );
+        if (hasOccurrenceColor) {
+          await tester.runAsync(
+            () =>
+                _c.setOccurrenceColor(_c.cellsForDay(7, 1).single, 0xFF753AC5),
+          );
+        }
+        final cell = _c.cellsForDay(7, 1).single;
+        final expected = hasOccurrenceColor
+            ? const Color(0xFF43856B)
+            : coursePairFor(_c, cell.course.copyWith(useDefaultColor: true)).bg;
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: appLightTheme(),
+            home: Scaffold(
+              body: CourseDetailSheet(cell: cell, controller: _c),
+            ),
+          ),
+        );
+        await tester.tap(find.byKey(const Key('course_detail_color')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('tt_color_reset')));
+        await tester.pump();
+        final preview = tester.widget<Container>(
+          find.byKey(const Key('tt_color_display_swatch')),
+        );
+        expect((preview.decoration! as BoxDecoration).color, expected);
+        await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('course_color_scope_this')));
+        await _settleIo(tester);
+        final saved = _c.cellsForDay(7, 1).single;
+        expect(coursePairFor(_c, saved.course).bg, expected);
+        expect(saved.slot.note, '课程备注');
+        expect(saved.slot.kind, CourseKind.lab);
+        expect(_c.userColorOf(_c.cellsForDay(8, 1).single.course), 0xFF43856B);
+        expect(_c.userColorOf(_c.cellsForDay(7, 3).single.course), 0xFF386F95);
+      });
+    }
+
     testWidgets('无效色号不可保存；取消范围不落盘；深色预填保持原始色号', (tester) async {
       _load();
       await tester.runAsync(() => _c.setUserCourseColor('a', 0xFF43856B));
@@ -445,13 +504,15 @@ void main() {
           ),
         ),
       );
+      await tester.ensureVisible(find.byKey(const Key('manual_course_color')));
       await tester.tap(find.byKey(const Key('manual_course_color')));
       await tester.pumpAndSettle();
       await _chooseColor(tester, const Color(0xFF386F95));
       expect(find.byKey(const Key('course_color_scope_sheet')), findsNothing);
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settleIo(tester);
-      await tester.tap(find.byKey(const Key('course_color_scope_this')));
+      await tester.tap(find.byKey(const Key('course_form_scope_once')));
+      await tester.tap(find.byKey(const Key('course_form_scope_confirm')));
       await _settleIo(tester);
       expect(_c.userColorOf(_c.manualCourses.single), isNull);
       expect(_c.manualCourses.single.slots.single.note, isEmpty);

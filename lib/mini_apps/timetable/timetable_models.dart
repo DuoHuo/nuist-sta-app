@@ -4,6 +4,38 @@ import 'dart:convert';
 
 import 'timetable_date_edits.dart';
 
+/// 课程的教学类型；未显式指定时沿用教务实验标记与体育识别规则。
+enum CourseKind { standard, lab, pe }
+
+/// 解析本地类型字段；旧数据和未知值按自动识别处理。
+CourseKind? parseCourseKind(Object? value) {
+  for (final kind in CourseKind.values) {
+    if (kind.name == value) return kind;
+  }
+  return null;
+}
+
+/// 当前时段的有效类型，显式选择优先于教务自动识别。
+CourseKind courseKindOf({required Course course, required CourseSlot slot}) =>
+    slot.kind ??
+    course.displayKind ??
+    (slot.isLab
+        ? CourseKind.lab
+        : course.isPe
+        ? CourseKind.pe
+        : CourseKind.standard);
+
+/// 当前时段的显示名称，只有体育类型展示体育项目。
+String courseDisplayName({required Course course, required CourseSlot slot}) {
+  final name = slot.nameOverride ?? course.name;
+  final explicit = slot.kind ?? course.displayKind;
+  final pe = explicit == null ? course.isPe : explicit == CourseKind.pe;
+  if (!pe || course.projectName.trim().isEmpty) {
+    return name;
+  }
+  return '${looksLikePeCourse(name) ? '体育' : name}·${course.projectName.trim()}';
+}
+
 /// 一节课的上课时段。
 class CourseSlot {
   const CourseSlot({
@@ -17,6 +49,10 @@ class CourseSlot {
     this.note = '',
     this.istk = 0,
     this.isLab = false,
+    this.kind,
+    this.nameOverride,
+    this.color,
+    this.useDefaultColor = false,
     this.splitFrom,
   });
 
@@ -41,6 +77,16 @@ class CourseSlot {
   /// 旧数据没有该字段 → false。
   final bool isLab;
 
+  /// 用户显式选择的教学类型；null 表示沿用自动识别。
+  final CourseKind? kind;
+
+  /// 仅此上课时段的名称和颜色，不影响同门课的其他时段。
+  final String? nameOverride;
+  final int? color;
+
+  /// 显式恢复自动色；区别于 null 颜色所表示的继承课程颜色。
+  final bool useDefaultColor;
+
   /// 手动课拖动拆出的时段（「只改本周」/「改以后所有周」）记下它来自哪个原时段
   /// （按同一门课内的星期 + 起止节识别，见 [SlotRef]）。仅用于周视图：第 w 周本时段
   /// 有课时，原时段不再画「[非本周]」虚影。不参与配色。旧数据无此字段 → null（普通时段）。
@@ -61,7 +107,48 @@ class CourseSlot {
     note: note,
     istk: istk,
     isLab: isLab,
+    kind: kind,
+    nameOverride: nameOverride,
+    color: color,
+    useDefaultColor: useDefaultColor,
     splitFrom: clear ? null : (value ?? splitFrom),
+  );
+
+  /// 复制时段，未传的字段和局部显示属性保持原样。
+  CourseSlot copyWith({
+    int? day,
+    int? startNode,
+    int? endNode,
+    String? weeks,
+    String? weeksLabel,
+    String? teacher,
+    String? location,
+    String? note,
+    CourseKind? kind,
+    String? nameOverride,
+    int? color,
+    bool? useDefaultColor,
+    bool clearColor = false,
+    bool clearName = false,
+    bool clearKind = false,
+    SlotRef? splitFrom,
+    bool clearSplitFrom = false,
+  }) => CourseSlot(
+    day: day ?? this.day,
+    startNode: startNode ?? this.startNode,
+    endNode: endNode ?? this.endNode,
+    weeks: weeks ?? this.weeks,
+    weeksLabel: weeksLabel ?? this.weeksLabel,
+    teacher: teacher ?? this.teacher,
+    location: location ?? this.location,
+    note: note ?? this.note,
+    istk: istk,
+    isLab: isLab,
+    kind: clearKind ? null : (kind ?? this.kind),
+    nameOverride: clearName ? null : (nameOverride ?? this.nameOverride),
+    color: clearColor ? null : (color ?? this.color),
+    useDefaultColor: useDefaultColor ?? this.useDefaultColor,
+    splitFrom: clearSplitFrom ? null : (splitFrom ?? this.splitFrom),
   );
 
   bool get hasFixedTime =>
@@ -107,6 +194,10 @@ class CourseSlot {
     'note': note,
     'istk': istk,
     if (isLab) 'isLab': true,
+    if (kind != null) 'courseKind': kind!.name,
+    if (nameOverride != null) 'nameOverride': nameOverride,
+    if (color != null) 'color': color,
+    if (useDefaultColor) 'useDefaultColor': true,
     if (splitFrom != null) 'splitFrom': splitFrom!.toJson(),
   };
 
@@ -121,6 +212,12 @@ class CourseSlot {
     note: '${json['note'] ?? ''}',
     istk: _asInt(json['istk']) ?? 0,
     isLab: _asFlag(json['isLab']),
+    kind: parseCourseKind(json['courseKind']),
+    nameOverride: json['nameOverride'] is String
+        ? json['nameOverride'] as String
+        : null,
+    color: json['color'] is int ? (json['color'] as int) | 0xFF000000 : null,
+    useDefaultColor: json['useDefaultColor'] == true,
     splitFrom: SlotRef.tryParse(json['splitFrom']),
   );
 }
@@ -186,6 +283,8 @@ class Course {
     this.colorIndex,
     this.assignedColorIndex,
     this.occurrenceColor,
+    this.useDefaultColor = false,
+    this.displayKind,
     this.source = CourseSource.manual,
     this.slots = const [],
     this.hidden = false,
@@ -225,6 +324,10 @@ class Course {
 
   /// 当前这次课的自选 ARGB，仅用于显示；持久化在单日修改记录中，不写入课程 JSON。
   final int? occurrenceColor;
+
+  /// 当前格子的局部自动色与类型，仅用于显示，不写入课程 JSON。
+  final bool useDefaultColor;
+  final CourseKind? displayKind;
   final CourseSource source;
   final List<CourseSlot> slots;
   final bool hidden;
@@ -260,6 +363,9 @@ class Course {
     bool clearColor = false,
     int? assignedColorIndex,
     int? occurrenceColor,
+    bool clearOccurrenceColor = false,
+    bool? useDefaultColor,
+    CourseKind? displayKind,
     bool clearAssignedColor = false,
     CourseSource? source,
     List<CourseSlot>? slots,
@@ -276,10 +382,23 @@ class Course {
     assignedColorIndex: clearAssignedColor
         ? null
         : (assignedColorIndex ?? this.assignedColorIndex),
-    occurrenceColor: occurrenceColor ?? this.occurrenceColor,
+    occurrenceColor: clearOccurrenceColor
+        ? null
+        : (occurrenceColor ?? this.occurrenceColor),
+    useDefaultColor: useDefaultColor ?? this.useDefaultColor,
+    displayKind: displayKind ?? this.displayKind,
     source: source ?? this.source,
     slots: slots ?? this.slots,
     hidden: hidden ?? this.hidden,
+  );
+
+  /// 将时段局部名称、颜色、类型投影到显示用课程，保留课程身份。
+  Course forSlot(CourseSlot slot) => copyWith(
+    name: slot.nameOverride,
+    occurrenceColor: slot.color,
+    clearOccurrenceColor: slot.useDefaultColor,
+    useDefaultColor: slot.useDefaultColor,
+    displayKind: slot.kind,
   );
 
   Map<String, dynamic> toJson() => {

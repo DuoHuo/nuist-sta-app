@@ -588,12 +588,12 @@ class CourseColorRow extends StatelessWidget {
         ? coursePairFor(controller, course, dark: colors.isDark).bg
         : Color(user);
     final base = cell == null ? null : controller.baseOccurrenceOf(cell!);
-    final fallback = cell?.dateEdit?.color != null
-        ? coursePairFor(
-            controller,
-            base?.course ?? course,
-            dark: colors.isDark,
-          ).bg
+    final inheritBaseColor = cell?.dateEdit?.color != null;
+    final baseCourse = base == null
+        ? course
+        : base.course.forSlot(base.course.slots[base.slotIndex]);
+    final fallback = inheritBaseColor
+        ? coursePairFor(controller, baseCourse, dark: colors.isDark).bg
         : TimetableTheme.autoCoursePair(
             coursePresetIndexForCourse(
               course,
@@ -611,7 +611,9 @@ class CourseColorRow extends StatelessWidget {
           current: raw,
           defaultColor: fallback,
           showReset: user != null,
-          previewTitle: course.displayName,
+          previewTitle: cell == null
+              ? course.displayName
+              : courseDisplayName(course: course, slot: cell!.slot),
           opacity: controller.settings.cellOpacity,
           textColorMode: controller.settings.cellTextColor,
         );
@@ -623,7 +625,11 @@ class CourseColorRow extends StatelessWidget {
         if (scope == null || !context.mounted) return;
         final value = pick.reset ? null : pick.color!.toARGB32();
         if (scope == EditScope.thisDay) {
-          final ok = await controller.setOccurrenceColor(occurrence!, value);
+          final ok = await controller.setOccurrenceColor(
+            occurrence!,
+            value,
+            useDefaultColor: pick.reset && !inheritBaseColor,
+          );
           if (!ok && context.mounted) {
             ScaffoldMessenger.maybeOf(
               context,

@@ -1,6 +1,7 @@
 import 'timetable_controller.dart';
 import 'timetable_course_color.dart';
 import 'timetable_date_edits.dart';
+import 'timetable_models.dart';
 import 'timetable_schedule_event_layout.dart';
 
 /// 导出准备或网络请求失败时可直接展示的提示。
@@ -113,7 +114,7 @@ class TimetableExportSnapshot {
           items.add({
             'key': keyOf('course:${cell.course.id}'),
             'kind': 'course',
-            'title': cell.course.displayName,
+            'title': courseDisplayName(course: cell.course, slot: cell.slot),
             'date': dateKeyOf(c.dateOfColumn(week, day)),
             'startNode': cell.slot.startNode,
             'endNode': cell.slot.endNode,
@@ -167,12 +168,12 @@ class TimetableExportSnapshot {
           for (final slot in course.slots)
             if (!slot.hasFixedTime)
               TimetableExportSkippedSlot(
-                courseName: course.displayName,
+                courseName: courseDisplayName(course: course, slot: slot),
                 reason: TimetableExportSkipReason.noFixedTime,
               )
             else if (!slot.weeks.contains('1'))
               TimetableExportSkippedSlot(
-                courseName: course.displayName,
+                courseName: courseDisplayName(course: course, slot: slot),
                 reason: TimetableExportSkipReason.emptyWeeks,
               ),
     ];
