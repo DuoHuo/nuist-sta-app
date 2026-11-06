@@ -7,12 +7,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/app.dart';
 import 'package:nuist_sta_app/core/theme_mode.dart';
 import 'package:nuist_sta_app/mini_apps/registry.dart';
+import 'package:nuist_sta_app/shell/home/app_grid_item.dart';
 
 void main() {
   test('小程序注册表 id 全局唯一且入口完整', () {
-    final ids = appRegistry.map((m) => m.id).toList();
+    final ids = appRegistry.apps.map((m) => m.id).toList();
     expect(ids.toSet().length, ids.length, reason: 'id 重复会导致路由 /apps/:id 冲突');
-    for (final m in appRegistry) {
+    for (final m in appRegistry.byId.values) {
       expect(
         (m.entry == null) != (m.url == null),
         isTrue,
@@ -32,6 +33,20 @@ void main() {
     expect(find.text('空教室'), findsOneWidget);
     expect(find.text('首页'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);
+    expect(find.byType(AppGridItem), findsNWidgets(6));
+    expect(
+      tester
+          .widgetList<AppGridItem>(find.byType(AppGridItem))
+          .map((w) => w.app.id),
+      [
+        'bulletin',
+        'electricity',
+        'free-classroom',
+        'campus-map',
+        'timetable',
+        'exam-schedule',
+      ],
+    );
   });
 
   testWidgets('点击校园地图进入小程序页（全屏、无底部页签）', (WidgetTester tester) async {
@@ -89,9 +104,14 @@ void main() {
 
     // 测试环境没有平台通道，各卡读不到本地状态、也不会去请求网络，
     // 只保证壳把五张卡都摆出来了。
-    for (final label in ['本学期', '学业概览', '成绩查询', '双创学分', '劳动积分']) {
+    const labels = ['本学期', '学业概览', '成绩查询', '双创学分', '劳动积分'];
+    for (final label in labels) {
       expect(find.text(label), findsOneWidget);
     }
+    final positions = labels
+        .map((label) => tester.getTopLeft(find.text(label)).dy)
+        .toList();
+    expect(positions, orderedEquals([...positions]..sort()));
   });
 
   testWidgets('我的页进入设置并切换深色模式', (WidgetTester tester) async {

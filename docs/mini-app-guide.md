@@ -4,7 +4,7 @@
 交给不会 Flutter 的社团）。
 
 先读 [架构文档](architecture.md#一个小程序能贡献的四种-ui-面)里的「四种 UI 面」一节 ——
-宫格入口走注册表，但学习页卡片要改壳，这是新人最容易踩的点。
+宫格入口、首页卡片、学习页卡片和全屏入口都通过 manifest 声明，再统一登记到注册表。
 
 ## 方式一：最小原生小程序
 
@@ -53,14 +53,14 @@ Widget _myEntry(BuildContext context) => const MyPage();
 **3. 登记** 到 `lib/mini_apps/registry.dart`：
 
 ```dart
-final List<AppManifest> appRegistry = [
+final appRegistry = AppRegistry([
   bulletinManifest,
   electricityManifest,
   freeClassroomManifest,
   campusMapManifest,
   timetableManifest,
   myManifest,          // ← 加这一行
-];
+]);
 ```
 
 完事，首页宫格自动多一个图标。
@@ -123,6 +123,52 @@ AppManifest(
 可配置项只有 `url`（地址）、`label`（顶栏标题）和 `requiresPortal`。没有 UA 覆写、
 没有 JS 注入白名单、没有 native bridge。
 
+## 方式四：学习页卡片
+
+学习页卡片与刷新回调在自己的 manifest 中一起声明，然后在 `registry.dart` 的
+`AppRegistry([...])` 中登记一次。壳会自动展示卡片、按顺序排列并在下拉时刷新，不需要
+修改学习页、刷新名单或路由表。
+
+有详情页时使用普通 `AppManifest`。例如 `lib/mini_apps/score/score_manifest.dart`：
+
+```dart
+const scoreManifest = AppManifest(
+  id: 'scores',
+  label: '成绩查询',
+  color: kScoreColor,
+  icon: Icons.assessment_outlined,
+  entry: _entry,
+  showInHomeGrid: false,
+  studyCard: StudyCardContribution(
+    builder: _studyCard,
+    order: 30,
+    onRefresh: _studyRefresh,
+  ),
+);
+
+Widget _entry(BuildContext context) => const ScorePage();
+Widget _studyCard(BuildContext context) => const ScoreCard();
+Future<void> _studyRefresh() => ScoreController.instance.refresh();
+```
+
+卡片内部使用 `context.push('/apps/scores')` 打开详情。`showInHomeGrid: false` 只隐藏宫格
+入口，详情页仍可通过注册表访问；如果也需要宫格入口，保留默认的 `true`。
+
+没有详情页时使用 `AppManifest.cardOnly`，只需填写 `id`、`label`、`studyCard` 三项。
+参考 `lib/mini_apps/student_info/student_info_manifest.dart` 或
+`lib/mini_apps/academic/academic_manifest.dart`：这类模块不提供 `entry/url` 或图标配置，
+不会出现在宫格中，也没有 `/apps/<id>` 入口。
+
+学习卡片的约定：
+
+- `builder` 和 `order` 必填，`onRefresh` 可选；静态卡片无需提供刷新回调。
+- `order` 越小越靠前，同值时按模块 id 排序，与首页宫格顺序无关。现有五张卡依次使用
+  10、20、30、40、50，方便在中间插入卡片。
+- 卡片挂载时自行调用 Controller 的 `ensureStarted()`；注册表只保存描述，不预加载数据。
+- 下拉刷新并发调用当前注册卡片的 `onRefresh` 并等待全部完成。回调通过 `Future.sync`
+  包装，单项同步抛错不会阻止其他项启动；各模块应自行处理业务错误并在卡片里展示。
+- 卡片与详情页共用 Controller 单例，点击是否可用也由卡片自行判断。
+
 ## 取用门户登录态
 
 需要教务、电费这类登录后才能访问的接口时，**不要自己搓登录流程**，用
@@ -158,10 +204,11 @@ Cookie 灌进 WebView 再加载页面，网页里直接就是登录态。
 
 提交前过一遍：
 
-- [ ] `id` 在注册表里唯一（`test/widget_test.dart` 会自动守护）
+- [ ] `id` 在注册表里唯一，包括仅卡片模块（`AppRegistry` 构造时会拒绝重复 id）
 - [ ] `label` **不与现有小程序重名**（否则 `widget_test.dart` 的 `findsOneWidget` 断言会挂）
-- [ ] `entry` 与 `url` 恰好提供一个（构造断言会拦）
+- [ ] 普通 manifest 的 `entry` 与 `url` 恰好提供一个；没有详情页的学习卡片使用 `AppManifest.cardOnly`
 - [ ] `mini_apps/<name>/` 没有 import `shell/*` 或兄弟小程序
 - [ ] Store 的读写都有 `try/catch` 兜底
 - [ ] 有解析逻辑的话补上单元测试（参考 `test/free_classroom_models_test.dart`）
-- [ ] 如果是学习页卡片 —— 记住那**不是**注册表机制，要改 `shell/study/study_page.dart` 和 `router.dart`
+- [ ] 学习页卡片已声明 `studyCard` 的构建、顺序与所需刷新回调，且已在唯一注册表中登记
+- [ ] 有详情页时，卡片内部使用 `context.push('/apps/<id>')` 跳转

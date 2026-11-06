@@ -60,7 +60,7 @@ class _InnovationCreditCardState extends State<InnovationCreditCard> {
         return InkWell(
           onTap: credit == null
               ? null
-              : () => context.push('/innovation-credit'),
+              : () => context.push('/apps/innovation-credit'),
           borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),

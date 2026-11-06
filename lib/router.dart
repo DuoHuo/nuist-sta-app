@@ -3,10 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import 'core/app_manifest.dart';
 import 'mini_apps/campus_map/campus_place_detail_page.dart';
-import 'mini_apps/innovation_credit/innovation_credit_page.dart';
-import 'mini_apps/labor_score/labor_score_page.dart';
 import 'mini_apps/registry.dart';
-import 'mini_apps/score/score_page.dart';
 import 'mini_apps/timetable/timetable_page.dart';
 import 'mini_apps/web/mini_web_view_page.dart';
 import 'shell/home/home_page.dart';
@@ -28,14 +25,12 @@ import 'shell/study/study_page.dart';
 /// - StatefulShellRoute：壳（底部三页签），branch 0 = 首页 `/`，
 ///   branch 1 = 学习 `/study`，branch 2 = 我的 `/profile`
 /// - `/apps/:appId`：小程序全屏入口，与壳平级 —— 进入小程序后不带底部页签，
-///   系统返回键自然退回宫格。原生小程序进 [AppManifest.entry]，
+///   从宫格或学习卡片 push 后返回原页面。原生小程序进 [AppManifest.entry]，
 ///   H5 小程序进通用 WebView 承载页。
 /// - `/portal-bind`：统一门户的绑定状态页（学号、凭据信息、重新绑定/解绑），
 ///   其子路由 `/portal-bind/register` 才是内嵌登录 + 注册 Passkey 的流程页；
 ///   `export` / `import`（及 `import/scan` 扫码）是通行密钥在设备间搬运的页面。
 ///   都与壳平级，全屏展示。
-/// - `/innovation-credit`、`/labor-score`：学习页两张卡片的详情页，同样与壳
-///   平级全屏展示，返回键退回学习页。
 /// - `/place/:placeId`：校园地图的地物详情页（建筑 / POI / 通用地物共用）。
 ///   与壳平级，可深链与分享；页面按编号自行取数，不依赖地图页是否打开。
 /// - `/about`：关于页（应用图标、版本号、贡献者名单），与壳平级。
@@ -87,7 +82,7 @@ GoRouter buildRouter() => GoRouter(
       path: '/apps/:appId',
       pageBuilder: (context, state) {
         final id = state.pathParameters['appId']!;
-        final manifest = appRegistryById[id];
+        final manifest = appRegistry.byId[id];
         if (manifest == null) {
           return MaterialPage<void>(
             key: state.pageKey,
@@ -148,23 +143,6 @@ GoRouter buildRouter() => GoRouter(
           ],
         ),
       ],
-    ),
-    GoRoute(
-      path: '/innovation-credit',
-      pageBuilder: (_, state) => MaterialPage<void>(
-        key: state.pageKey,
-        child: const InnovationCreditPage(),
-      ),
-    ),
-    GoRoute(
-      path: '/labor-score',
-      pageBuilder: (_, state) =>
-          MaterialPage<void>(key: state.pageKey, child: const LaborScorePage()),
-    ),
-    GoRoute(
-      path: '/scores',
-      pageBuilder: (_, state) =>
-          MaterialPage<void>(key: state.pageKey, child: const ScorePage()),
     ),
     GoRoute(
       path: '/about',

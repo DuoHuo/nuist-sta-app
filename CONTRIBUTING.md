@@ -87,7 +87,9 @@ lib/
 - `lib/mini_apps/<app>/` 只能依赖 `lib/core/` 和第三方包
 - 小程序不得 import `lib/shell/` 或其他小程序
 - 需要登录的接口统一使用 `PortalSession`，不要自行实现登录
-- `entry` 与 `url` 必须恰好提供一个
+- 普通 `AppManifest(...)` 的 `entry` 与 `url` 必须恰好提供一个
+- 仅提供学习卡片、没有详情入口的模块使用 `AppManifest.cardOnly(...)`，必须提供
+  `id`、`label` 和 `studyCard`，不提供 `entry/url`，也不进入首页宫格
 - `id` 全局唯一，`label` 不要与已有小程序重名
 - Store 的读写必须 `try/catch`，失败时退化为没有存储
 - 进入小程序使用 `context.push('/apps/<id>')`，不要使用 `go`

@@ -58,7 +58,7 @@ class _LaborScoreCardState extends State<LaborScoreCard> {
         }
 
         return InkWell(
-          onTap: score == null ? null : () => context.push('/labor-score'),
+          onTap: score == null ? null : () => context.push('/apps/labor-score'),
           borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),

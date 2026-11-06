@@ -19,7 +19,7 @@ class HomePage extends StatelessWidget {
   /// 并发刷新所有提供了 [AppManifest.onHomeRefresh] 的首页卡片。
   static Future<void> _refreshAll() => _log.startSpan().run(
     () => Future.wait([
-      for (final app in appRegistry)
+      for (final app in appRegistry.apps)
         if (app.onHomeRefresh case final refresh?) refresh(),
     ]),
   );
@@ -39,7 +39,7 @@ class HomePage extends StatelessWidget {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             children: [
-              for (final app in appRegistry)
+              for (final app in appRegistry.apps)
                 if (app.homeCard != null) ...[
                   Builder(builder: app.homeCard!),
                   // 设计师 10/20：首页卡片间距 12→8。
@@ -61,7 +61,7 @@ class HomePage extends StatelessWidget {
                   mainAxisSpacing: 14,
                   childAspectRatio: 0.86,
                   children: [
-                    for (final app in appRegistry)
+                    for (final app in appRegistry.homeGridApps)
                       AppGridItem(
                         app: app,
                         // 必须 push 而非 go：go 会把小程序页替换成栈底，

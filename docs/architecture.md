@@ -3,7 +3,8 @@
 整体是「**壳 + 注册表 + 小程序**」三层。
 
 壳（底部页签 + 宫格首页）固定不变；每个小程序是 `lib/mini_apps/` 下一个自包含目录，
-在注册表登记一行就上宫格，点击进入全屏路由 `/apps/<id>`。
+在注册表登记一次，由 manifest 声明首页宫格、首页卡片和学习页卡片；有入口的小程序
+通过全屏路由 `/apps/<id>` 打开，也可以只贡献学习卡片。
 
 这样切分的目的是**让小程序可以独立增删、并行开发、合并互不冲突** —— 社团同学各做各的，
 不需要协调同一个文件。
@@ -22,6 +23,7 @@ lib/
 │   ├── network/        # 校园 VPN：vpnDio() 与 Rust 原生库的 FFI 封装
 │   ├── schedule/       # WeeklyClasses：「本周课程」跨小程序接口（课表提供，地图读取）
 │   ├── app_manifest.dart   # AppManifest：小程序描述
+│   ├── app_registry.dart   # AppRegistry：注册校验与宫格、学习卡片、入口索引
 │   ├── app_info.dart       # kAppName
 │   ├── colors.dart         # AppPalette 与 AppColors / AppColorsDark 色板
 │   ├── theme.dart          # appLightTheme() / appDarkTheme()
@@ -48,17 +50,20 @@ lib/
 | 路径 | 内容 |
 |---|---|
 | `/` `/study` `/profile` | 三个页签，包在 `StatefulShellRoute.indexedStack` 里 |
-| `/apps/:appId` | 全屏小程序；按 id 查注册表，查不到显示「小程序不存在或已下线」 |
+| `/apps/:appId` | 全屏小程序；按 id 查注册表的入口索引，未知 id 或仅卡片模块显示「小程序不存在或已下线」 |
 | `/portal-bind`、`/portal-bind/register` | 统一门户绑定与状态页 |
 | `/portal-bind/export`、`/portal-bind/import`、`/portal-bind/import/scan` | 通行密钥导出、导入与扫码导入 |
-| `/innovation-credit`、`/labor-score`、`/scores` | 学习页卡片的详情页，硬编码在路由表里 |
 | `/place/:placeId` | 校园地图地物详情页，可深链 |
 | `/about`、`/settings` | 关于页、App 级设置页 |
 
-小程序路由与壳路由**平级**，所以进小程序后不带底部页签，系统返回键自然退回宫格。
+学习页的成绩、双创学分、劳动积分详情分别使用 `/apps/scores`、`/apps/innovation-credit`、
+`/apps/labor-score`，页面入口由各模块的 manifest 提供。
+
+小程序路由与壳路由**平级**，所以进小程序后不带底部页签；从宫格或学习页 `push` 进入后，
+系统返回键自然退回原页面。
 
 > **⚠️ 必须用 `context.push('/apps/<id>')`，不要用 `go`。**
-> 用 `go` 会替换掉栈底，小程序页顶栏就没有返回按钮、返回键也退不回宫格。
+> 用 `go` 会替换掉栈底，小程序页顶栏就没有返回按钮、返回键也退不回原页面。
 
 ## AppManifest
 
@@ -66,35 +71,59 @@ lib/
 
 | 字段 | 类型 | 必填 | 含义 |
 |---|---|---|---|
-| `id` | `String` | ✅ | 全局唯一，决定路由 `/apps/<id>` |
-| `label` | `String` | ✅ | 宫格文字，**同时**是小程序内的顶栏标题 |
-| `color` | `Color` | ✅ | 图标底色 |
+| `id` | `String` | ✅ | 全局唯一；有入口时决定路由 `/apps/<id>` |
+| `label` | `String` | ✅ | 模块名称；有宫格或全屏入口时也是对应的显示名称 |
+| `color` | `Color?` | 普通构造必填 | 图标底色；仅卡片构造固定为 `null` |
 | `glyph` | `String?` | | 底色上的单字（如「图」）。设计稿首选形式 |
 | `icon` | `IconData?` | | 备选 Material 图标。**与 `glyph` 同时存在时 `glyph` 优先** |
-| `entry` | `WidgetBuilder?` | 二选一 | 原生小程序的入口页面 |
-| `url` | `String?` | 二选一 | H5 小程序地址 |
+| `entry` | `WidgetBuilder?` | 普通构造二选一 | 原生小程序的入口页面 |
+| `url` | `String?` | 普通构造二选一 | H5 小程序地址 |
 | `requiresPortal` | `bool` | | 仅对 H5 有意义，默认 `false` |
+| `showInHomeGrid` | `bool` | | 是否展示首页宫格入口，普通构造默认 `true` |
 | `homeCard` | `WidgetBuilder?` | | 首页宫格**上方**的常驻卡片 |
 | `onHomeRefresh` | `Future<void> Function()?` | | 首页下拉刷新时调用，刷新自己 `homeCard` 的数据；壳并发调用全部回调 |
+| `studyCard` | `StudyCardContribution?` | 仅卡片构造必填 | 学习页卡片及其排序、刷新配置 |
 
-两条构造断言（写错了会在构造时直接抛）：
+普通构造 `AppManifest(...)` 有两条断言（写错了会在构造时直接抛）：
 
 1. **`entry` 与 `url` 必须恰好二选一** —— 原生给 `entry`，H5 给 `url`
 2. **`requiresPortal` 为 `true` 时 `url` 必须非空** —— 原生小程序请直接用 `PortalSession`
 
+只有卡片、没有详情页的模块使用 `AppManifest.cardOnly(...)`，必须提供 `id`、`label` 和
+`studyCard`。该构造固定无 `entry/url`、无宫格信息、`showInHomeGrid: false`，不需要补一个
+占位页面。`hasEntry` 表示是否有原生或 H5 入口。
+
+`StudyCardContribution` 将学习卡片的三个配置放在一起：
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `builder` | `WidgetBuilder` | 必填，构建卡片；启动与状态仍由卡片内部管理 |
+| `order` | `int` | 必填，学习页按数值升序排列；相同数值按模块 id 排序 |
+| `onRefresh` | `Future<void> Function()?` | 可选，学习页下拉时调用；静态卡片可以省略 |
+
+`lib/mini_apps/registry.dart` 只维护一份 `appRegistry = AppRegistry([...])`。`AppRegistry`
+在构造时拒绝重复 id，并生成只读的 `apps`（全量模块）、`homeGridApps`（宫格可见模块）、
+`studyApps`（按学习顺序排序的模块）和 `byId`（仅包含有入口模块的索引）。首页宫格与学习页
+排序互不影响；增删模块只需调整这一份登记。
+
 ## 一个小程序能贡献的四种 UI 面
 
-这是最容易误解的地方。**只有前两种走注册表机制**：
+这四种常用贡献面都由 manifest 和注册表接入：
 
 | 贡献面 | 机制 | 要改哪里 |
 |---|---|---|
-| 首页宫格入口 | 注册表加一行 | `lib/mini_apps/registry.dart` |
+| 首页宫格入口 | 注册并保持 `showInHomeGrid: true` | 自己的 manifest + `lib/mini_apps/registry.dart` |
 | 首页常驻卡片 | `AppManifest.homeCard` | 自己的 manifest，**不用改壳** |
-| 学习页常驻卡片 | ⚠️ **没有注册表机制** | 必须改 `shell/study/study_page.dart`（卡片列表**和** `_refreshAll` 两处）+ `router.dart` |
-| 全屏详情页路由 | `router.dart` 里手写 `GoRoute` | `lib/router.dart` |
+| 学习页常驻卡片 | `AppManifest.studyCard` | 自己的 manifest，**不用改壳或刷新名单** |
+| 全屏入口页路由 | `AppManifest.entry` 或 `url`，统一 `/apps/<id>` | 自己的 manifest，**不用改路由表** |
 
-`homeCard` 的设计意图是壳只负责「把它摆出来」，卡片内部的数据与跳转由小程序自理，
-壳不感知 —— 所以首页加卡片确实不用动壳。学习页目前没有对应的机制，见下文「已知架构债」。
+壳只负责摆放卡片，卡片内部的数据、状态和跳转由小程序自理。学习页用同一份 `studyApps`
+渲染卡片和收集刷新回调，通过 `Future.sync` 包装后并发等待所有回调；单项同步抛错不会阻止
+其余项启动。业务错误仍由各模块在卡片内展示，不应向壳抛出；意外的同步或异步异常由壳
+记录脱敏日志并兜底，等待其余刷新完成后正常结束下拉。
+
+注册表本身不启动 Controller 或请求网络。学习卡片仍在挂载时调用 `ensureStarted()`，
+详情页与卡片继续共享各模块的单例状态。
 
 ## 依赖方向
 
@@ -104,19 +133,17 @@ lib/
 - `shell/*` 应当只 import `core/*` 和 `mini_apps/registry.dart`，不感知具体小程序
 - 跨小程序共享的组件才进 `core/`，且尽量少加
 
-**现状**（写文档时点名的两处，别照抄约定当现实）：
+**现状**（别照抄约定当现实）：
 
 - ✅ `mini_apps/*` 侧完全合规：没有任何一处 import `shell/*` 或兄弟小程序
-- ⚠️ 壳侧**有四处合法例外**：
-  - `shell/study/study_page.dart` 直接 import 了五个小程序模块（`student_info` / `academic` /
-    `score` / `innovation_credit` / `labor_score`）—— 因为学习页卡片没有注册表机制
+- ⚠️ 壳侧**有三处合法例外**：
   - `shell/profile/portal_bind/portal_status_page.dart` import 了 `student_info` 的模型与存储，
     用于展示学生身份；还 import 了 `TimetableController`，在登录成功、解绑时通知课表
-  - `router.dart` 直接 import 了几个小程序页面
+  - `router.dart` 仍直接 import 地图地物详情、课表特殊入口和通用 WebView 承载页
   - `app.dart` import 了课表的 `TimetableWeeklyClasses` 与 `TimetableLifecycleScope`，
     启动时登记为 `WeeklyClasses.source` 并挂上课表生命周期
 
-  真正「只认注册表」的壳页面只有 `shell/home/home_page.dart`。
+  `shell/home/home_page.dart` 和 `shell/study/study_page.dart` 都只通过注册表接入小程序。
 
 **只有第一条有工具强制**：CI 的「Check dependency direction」步骤会检查 `mini_apps/*` 的 import；
 其余两条仍靠人工 review（`analysis_options.yaml` 里 `linter.rules` 是空的，也没有自定义 lint）。
@@ -288,20 +315,21 @@ debug 构建默认记录 DEBUG。用户可在「我的 → 设置 → 诊断与�
 
 如实列出，不是「规范」，是「将来要还的账」：
 
-1. **学习页卡片没有注册表化**。新增学习页卡片必须改壳的两个地方（卡片列表 + `_refreshAll`），
-   与「小程序独立增删」的设计目标相悖。
-2. **依赖方向只有部分工具强制**。CI 只检查了 `mini_apps/*` 一侧；`shell/*` 的约定和 `core/` 的准入仍靠 review 把关。
-3. **`_RefreshButton` 在七个卡片文件里各写了一份私有同名类**（`academic` / `student_info` /
+1. **依赖方向只有部分工具强制**。CI 只检查了 `mini_apps/*` 一侧；`shell/*` 的约定和 `core/` 的准入仍靠 review 把关。
+2. **`_RefreshButton` 在七个卡片文件里各写了一份私有同名类**（`academic` / `student_info` /
    `score` / `innovation_credit` / `labor_score` / `timetable` / `electricity`），没有上收到 `core/`。
-4. **`lib/core/auth/` 测试覆盖不全**。目前只有 `NuistLogin`、`PortalCookieManager` 和学号掩码有单元测试，
+3. **`lib/core/auth/` 测试覆盖不全**。目前只有 `NuistLogin`、`PortalCookieManager` 和学号掩码有单元测试，
    `PortalSession`、`PasskeyTransfer` 等仍没有。
 
 ## 测试
 
-`test/widget_test.dart` 是冒烟测试，自动守护两条不变量：
+`test/widget_test.dart` 是冒烟测试，守护注册约束与主要页面入口：
 
 - 注册表 `id` 全局唯一（重复会导致 `/apps/:id` 路由冲突）
-- 每个 manifest 恰好提供 `entry` 或 `url` 之一
+- 有入口的 manifest 恰好提供 `entry` 或 `url` 之一；仅卡片模块不进入宫格或入口索引
+
+`test/study_registry_test.dart` 覆盖学习卡片注册、排序、增删及刷新分发，验证并发刷新会等待
+全部回调，单项同步抛错不影响其余回调启动，以及仅卡片模块和未知 id 的路由兜底。
 
 另外它还用 `findsOneWidget` 断言了若干界面文案（首页宫格、学习页五张卡片标题、我的页
 「设置」「关于」等）。**副作用：新增小程序的 `label` 不能与现有重名**，否则这些断言会挂。

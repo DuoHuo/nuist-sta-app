@@ -2,18 +2,21 @@ import 'package:flutter/material.dart';
 
 /// 一个「小程序」在注册表里的描述。
 ///
-/// 壳首页宫格按注册表渲染；点击后统一跳转全屏路由 `/apps/[id]`。
-/// 小程序有两种形态，[entry] 与 [url] 恰好二选一：
+/// 壳按注册信息展示宫格与卡片；有入口的模块统一走 `/apps/[id]`。
+/// 普通构造要求 [entry] 与 [url] 恰好二选一：
 ///
 /// - 原生小程序：在 `lib/mini_apps/<name>/` 下写 Flutter 页面，
 ///   模块里导出一个 [AppManifest] 常量并在注册表登记；
 /// - H5 小程序：只登记 [url]，由通用 WebView 承载页打开，
 ///   适合不会 Flutter 的社团用任意 Web 技术栈交付。
+///
+/// 没有全屏入口、只提供学习卡片的模块使用 [AppManifest.cardOnly]。
 class AppManifest {
+  /// 声明带原生或 H5 入口的小程序。
   const AppManifest({
     required this.id,
     required this.label,
-    required this.color,
+    required Color this.color,
     this.glyph,
     this.icon,
     this.iconWidget,
@@ -22,6 +25,8 @@ class AppManifest {
     this.requiresPortal = false,
     this.homeCard,
     this.onHomeRefresh,
+    this.showInHomeGrid = true,
+    this.studyCard,
   }) : assert(
          (entry == null) != (url == null),
          '$id 必须且只能提供 entry（原生）或 url（H5）之一',
@@ -31,14 +36,30 @@ class AppManifest {
          '$id 的 requiresPortal 只对 H5 小程序有意义；原生小程序请直接用 PortalSession',
        );
 
-  /// 路由标识，如 'campus-map'，全注册表唯一，跳转 `/apps/$id` 用。
+  /// 声明只有学习卡片的模块，不提供全屏入口或首页宫格图标。
+  const AppManifest.cardOnly({
+    required this.id,
+    required this.label,
+    required StudyCardContribution this.studyCard,
+  }) : color = null,
+       glyph = null,
+       icon = null,
+       iconWidget = null,
+       entry = null,
+       url = null,
+       requiresPortal = false,
+       homeCard = null,
+       onHomeRefresh = null,
+       showInHomeGrid = false;
+
+  /// 全注册表唯一的标识；有入口时对应 `/apps/$id`。
   final String id;
 
-  /// 宫格与小程序内顶栏显示的名字。
+  /// 模块名称；有宫格或全屏入口时也是对应的显示名称。
   final String label;
 
-  /// 宫格图标底色。
-  final Color color;
+  /// 宫格图标底色；仅卡片模块没有宫格配色。
+  final Color? color;
 
   /// 图标底色上的单字，如「图」。
   ///
@@ -80,6 +101,36 @@ class AppManifest {
   /// 由小程序自己在卡片上展示，不要抛出异常。
   final Future<void> Function()? onHomeRefresh;
 
+  /// 是否在首页宫格展示入口；不影响首页卡片或全屏路由。
+  final bool showInHomeGrid;
+
+  /// 可选：学习页常驻卡片及其排序、刷新行为。
+  final StudyCardContribution? studyCard;
+
+  /// 是否提供可通过 `/apps/$id` 访问的全屏入口。
+  bool get hasEntry => entry != null || url != null;
+
   /// 是否为 H5 形态。
   bool get isWeb => url != null;
+}
+
+/// 小程序贡献的学习卡片，展示与刷新始终使用同一份注册配置。
+class StudyCardContribution {
+  /// [order] 越小越靠前；相同时按模块 id 排序。
+  const StudyCardContribution({
+    required this.builder,
+    required this.order,
+    this.onRefresh,
+  });
+
+  /// 构建卡片；数据启动、状态展示和点击行为由卡片自身负责。
+  final WidgetBuilder builder;
+
+  /// 学习页展示顺序，独立于首页宫格顺序。
+  final int order;
+
+  /// 可选的下拉刷新操作；业务失败由模块在卡片中展示。
+  ///
+  /// 壳并发调用所有回调并等待完成；静态卡片可以不提供刷新操作。
+  final Future<void> Function()? onRefresh;
 }

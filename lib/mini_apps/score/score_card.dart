@@ -54,7 +54,7 @@ class _ScoreCardState extends State<ScoreCard> {
         }
 
         return InkWell(
-          onTap: report == null ? null : () => context.push('/scores'),
+          onTap: report == null ? null : () => context.push('/apps/scores'),
           borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
