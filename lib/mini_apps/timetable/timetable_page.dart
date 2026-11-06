@@ -129,7 +129,7 @@ class _TimetablePageState extends State<TimetablePage> {
   }
 
   /// 打开门户绑定状态页（登录 / 解绑）。回来后只刷新绑定状态（UI）；登录成功的
-  /// 同步由门户绑定页（portal_status_page）自己调用 onLoginSucceeded，这里不重复调用。
+  /// 同步由注册表统一分发，这里不重复调用。
   Future<void> _openLogin() async {
     await context.push('/portal-bind');
     if (!mounted) return;

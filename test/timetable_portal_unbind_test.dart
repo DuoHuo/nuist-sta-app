@@ -1,10 +1,12 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_registry.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
-import 'package:nuist_sta_app/shell/profile/portal_bind/portal_status_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_manifest.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_exams_manifest.dart';
 
 void main() {
   late Directory tmp;
@@ -49,7 +51,11 @@ void main() {
     expect(c.jwxtCourses, isNotEmpty);
     expect(File('${tmp.path}/snapshot.json').existsSync(), isTrue);
 
-    await clearTimetableOnUnbind();
+    expect(
+      await AppRegistry([timetableManifest, examScheduleManifest])
+          .notifyPortalBindingChanged(bound: false),
+      isTrue,
+    );
 
     expect(c.portalBound, isFalse);
     expect(c.jwxtCourses, isEmpty);

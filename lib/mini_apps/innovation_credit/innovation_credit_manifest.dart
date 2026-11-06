@@ -13,6 +13,7 @@ const innovationCreditManifest = AppManifest(
   icon: Icons.lightbulb_outline,
   entry: _entry,
   showInHomeGrid: false,
+  onPortalBindingChanged: _portalBindingChanged,
   studyCard: StudyCardContribution(
     builder: _studyCard,
     order: 40,
@@ -25,3 +26,6 @@ Widget _entry(BuildContext context) => const InnovationCreditPage();
 Widget _studyCard(BuildContext context) => const InnovationCreditCard();
 
 Future<void> _studyRefresh() => InnovationCreditController.instance.refresh();
+
+Future<void> _portalBindingChanged(bool bound) =>
+    InnovationCreditController.instance.onPortalBindingChanged(bound);

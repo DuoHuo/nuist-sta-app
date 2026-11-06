@@ -122,8 +122,7 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
 
   void _openTimetable() => context.push('/apps/timetable');
 
-  /// 登录：回来后只刷新绑定状态（UI）。登录成功的同步由门户绑定页
-  /// （portal_status_page）自己调用 onLoginSucceeded，这里不重复调用。
+  /// 登录：回来后只刷新绑定状态（UI）。绑定成功的同步由注册表统一分发。
   Future<void> _openLogin() async {
     await context.push('/portal-bind');
     if (!mounted) return;

@@ -11,9 +11,30 @@ import 'labor_score_store.dart';
 /// 劳动积分的全局状态：学习页卡片和详情页共用一份。
 ///
 /// 生命周期与 AcademicController 一致：卡片首次挂载时 [ensureStarted]
-/// （读缓存 → 缓存不是今天拉的才自动拉一次），之后只在用户手动刷新时再请求。
+/// （读缓存 → 缓存不是今天拉的才自动拉一次），之后在手动刷新或门户绑定变化时请求。
 class LaborScoreController extends ChangeNotifier {
-  LaborScoreController._();
+  LaborScoreController._()
+    : _readCache = LaborScoreStore.read,
+      _saveCache = LaborScoreStore.save,
+      _fetch = LaborScoreApi.fetch,
+      _bindingCheck = _hasPortalBinding;
+
+  /// 测试使用独立实例，避免请求学校接口或修改真实缓存。
+  @visibleForTesting
+  LaborScoreController.forTesting({
+    required this._readCache,
+    required this._saveCache,
+    required this._fetch,
+    required this._bindingCheck,
+  });
+
+  static Future<bool> _hasPortalBinding() async =>
+      await PasskeyStore.read() != null;
+
+  final Future<LaborScore?> Function() _readCache;
+  final Future<void> Function(LaborScore) _saveCache;
+  final Future<LaborScore> Function() _fetch;
+  final Future<bool> Function() _bindingCheck;
 
   static final LaborScoreController instance = LaborScoreController._();
   static final _log = AppLog.logger('labor_score.controller');
@@ -24,6 +45,8 @@ class LaborScoreController extends ChangeNotifier {
   bool _portalBound = true;
   bool _started = false;
   Future<void>? _starting;
+  Future<void>? _refreshing;
+  int _bindingGeneration = 0;
 
   LaborScore? get score => _score;
   bool get loading => _loading;
@@ -41,40 +64,82 @@ class LaborScoreController extends ChangeNotifier {
     return _starting = _start();
   }
 
-  Future<void> _start() async {
-    _score = await LaborScoreStore.read();
-    _portalBound = await PasskeyStore.read() != null;
+  Future<void> _readInitialCache(int generation) async {
+    final cached = await _readCache();
+    if (generation != _bindingGeneration) return;
+    _score = cached;
     notifyListeners();
-    // 今天已经拉到过就只展示缓存，跨了自然天（或从没拉到过）才自动刷新。
+  }
+
+  Future<void> _start() async {
+    final generation = _bindingGeneration;
+    await _readInitialCache(generation);
+    if (generation != _bindingGeneration) return;
+    final bound = await _bindingCheck();
+    if (generation != _bindingGeneration) return;
+    _portalBound = bound;
+    notifyListeners();
     final cached = _score;
     if (_portalBound && (cached == null || !isFetchedToday(cached.fetchedAt))) {
       await refresh();
     }
   }
 
-  Future<void> refresh() async {
-    if (_loading) return;
-    _portalBound = await PasskeyStore.read() != null;
-    if (!_portalBound) {
-      notifyListeners();
-      return;
+  /// 绑定或更换凭据后强制刷新；解绑仅更新状态，已有缓存保留。
+  Future<void> onPortalBindingChanged(bool bound) async {
+    final generation = ++_bindingGeneration;
+    _portalBound = bound;
+    _error = null;
+    _loading = bound;
+    if (!_started) {
+      _started = true;
+      _starting = _readInitialCache(generation);
     }
+    notifyListeners();
+    if (!bound) return;
+    await _starting;
+    if (generation != _bindingGeneration) return;
+    // 旧请求及其写盘先结束，避免旧账号结果覆盖这次绑定后的数据。
+    await _refreshing;
+    if (generation != _bindingGeneration) return;
+    await _runRefresh(checkBinding: false);
+  }
+
+  /// 手动刷新合并在途请求；绑定变化会等待旧请求后另行刷新。
+  Future<void> refresh() => _runRefresh();
+
+  Future<void> _runRefresh({bool checkBinding = true}) => _refreshing ??=
+      _refresh(_bindingGeneration, checkBinding: checkBinding).whenComplete(() {
+        _refreshing = null;
+      });
+
+  Future<void> _refresh(int generation, {required bool checkBinding}) async {
     _loading = true;
     _error = null;
     notifyListeners();
     try {
+      if (checkBinding) {
+        final bound = await _bindingCheck();
+        if (generation != _bindingGeneration) return;
+        _portalBound = bound;
+      }
+      if (!_portalBound) return;
       await _log.operation('refresh', () async {
-        final score = await LaborScoreApi.fetch();
-        await LaborScoreStore.save(score);
+        final score = await _fetch();
+        if (generation != _bindingGeneration) return;
+        await _saveCache(score);
+        if (generation != _bindingGeneration) return;
         _score = score;
       });
     } on PortalException catch (e) {
-      _error = e.message;
+      if (generation == _bindingGeneration) _error = e.message;
     } catch (e) {
-      _error = '刷新失败：$e';
+      if (generation == _bindingGeneration) _error = '刷新失败：$e';
     } finally {
-      _loading = false;
-      notifyListeners();
+      if (generation == _bindingGeneration) {
+        _loading = false;
+        notifyListeners();
+      }
     }
   }
 }

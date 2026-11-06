@@ -10,9 +10,10 @@ import '../../../core/auth/passkey_store.dart';
 import '../../../core/auth/passkey_transfer.dart';
 import '../../../core/colors.dart';
 import 'portal_bind_widgets.dart';
+import 'portal_binding_actions.dart';
 
 /// 导入通行密钥：三种来源拿到导出文本 → 输 PIN 解密 → 预览确认 → 覆盖本机凭据。
-/// 成功后 `pop(true)`，由状态页负责清会话并刷新。
+/// 保存成功后清理旧会话并通知各模块，再 `pop(true)` 更新状态页展示。
 class PortalImportPage extends StatefulWidget {
   const PortalImportPage({super.key});
 
@@ -90,7 +91,12 @@ class _PortalImportPageState extends State<PortalImportPage> {
     final confirmed = await _preview(bundle, replacing: existing != null);
     if (!confirmed) return;
 
-    await PasskeyStore.save(bundle);
+    try {
+      await PortalBindingActions.instance.bind(bundle);
+    } catch (_) {
+      if (mounted) _message('绑定未完成，请重试');
+      return;
+    }
     if (mounted) context.pop(true);
   }
 

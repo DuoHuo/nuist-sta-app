@@ -60,8 +60,8 @@ class NetworkRestoreDetector {
 ///   （始终本地刷新；距上次成功远程同步超过 6 小时则再静默补一次远程）；
 /// - 网络从无到有时调用 [TimetableController.onNetworkRestored]（远程补同步，节流与
 ///   「只补一次」由 controller 决定）。
-/// 登录成功的同步（[TimetableController.onLoginSucceeded]）由门户绑定页
-/// （portal_status_page）在绑定 / 导入通行密钥成功后调用，不在这里接。
+/// 绑定成功的同步由注册表通过 [TimetableController.onPortalBindingChanged]
+/// 分发，不在这里重复接入。
 /// 切回首页 tab / 首页下拉只走 [TimetableController.refreshLocal]，不经过本 Scope。
 class TimetableLifecycleScope extends StatefulWidget {
   const TimetableLifecycleScope({

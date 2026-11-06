@@ -2,11 +2,16 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_registry.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_lifecycle.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_manifest.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_exams_manifest.dart';
 
 // 虚构数据；时钟注入，不真正等待。
 Course _course(String id) => Course(
@@ -174,6 +179,124 @@ void main() {
     expect(await c.manualSync(), isTrue);
     expect(fetches, 3);
   });
+
+  test('绑定通知立即同步，课表与考试卡片只触发一次请求', () async {
+    await c.onAppStart();
+    advance(const Duration(minutes: 1));
+    final registry = AppRegistry([timetableManifest, examScheduleManifest]);
+    expect(await registry.notifyPortalBindingChanged(bound: true), isTrue);
+    expect(fetches, 2);
+    expect(c.portalBound, isTrue);
+  });
+
+  test('在途同步不会吞掉换绑通知，旧请求结束后补一次同步', () async {
+    await c.ensureStarted();
+    gate = Completer<void>();
+    final first = c.manualSync();
+    await pumpEventQueue();
+    final registry = AppRegistry([timetableManifest, examScheduleManifest]);
+    final rebound = registry.notifyPortalBindingChanged(bound: true);
+    await pumpEventQueue();
+    expect(fetches, 1);
+    final oldGate = gate!;
+    gate = null;
+    oldGate.complete();
+    await first;
+    expect(await rebound, isTrue);
+    expect(fetches, 2);
+    expect(c.syncStatus, TimetableSyncStatus.success);
+  });
+
+  test('解绑等待在途同步结束，晚到课表不会重新写回', () async {
+    await c.ensureStarted();
+    gate = Completer<void>();
+    final first = c.manualSync();
+    await pumpEventQueue();
+    TimetableController.bindingCheck = () async => false;
+    final registry = AppRegistry([timetableManifest, examScheduleManifest]);
+    final unbound = registry.notifyPortalBindingChanged(bound: false);
+    await pumpEventQueue();
+    expect(c.portalBound, isFalse);
+    gate!.complete();
+    await first;
+    expect(await unbound, isTrue);
+    expect(c.jwxtCourses, isEmpty);
+    expect(c.syncStatus, TimetableSyncStatus.idle);
+    expect(await TimetableStore.readSnapshot(), isNull);
+  });
+
+  test('解绑忽略晚到考试，保留考试覆盖且不记录旧同步成功', () async {
+    await c.ensureStarted();
+    final exam = ScheduleEvent(
+      id: 'old-exam',
+      kind: ScheduleKind.exam,
+      source: ScheduleSource.jwxt,
+      title: '示例考试',
+      date: DateTime(2026, 9, 8),
+      start: const TimeOfDayMinutes(9, 0),
+      end: const TimeOfDayMinutes(11, 0),
+      courseCode: 'EXAMPLE01',
+    );
+    await c.replaceJwxtExams([exam]);
+    await c.deleteScheduleEvent(exam.id);
+    final originalFetchExams = TimetableController.fetchExams;
+    addTearDown(() => TimetableController.fetchExams = originalFetchExams);
+    final entered = Completer<void>();
+    final examResponse = Completer<List<ScheduleEvent>>();
+    TimetableController.fetchExams = (_) {
+      entered.complete();
+      return examResponse.future;
+    };
+    final outcomes = <TimetableSyncOutcome>[];
+    final subscription = c.syncOutcomes.listen(outcomes.add);
+    addTearDown(subscription.cancel);
+
+    final sync = c.manualSync();
+    await entered.future;
+    TimetableController.bindingCheck = () async => false;
+    final unbound = c.onPortalBindingChanged(false);
+    // 过时响应若仍合并，空列表会删除原考试的覆盖记录。
+    examResponse.complete(const []);
+    await sync;
+    await unbound;
+    await pumpEventQueue();
+
+    expect(c.isJwxtOverridden(examKey: exam.jwxtKey), isTrue);
+    expect(await ScheduleStore.readExamOverrides(), contains(exam.jwxtKey));
+    expect(c.scheduleEvents, isEmpty);
+    expect(c.lastSyncSuccessAt, isNull);
+    expect(outcomes, isEmpty);
+    expect(c.syncStatus, TimetableSyncStatus.idle);
+  });
+
+  for (final latestBound in [true, false]) {
+    test('读取绑定状态期间再次${latestBound ? '换绑' : '解绑'}，旧通知不再启动同步', () async {
+      await c.ensureStarted();
+      final entered = Completer<void>();
+      final oldBindingRead = Completer<bool>();
+      var bindingReads = 0;
+      TimetableController.bindingCheck = () {
+        if (bindingReads++ == 0) {
+          entered.complete();
+          return oldBindingRead.future;
+        }
+        return Future.value(latestBound);
+      };
+
+      final first = c.onPortalBindingChanged(true);
+      await entered.future;
+      final latest = c.onPortalBindingChanged(latestBound);
+      oldBindingRead.complete(true);
+      await Future.wait([first, latest]);
+
+      expect(fetches, latestBound ? 1 : 0);
+      expect(c.portalBound, latestBound);
+      expect(
+        c.syncStatus,
+        latestBound ? TimetableSyncStatus.success : TimetableSyncStatus.idle,
+      );
+    });
+  }
 
   test('manual sync when unbound does nothing', () async {
     TimetableController.bindingCheck = () async => false;

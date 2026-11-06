@@ -27,6 +27,7 @@ class AppManifest {
     this.onHomeRefresh,
     this.showInHomeGrid = true,
     this.studyCard,
+    this.onPortalBindingChanged,
   }) : assert(
          (entry == null) != (url == null),
          '$id 必须且只能提供 entry（原生）或 url（H5）之一',
@@ -41,6 +42,7 @@ class AppManifest {
     required this.id,
     required this.label,
     required StudyCardContribution this.studyCard,
+    this.onPortalBindingChanged,
   }) : color = null,
        glyph = null,
        icon = null,
@@ -106,6 +108,13 @@ class AppManifest {
 
   /// 可选：学习页常驻卡片及其排序、刷新行为。
   final StudyCardContribution? studyCard;
+
+  /// 可选：本机门户绑定变化后的处理，优先于卡片的默认刷新。
+  ///
+  /// `bound` 为 true 表示注册、重新绑定或导入凭据成功，为 false 表示解绑；
+  /// 普通会话续期不会触发。未提供时，注册表会刷新已有的首页卡片与学习卡片，
+  /// 由各模块重新检查绑定状态；需要清理缓存等特殊处理时提供此回调。
+  final Future<void> Function(bool bound)? onPortalBindingChanged;
 
   /// 是否提供可通过 `/apps/$id` 访问的全屏入口。
   bool get hasEntry => entry != null || url != null;

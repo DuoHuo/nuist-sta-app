@@ -8,6 +8,7 @@ import 'student_info_controller.dart';
 const studentInfoManifest = AppManifest.cardOnly(
   id: 'student-info',
   label: '本学期',
+  onPortalBindingChanged: _portalBindingChanged,
   studyCard: StudyCardContribution(
     builder: _studyCard,
     order: 10,
@@ -18,3 +19,6 @@ const studentInfoManifest = AppManifest.cardOnly(
 Widget _studyCard(BuildContext context) => const StudentInfoCard();
 
 Future<void> _studyRefresh() => StudentInfoController.instance.refresh();
+
+Future<void> _portalBindingChanged(bool bound) =>
+    StudentInfoController.instance.onPortalBindingChanged(bound);

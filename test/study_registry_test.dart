@@ -17,9 +17,11 @@ AppManifest _card(
   String id, {
   int order = 0,
   Future<void> Function()? onRefresh,
+  Future<void> Function(bool bound)? onPortalBindingChanged,
 }) => AppManifest.cardOnly(
   id: id,
   label: id,
+  onPortalBindingChanged: onPortalBindingChanged,
   studyCard: StudyCardContribution(
     builder: (_) => Text(id),
     order: order,
@@ -145,6 +147,179 @@ void main() {
         expect(appRegistry.byId[id]?.hasEntry, isTrue);
       }
     });
+  });
+
+  group('门户绑定变化分发', () {
+    for (final bound in [true, false]) {
+      test('${bound ? '绑定' : '解绑'}默认刷新首页与学习卡片，同一回调不重复', () async {
+        final refreshed = <String>[];
+        Future<void> sharedRefresh() async => refreshed.add('shared');
+        final registry = AppRegistry([
+          AppManifest(
+            id: 'both-cards',
+            label: '两类卡片',
+            color: Colors.blue,
+            entry: _entry,
+            homeCard: (_) => const Text('首页卡片'),
+            onHomeRefresh: () async => refreshed.add('home'),
+            studyCard: StudyCardContribution(
+              builder: (_) => const Text('学习卡片'),
+              order: 0,
+              onRefresh: () async => refreshed.add('study'),
+            ),
+          ),
+          AppManifest(
+            id: 'shared-callback',
+            label: '共享刷新',
+            color: Colors.blue,
+            entry: _entry,
+            homeCard: (_) => const Text('首页卡片'),
+            onHomeRefresh: sharedRefresh,
+            studyCard: StudyCardContribution(
+              builder: (_) => const Text('学习卡片'),
+              order: 0,
+              onRefresh: sharedRefresh,
+            ),
+          ),
+          _card('card-only', onRefresh: () async => refreshed.add('card-only')),
+        ]);
+
+        expect(await registry.notifyPortalBindingChanged(bound: bound), isTrue);
+        expect(
+          refreshed,
+          unorderedEquals(['home', 'study', 'shared', 'card-only']),
+        );
+      });
+
+      test('${bound ? '绑定' : '解绑'}显式回调优先，普通与纯卡片模块都能接收状态', () async {
+        final received = <(String, bool)>[];
+        Future<void> unexpectedRefresh() async => fail('显式处理后不应再次刷新卡片');
+        final registry = AppRegistry([
+          AppManifest(
+            id: 'explicit',
+            label: '显式处理',
+            color: Colors.blue,
+            entry: _entry,
+            homeCard: (_) => const Text('首页卡片'),
+            onHomeRefresh: unexpectedRefresh,
+            studyCard: StudyCardContribution(
+              builder: (_) => const Text('学习卡片'),
+              order: 0,
+              onRefresh: unexpectedRefresh,
+            ),
+            onPortalBindingChanged: (value) async =>
+                received.add(('app', value)),
+          ),
+          _card(
+            'explicit-card',
+            onRefresh: unexpectedRefresh,
+            onPortalBindingChanged: (value) async =>
+                received.add(('card', value)),
+          ),
+        ]);
+
+        expect(await registry.notifyPortalBindingChanged(bound: bound), isTrue);
+        expect(received, unorderedEquals([('app', bound), ('card', bound)]));
+      });
+    }
+
+    test('只调用实际卡片的刷新，没有订阅或静态卡片时直接成功', () async {
+      final registry = AppRegistry([
+        _card('static'),
+        AppManifest(
+          id: 'entry-only',
+          label: '仅入口',
+          color: Colors.blue,
+          entry: _entry,
+          onHomeRefresh: () async => fail('没有首页卡片不应调用其刷新'),
+        ),
+      ]);
+
+      expect(await registry.notifyPortalBindingChanged(bound: true), isTrue);
+      expect(await registry.notifyPortalBindingChanged(bound: false), isTrue);
+      expect(
+        await AppRegistry([]).notifyPortalBindingChanged(bound: true),
+        isTrue,
+      );
+    });
+
+    test('并发启动所有处理，最后一项完成前不结束', () async {
+      final started = <String>[];
+      final first = Completer<void>();
+      final second = Completer<void>();
+      final registry = AppRegistry([
+        _card(
+          'first',
+          onPortalBindingChanged: (_) {
+            started.add('first');
+            return first.future;
+          },
+        ),
+        _card(
+          'second',
+          onRefresh: () {
+            started.add('second');
+            return second.future;
+          },
+        ),
+      ]);
+
+      var completed = false;
+      final notification = registry
+          .notifyPortalBindingChanged(bound: true)
+          .then((success) {
+            completed = true;
+            return success;
+          });
+      expect(started, unorderedEquals(['first', 'second']));
+      expect(completed, isFalse);
+
+      second.complete();
+      await Future<void>.value();
+      expect(completed, isFalse);
+      first.complete();
+      expect(await notification, isTrue);
+    });
+
+    for (final asynchronous in [false, true]) {
+      test('${asynchronous ? '异步' : '同步'}异常不阻断其他处理，等待全部后返回失败', () async {
+        final remaining = Completer<void>();
+        var remainingStarted = false;
+        Future<void> broken() {
+          final error = StateError('合成绑定通知失败');
+          if (asynchronous) return Future<void>.error(error);
+          throw error;
+        }
+
+        final registry = AppRegistry([
+          _card(
+            'broken',
+            onRefresh: asynchronous ? broken : null,
+            onPortalBindingChanged: asynchronous ? null : (_) => broken(),
+          ),
+          _card(
+            'remaining',
+            onRefresh: () {
+              remainingStarted = true;
+              return remaining.future;
+            },
+          ),
+        ]);
+
+        var completed = false;
+        final notification = registry
+            .notifyPortalBindingChanged(bound: false)
+            .then((success) {
+              completed = true;
+              return success;
+            });
+        expect(remainingStarted, isTrue);
+        await Future<void>.value();
+        expect(completed, isFalse);
+        remaining.complete();
+        expect(await notification, isFalse);
+      });
+    }
   });
 
   group('学习页卡片与刷新联动', () {

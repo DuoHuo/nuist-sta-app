@@ -8,6 +8,7 @@ import 'academic_summary_card.dart';
 const academicManifest = AppManifest.cardOnly(
   id: 'academic',
   label: '学业概览',
+  onPortalBindingChanged: _portalBindingChanged,
   studyCard: StudyCardContribution(
     builder: _studyCard,
     order: 20,
@@ -18,3 +19,6 @@ const academicManifest = AppManifest.cardOnly(
 Widget _studyCard(BuildContext context) => const AcademicSummaryCard();
 
 Future<void> _studyRefresh() => AcademicController.instance.refresh();
+
+Future<void> _portalBindingChanged(bool bound) =>
+    AcademicController.instance.onPortalBindingChanged(bound);

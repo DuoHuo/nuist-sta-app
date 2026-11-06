@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -12,8 +10,8 @@ import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
 import '../../../mini_apps/student_info/student_info_models.dart';
 import '../../../mini_apps/student_info/student_info_store.dart';
-import '../../../mini_apps/timetable/timetable_controller.dart';
 import 'portal_bind_widgets.dart';
+import 'portal_binding_actions.dart';
 
 /// 「绑定统一门户」的状态页：展示当前绑定的学号与凭据信息，并提供重新绑定、
 /// 解除绑定、导出 / 导入通行密钥入口。debug 构建下多一个「测试登录」按钮，
@@ -65,13 +63,7 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
   /// 就不必再输一遍密码。万一残留的是别人的账号，绑定页顶部有「换个账号」，
   /// 绑完状态页也会把学号摆出来，看一眼就知道对不对。
   Future<void> _openRegister() async {
-    final done = await context.push<bool>('/portal-bind/register');
-    if (done == true) {
-      // 新凭据对应的可能是另一个学号，旧会话必须作废。
-      await PortalSession.instance.clear();
-      // 登录（绑定 / 导入）成功后立即同步课表，不受自动同步节流限制。
-      unawaited(TimetableController.instance.onLoginSucceeded());
-    }
+    await context.push<bool>('/portal-bind/register');
     if (mounted) _load();
   }
 
@@ -101,14 +93,9 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
     if (confirmed && mounted) await context.push('/portal-bind/export');
   }
 
-  /// 与 [_openRegister] 同一套收尾：导入的凭据可能属于别的学号，旧会话必须作废。
+  /// 导入页自行完成凭据保存、清会话与模块通知；返回后更新绑定信息。
   Future<void> _openImport() async {
-    final done = await context.push<bool>('/portal-bind/import');
-    if (done == true) {
-      await PortalSession.instance.clear();
-      // 登录（绑定 / 导入）成功后立即同步课表，不受自动同步节流限制。
-      unawaited(TimetableController.instance.onLoginSucceeded());
-    }
+    await context.push<bool>('/portal-bind/import');
     if (mounted) _load();
   }
 
@@ -125,20 +112,26 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
     );
     if (!confirmed) return;
 
-    await _log.operation('unbind', () async {
-      await PasskeyStore.delete();
-      // 解绑是用户主动断开，WebView 里的登录态也一并清掉，免得看起来还登着。
-      await PortalSession.instance.clear(includeWebView: true);
-      await clearTimetableOnUnbind();
-    });
+    final bool reloaded;
+    try {
+      reloaded = await PortalBindingActions.instance.unbind();
+    } catch (_) {
+      if (!mounted) return;
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('解绑未完成，请重试')));
+      return;
+    }
     if (!mounted) return;
     setState(() {
       _bundle = null;
       _user = null;
       _testResult = null;
     });
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('已解除绑定')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(reloaded ? '已解除绑定' : '已解除绑定，部分卡片刷新或本地数据清理失败')),
+    );
   }
 
   Future<bool> _confirm({
@@ -652,9 +645,3 @@ class _TestResultView extends StatelessWidget {
     );
   }
 }
-
-/// 解绑后清理课表：清掉教务课、磁盘缓存与学期元数据，手动课保留。
-/// 第二阶段改为 core 里的统一退出钩子。
-@visibleForTesting
-Future<void> clearTimetableOnUnbind() =>
-    TimetableController.instance.handleLogout(clearJwxt: true);

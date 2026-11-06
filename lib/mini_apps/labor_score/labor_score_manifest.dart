@@ -13,6 +13,7 @@ const laborScoreManifest = AppManifest(
   icon: Icons.volunteer_activism_outlined,
   entry: _entry,
   showInHomeGrid: false,
+  onPortalBindingChanged: _portalBindingChanged,
   studyCard: StudyCardContribution(
     builder: _studyCard,
     order: 50,
@@ -25,3 +26,6 @@ Widget _entry(BuildContext context) => const LaborScorePage();
 Widget _studyCard(BuildContext context) => const LaborScoreCard();
 
 Future<void> _studyRefresh() => LaborScoreController.instance.refresh();
+
+Future<void> _portalBindingChanged(bool bound) =>
+    LaborScoreController.instance.onPortalBindingChanged(bound);

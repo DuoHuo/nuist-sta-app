@@ -10,22 +10,61 @@ import 'electricity_store.dart';
 /// 电费的全局状态：首页卡片和详情页共用一份，刷新、换宿舍两边同步更新。
 ///
 /// 生命周期：首页卡片首次挂载时 [ensureStarted]（读缓存 → 自动拉一次），
-/// 之后只在用户手动刷新或换宿舍时再请求。
+/// 之后在用户手动刷新、换宿舍或绑定门户后再请求。
 class ElectricityController extends ChangeNotifier {
-  ElectricityController._();
+  ElectricityController._({
+    Future<bool> Function()? bindingCheck,
+    Future<ElecRoom?> Function()? readRoom,
+    Future<ElecReading?> Function(ElecRoom room)? readLatest,
+    Future<double> Function(ElecRoom room)? queryBalance,
+    Future<void> Function(ElecRoom room, ElecReading reading)? appendReading,
+  }) : _bindingCheck = bindingCheck ?? _readPortalBound,
+       _readRoom = readRoom ?? ElectricityStore.readRoom,
+       _readLatest = readLatest ?? ElectricityStore.latest,
+       _queryBalance = queryBalance ?? ElectricityApi.queryBalance,
+       _appendReading = appendReading ?? ElectricityStore.appendReading;
+
+  /// 注入绑定状态、余额请求与本地缓存，用合成数据验证生命周期。
+  @visibleForTesting
+  factory ElectricityController.forTesting({
+    required Future<bool> Function() bindingCheck,
+    required Future<ElecRoom?> Function() readRoom,
+    required Future<ElecReading?> Function(ElecRoom room) readLatest,
+    required Future<double> Function(ElecRoom room) queryBalance,
+    required Future<void> Function(ElecRoom room, ElecReading reading)
+    appendReading,
+  }) => ElectricityController._(
+    bindingCheck: bindingCheck,
+    readRoom: readRoom,
+    readLatest: readLatest,
+    queryBalance: queryBalance,
+    appendReading: appendReading,
+  );
 
   static final ElectricityController instance = ElectricityController._();
   static final _log = AppLog.logger('electricity.controller');
 
   static const lowKwhThreshold = 10.0;
 
+  static Future<bool> _readPortalBound() async =>
+      await PasskeyStore.read() != null;
+
+  final Future<bool> Function() _bindingCheck;
+  final Future<ElecRoom?> Function() _readRoom;
+  final Future<ElecReading?> Function(ElecRoom room) _readLatest;
+  final Future<double> Function(ElecRoom room) _queryBalance;
+  final Future<void> Function(ElecRoom room, ElecReading reading)
+  _appendReading;
+
   ElecRoom? _room;
   ElecReading? _latest;
   bool _loading = false;
   String? _error;
   bool _portalBound = true;
-  bool _started = false;
   Future<void>? _starting;
+  Future<void>? _loadingLocal;
+  Future<void>? _refreshing;
+  int _bindingRevision = 0;
 
   ElecRoom? get room => _room;
   ElecReading? get latest => _latest;
@@ -43,25 +82,58 @@ class ElectricityController extends ChangeNotifier {
   bool get isOverdue => (_latest?.kwh ?? double.infinity) < 0;
 
   /// 读本地缓存并自动刷新一次；重复调用只会执行一次。
-  Future<void> ensureStarted() {
-    if (_started) return _starting ?? Future.value();
-    _started = true;
-    return _starting = _start();
-  }
+  Future<void> ensureStarted() => _starting ??= _start();
 
   Future<void> _start() async {
-    _room = await ElectricityStore.readRoom();
-    if (_room != null) _latest = await ElectricityStore.latest(_room!);
-    _portalBound = await PasskeyStore.read() != null;
-    notifyListeners();
-    if (_room != null && _portalBound) await refresh();
+    await _ensureLocalLoaded();
+    // 绑定事件自己负责刷新，首次挂载不再重复请求。
+    if (_bindingRevision == 0) await refresh();
   }
 
-  Future<void> refresh() async {
+  Future<void> _ensureLocalLoaded() => _loadingLocal ??= _loadLocal();
+
+  Future<void> _loadLocal() async {
+    _room = await _readRoom();
+    if (_room != null) _latest = await _readLatest(_room!);
+    notifyListeners();
+  }
+
+  /// 更新门户绑定状态；解绑保留本地宿舍和历史，重新绑定后立即刷新余额。
+  Future<void> onPortalBindingChanged(bool bound) async {
+    final revision = ++_bindingRevision;
+    _portalBound = bound;
+    _error = null;
+    notifyListeners();
+    await _ensureLocalLoaded();
+    if (!bound || revision != _bindingRevision) return;
+    // 旧凭据的请求可能仍在返回；等它结束后补一次新请求，不能因 loading 丢掉。
+    if (_refreshing case final refreshing?) await refreshing;
+    if (revision != _bindingRevision) return;
+    await _refresh(knownBinding: bound);
+  }
+
+  /// 重读绑定状态并刷新余额；并发调用共用同一次请求。
+  Future<void> refresh() => _refresh();
+
+  Future<void> _refresh({bool? knownBinding}) {
+    if (_refreshing case final refreshing?) return refreshing;
+    late final Future<void> future;
+    future = _refreshCurrent(knownBinding: knownBinding).whenComplete(() {
+      if (identical(_refreshing, future)) _refreshing = null;
+    });
+    _refreshing = future;
+    return future;
+  }
+
+  Future<void> _refreshCurrent({bool? knownBinding}) async {
+    final revision = _bindingRevision;
+    await _ensureLocalLoaded();
+    if (revision != _bindingRevision) return;
+    final bound = knownBinding ?? await _bindingCheck();
+    if (revision != _bindingRevision) return;
+    _portalBound = bound;
     final room = _room;
-    if (room == null || _loading) return;
-    _portalBound = await PasskeyStore.read() != null;
-    if (!_portalBound) {
+    if (!bound || room == null) {
       notifyListeners();
       return;
     }
@@ -70,16 +142,19 @@ class ElectricityController extends ChangeNotifier {
     notifyListeners();
     try {
       await _log.operation('refresh', () async {
-        final kwh = await ElectricityApi.queryBalance(room);
+        final kwh = await _queryBalance(room);
+        if (revision != _bindingRevision) return;
         final reading = ElecReading(time: DateTime.now(), kwh: kwh);
-        await ElectricityStore.appendReading(room, reading);
+        await _appendReading(room, reading);
         // 拉取期间用户可能换了宿舍，那这次结果就不该盖到新宿舍头上。
-        if (identical(_room, room)) _latest = reading;
+        if (revision == _bindingRevision && identical(_room, room)) {
+          _latest = reading;
+        }
       });
     } on PortalException catch (e) {
-      _error = e.message;
+      if (revision == _bindingRevision) _error = e.message;
     } catch (e) {
-      _error = '刷新失败：$e';
+      if (revision == _bindingRevision) _error = '刷新失败：$e';
     } finally {
       _loading = false;
       notifyListeners();
@@ -87,10 +162,11 @@ class ElectricityController extends ChangeNotifier {
   }
 
   Future<void> bindRoom(ElecRoom room) async {
+    await _ensureLocalLoaded();
     await _log.operation('room.bind', () async {
       await ElectricityStore.saveRoom(room);
       _room = room;
-      _latest = await ElectricityStore.latest(room);
+      _latest = await _readLatest(room);
       _error = null;
       notifyListeners();
       await refresh();

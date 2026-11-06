@@ -10,9 +10,9 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../../core/app_info.dart';
 import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/config/campus_config.dart';
-import '../../../core/auth/passkey_store.dart';
 import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
+import 'portal_binding_actions.dart';
 
 /// 「绑定统一门户」页：内嵌门户登录，登录后自动跳到「账户安全-通行密钥」，
 /// 注入 assets/js/portal_passkey.js 完成软件 Passkey 注册，私钥包经
@@ -226,10 +226,10 @@ class _PortalBindPageState extends State<PortalBindPage> {
       'createdAt': DateTime.now().toIso8601String(),
     });
     try {
-      await PasskeyStore.save(bundle);
-    } catch (e) {
+      await PortalBindingActions.instance.bind(bundle);
+    } catch (_) {
       _finished = false;
-      setState(() => _error = '凭据保存失败：$e');
+      if (mounted) setState(() => _error = '绑定未完成，请重试');
       return;
     }
     if (!mounted) return;

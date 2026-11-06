@@ -151,6 +151,8 @@ class TimetableController extends ChangeNotifier {
   TimetableSyncStatus _syncStatus = TimetableSyncStatus.idle;
   TimetableSyncFailure _syncFailure = TimetableSyncFailure.none;
   Future<void>? _syncInFlight;
+  int _portalBindingRevision = 0;
+  Future<void> _portalBindingChange = Future.value();
 
   /// 最近一次成功同步写入的变动结果（含待弹窗列表）；失败或无 diff 为 null。
   TimetableSyncDiffResult? lastSyncDiff;
@@ -886,6 +888,7 @@ class TimetableController extends ChangeNotifier {
   Future<void> syncFromRemote() => syncFromJwxt();
 
   Future<void> _doSync({bool automatic = false}) async {
+    final bindingRevision = _portalBindingRevision;
     final watch = Stopwatch()..start();
     _log.debug('sync.started', fields: {'automatic': automatic});
     TimetableSyncOutcome? outcome;
@@ -906,6 +909,8 @@ class TimetableController extends ChangeNotifier {
         // 清空开学日，以便区分「本次 dqzc 推算」与「缓存/默认值」。
         baseSettings: previous.copyWith(clearTermStart: true),
       );
+      // 绑定已变更，旧请求不能继续套用或保存课程。
+      if (bindingRevision != _portalBindingRevision) return;
       if (snapshot.periods.isEmpty) {
         snapshot = snapshot.copyWith(
           periods: _snapshot.periods.isEmpty
@@ -927,8 +932,9 @@ class TimetableController extends ChangeNotifier {
       );
       // 同步 diff：在覆盖内存快照前比对旧教务源；失败不影响同步成功态。
       final previousJwxt = _snapshot.courses;
+      TimetableSyncDiffResult? syncDiff;
       try {
-        lastSyncDiff = await TimetableSyncDiff.applyAfterFetch(
+        syncDiff = await TimetableSyncDiff.applyAfterFetch(
           previousJwxtCourses: previousJwxt,
           newJwxtCourses: snapshot.courses,
           xnxqdm: snapshot.settings.termCode.isNotEmpty
@@ -936,9 +942,9 @@ class TimetableController extends ChangeNotifier {
               : term,
           detectedAt: snapshot.syncedAt,
         );
-      } catch (_) {
-        lastSyncDiff = null;
-      }
+      } catch (_) {}
+      if (bindingRevision != _portalBindingRevision) return;
+      lastSyncDiff = syncDiff;
       _snapshot = snapshot;
       // SW01（§13.10）：同步成功后停留在正在看的周（只钳到 1..totalWeeks）。
       // 同步前就在看本周、之前周次未知（无开学日）或换了学期时才跟到新的本周。
@@ -952,9 +958,11 @@ class TimetableController extends ChangeNotifier {
       // 系统日期/本周相对上次已变时跟到本周（同周内手动翻周仍由上面 SW01 保留）。
       followCurrentWeekIfChanged();
       await TimetableStore.saveSnapshot(_snapshot);
+      if (bindingRevision != _portalBindingRevision) return;
       // settings.json 只合并学期四键（与磁盘一致则不写）；periodHeight 原值、
       // 开关与未知键原样保留，绝不序列化整个内存设置。
       await TimetableStore.mergeTermSettings(_snapshot.settings);
+      if (bindingRevision != _portalBindingRevision) return;
       // 教务优先（jwxt §3.2）：原课被删、SKZC 与 origWeeks 不同（含缺 origWeeks
       // 的旧记录）、或原时段星期/节次变了 → 删掉记录，显示教务数据。其余保留。
       // 只在同步成功这里比较；解绑不删。
@@ -965,6 +973,7 @@ class TimetableController extends ChangeNotifier {
             if (!stale.contains(o.id)) o,
         ]);
         await TimetableStore.saveOverrides(_overrides);
+        if (bindingRevision != _portalBindingRevision) return;
       }
       // 编辑/删除记录同理：原课没了、SKZC 或时段变了 → 删除（解绑/失败不删）。
       final staleEdits = staleCourseEditIds(_snapshot.courses, _courseEdits);
@@ -973,22 +982,30 @@ class TimetableController extends ChangeNotifier {
           {..._courseEdits}..removeWhere((k, _) => staleEdits.contains(k)),
         );
         await ScheduleStore.saveCourseEdits(_courseEdits);
+        if (bindingRevision != _portalBindingRevision) return;
       }
-      if (await _recomputeColors()) {
+      final colorsChanged = await _recomputeColors();
+      if (bindingRevision != _portalBindingRevision) return;
+      if (colorsChanged) {
         await TimetableStore.saveManualCourses(_manualCourses);
+        if (bindingRevision != _portalBindingRevision) return;
       }
       // 第 11 条：课表成功后拉考试（不受 showExams 影响）。考试失败不影响本次课表
       // 同步结果、成功时间与离线补同步逻辑，已有考试保留。
-      await _syncExams(term);
+      await _syncExams(term, bindingRevision: bindingRevision);
+      if (bindingRevision != _portalBindingRevision) return;
       // 只有成功才重置自动同步计时。
-      _lastSyncSuccessAt = syncClock();
+      final succeededAt = syncClock();
+      await ScheduleStore.saveLastSyncSuccess(succeededAt);
+      if (bindingRevision != _portalBindingRevision) return;
+      await _setPortalSessionExpired(false);
+      if (bindingRevision != _portalBindingRevision) return;
+      _lastSyncSuccessAt = succeededAt;
       _lastFailureOffline = false;
-      await ScheduleStore.saveLastSyncSuccess(_lastSyncSuccessAt!);
       _statusMessage = '已同步 ${_snapshot.courses.length} 门教务课程';
       _syncStatus = TimetableSyncStatus.success;
       _syncFailure = TimetableSyncFailure.none;
       _lastAutoSyncFailed = false;
-      await _setPortalSessionExpired(false);
       outcome = TimetableSyncOutcome.success(automatic: automatic);
       _fireScheduleChanged(ScheduleChangeReason.sync);
       _log.info(
@@ -1000,6 +1017,7 @@ class TimetableController extends ChangeNotifier {
         },
       );
     } catch (e, stackTrace) {
+      if (bindingRevision != _portalBindingRevision) return;
       _lastFailureOffline = _isOffline(e);
       _syncFailure = classifySyncError(e);
       _log.warning(
@@ -1027,6 +1045,8 @@ class TimetableController extends ChangeNotifier {
       }
     } finally {
       _loading = false;
+      // 等待存储期间也可能换绑，过时同步不能再发布成功或失败提示。
+      if (bindingRevision != _portalBindingRevision) outcome = null;
       if (outcome != null) _lastSyncOutcome = outcome;
       notifyListeners();
       if (outcome != null) _syncOutcomes.add(outcome);
@@ -1084,6 +1104,8 @@ class TimetableController extends ChangeNotifier {
     _syncStatus = TimetableSyncStatus.idle;
     _syncFailure = TimetableSyncFailure.none;
     _syncInFlight = null;
+    _portalBindingRevision = 0;
+    _portalBindingChange = Future.value();
     _portalBound = false;
     _pendingOpen = null;
   }
@@ -1950,11 +1972,12 @@ class TimetableController extends ChangeNotifier {
 
   /// 课表同步成功后拉教务考试并整批替换（覆盖层由 [replaceJwxtExams] 按 examKey
   /// 保留 / 清理）。任何失败只记一条通用日志，已有考试不动。
-  Future<void> _syncExams(String term) async {
+  Future<void> _syncExams(String term, {required int bindingRevision}) async {
     final List<ScheduleEvent>? exams;
     try {
       exams = await fetchExams(term);
     } catch (error, stackTrace) {
+      if (bindingRevision != _portalBindingRevision) return;
       _log.warning(
         'exams.fetch_failed_using_existing',
         error: error,
@@ -1962,10 +1985,11 @@ class TimetableController extends ChangeNotifier {
       );
       return;
     }
-    if (exams == null) return;
+    if (bindingRevision != _portalBindingRevision || exams == null) return;
     try {
       await replaceJwxtExams(exams);
     } catch (error, stackTrace) {
+      if (bindingRevision != _portalBindingRevision) return;
       _log.warning(
         'exams.save_failed_using_existing',
         error: error,
@@ -2394,6 +2418,38 @@ class TimetableController extends ChangeNotifier {
     await ensureStarted();
     await _setPortalSessionExpired(false);
     return _trigger(armOfflineRetry: false);
+  }
+
+  /// 注册表分发的绑定变更：等待旧同步收尾，再立即同步或清理教务数据。
+  /// 连续变更只处理最新状态；考试卡片共享本次处理结果。
+  Future<void> onPortalBindingChanged(bool bound) {
+    final revision = ++_portalBindingRevision;
+    _portalBound = bound;
+    notifyListeners();
+    final change = _portalBindingChange.then((_) async {
+      await ensureStarted();
+      if (revision != _portalBindingRevision) return;
+      await _syncInFlight;
+      if (revision != _portalBindingRevision) return;
+      _portalBound = bound;
+      if (bound) {
+        _offlineRetryPending = false;
+        await _setPortalSessionExpired(false);
+        if (revision != _portalBindingRevision) return;
+        final stillBound = await bindingCheck();
+        if (revision != _portalBindingRevision) return;
+        _portalBound = stillBound;
+        notifyListeners();
+        unawaited(updateNextDayReminder());
+        // 旧自动触发可能还在退栈；直接进入同步合流，不受 _triggerBusy 或节流影响。
+        if (stillBound) await syncFromJwxt();
+      } else {
+        await handleLogout(clearJwxt: true);
+      }
+    });
+    // 一次清理失败由注册表反馈，不阻断后续绑定变更。
+    _portalBindingChange = change.then<void>((_) {}, onError: (Object _) {});
+    return change;
   }
 
   /// App 回到前台：始终先 [refreshLocal]（返回值供 UI toast「刷新失败」）；

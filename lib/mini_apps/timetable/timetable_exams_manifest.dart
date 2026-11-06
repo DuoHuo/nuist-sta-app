@@ -18,6 +18,7 @@ const examScheduleManifest = AppManifest(
   entry: _entry,
   homeCard: _homeCard,
   onHomeRefresh: _homeRefresh,
+  onPortalBindingChanged: _portalBindingChanged,
 );
 
 Widget _entry(BuildContext context) => const TimetableExamsPage();
@@ -26,3 +27,6 @@ Widget _homeCard(BuildContext context) => const TimetableExamsCard();
 
 /// 首页下拉等同课表手动同步（考试随课表一起拉取）；未绑定门户时不发请求。
 Future<void> _homeRefresh() => TimetableController.instance.manualSync();
+
+/// 绑定变更由课表模块统一处理；考试共享其状态，不重复同步或清理。
+Future<void> _portalBindingChanged(bool bound) async {}

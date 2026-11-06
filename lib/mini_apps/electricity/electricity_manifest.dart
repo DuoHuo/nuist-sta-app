@@ -14,6 +14,7 @@ const electricityManifest = AppManifest(
   entry: _entry,
   homeCard: _homeCard,
   onHomeRefresh: _homeRefresh,
+  onPortalBindingChanged: _portalBindingChanged,
 );
 
 Widget _entry(BuildContext context) => const ElectricityPage();
@@ -21,3 +22,6 @@ Widget _entry(BuildContext context) => const ElectricityPage();
 Widget _homeCard(BuildContext context) => const ElectricityHomeCard();
 
 Future<void> _homeRefresh() => ElectricityController.instance.refresh();
+
+Future<void> _portalBindingChanged(bool bound) =>
+    ElectricityController.instance.onPortalBindingChanged(bound);

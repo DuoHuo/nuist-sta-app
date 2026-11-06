@@ -15,6 +15,7 @@ const timetableManifest = AppManifest(
   entry: _entry,
   homeCard: _homeCard,
   onHomeRefresh: _homeRefresh,
+  onPortalBindingChanged: _portalBindingChanged,
 );
 
 Widget _tileIcon(BuildContext context) => const TimetableTileIcon();
@@ -28,3 +29,6 @@ Widget _homeCard(BuildContext context) => const TimetableHomeCard();
 Future<void> _homeRefresh() async {
   await TimetableController.instance.refreshLocal();
 }
+
+Future<void> _portalBindingChanged(bool bound) =>
+    TimetableController.instance.onPortalBindingChanged(bound);

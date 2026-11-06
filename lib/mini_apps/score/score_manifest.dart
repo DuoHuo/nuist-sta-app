@@ -13,6 +13,7 @@ const scoreManifest = AppManifest(
   icon: Icons.assessment_outlined,
   entry: _entry,
   showInHomeGrid: false,
+  onPortalBindingChanged: _portalBindingChanged,
   studyCard: StudyCardContribution(
     builder: _studyCard,
     order: 30,
@@ -25,3 +26,6 @@ Widget _entry(BuildContext context) => const ScorePage();
 Widget _studyCard(BuildContext context) => const ScoreCard();
 
 Future<void> _studyRefresh() => ScoreController.instance.refresh();
+
+Future<void> _portalBindingChanged(bool bound) =>
+    ScoreController.instance.onPortalBindingChanged(bound);
