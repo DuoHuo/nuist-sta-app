@@ -22,6 +22,9 @@ class AppLog {
 
   static const formatVersion = 1;
   static final String _sessionId = _randomHex(8);
+
+  /// 本次运行是否已通过版本号五连击显示日志入口，不影响日志记录级别。
+  static final ValueNotifier<bool> diagnosticsVisible = ValueNotifier(false);
   static final ValueNotifier<bool> verboseEnabled = ValueNotifier(kDebugMode);
   static final ValueNotifier<DateTime?> verboseExpiresAt = ValueNotifier(null);
   static final ValueNotifier<bool> storageAvailable = ValueNotifier(false);
@@ -1502,6 +1505,7 @@ class AppLog {
     _verboseUntil = null;
     verboseExpiresAt.value = null;
     storageAvailable.value = false;
+    diagnosticsVisible.value = false;
     verboseEnabled.value = kDebugMode;
     _store = null;
     _sequence = 0;

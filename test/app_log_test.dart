@@ -11,7 +11,9 @@ import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/logging/log_store.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_controller.dart';
+import 'package:nuist_sta_app/shell/profile/about/about_page.dart';
 import 'package:nuist_sta_app/shell/profile/settings/settings_page.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 void main() {
   setUp(() async => AppLog.resetForTesting());
@@ -241,6 +243,103 @@ void main() {
     expect(AppLog.verboseExpiresAt.value, isNotNull);
     await AppLog.disableVerbose();
     expect(AppLog.verboseExpiresAt.value, isNull);
+  });
+
+  testWidgets('调试构建默认记录详细日志，设置仍隐藏所有诊断入口', (tester) async {
+    expect(AppLog.verboseEnabled.value, isTrue);
+    expect(AppLog.diagnosticsVisible.value, isFalse);
+    await tester.pumpWidget(
+      MaterialApp(theme: appLightTheme(), home: const SettingsPage()),
+    );
+
+    expect(find.text('深色模式'), findsOneWidget);
+    expect(find.text('诊断与日志'), findsNothing);
+    expect(find.text('查看日志'), findsNothing);
+    expect(find.text('导出诊断日志'), findsNothing);
+    expect(find.text('清除诊断日志'), findsNothing);
+    expect(find.textContaining('详细模式'), findsNothing);
+    expect(find.textContaining('需要详细诊断时'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  for (final verbose in [false, true]) {
+    testWidgets('版本号五连击只解锁入口，保留${verbose ? '详细' : '标准'}日志模式', (tester) async {
+      final expiry = verbose ? DateTime.utc(2030, 1, 1) : null;
+      AppLog.verboseEnabled.value = verbose;
+      AppLog.verboseExpiresAt.value = expiry;
+      await _openAboutFromSettings(tester);
+
+      for (var count = 0; count < 4; count++) {
+        await tester.tap(find.text('v1.2.3 (45)'));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(AppLog.diagnosticsVisible.value, isFalse);
+      await tester.tap(find.text('v1.2.3 (45)'));
+      await tester.pump();
+
+      expect(AppLog.diagnosticsVisible.value, isTrue);
+      expect(AppLog.verboseEnabled.value, verbose);
+      expect(AppLog.verboseExpiresAt.value, expiry);
+      expect(find.text('已显示诊断与日志入口'), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      expect(find.text('诊断与日志'), findsOneWidget);
+      expect(find.text('查看日志'), findsOneWidget);
+      expect(find.text('导出诊断日志'), findsOneWidget);
+      expect(find.text('清除诊断日志'), findsOneWidget);
+      expect(find.textContaining('需要详细诊断时'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
+  testWidgets('版本号点击间隔超过三秒后必须重新累计五次', (tester) async {
+    await _openAboutFromSettings(tester);
+    for (var count = 0; count < 4; count++) {
+      await tester.tap(find.text('v1.2.3 (45)'));
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await tester.pump(const Duration(seconds: 4));
+    await tester.tap(find.text('v1.2.3 (45)'));
+    await tester.pump();
+    expect(AppLog.diagnosticsVisible.value, isFalse);
+
+    for (var count = 0; count < 4; count++) {
+      await tester.tap(find.text('v1.2.3 (45)'));
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(AppLog.diagnosticsVisible.value, isTrue);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('解锁后点击标准模式行才开启三十分钟详细日志', (tester) async {
+    AppLog.diagnosticsVisible.value = true;
+    AppLog.verboseEnabled.value = false;
+    await tester.pumpWidget(
+      MaterialApp(theme: appLightTheme(), home: const SettingsPage()),
+    );
+    await tester.pumpAndSettle();
+    expect(AppLog.verboseExpiresAt.value, isNull);
+
+    final before = DateTime.now().toUtc();
+    await tester.tap(find.text('标准模式 · 记录运行结果和错误'));
+    await tester.pumpAndSettle();
+
+    expect(AppLog.verboseEnabled.value, isTrue);
+    expect(
+      AppLog.verboseExpiresAt.value?.millisecondsSinceEpoch,
+      inInclusiveRange(
+        before.add(const Duration(minutes: 30)).millisecondsSinceEpoch,
+        DateTime.now()
+            .toUtc()
+            .add(const Duration(minutes: 30))
+            .millisecondsSinceEpoch,
+      ),
+    );
+    expect(AppLog.diagnosticsVisible.value, isTrue);
+    expect(find.textContaining('需要详细诊断时'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await AppLog.resetForTesting();
   });
 
   testWidgets('设置可预览日志、筛选错误并展开安全堆栈', (tester) async {
@@ -659,7 +758,28 @@ void main() {
   });
 }
 
+Future<void> _openAboutFromSettings(WidgetTester tester) async {
+  PackageInfo.setMockInitialValues(
+    appName: 'NUIST++',
+    packageName: 'com.example.nuist_sta_app',
+    version: '1.2.3',
+    buildNumber: '45',
+    buildSignature: '',
+  );
+  await tester.pumpWidget(
+    MaterialApp(theme: appLightTheme(), home: const SettingsPage()),
+  );
+  tester
+      .state<NavigatorState>(find.byType(Navigator))
+      .push(MaterialPageRoute<void>(builder: (_) => const AboutPage()));
+  // 贡献者在无平台通道时可能一直加载，只等待本次测试需要的页面转场。
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+  expect(find.text('v1.2.3 (45)'), findsOneWidget);
+}
+
 Future<void> _openLogPreview(WidgetTester tester, ThemeData theme) async {
+  AppLog.diagnosticsVisible.value = true;
   await tester.pumpWidget(
     MaterialApp(theme: theme, home: const SettingsPage()),
   );

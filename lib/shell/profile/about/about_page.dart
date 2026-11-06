@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -48,7 +47,7 @@ class _AboutPageState extends State<AboutPage> {
     }
   }
 
-  Future<void> _onVersionTap() async {
+  void _onVersionTap() {
     if (_version == null) return;
     _versionTapReset?.cancel();
     _versionTapCount++;
@@ -59,12 +58,8 @@ class _AboutPageState extends State<AboutPage> {
       return;
     }
     _versionTapCount = 0;
-    if (kDebugMode) {
-      _message('调试构建已默认开启详细日志');
-      return;
-    }
-    await AppLog.enableVerbose();
-    if (mounted) _message('详细日志已开启，将在 30 分钟后自动关闭');
+    AppLog.diagnosticsVisible.value = true;
+    _message('已显示诊断与日志入口');
   }
 
   void _message(String text) {

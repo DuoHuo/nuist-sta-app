@@ -67,8 +67,15 @@ class SettingsPage extends StatelessWidget {
               style: TextStyle(color: palette.labelText, fontSize: 12),
             ),
           ),
-          const SizedBox(height: 20),
-          const _DiagnosticLogSection(),
+          ValueListenableBuilder<bool>(
+            valueListenable: AppLog.diagnosticsVisible,
+            builder: (context, visible, _) => visible
+                ? const Padding(
+                    padding: EdgeInsets.only(top: 20),
+                    child: _DiagnosticLogSection(),
+                  )
+                : const SizedBox.shrink(),
+          ),
         ],
       ),
     );
@@ -271,6 +278,12 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
       ..showSnackBar(SnackBar(content: Text(text)));
   }
 
+  Future<void> _enableVerbose() async {
+    if (_working || AppLog.verboseEnabled.value) return;
+    await AppLog.enableVerbose();
+    if (mounted) _message('详细日志已开启，将在 30 分钟后自动关闭');
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
@@ -283,11 +296,11 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
     final verbose = AppLog.verboseEnabled.value;
     final until = AppLog.verboseExpiresAt.value;
     final remaining = until?.difference(DateTime.now().toUtc());
-    final mode = kDebugMode
+    final mode = !verbose
+        ? '标准模式 · 记录运行结果和错误'
+        : kDebugMode
         ? '详细模式 · 调试构建默认开启'
-        : verbose
-        ? '详细模式 · 剩余 ${((remaining?.inSeconds ?? 0).clamp(0, 1800) / 60).ceil()} 分钟'
-        : '标准模式 · 记录运行结果和错误';
+        : '详细模式 · 剩余 ${((remaining?.inSeconds ?? 0).clamp(0, 1800) / 60).ceil()} 分钟';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -308,6 +321,7 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
           child: Column(
             children: [
               ListTile(
+                onTap: !verbose && !_working ? _enableVerbose : null,
                 leading: Icon(Icons.bug_report_outlined, color: palette.accent),
                 title: Text(mode),
                 subtitle: Text(
@@ -368,8 +382,7 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
         Padding(
           padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
           child: Text(
-            '日志仅保存在本机，不会自动上传。'
-            '${verbose ? '' : '需要详细诊断时，在「关于」页连续点击版本号 5 次。'}',
+            '日志仅保存在本机，不会自动上传。',
             style: TextStyle(color: palette.labelText, fontSize: 12),
           ),
         ),

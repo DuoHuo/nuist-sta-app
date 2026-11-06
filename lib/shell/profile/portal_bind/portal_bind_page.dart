@@ -125,14 +125,14 @@ class _PortalBindPageState extends State<PortalBindPage> {
     if (url.toLowerCase().contains('personcenter')) _inject();
   }
 
-  /// debug 构建下往页面装一个 vConsole：手机右下角会出现绿色按钮，
+  /// debug 构建解锁日志入口后往页面装一个 vConsole：手机右下角会出现绿色按钮，
   /// 能看页面自己的 console、网络请求、Element 和 Storage。release 不注入。
   ///
   /// runJavaScript 走 evaluateJavascript，不受页面 CSP 限制，所以直接把
   /// 整份源码丢进去执行，不用 <script src>。页面每次跳转都要重装，故放在
   /// onPageFinished；重复执行由 window.__vConsole 兜住。
   Future<void> _injectVConsole() async {
-    if (!kDebugMode) return;
+    if (!kDebugMode || !AppLog.diagnosticsVisible.value) return;
     try {
       final source = await rootBundle.loadString(_vconsoleAsset);
       if (!mounted) return;
