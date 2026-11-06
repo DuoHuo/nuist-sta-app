@@ -60,7 +60,7 @@ void main() {
             endNode: 2,
             kind: timingKindOf(course: displayed, slot: slot),
           ).single.end,
-          kind == CourseKind.standard ? '09:40' : '09:30',
+          kind == CourseKind.lab || kind == CourseKind.pe ? '09:30' : '09:40',
         );
         expect(
           courseDisplayName(course: displayed, slot: slot),

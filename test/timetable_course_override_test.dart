@@ -174,6 +174,260 @@ void main() {
   }
 
   group('统一课程编辑数据', () {
+    for (final source in [CourseSource.jwxt, CourseSource.manual]) {
+      test('${source.name} 单周课程移为独立考试，其他安排和重启保持', () async {
+        final original = _jwxt('convert', '测试课程', weeks: '111').copyWith(
+          source: source,
+          slots: [
+            _jwxt(
+              'x',
+              'x',
+              weeks: '111',
+            ).slots.single.copyWith(kind: CourseKind.lab),
+            _jwxt(
+              'x',
+              'x',
+              day: 3,
+              start: 5,
+              end: 6,
+              weeks: '111',
+            ).slots.single,
+          ],
+        );
+        await seed(
+          source == CourseSource.jwxt ? [original] : [],
+          manual: source == CourseSource.manual ? [original] : [],
+        );
+        final opening = cellAt('convert', 2, 1);
+        expect(await saveForm(opening, kind: CourseKind.exam), isNull);
+        expect(c.scheduleEvents, isEmpty);
+        final exam = await c.convertCourseOccurrenceToExam(
+          cell: opening,
+          title: ' 测试考试 ',
+          location: ' 教二-201 ',
+          note: ' 带计算器 ',
+          day: 1,
+          startNode: 1,
+          endNode: 2,
+        );
+        expect(exam, isNotNull);
+        expect(exam!.kind, ScheduleKind.exam);
+        expect(exam.source, ScheduleSource.manual);
+        expect(exam.title, '测试考试');
+        expect(exam.date, _monday);
+        expect(exam.start.format(), '08:00');
+        expect(exam.end.format(), '09:40');
+        expect(exam.location, '教二-201');
+        expect(exam.note, '带计算器');
+        expect(
+          c.cellsForDay(2, 1).where((cell) => cell.activeThisWeek),
+          isEmpty,
+        );
+        expect(cellAt('convert', 1, 1).slot.kind, CourseKind.lab);
+        expect(cellAt('convert', 2, 3).slot.startNode, 5);
+        expect(c.courseDateEdits, isEmpty);
+        expect(shown('convert').slots.first.weeks, '101');
+        expect(
+          await c.convertCourseOccurrenceToExam(
+            cell: opening,
+            title: '重复保存',
+            location: '',
+            note: '',
+            day: 1,
+            startNode: 1,
+            endNode: 2,
+          ),
+          isNull,
+        );
+        await restart();
+        expect(c.scheduleEvents.single.toJson(), exam.toJson());
+        expect(
+          c.cellsForDay(2, 1).where((cell) => cell.activeThisWeek),
+          isEmpty,
+        );
+        expect(cellAt('convert', 3, 1).slot.kind, CourseKind.lab);
+        expect(
+          await c.updateScheduleEvent(exam.copyWith(title: '独立改名')),
+          isTrue,
+        );
+        expect(cellAt('convert', 3, 1).course.name, '测试课程');
+        expect(await c.deleteScheduleEvent(exam.id), isTrue);
+        expect(
+          c.cellsForDay(2, 1).where((cell) => cell.activeThisWeek),
+          isEmpty,
+        );
+        await c.syncFromJwxt();
+        expect(c.scheduleEvents, isEmpty);
+        expect(
+          c.cellsForDay(2, 1).where((cell) => cell.activeThisWeek),
+          isEmpty,
+        );
+      });
+    }
+
+    test('最后一周课程转换考试后浏览上限不缩短，隐藏考试与重启仍可访问', () async {
+      await seed([
+        _jwxt('keep', '保留课程', day: 2, weeks: '1000'),
+        _jwxt('convert', '期末课程', weeks: '0001'),
+      ]);
+      final lastDate = _termStart.add(const Duration(days: 21));
+      TimetableController.clock = () => lastDate;
+      c.setViewingWeek(4);
+      expect(c.totalWeeks, 4);
+      expect(
+        await c.convertCourseOccurrenceToExam(
+          cell: cellAt('convert', 4, 1),
+          title: '期末考试',
+          location: '',
+          note: '',
+          day: 1,
+          startNode: 1,
+          endNode: 2,
+        ),
+        isNotNull,
+      );
+      expect(c.totalWeeks, 4);
+      expect(c.viewingWeek, 4);
+      await c.updateSettings(c.settings.copyWith(showExams: false));
+      expect(c.totalWeeks, 4);
+      expect(c.viewingWeek, 4);
+      await restart();
+      expect(c.totalWeeks, 4);
+      expect(c.viewingWeek, 4);
+      expect(c.scheduleEvents.single.date, lastDate);
+    });
+
+    test('周末课程转换考试后当天列仍可见，隐藏考试后不保留空列', () async {
+      await seed([
+        _jwxt('saturday', '周六课程', day: 6, weeks: '010'),
+        _jwxt('sunday', '周日课程', day: 7, weeks: '010'),
+      ]);
+      await c.updateSettings(
+        c.settings.copyWith(
+          showSaturday: false,
+          showSunday: false,
+          showNonCurrentWeek: true,
+        ),
+      );
+      expect(c.visibleDays(2), containsAll([6, 7]));
+      for (final day in [6, 7]) {
+        expect(
+          await c.convertCourseOccurrenceToExam(
+            cell: cellAt(day == 6 ? 'saturday' : 'sunday', 2, day),
+            title: '周末考试',
+            location: '',
+            note: '',
+            day: day,
+            startNode: 1,
+            endNode: 2,
+          ),
+          isNotNull,
+        );
+        expect(
+          c.cellsForDay(2, day).where((cell) => cell.activeThisWeek),
+          isEmpty,
+        );
+      }
+      expect(c.visibleDays(2), containsAll([6, 7]));
+      expect(c.visibleDays(1), isNot(contains(6)));
+      expect(c.visibleDays(1), isNot(contains(7)));
+      await c.updateSettings(c.settings.copyWith(showExams: false));
+      expect(c.visibleDays(2), isNot(contains(6)));
+      expect(c.visibleDays(2), isNot(contains(7)));
+      expect(c.scheduleEvents, hasLength(2));
+    });
+
+    for (final source in [CourseSource.jwxt, CourseSource.manual]) {
+      test('${source.name} 交换后移动的课程转换考试，撤销交换或删除考试不恢复原次', () async {
+        final original = _jwxt(
+          'convert',
+          '测试课程',
+          weeks: '111',
+        ).copyWith(source: source);
+        await seed(
+          source == CourseSource.jwxt ? [original] : [],
+          manual: source == CourseSource.manual ? [original] : [],
+        );
+        await c.editOccurrenceWeeks(
+          cellAt('convert', 2, 1),
+          weeks: [2, 3],
+          note: '按周备注',
+        );
+        final swap = await c.addDaySwap(
+          _monday,
+          _monday.add(const Duration(days: 1)),
+        );
+        await c.editOccurrence(
+          cellAt('convert', 2, 2),
+          toDay: 4,
+          toStart: 3,
+          toEnd: 4,
+        );
+        final moved = cellAt('convert', 2, 4);
+        final exam = await c.convertCourseOccurrenceToExam(
+          cell: moved,
+          title: '独立考试',
+          location: '教三-301',
+          note: '',
+          day: 5,
+          startNode: 5,
+          endNode: 6,
+        );
+        expect(exam!.date, _monday.add(const Duration(days: 4)));
+        expect(exam.start.format(), c.periodStart(5));
+        expect(exam.end.format(), c.periodEnd(6));
+        for (final day in [1, 2, 4, 5]) {
+          expect(
+            c.cellsForDay(2, day).where((cell) => cell.activeThisWeek),
+            isEmpty,
+          );
+        }
+        expect(c.courseDateEdits.single.isWeeksScoped, isTrue);
+        expect(c.courseDateEdits.single.weeks, [2, 3]);
+        expect(cellAt('convert', 3, 1).slot.startNode, 1);
+        expect(cellAt('convert', 3, 1).slot.note, '按周备注');
+        await restart();
+        expect(c.scheduleEvents.single.date, exam.date);
+        expect(
+          c.cellsForDay(2, 4).where((cell) => cell.activeThisWeek),
+          isEmpty,
+        );
+        expect(await c.removeDaySwap(swap!.id), isTrue);
+        expect(
+          c.cellsForDay(2, 1).where((cell) => cell.activeThisWeek),
+          isEmpty,
+        );
+        expect(await c.deleteScheduleEvent(exam.id), isTrue);
+        expect(
+          c.cellsForDay(2, 1).where((cell) => cell.activeThisWeek),
+          isEmpty,
+        );
+        await restart();
+        expect(
+          c.cellsForDay(2, 1).where((cell) => cell.activeThisWeek),
+          isEmpty,
+        );
+        expect(cellAt('convert', 3, 1).slot.note, '按周备注');
+      });
+    }
+
+    test('主动恢复教务课程可恢复被转换的周次，但独立考试仍保留', () async {
+      await seed([_jwxt('convert', '测试课程', weeks: '111')]);
+      final exam = await c.convertCourseOccurrenceToExam(
+        cell: cellAt('convert', 2, 1),
+        title: '独立考试',
+        location: '',
+        note: '',
+        day: 1,
+        startNode: 1,
+        endNode: 2,
+      );
+      expect(exam, isNotNull);
+      expect(await c.restoreJwxtCourse('convert'), isTrue);
+      expect(cellAt('convert', 2, 1).slot.weeks, '111');
+      expect(c.scheduleEvents.single.toJson(), exam!.toJson());
+    });
+
     test('同起始节次的重叠时段不会借用另一时段的类型名称或颜色', () async {
       await seed([
         _jwxt('overlap', '原始课程').copyWith(

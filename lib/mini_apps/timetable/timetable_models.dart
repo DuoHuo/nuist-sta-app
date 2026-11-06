@@ -5,7 +5,8 @@ import 'dart:convert';
 import 'timetable_date_edits.dart';
 
 /// 课程的教学类型；未显式指定时沿用教务实验标记与体育识别规则。
-enum CourseKind { standard, lab, pe }
+/// [CourseKind.exam] 仅作为表单转换入口，保存时将单次课程移为独立考试日程。
+enum CourseKind { standard, lab, pe, exam }
 
 /// 解析本地类型字段；旧数据和未知值按自动识别处理。
 CourseKind? parseCourseKind(Object? value) {

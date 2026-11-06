@@ -10,6 +10,8 @@ import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_detail_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
@@ -84,11 +86,13 @@ void _bigView(WidgetTester tester) {
 /// 在空页面上用按钮打开弹层（便于点按钮后观察弹层关闭）。
 Future<void> _pumpLauncher(
   WidgetTester tester,
-  void Function(BuildContext context) open,
-) async {
+  void Function(BuildContext context) open, {
+  ThemeData? theme,
+}) async {
   _bigView(tester);
   await tester.pumpWidget(
     MaterialApp(
+      theme: theme,
       home: Scaffold(
         body: Builder(
           builder: (context) => Center(
@@ -126,6 +130,120 @@ void main() {
     _c.debugReset();
     if (tmp.existsSync()) tmp.deleteSync(recursive: true);
   });
+
+  for (final source in CourseSource.values) {
+    final dark = source == CourseSource.manual;
+    testWidgets('课程转独立考试只迁移本次，确认前提示且可取消（${source.name}，深色 $dark）', (
+      tester,
+    ) async {
+      final original = _course('convert', '测试课甲', source: source);
+      final course = original.copyWith(
+        slots: [
+          ...original.slots,
+          original.slots.single.copyWith(day: 3, startNode: 5, endNode: 6),
+        ],
+      );
+      _load(
+        manual: source == CourseSource.manual ? [course] : const [],
+        jwxt: source == CourseSource.jwxt ? [course] : const [],
+      );
+      final theme = dark ? appDarkTheme() : appLightTheme();
+      await _pumpLauncher(
+        tester,
+        (context) => showCourseDetailSheet(
+          context,
+          cell: _c.cellsForDay(_week, 1).single,
+          controller: _c,
+        ),
+        theme: theme,
+      );
+      await tester.tap(
+        find.byKey(
+          Key(
+            source == CourseSource.manual
+                ? 'course_detail_edit'
+                : 'course_detail_jwxt_edit',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('course_form_kind')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('考试').last);
+      await tester.pumpAndSettle();
+      final prefix = source == CourseSource.manual
+          ? 'manual_course_'
+          : 'jwxt_edit_';
+      await tester.enterText(find.byKey(Key('${prefix}name')), '测试课甲考试');
+      await tester.enterText(find.byKey(Key('${prefix}location')), '测试楼 B202');
+      await tester.tap(find.byKey(Key('${prefix}save')));
+      await tester.pumpAndSettle();
+      expect(find.text('仅修改本周这节课'), findsOneWidget);
+      expect(find.byKey(const Key('course_form_scope_sheet')), findsNothing);
+      expect(find.byKey(const Key('course_form_repeat_sheet')), findsNothing);
+      expect(_c.scheduleEvents, isEmpty);
+      expect(_c.cellsForDay(_week, 1).single.course.name, '测试课甲');
+
+      await tester.tap(find.byKey(const Key('course_form_exam_cancel')));
+      await tester.pumpAndSettle();
+      expect(find.text('仅修改本周这节课'), findsNothing);
+      expect(_c.scheduleEvents, isEmpty);
+      expect(_c.courseDateEdits, isEmpty);
+      expect(
+        tester
+            .widget<TextFormField>(find.byKey(Key('${prefix}name')))
+            .controller!
+            .text,
+        '测试课甲考试',
+      );
+
+      await tester.tap(find.byKey(Key('${prefix}save')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('course_form_exam_confirm')));
+      await _settleIo(tester);
+      expect(tester.takeException(), isNull);
+      expect(
+        _c.cellsForDay(_week, 1).where((cell) => cell.activeThisWeek),
+        isEmpty,
+      );
+      expect(_c.cellsForDay(_week + 1, 1).single.course.name, '测试课甲');
+      expect(_c.cellsForDay(_week, 3).single.course.name, '测试课甲');
+      final exam = _c.scheduleEvents.single;
+      expect(exam.kind, ScheduleKind.exam);
+      expect(exam.source, ScheduleSource.manual);
+      expect(exam.title, '测试课甲考试');
+      expect(exam.date, DateTime(2026, 10, 19));
+      expect(exam.start, const TimeOfDayMinutes(10, 10));
+      expect(exam.end, const TimeOfDayMinutes(11, 50));
+      expect(exam.location, '测试楼 B202');
+
+      await _pumpLauncher(
+        tester,
+        (context) =>
+            showScheduleEventDetailSheet(context, event: exam, controller: _c),
+        theme: theme,
+      );
+      await tester.tap(find.byKey(const Key('schedule_detail_edit')));
+      await tester.pumpAndSettle();
+      expect(find.text('编辑考试'), findsOneWidget);
+      expect(find.byKey(const Key('course_form_kind')), findsNothing);
+      expect(find.byKey(const Key('schedule_form_kind')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('schedule_form_location')),
+        '测试楼 C303',
+      );
+      await tester.tap(find.byKey(const Key('schedule_form_save')));
+      await _settleIo(tester);
+      expect(_c.scheduleEvents.single.location, '测试楼 C303');
+      expect(
+        _c.cellsForDay(_week, 1).where((cell) => cell.activeThisWeek),
+        isEmpty,
+      );
+      expect(_c.cellsForDay(_week + 1, 1).single.slot.location, '测试楼 A101');
+      expect(_c.cellsForDay(_week, 3).single.slot.location, '测试楼 A101');
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   group('JE 教务课编辑 / 删除 / 恢复', () {
     final jwxt = _course('j1', '测试课甲', source: CourseSource.jwxt);

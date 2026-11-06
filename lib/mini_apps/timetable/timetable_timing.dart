@@ -52,7 +52,7 @@ CourseTimingKind timingKindOf({
   required CourseSlot slot,
 }) {
   return switch (courseKindOf(course: course, slot: slot)) {
-    CourseKind.standard => CourseTimingKind.standard,
+    CourseKind.standard || CourseKind.exam => CourseTimingKind.standard,
     CourseKind.lab => CourseTimingKind.lab,
     CourseKind.pe => CourseTimingKind.pe,
   };

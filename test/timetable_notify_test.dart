@@ -980,6 +980,7 @@ void main() {
     });
 
     test('课程类型覆盖同步用于小组件名称与实际结束时间', () {
+      const kinds = [CourseKind.standard, CourseKind.lab, CourseKind.pe];
       c.debugSetSnapshot(
         TimetableSnapshot(
           courses: [
@@ -989,7 +990,7 @@ void main() {
               buildingDisplay: '体育板块场地',
               projectName: '篮球',
               slots: [
-                for (final (i, kind) in CourseKind.values.indexed)
+                for (final (i, kind) in kinds.indexed)
                   CourseSlot(
                     day: i + 1,
                     startNode: 1,
@@ -1005,7 +1006,7 @@ void main() {
         ),
       );
       final service = svc(_FakeBridge());
-      for (final (i, kind) in CourseKind.values.indexed) {
+      for (final (i, kind) in kinds.indexed) {
         final date = DateTime(2026, 9, 7 + i);
         final item = service.classesOn(date).single;
         expect(item.name, kind == CourseKind.pe ? '体育·篮球' : '体育（3）');

@@ -572,13 +572,23 @@ class TimetableController extends ChangeNotifier {
   /// 学期总周数：所有课程（教务 + 手动）中最晚有课的周次；
   /// 无法解析周次的课程（未排课/「其他课程」，无 hasClassInWeek 为真的周）不计入。
   /// 没有任何可计入的课程时退回 [kDefaultTotalWeeks]。不看位串长度。
+  /// 开学日明确时，独立考试在第 1–104 周内的日期也延长可浏览周次，不受显示开关影响。
   int get totalWeeks {
     var max = 0;
     for (final c in combinedCourses) {
       final w = _lastWeekWithClass(c);
       if (w > max) max = w;
     }
-    return max > 0 ? max : kDefaultTotalWeeks;
+    if (max == 0) max = kDefaultTotalWeeks;
+    final termStart = settings.termStartDate;
+    if (termStart != null) {
+      for (final event in _effectiveEvents) {
+        if (!event.isExam) continue;
+        final week = teachingWeekOf(termStart, event.date);
+        if (week >= 1 && week <= 104 && week > max) max = week;
+      }
+    }
+    return max;
   }
 
   /// 课程最后一个有课的周（经 [CourseSlot.hasClassInWeek] 判定）；无则 0。
@@ -1486,7 +1496,8 @@ class TimetableController extends ChangeNotifier {
     bool colorChanged = false,
   }) => _log.operation<Course?>('course.save', () async {
     final weeks = courseWeeks.where((w) => w >= 1 && w <= 104).toSet();
-    if (name.trim().isEmpty ||
+    if (kind == CourseKind.exam ||
+        name.trim().isEmpty ||
         weeks.isEmpty ||
         day < 1 ||
         day > 7 ||
@@ -1746,6 +1757,139 @@ class TimetableController extends ChangeNotifier {
     return saved.forSlot(replacement);
   }, resultFields: (course) => {'saved': course != null});
 
+  /// 将当前单周的一次课程安排移为独立考试，连续节次仍算同一次安排。
+  /// 原课程仅删除这一次；考试之后的编辑、删除不再关联原课程。
+  /// 从底层时段移除这一周，撤销整天调课也不会重新出现原课程。
+  /// 全部相关文件批量保存成功后才发布内存变更；保存失败时保留原课程与日程。
+  Future<ScheduleEvent?> convertCourseOccurrenceToExam({
+    required GridCell cell,
+    required String title,
+    required String location,
+    required String note,
+    required int day,
+    required int startNode,
+    required int endNode,
+  }) => _log.operation<ScheduleEvent?>('course.convert_to_exam', () async {
+    final key = _occurrenceKey(cell);
+    final base = baseOccurrenceOf(cell);
+    if (key == null ||
+        base == null ||
+        title.trim().isEmpty ||
+        day < 1 ||
+        day > 7 ||
+        startNode < 1 ||
+        endNode < startNode ||
+        endNode > lastPeriod) {
+      return null;
+    }
+    // 表单保存前该次课可能已经删除或挪走，不能用旧格子重复生成考试。
+    final stillPresent =
+        cellsForDay(_weekOfDate(cell.date!), cell.date!.weekday).any(
+          (current) => current.activeThisWeek && _occurrenceKey(current) == key,
+        );
+    final start = TimeOfDayMinutes.tryParse(periodStart(startNode));
+    final end = TimeOfDayMinutes.tryParse(periodEnd(endNode));
+    if (!stillPresent ||
+        start == null ||
+        end == null ||
+        end.compareTo(start) <= 0) {
+      return null;
+    }
+    final original = base.course.slots[base.slotIndex];
+    final replacement = original.copyWith(
+      weeks: weeksToBits(
+        weeksOf(original).where((week) => week != base.week),
+        original.weeks.length,
+      ),
+      weeksLabel: '',
+    );
+    List<Course>? nextManual;
+    Map<String, CourseEdit>? nextCourseEdits;
+    if (base.course.isManual) {
+      final stored = manualCourseById(base.course.id);
+      if (stored == null) return null;
+      final index = _indexOfEqualSlot(stored.slots, original, base.slotIndex);
+      if (index < 0) return null;
+      final slots = [...stored.slots]..[index] = replacement;
+      nextManual = List.unmodifiable([
+        for (final course in _manualCourses)
+          if (course.id == stored.id) stored.copyWith(slots: slots) else course,
+      ]);
+    } else {
+      final raw = _jwxtOriginal(base.course.id, original, base.slotIndex);
+      final edit = _editBase(base.course.id);
+      if (raw == null || edit == null) return null;
+      final replacements = <CourseSlot>[];
+      for (var index = 0; index < base.course.slots.length; index++) {
+        final slot = base.course.slots[index];
+        final origin = _jwxtOriginal(base.course.id, slot, index);
+        if (origin == null || !_sameSlot(origin, raw)) continue;
+        replacements.add(index == base.slotIndex ? replacement : slot);
+      }
+      nextCourseEdits = Map.unmodifiable({
+        ..._courseEdits,
+        base.course.id: _withJwxtSlotReplacements(raw, replacements, edit),
+      });
+    }
+    final exam = ScheduleEvent(
+      id: 'event-${DateTime.now().microsecondsSinceEpoch}-${_eventSeq++}',
+      kind: ScheduleKind.exam,
+      source: ScheduleSource.manual,
+      title: title.trim(),
+      date: mondayOfWeek(cell.date!).add(Duration(days: day - 1)),
+      start: start,
+      end: end,
+      location: location.trim(),
+      note: note.trim(),
+      courseCode: cell.course.code.isEmpty ? null : cell.course.code,
+    );
+    final previousDateEdits = _dateEdits;
+    final previousEvents = _scheduleEvents;
+    final previousManual = _manualCourses;
+    final previousCourseEdits = _courseEdits;
+    final previousSnapshot = _snapshot;
+    final previousOverrides = _overrides;
+    final previousDaySwaps = _daySwaps;
+    final nextDateEdits = List<CourseDateEdit>.unmodifiable([
+      for (final edit in previousDateEdits)
+        if (edit.scope != DateEditScope.oneDay ||
+            !edit.matches(key.courseId, key.date, key.start, key.end))
+          edit,
+    ]);
+    final nextEvents = List<ScheduleEvent>.unmodifiable([
+      ...previousEvents,
+      exam,
+    ]);
+    await TimetableStore.writeBatch(() async {
+      if (nextManual != null) {
+        await TimetableStore.saveManualCourses(nextManual);
+      }
+      if (nextCourseEdits != null) {
+        await ScheduleStore.saveCourseEdits(nextCourseEdits);
+      }
+      if (nextDateEdits.length != previousDateEdits.length) {
+        await ScheduleStore.saveCourseDateEdits(nextDateEdits);
+      }
+      await ScheduleStore.saveEvents(nextEvents);
+      if (!identical(_dateEdits, previousDateEdits) ||
+          !identical(_scheduleEvents, previousEvents) ||
+          !identical(_manualCourses, previousManual) ||
+          !identical(_courseEdits, previousCourseEdits) ||
+          !identical(_snapshot, previousSnapshot) ||
+          !identical(_overrides, previousOverrides) ||
+          !identical(_daySwaps, previousDaySwaps)) {
+        throw const TimetablePersistenceException();
+      }
+    });
+    if (nextManual != null) _manualCourses = nextManual;
+    if (nextCourseEdits != null) _courseEdits = nextCourseEdits;
+    _dateEdits = nextDateEdits;
+    _scheduleEvents = nextEvents;
+    _clampViewingWeek();
+    _notifyEvents();
+    return exam;
+  }, resultFields: (exam) => {'saved': exam != null});
+
   /// 替换一个显示时段，手动课更新本地课程，教务课保存原时段的差异覆盖。
   Future<Course?> _replaceFormSlot(
     Course course,
@@ -1780,7 +1924,14 @@ class TimetableController extends ChangeNotifier {
     CourseSlot raw,
     List<CourseSlot> replacements,
     CourseEdit edit,
-  ) async {
+  ) => _setCourseEdit(_withJwxtSlotReplacements(raw, replacements, edit));
+
+  /// 仅构造时段覆盖，供普通编辑与课程转考试的批量保存复用。
+  static CourseEdit _withJwxtSlotReplacements(
+    CourseSlot raw,
+    List<CourseSlot> replacements,
+    CourseEdit edit,
+  ) {
     final base = raw.copyWith(
       teacher: edit.teacher,
       location: edit.location,
@@ -1795,15 +1946,13 @@ class TimetableController extends ChangeNotifier {
           CourseSlotPatch.between(base, value),
       ],
     );
-    await _setCourseEdit(
-      edit.copyWith(
-        slotEdits: [
-          for (final previous in edit.slotEdits)
-            if (!previous.matches(raw)) previous,
-          record,
-        ],
-        updatedAt: DateTime.now().toIso8601String(),
-      ),
+    return edit.copyWith(
+      slotEdits: [
+        for (final previous in edit.slotEdits)
+          if (!previous.matches(raw)) previous,
+        record,
+      ],
+      updatedAt: DateTime.now().toIso8601String(),
     );
   }
 
@@ -2703,13 +2852,17 @@ class TimetableController extends ChangeNotifier {
   // ---- 周视图列（设置 9）与首页明天（设置 13）----
 
   /// 第 [week] 周要显示的星期（显示顺序）。周日开头时周日（本教学周周日）放第一列；
-  /// 周末列关闭但当周该天有课时自动显示。
+  /// 周末列关闭但当周该天有课或可见日程时自动显示。
   List<int> visibleDays(int week) => weekColumnDays(
     weekStartsSunday: settings.weekStartsSunday,
     showSaturday: settings.showSaturday,
     showSunday: settings.showSunday,
-    saturdayHasClass: cellsForDay(week, 6).any((c) => c.activeThisWeek),
-    sundayHasClass: cellsForDay(week, 7).any((c) => c.activeThisWeek),
+    saturdayHasClass:
+        cellsForDay(week, 6).any((c) => c.activeThisWeek) ||
+        scheduleEventsOn(dateOfColumn(week, 6)).isNotEmpty,
+    sundayHasClass:
+        cellsForDay(week, 7).any((c) => c.activeThisWeek) ||
+        scheduleEventsOn(dateOfColumn(week, 7)).isNotEmpty,
   );
 
   /// 第 [week] 周第 [day] 列的日期（周日 = 本教学周周一 + 6）。

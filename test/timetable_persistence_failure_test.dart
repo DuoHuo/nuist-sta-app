@@ -65,6 +65,7 @@ void main() {
       'course_colors.json',
       'manual_courses.json',
       'course_edits.json',
+      'schedule_events.json',
     ])
       if (File('${directory.path}/$name').existsSync())
         name: File('${directory.path}/$name').readAsStringSync(),
@@ -111,6 +112,78 @@ void main() {
     TimetableStore.debugBeforeBatchReplace = null;
     await restart();
     expect(c.settings.showSaturday, isTrue);
+  });
+
+  test('课程转换考试最后文件失败时全部存储与内存均不变，重试仅通知一次', () async {
+    await seed();
+    await c.addScheduleEvent(
+      ScheduleEvent(
+        id: 'existing-exam',
+        kind: ScheduleKind.exam,
+        source: ScheduleSource.manual,
+        title: '已有考试',
+        date: DateTime(2026, 9, 1),
+        start: const TimeOfDayMinutes(10, 0),
+        end: const TimeOfDayMinutes(11, 0),
+      ),
+    );
+    await pumpEventQueue();
+    final before = savedFiles();
+    final originalManual = c.manualCourses.single.toJson();
+    final originalEdits = c.courseDateEdits
+        .map((edit) => edit.toJson())
+        .toList();
+    final originalEvents = c.scheduleEvents
+        .map((event) => event.toJson())
+        .toList();
+    GridCell opening() => c
+        .cellsForDay(1, 1)
+        .firstWhere(
+          (cell) => cell.activeThisWeek && cell.course.id == 'manual',
+        );
+    Future<ScheduleEvent?> convert() => c.convertCourseOccurrenceToExam(
+      cell: opening(),
+      title: '转换考试',
+      location: '',
+      note: '',
+      day: 1,
+      startNode: 1,
+      endNode: 2,
+    );
+    final changes = <ScheduleChangeReason>[];
+    final subscription = c.scheduleChanged.listen(changes.add);
+    addTearDown(subscription.cancel);
+    TimetableStore.debugBeforeBatchReplace = (index) {
+      if (index == 2) throw const FileSystemException('合成考试保存失败');
+    };
+    await expectLater(convert(), throwsA(isA<TimetablePersistenceException>()));
+    expect(savedFiles(), before);
+    expect(c.manualCourses.single.toJson(), originalManual);
+    expect(
+      c.courseDateEdits.map((edit) => edit.toJson()).toList(),
+      originalEdits,
+    );
+    expect(
+      c.scheduleEvents.map((event) => event.toJson()).toList(),
+      originalEvents,
+    );
+    expect(opening().slot.note, '保留备注');
+    await pumpEventQueue();
+    expect(changes, isEmpty);
+    TimetableStore.debugBeforeBatchReplace = null;
+    await restart();
+    expect(opening().slot.note, '保留备注');
+    expect(
+      c.scheduleEvents.map((event) => event.toJson()).toList(),
+      originalEvents,
+    );
+    expect(await convert(), isNotNull);
+    await pumpEventQueue();
+    expect(changes, [ScheduleChangeReason.scheduleEvent]);
+    expect(c.scheduleEvents, hasLength(2));
+    expect(c.courseDateEdits, isEmpty);
+    expect(c.manualCourses.single.slots.single.weeks, '0111');
+    expect(c.manualCourses.single.slots.single.color, oldSlotColor);
   });
 
   test('换配色方案的最后一份文件失败，不残留新方案或新手动课色号', () async {

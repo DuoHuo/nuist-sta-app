@@ -89,6 +89,7 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
   _initial;
 
   bool get _isEdit => _entryCourse != null;
+  bool get _isExam => _kind == CourseKind.exam;
   bool get _busy => _saving || _choosingScope || _pickingColor;
   String get _prefix =>
       widget.returnSavedFlag ? 'jwxt_edit_' : 'manual_course_';
@@ -349,6 +350,10 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
       _reveal(_nameAnchor);
       return;
     }
+    if (_isExam) {
+      await _saveAsExam();
+      return;
+    }
     if (_weeks.isEmpty) {
       setState(() => _weeksError = true);
       _reveal(_weeksAnchor);
@@ -429,13 +434,82 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
     }
   }
 
+  Future<void> _saveAsExam() async {
+    final cell = widget.cell;
+    if (cell == null || !cell.activeThisWeek || cell.date == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('仅支持改单周单节课，请从对应周的课程详情进入修改。')),
+      );
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    setState(() => _choosingScope = true);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('改为考试'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('仅修改本周这节课'),
+            SizedBox(height: 12),
+            Text('其他周次和时段保持不变。'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            key: const Key('course_form_exam_cancel'),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('course_form_exam_confirm'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认保存'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _choosingScope = false);
+    if (confirmed != true) return;
+    setState(() => _saving = true);
+    try {
+      var completed = false;
+      final saved = await withTimetablePersistenceFeedback(context, () async {
+        final exam = await widget.controller.convertCourseOccurrenceToExam(
+          cell: cell,
+          title: _name.text.trim(),
+          location: _location.text.trim(),
+          note: _note.text.trim(),
+          day: _day,
+          startNode: _start,
+          endNode: _end,
+        );
+        completed = true;
+        return exam;
+      });
+      if (!mounted) return;
+      if (saved != null) {
+        _leave(_entryCourse, true);
+      } else if (completed) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('课程未能转为考试，请重新打开这次课程后重试。')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   String get _clockText {
     final segments = resolveTimingSegments(
       periods: widget.controller.periods,
       startNode: _start,
       endNode: _end,
       kind: switch (_kind) {
-        CourseKind.standard => CourseTimingKind.standard,
+        CourseKind.standard || CourseKind.exam => CourseTimingKind.standard,
         CourseKind.lab => CourseTimingKind.lab,
         CourseKind.pe => CourseTimingKind.pe,
       },
@@ -527,8 +601,9 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
         onFieldSubmitted: (_) => nextFocus?.requestFocus(),
         decoration: _decoration(hint: hint),
         validator: required
-            ? (value) =>
-                  value == null || value.trim().isEmpty ? '请填写课程名称' : null
+            ? (value) => value == null || value.trim().isEmpty
+                  ? (_isExam ? '请填写考试名称' : '请填写课程名称')
+                  : null
             : null,
       ),
     ),
@@ -561,13 +636,21 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
   @override
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
+    final examWeek = _isExam && widget.cell?.date != null
+        ? widget.controller.weekOfDate(widget.cell!.date!)
+        : null;
     final candidate = CourseSlot(
       day: _day,
       startNode: _start,
       endNode: _end,
       weeks: List.generate(
         _totalWeeks,
-        (index) => _weeks.contains(index + 1) ? '1' : '0',
+        (index) =>
+            (examWeek == null
+                ? _weeks.contains(index + 1)
+                : examWeek == index + 1)
+            ? '1'
+            : '0',
       ).join(),
     );
     final conflict = describeManualConflicts(
@@ -622,10 +705,12 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
                           children: [
                             _textField(
                               name: 'name',
-                              label: '课程名称',
+                              label: _isExam ? '考试名称' : '课程名称',
                               controller: _name,
                               focus: _nameFocus,
-                              nextFocus: _teacherFocus,
+                              nextFocus: _isExam
+                                  ? _locationFocus
+                                  : _teacherFocus,
                               anchor: _nameAnchor,
                               required: true,
                               hint: '必填',
@@ -635,35 +720,41 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
                               _dropdown<CourseKind>(
                                 key: const Key('course_form_kind'),
                                 value: _kind,
-                                items: const [
-                                  DropdownMenuItem(
+                                items: [
+                                  const DropdownMenuItem(
                                     value: CourseKind.standard,
                                     child: Text('普通课'),
                                   ),
-                                  DropdownMenuItem(
+                                  const DropdownMenuItem(
                                     value: CourseKind.lab,
                                     child: Text('实验课'),
                                   ),
-                                  DropdownMenuItem(
+                                  const DropdownMenuItem(
                                     value: CourseKind.pe,
                                     child: Text('体育课'),
                                   ),
+                                  if (_isEdit)
+                                    const DropdownMenuItem(
+                                      value: CourseKind.exam,
+                                      child: Text('考试'),
+                                    ),
                                 ],
                                 onChanged: (value) =>
                                     setState(() => _kind = value),
                               ),
                             ),
-                            _textField(
-                              name: 'teacher',
-                              label: '任课教师',
-                              controller: _teacher,
-                              focus: _teacherFocus,
-                              nextFocus: _locationFocus,
-                              hint: '选填',
-                            ),
+                            if (!_isExam)
+                              _textField(
+                                name: 'teacher',
+                                label: '任课教师',
+                                controller: _teacher,
+                                focus: _teacherFocus,
+                                nextFocus: _locationFocus,
+                                hint: '选填',
+                              ),
                             _textField(
                               name: 'location',
-                              label: '上课地点',
+                              label: _isExam ? '考试地点' : '上课地点',
                               controller: _location,
                               focus: _locationFocus,
                               nextFocus: _noteFocus,
@@ -675,7 +766,7 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
                                 bottom: 4,
                               ),
                               child: Text(
-                                '上课安排',
+                                _isExam ? '考试安排' : '上课安排',
                                 style: TextStyle(
                                   color: colors.labelText,
                                   fontSize: 13,
@@ -772,36 +863,42 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
                               child: KeyedSubtree(
                                 key: const Key('course_form_weeks'),
                                 child: _row(
-                                  '上课周次',
-                                  InkWell(
-                                    key: Key('${_prefix}weeks'),
-                                    onTap: _busy ? null : _pickWeeks,
-                                    child: ConstrainedBox(
-                                      constraints: const BoxConstraints(
-                                        minHeight: 52,
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              _weeks.isEmpty
-                                                  ? '请选择周次'
-                                                  : formatWeeks(_weeks),
+                                  _isExam ? '考试周次' : '上课周次',
+                                  _isExam
+                                      ? Text(
+                                          widget.cell?.date == null
+                                              ? '请从对应周的课程详情进入'
+                                              : '第 ${widget.controller.weekOfDate(widget.cell!.date!)} 周（仅这次课）',
+                                        )
+                                      : InkWell(
+                                          key: Key('${_prefix}weeks'),
+                                          onTap: _busy ? null : _pickWeeks,
+                                          child: ConstrainedBox(
+                                            constraints: const BoxConstraints(
+                                              minHeight: 52,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Text(
+                                                    _weeks.isEmpty
+                                                        ? '请选择周次'
+                                                        : formatWeeks(_weeks),
+                                                  ),
+                                                ),
+                                                Icon(
+                                                  Icons.chevron_right,
+                                                  size: 20,
+                                                  color: colors.chevron,
+                                                ),
+                                              ],
                                             ),
                                           ),
-                                          Icon(
-                                            Icons.chevron_right,
-                                            size: 20,
-                                            color: colors.chevron,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
+                                        ),
                                 ),
                               ),
                             ),
-                            if (_weeksError)
+                            if (_weeksError && !_isExam)
                               Padding(
                                 padding: const EdgeInsets.only(top: 8),
                                 child: Text(
@@ -860,45 +957,46 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
                               ),
                             ),
                             const SizedBox(height: 8),
-                            _row(
-                              '课程颜色',
-                              InkWell(
-                                key: Key('${_prefix}color'),
-                                onTap: _busy ? null : _pickColor,
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    minHeight: 52,
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Container(
-                                        width: 14,
-                                        height: 14,
-                                        decoration: BoxDecoration(
-                                          color: swatch,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                            color: colors.divider,
+                            if (!_isExam)
+                              _row(
+                                '课程颜色',
+                                InkWell(
+                                  key: Key('${_prefix}color'),
+                                  onTap: _busy ? null : _pickColor,
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      minHeight: 52,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Container(
+                                          width: 14,
+                                          height: 14,
+                                          decoration: BoxDecoration(
+                                            color: swatch,
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                              color: colors.divider,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          _userArgb == null ? '自动' : '自选颜色',
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            _userArgb == null ? '自动' : '自选颜色',
+                                          ),
                                         ),
-                                      ),
-                                      Icon(
-                                        Icons.chevron_right,
-                                        size: 20,
-                                        color: colors.chevron,
-                                      ),
-                                    ],
+                                        Icon(
+                                          Icons.chevron_right,
+                                          size: 20,
+                                          color: colors.chevron,
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
+                                divider: false,
                               ),
-                              divider: false,
-                            ),
                             const SizedBox(height: 12),
                           ],
                         ),
