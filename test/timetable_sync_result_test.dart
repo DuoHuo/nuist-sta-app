@@ -143,18 +143,16 @@ void main() {
       expect(c.isViewingCurrentWeek, isTrue);
     });
 
-    test(
-      'SW01 term shrinks below the viewed week: clamped to the last week',
-      () async {
-        await seed([_jwxt('j1', '高等数学')]); // 16 周
-        c.setViewingWeek(14);
-        nextFetch = [_jwxt('j1', '高等数学', weeks: '1' * 10)];
-        await c.syncFromJwxt();
-        expect(c.syncStatus, TimetableSyncStatus.success);
-        expect(c.totalWeeks, 10);
-        expect(c.viewingWeek, 10);
-      },
-    );
+    test('SW01 同步后课程提前结束：总周数仍为 20，保留正在浏览的空周', () async {
+      await seed([_jwxt('j1', '高等数学')]); // 16 周
+      c.setViewingWeek(14);
+      nextFetch = [_jwxt('j1', '高等数学', weeks: '1' * 10)];
+      await c.syncFromJwxt();
+      expect(c.syncStatus, TimetableSyncStatus.success);
+      expect(c.totalWeeks, 20);
+      expect(c.viewingWeek, 14);
+      expect(c.cellsForDay(14, 1), isEmpty);
+    });
 
     test('SW01 failed sync also keeps the viewed week', () async {
       await seed([_jwxt('j1', '高等数学')]);

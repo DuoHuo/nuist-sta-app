@@ -66,7 +66,7 @@ void main() {
     });
   });
 
-  group('周次越界（W02f/g/h、反向收缩、表单周次）', () {
+  group('固定 20 周（无课周浏览、周次越界、表单周次）', () {
     late Directory tmp;
     final origClock = TimetableController.clock;
     final origBinding = TimetableController.bindingCheck;
@@ -120,42 +120,53 @@ void main() {
       await tester.pump();
     }
 
-    testWidgets('W02f 本周 19、总 18：顶栏第 18 周 + 课程已结束；无回到本周；首页今天没有课', (
-      tester,
-    ) async {
+    testWidgets('课程第 18 周结束：本周 19 正常显示，无课周可滑到第 20 周并选择', (tester) async {
       final today = _mondayOf(19);
       setUpCourses([_course('a', '${'1' * 18}00')], today: today);
-      expect(_c.totalWeeks, 18);
+      expect(_c.totalWeeks, 20);
       expect(_c.currentWeek, 19);
-      expect(_c.viewingWeek, 18);
+      expect(_c.viewingWeek, 19);
 
       await pumpPage(tester);
       expect(tester.takeException(), isNull);
-      expect(find.textContaining('第 18 周', findRichText: true), findsOneWidget);
-      expect(find.text('本周第 19 周 · 课程已结束'), findsOneWidget);
+      expect(find.textContaining('第 19 周', findRichText: true), findsOneWidget);
+      expect(find.textContaining('课程已结束'), findsNothing);
       expect(find.textContaining('非本周', findRichText: true), findsNothing);
-      expect(find.text('回到本周'), findsNothing);
       expect(find.byType(WeekGrid), findsOneWidget);
-      // PageView 停在第 18 周（下标 17），网格表头是第 18 周的日期（12/28 起）。
+      // 无课的第 19 周正常显示日期（1/4 起）。
       final pv = tester.widget<PageView>(find.byType(PageView));
-      expect(pv.controller!.page, 17);
+      expect(pv.controller!.page, 18);
       final grid = tester.widget<WeekGrid>(find.byType(WeekGrid));
-      expect(grid.week, 18);
-      expect(find.text('12月'), findsOneWidget);
-      expect(find.text('28'), findsOneWidget);
+      expect(grid.week, 19);
+      expect(find.text('1月'), findsOneWidget);
+      expect(find.text('课程a'), findsNothing);
 
-      // 选周弹层：只有 1..18，不高亮越界的「本周」。
-      await tester.tap(find.textContaining('第 18 周', findRichText: true));
+      // 从最后一个有课的周连续划过空周，固定在第 20 周到达边界。
+      _c.setViewingWeek(18);
       await tester.pumpAndSettle();
-      expect(find.text('18'), findsOneWidget);
-      expect(find.text('19'), findsNothing);
+      for (final week in [19, 20, 20]) {
+        await tester.drag(find.byType(PageView), const Offset(-300, 0));
+        await tester.pumpAndSettle();
+        expect(_c.viewingWeek, week);
+        expect(tester.widget<WeekGrid>(find.byType(WeekGrid)).week, week);
+        expect(find.text('课程a'), findsNothing);
+      }
+
+      // 选周条包含第 19、20 周，空周也可直接选择。
+      await tester.tap(find.textContaining('第 20 周', findRichText: true));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('week_chip_19')), findsOneWidget);
+      expect(find.byKey(const ValueKey('week_chip_20')), findsOneWidget);
+      expect(find.byKey(const ValueKey('week_chip_21')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('week_chip_19')));
+      await tester.pumpAndSettle();
+      expect(_c.viewingWeek, 19);
       expect(tester.takeException(), isNull);
 
       await pumpHome(tester, today.add(const Duration(hours: 9)));
       expect(tester.takeException(), isNull);
-      // TM13（§13.4）：学期已结束时卡片主文案「本学期已结束」，不再显示「今天没有课」。
-      expect(find.text('本学期已结束'), findsOneWidget);
-      expect(find.text('今天没有课'), findsNothing);
+      expect(find.text('本学期已结束'), findsNothing);
+      expect(find.text('今天没有课'), findsOneWidget);
     });
 
     testWidgets('首页 08-30（周日，开学前一天）：今天没有课；明天（周一·第 1 周）+ 周一课', (tester) async {
@@ -216,7 +227,7 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('反向：浏览第 20 周时删掉第 20 周的课 → 总 18，自动回到第 18 周', (tester) async {
+    testWidgets('浏览第 20 周时删掉该周最后一门课，仍停留在第 20 周', (tester) async {
       setUpCourses(
         [_course('a', '${'1' * 18}00'), _course('b', '${'0' * 19}1', day: 2)],
         today: _mondayOf(3),
@@ -231,16 +242,18 @@ void main() {
         await tester.pump(const Duration(milliseconds: 50));
       }
       expect(tester.takeException(), isNull);
-      expect(_c.totalWeeks, 18);
-      expect(_c.viewingWeek, 18);
-      expect(find.textContaining('第 18 周', findRichText: true), findsOneWidget);
+      expect(_c.totalWeeks, 20);
+      expect(_c.viewingWeek, 20);
+      expect(find.textContaining('第 20 周', findRichText: true), findsOneWidget);
       expect(find.byType(WeekGrid), findsOneWidget);
-      expect(find.text('课程a'), findsWidgets);
+      expect(tester.widget<WeekGrid>(find.byType(WeekGrid)).week, 20);
+      expect(find.text('课程a'), findsNothing);
+      expect(find.text('课程b'), findsNothing);
     });
 
-    testWidgets('表单周次按实际学期列出，不额外补到20周', (tester) async {
+    testWidgets('课程只到第 18 周时，表单仍列出完整 20 周', (tester) async {
       setUpCourses([_course('a', '1' * 18)], today: _mondayOf(3));
-      expect(_c.totalWeeks, 18);
+      expect(_c.totalWeeks, 20);
       await tester.pumpWidget(
         MaterialApp(home: ManualCourseForm(controller: _c)),
       );
@@ -254,6 +267,14 @@ void main() {
       );
       expect(
         find.byKey(const Key('course_form_week_19'), skipOffstage: false),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('course_form_week_20'), skipOffstage: false),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('course_form_week_21'), skipOffstage: false),
         findsNothing,
       );
       expect(tester.takeException(), isNull);

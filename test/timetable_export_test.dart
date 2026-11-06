@@ -211,6 +211,7 @@ void main() {
         ),
       );
     }
+    expect(_c.totalWeeks, 20);
     final snapshot = TimetableExportSnapshot.fromController(_c);
     expect(snapshot.examCount, 1);
     expect(snapshot.otherCount, 1);

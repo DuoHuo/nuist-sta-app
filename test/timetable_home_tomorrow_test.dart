@@ -77,10 +77,13 @@ void main() {
     expect(i.hasTomorrowSection, isFalse);
   });
 
-  test('学期已结束（actualWeek > 总周数）：「本学期已结束」', () {
+  test('课程结束后仍保留20周学期，第21周才显示「本学期已结束」', () {
     load();
-    expect(c.totalWeeks, 16);
-    final i = c.homeTomorrow(now: DateTime(2026, 12, 21)); // 第 17 周
+    expect(c.totalWeeks, 20);
+    final emptyWeek = c.homeTomorrow(now: DateTime(2026, 12, 21)); // 第 17 周
+    expect(emptyWeek.kind, HomeTomorrowKind.noClass);
+    expect(emptyWeek.message, '明天没课');
+    final i = c.homeTomorrow(now: DateTime(2027, 1, 18)); // 第 21 周
     expect(i.kind, HomeTomorrowKind.termEnded);
     expect(i.message, '本学期已结束');
     expect(i.hasTomorrowSection, isFalse);
@@ -88,8 +91,9 @@ void main() {
 
   test('最后一周周日：明天超出总周数 → 明天没课（今天学期未结束）', () {
     load();
-    final i = c.homeTomorrow(now: DateTime(2026, 12, 20, 20));
+    final i = c.homeTomorrow(now: DateTime(2027, 1, 17, 20)); // 第 20 周周日
     expect(i.kind, HomeTomorrowKind.noClass);
+    expect(i.tomorrowWeek, 21);
   });
 
   test('开学前一天：照常显示第 1 周周一的课', () {
@@ -190,7 +194,7 @@ void main() {
       load();
       expect(c.firstCourseTomorrow(now: DateTime(2026, 10, 13)), isNull);
       expect(c.firstCourseTomorrow(now: DateTime(2026, 8, 20)), isNull);
-      expect(c.firstCourseTomorrow(now: DateTime(2026, 12, 21)), isNull);
+      expect(c.firstCourseTomorrow(now: DateTime(2027, 1, 18)), isNull);
       c.debugSetSnapshot(
         TimetableSnapshot(
           courses: [_c('hidden', '隐藏课', 2).copyWith(hidden: true)],

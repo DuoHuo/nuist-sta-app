@@ -31,14 +31,14 @@ void main() {
           termCode: '2026-2027-1',
           termStartDate: _termStart,
         ),
-        // 位串覆盖到第 20 周，避免 totalWeeks 把 18 钳回去。
+        // 课程只到第 16 周，后续空周仍能跟随本周。
         courses: [
           Course(
             id: 'c1',
             name: '示例课',
             source: CourseSource.jwxt,
             slots: [
-              CourseSlot(day: 2, startNode: 1, endNode: 2, weeks: '1' * 20),
+              CourseSlot(day: 2, startNode: 1, endNode: 2, weeks: '1' * 16),
             ],
           ),
         ],

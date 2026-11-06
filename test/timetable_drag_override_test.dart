@@ -248,7 +248,7 @@ void main() {
       expect(c.cellsForDay(6, 3).where((x) => x.activeThisWeek), hasLength(1));
       expect(c.cellsForDay(6, 1).where((x) => x.activeThisWeek), isEmpty);
       expect(c.cellsForDay(7, 1).where((x) => x.activeThisWeek), hasLength(1));
-      expect(c.totalWeeks, 16);
+      expect(c.totalWeeks, 20);
     });
 
     test('再拖回原位：记录合并消失', () async {

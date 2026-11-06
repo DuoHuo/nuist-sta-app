@@ -569,47 +569,15 @@ class TimetableController extends ChangeNotifier {
   /// 同 [combinedCourses]（周视图/首页使用）。
   List<Course> get courses => combinedCourses;
 
-  /// 学期总周数：所有课程（教务 + 手动）中最晚有课的周次；
-  /// 无法解析周次的课程（未排课/「其他课程」，无 hasClassInWeek 为真的周）不计入。
-  /// 没有任何可计入的课程时退回 [kDefaultTotalWeeks]。不看位串长度。
-  /// 开学日明确时，独立考试在第 1–104 周内的日期也延长可浏览周次，不受显示开关影响。
-  int get totalWeeks {
-    var max = 0;
-    for (final c in combinedCourses) {
-      final w = _lastWeekWithClass(c);
-      if (w > max) max = w;
-    }
-    if (max == 0) max = kDefaultTotalWeeks;
-    final termStart = settings.termStartDate;
-    if (termStart != null) {
-      for (final event in _effectiveEvents) {
-        if (!event.isExam) continue;
-        final week = teachingWeekOf(termStart, event.date);
-        if (week >= 1 && week <= 104 && week > max) max = week;
-      }
-    }
-    return max;
-  }
-
-  /// 课程最后一个有课的周（经 [CourseSlot.hasClassInWeek] 判定）；无则 0。
-  static int _lastWeekWithClass(Course c) {
-    var max = 0;
-    for (final s in c.slots) {
-      for (var w = s.weeks.length; w > max; w--) {
-        if (s.hasClassInWeek(w)) {
-          max = w;
-          break;
-        }
-      }
-    }
-    return max;
-  }
+  /// 学期固定为 20 周，不随课程或考试安排变化，无课周也可浏览。
+  int get totalWeeks => kDefaultTotalWeeks;
 
   /// 课程变动后把浏览周钳回 1..totalWeeks（页面无需自行处理）。
   void _clampViewingWeek() {
     _viewingWeek = _viewingWeek.clamp(1, totalWeeks);
   }
 
+  /// 每学期固定的总周数。
   static const kDefaultTotalWeeks = 20;
 
   /// 已废弃：请用 [totalWeeks]。

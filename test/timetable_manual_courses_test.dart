@@ -171,20 +171,22 @@ void main() {
     expect(c.jwxtCourses.map((e) => e.id), ['j1', 'j2']);
   });
 
-  test('totalWeeks = 所有课程最晚有课周（不看位串长度，无课 → 20）', () async {
+  test('总周数固定 20，不随课程增删、同步或原始周次长度改变', () async {
     expect(c.totalWeeks, 20);
-    // 30 位位串但最后有课在第 16 周 → 16（不看长度，也不再与 20 取大）
+    // 30 位位串但最后有课在第 16 周，仍可浏览后面的空周。
     await c.addManualCourse(_manual('m', weeks: '${'1' * 16}${'0' * 14}'));
-    expect(c.totalWeeks, 16);
-    // 无法解析（全 0）的课程不计入
+    expect(c.totalWeeks, 20);
+    // 全 0 周次不影响浏览范围。
     await c.addManualCourse(_manual('none', weeks: '0' * 30));
-    expect(c.totalWeeks, 16);
+    expect(c.totalWeeks, 20);
     await c.syncFromJwxt();
-    final latest = c.courses
-        .map((x) => x.lastActiveWeek)
-        .fold<int>(0, (a, b) => a > b ? a : b);
-    expect(c.totalWeeks, latest > 0 ? latest : 20);
-    await c.addManualCourse(_manual('late', weeks: '${'0' * 21}1${'0' * 8}'));
-    expect(c.totalWeeks, 22);
+    expect(c.totalWeeks, 20);
+    final late = await c.addManualCourse(
+      _manual('late', weeks: '${'0' * 21}1${'0' * 8}'),
+    );
+    expect(c.totalWeeks, 20);
+    expect(late.hasClassInWeek(22), isTrue);
+    expect(await c.deleteManualCourse(late.id), isTrue);
+    expect(c.totalWeeks, 20);
   });
 }

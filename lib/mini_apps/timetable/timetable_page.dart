@@ -40,7 +40,7 @@ class _TimetablePageState extends State<TimetablePage> {
   /// AS-1：顶栏同步图标是否显示失败圆点（最近一次自动同步失败，下次成功后清除）。
   bool get _showSyncErrorDot => _controller.lastAutoSyncFailed;
 
-  /// 学期总周数（controller 按 SKZC 最后一个 1 与 20 取大）。
+  /// 学期固定为 20 周，包含没有课程的周。
   int get _totalWeeks => _controller.totalWeeks;
 
   @override
@@ -76,7 +76,7 @@ class _TimetablePageState extends State<TimetablePage> {
       });
       return;
     }
-    // totalWeeks 缩小（如删掉第 20 周的课）时把浏览周拉回范围内。
+    // 防御越界状态，确保浏览周落在学期范围内。
     if (_controller.viewingWeek > _totalWeeks) {
       _controller.setViewingWeek(_totalWeeks);
       return; // setViewingWeek 会再次通知本监听。

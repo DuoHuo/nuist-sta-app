@@ -116,7 +116,7 @@ void main() {
     expect(c.currentWeek, 1);
   });
 
-  test('viewingWeek 钳到 1..totalWeeks（=最晚有课周）；currentWeek 不截断', () {
+  test('浏览周固定钳到 1..20，当前真实周次不截断', () {
     c.debugSetSnapshot(
       TimetableSnapshot(
         courses: [_course('a', '1' * 16)],
@@ -127,12 +127,12 @@ void main() {
         ),
       ),
     );
-    expect(c.totalWeeks, 16);
+    expect(c.totalWeeks, 20);
     c.setViewingWeek(28);
-    expect(c.viewingWeek, 16);
+    expect(c.viewingWeek, 20);
     c.setViewingWeek(0);
     expect(c.viewingWeek, 1);
-    // 第 6 周课程延至 24 周 → totalWeeks 24
+    // 课程延至第 24 周时，浏览范围仍固定为 20 周。
     c.debugSetSnapshot(
       TimetableSnapshot(
         courses: [_course('b', '${'0' * 23}1')],
@@ -142,18 +142,18 @@ void main() {
         ),
       ),
     );
-    expect(c.totalWeeks, 24);
+    expect(c.totalWeeks, 20);
     c.setViewingWeek(30);
-    expect(c.viewingWeek, 24);
+    expect(c.viewingWeek, 20);
     // 开学很久之后 → currentWeek 为真实教学周，可超出 totalWeeks
     TimetableController.clock = () => DateTime(2027, 6, 1);
-    expect(c.currentWeek, greaterThan(24));
+    expect(c.currentWeek, greaterThan(20));
     expect(
       c.currentWeek,
       teachingWeekOf(DateTime(2026, 8, 31), DateTime(2027, 6, 1)),
     );
     c.setViewingWeek(c.currentWeek);
-    expect(c.viewingWeek, 24);
+    expect(c.viewingWeek, 20);
     // ignore: deprecated_member_use_from_same_package
     expect(c.maxWeeks, c.totalWeeks);
   });

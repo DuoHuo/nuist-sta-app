@@ -265,18 +265,18 @@ void main() {
       });
     }
 
-    test('最后一周课程转换考试后浏览上限不缩短，隐藏考试与重启仍可访问', () async {
+    test('第20周课程转换考试后浏览上限固定，隐藏考试与重启仍可访问', () async {
       await seed([
-        _jwxt('keep', '保留课程', day: 2, weeks: '1000'),
-        _jwxt('convert', '期末课程', weeks: '0001'),
+        _jwxt('keep', '保留课程', day: 2, weeks: '1${'0' * 19}'),
+        _jwxt('convert', '期末课程', weeks: '${'0' * 19}1'),
       ]);
-      final lastDate = _termStart.add(const Duration(days: 21));
+      final lastDate = _termStart.add(const Duration(days: 19 * 7));
       TimetableController.clock = () => lastDate;
-      c.setViewingWeek(4);
-      expect(c.totalWeeks, 4);
+      c.setViewingWeek(20);
+      expect(c.totalWeeks, 20);
       expect(
         await c.convertCourseOccurrenceToExam(
-          cell: cellAt('convert', 4, 1),
+          cell: cellAt('convert', 20, 1),
           title: '期末考试',
           location: '',
           note: '',
@@ -286,14 +286,14 @@ void main() {
         ),
         isNotNull,
       );
-      expect(c.totalWeeks, 4);
-      expect(c.viewingWeek, 4);
+      expect(c.totalWeeks, 20);
+      expect(c.viewingWeek, 20);
       await c.updateSettings(c.settings.copyWith(showExams: false));
-      expect(c.totalWeeks, 4);
-      expect(c.viewingWeek, 4);
+      expect(c.totalWeeks, 20);
+      expect(c.viewingWeek, 20);
       await restart();
-      expect(c.totalWeeks, 4);
-      expect(c.viewingWeek, 4);
+      expect(c.totalWeeks, 20);
+      expect(c.viewingWeek, 20);
       expect(c.scheduleEvents.single.date, lastDate);
     });
 

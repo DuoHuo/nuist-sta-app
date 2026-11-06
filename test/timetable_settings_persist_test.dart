@@ -230,7 +230,7 @@ void main() {
       expect(c.settings.termStartFromJwxt, isTrue);
     });
 
-    test('(c) unbind then re-sync: currentWeek 6, totalWeeks 18', () async {
+    test('(c) 解绑后重新同步：本周第 6 周，总周数仍为 20', () async {
       TimetableController.clock = () => DateTime(2026, 10, 11);
       await File('${tmp.path}/settings.json')
           .writeAsString(jsonEncode({'periodHeight': 44}));
@@ -239,7 +239,7 @@ void main() {
       await c.syncFromJwxt();
       await c.handleLogout();
       expect(c.settings.termStartFromJwxt, isFalse);
-      expect(c.totalWeeks, 20); // 解绑后无课程 -> 20
+      expect(c.totalWeeks, 20);
 
       // SKZC 最高位 18
       fakeTermFetch(maxWeeks: 30, weeks: '${'0' * 17}1${'0' * 12}');
@@ -247,7 +247,7 @@ void main() {
       expect(c.syncStatus, TimetableSyncStatus.success);
       expect(c.settings.termStartDate, DateTime(2026, 8, 31));
       expect(c.settings.termStartFromJwxt, isTrue);
-      expect(c.totalWeeks, 18);
+      expect(c.totalWeeks, 20);
       expect(c.currentWeek, 6);
       final f = await readFile();
       expect(f['termStartFromJwxt'], isTrue);
@@ -255,7 +255,7 @@ void main() {
     });
   });
 
-  group('W02 totalWeeks', () {
+  group('W02 学期固定 20 周', () {
     final origClock = TimetableController.clock;
     tearDown(() => TimetableController.clock = origClock);
     setUp(() => TimetableController.clock = () => DateTime(2026, 10, 11));
@@ -277,15 +277,15 @@ void main() {
       courses: courses,
     );
 
-    test('JWXT max 18 -> 18', () {
+    test('教务课只到第 18 周，总周数仍为 20', () {
       c.debugSetSnapshot(
         snap([course('j', bits(18), CourseSource.jwxt)]),
         manualCourses: const [],
       );
-      expect(c.totalWeeks, 18);
+      expect(c.totalWeeks, 20);
     });
 
-    test('JWXT 18 + manual week 20 -> 20', () {
+    test('教务课到第 18 周、手动课到第 20 周，总周数为 20', () {
       c.debugSetSnapshot(
         snap([course('j', bits(18), CourseSource.jwxt)]),
         manualCourses: [course('m', bits(20), CourseSource.manual)],
@@ -293,12 +293,12 @@ void main() {
       expect(c.totalWeeks, 20);
     });
 
-    test('no courses -> 20', () {
+    test('没有课程时，总周数仍为 20', () {
       c.debugSetSnapshot(snap(const []), manualCourses: const []);
       expect(c.totalWeeks, 20);
     });
 
-    test('unparseable/unscheduled courses excluded', () {
+    test('未排课或无法解析的周次不影响固定 20 周', () {
       c.debugSetSnapshot(
         snap([
           course('j', bits(12), CourseSource.jwxt),
@@ -320,7 +320,7 @@ void main() {
         ]),
         manualCourses: const [],
       );
-      expect(c.totalWeeks, 12);
+      expect(c.totalWeeks, 20);
       c.debugSetSnapshot(
         snap(const [
           Course(id: 'noslot', name: 'x', source: CourseSource.jwxt),
@@ -330,7 +330,7 @@ void main() {
       expect(c.totalWeeks, 20);
     });
 
-    test('deleting week-20 manual course clamps viewingWeek to 18', () async {
+    test('删除第 20 周手动课程后仍停留在第 20 周', () async {
       c.debugSetSnapshot(
         snap([course('j', bits(18), CourseSource.jwxt)]),
         manualCourses: [course('m', bits(20), CourseSource.manual)],
@@ -338,20 +338,22 @@ void main() {
       c.setViewingWeek(20);
       expect(c.viewingWeek, 20);
       expect(await c.deleteManualCourse('m'), isTrue);
-      expect(c.totalWeeks, 18);
-      expect(c.viewingWeek, 18);
-      // 再加回第 20 周课：浏览周不被动改变，但可再翻到 20。
+      expect(c.totalWeeks, 20);
+      expect(c.viewingWeek, 20);
+      // 再加回第 20 周课：浏览周仍保持不变。
       await c.addManualCourse(course('m2', bits(20), CourseSource.manual));
       expect(c.totalWeeks, 20);
-      expect(c.viewingWeek, 18);
+      expect(c.viewingWeek, 20);
     });
 
-    test('unbind clamps viewingWeek; hasClassInWeek drives cells', () async {
+    test('浏览周固定钳到 20，解绑前后保持边界，原始课程周次保留', () async {
       c.debugSetSnapshot(
         snap([course('j', bits(25), CourseSource.jwxt)]),
         manualCourses: const [],
       );
       c.setViewingWeek(25);
+      expect(c.totalWeeks, 20);
+      expect(c.viewingWeek, 20);
       expect(c.cellsForDay(25, 1).single.activeThisWeek, isTrue);
       expect(c.cellsForDay(26, 1), isEmpty);
       await c.handleLogout();
@@ -403,7 +405,7 @@ void main() {
       expect(c.viewingWeek, 1);
     });
 
-    test('W02f-2: actualWeek 19 with total 18 -> no courses/reminders', () {
+    test('W02f-2：课程只到第 18 周，第 19 周没有课程或提醒', () {
       // 2027-01-04 是第 19 周周一
       TimetableController.clock = () => DateTime(2027, 1, 4);
       c.debugSetSnapshot(
@@ -411,27 +413,29 @@ void main() {
         manualCourses: const [],
       );
       expect(c.actualWeek(DateTime(2027, 1, 4)), 19);
-      expect(c.totalWeeks, 18);
+      expect(c.totalWeeks, 20);
       expect(c.todayCourses(now: DateTime(2027, 1, 4, 7)), isEmpty);
       expect(c.coursesOnDate(DateTime(2027, 1, 4)), isEmpty);
       // 对照：第 18 周周一有课
       expect(c.coursesOnDate(DateTime(2026, 12, 28)), isNotEmpty);
     });
 
-    test('today week 19 with total 18 -> currentWeek 19, viewing 18', () {
+    test('本周第 19 周、课程只到第 18 周：默认浏览本周并可翻到第 20 周', () {
       // 2026-08-31 起第 19 周 = 2027-01-04 那周
       TimetableController.clock = () => DateTime(2027, 1, 6);
       c.debugSetSnapshot(
         snap([course('j', bits(18), CourseSource.jwxt)]),
         manualCourses: const [],
       );
-      expect(c.totalWeeks, 18);
+      expect(c.totalWeeks, 20);
       expect(c.currentWeek, 19);
-      expect(c.viewingWeek, 18);
+      expect(c.viewingWeek, 19);
+      c.setViewingWeek(20);
+      expect(c.viewingWeek, 20);
       expect(() => c.goToCurrentWeek(), returnsNormally);
-      expect(c.viewingWeek, 18);
+      expect(c.viewingWeek, 19);
       expect(() => c.todayCourses(), returnsNormally);
-      expect(c.isViewingCurrentWeek, isFalse);
+      expect(c.isViewingCurrentWeek, isTrue);
     });
   });
 }
