@@ -14,7 +14,8 @@ import 'timetable_theme.dart';
 class TimetableExamsPage extends StatelessWidget {
   const TimetableExamsPage({super.key});
 
-  void _openTimetable(BuildContext context) => context.push('/apps/timetable');
+  void _openTimetable(BuildContext context, ScheduleEvent event) =>
+      context.push('/apps/timetable', extra: event);
 
   @override
   Widget build(BuildContext context) {
@@ -48,7 +49,7 @@ class TimetableExamsPage extends StatelessWidget {
                     controller: controller,
                     event: e,
                     today: now,
-                    onTap: () => _openTimetable(context),
+                    onTap: () => _openTimetable(context, e),
                   ),
               ],
               if (past.isNotEmpty) ...[
@@ -59,7 +60,7 @@ class TimetableExamsPage extends StatelessWidget {
                     controller: controller,
                     event: e,
                     today: now,
-                    onTap: () => _openTimetable(context),
+                    onTap: () => _openTimetable(context, e),
                   ),
               ],
             ],
@@ -113,7 +114,7 @@ class _GroupHeader extends StatelessWidget {
   }
 }
 
-/// 考试列表的一项：卡片式，含科目、胶囊、日期倒计时、时间、考场与座位备注。
+/// 考试列表的一项：卡片式，含科目、胶囊、日期倒计时、时间、考场与备注。
 class _ExamTile extends StatelessWidget {
   const _ExamTile({
     required this.controller,

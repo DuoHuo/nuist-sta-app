@@ -54,7 +54,7 @@ void main() {
       expect(a.start, const TimeOfDayMinutes(9, 0));
       expect(a.end, const TimeOfDayMinutes(11, 0));
       expect(a.location, '示例楼A101');
-      expect(a.note, '座位号 12\n请携带学生证');
+      expect(a.note, '请携带学生证');
       expect(a.jwxtKey, '00000001|2027-01-05|09:00');
       expect(a.id, 'jwxt-exam:00000001|2027-01-05|09:00');
 
@@ -166,10 +166,29 @@ void main() {
       );
     });
 
-    test('备注组合', () {
-      expect(ExamParser.composeNote(seat: '', remark: ''), '');
-      expect(ExamParser.composeNote(seat: '3', remark: ''), '座位号 3');
-      expect(ExamParser.composeNote(seat: '', remark: '带笔'), '带笔');
+    test('教务备注只移除自动审核说明，保留有效提醒', () {
+      expect(ExamParser.cleanRemark(''), '');
+      expect(ExamParser.cleanRemark('带笔'), '带笔');
+      expect(ExamParser.cleanRemark('考试审核通过生成考试安排'), '');
+      expect(
+        ExamParser.cleanRemark('  考试审核通过生成考试安排\r\n请携带学生证\n带笔'),
+        '请携带学生证\n带笔',
+      );
+      expect(ExamParser.cleanRemark('请确认考试审核通过生成的通知'), '请确认考试审核通过生成的通知');
+    });
+
+    test('有座位号和自动审核说明的响应不再生成多余备注', () {
+      final result = ExamParser.parseRow({
+        'KCH': '00000009',
+        'KCM': '示例课程',
+        'KSRQ': '2027-01-08',
+        'KSKSSJ': '09:00',
+        'KSJSSJ': '11:00',
+        'SFAPSJ': '1',
+        'ZWH': '12',
+        'BZ': '考试审核通过生成考试安排',
+      }) as ExamRowOk;
+      expect(result.exam.note, isEmpty);
     });
 
     test('EX37 JASMC 空 → location 取 JXLMC；两者都空 → 空', () {

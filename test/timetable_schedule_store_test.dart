@@ -153,6 +153,43 @@ void main() {
       if (!e.isFromJwxt) e.toJson(),
   ]);
   group('schedule events persistence', () {
+    test('旧版教务备注在读取时清理，手动备注和用户覆盖仍保留', () async {
+      const oldNote = '座位号 12\n考试审核通过生成考试安排\n请携带学生证';
+      final original = _exam('legacy', 'MATH01').copyWith(note: oldNote);
+      final overridden = _exam('edited', 'PHY01').copyWith(note: oldNote);
+      final manual = manualExam().copyWith(note: oldNote);
+      await ScheduleStore.saveEvents([original, overridden, manual]);
+      await ScheduleStore.saveExamOverrides({
+        overridden.jwxtKey!: ExamOverride(
+          key: overridden.jwxtKey!,
+          note: oldNote,
+        ),
+      });
+
+      await restart();
+      expect(eventById(original.id).note, '请携带学生证');
+      expect(eventById(original.id).id, original.id);
+      expect(c.jwxtExamKeyOf(original.id), original.jwxtKey);
+      expect(eventById(overridden.id).note, oldNote);
+      expect(eventById(manual.id).note, oldNote);
+
+      // 仅修改地点时，不把清理后的教务备注误记成用户覆盖。
+      await c.updateScheduleEvent(
+        eventById(original.id).copyWith(location: '测试楼 A101'),
+      );
+      final overrides = await ScheduleStore.readExamOverrides();
+      expect(overrides[original.jwxtKey]?.note, isNull);
+
+      await c.replaceJwxtExams([original, overridden]);
+      expect(eventById(original.id).note, '请携带学生证');
+      expect(eventById(overridden.id).note, oldNote);
+      expect(eventById(manual.id).note, oldNote);
+      await restart();
+      expect(eventById(original.id).note, '请携带学生证');
+      expect(eventById(overridden.id).note, oldNote);
+      expect(eventById(manual.id).note, oldNote);
+    });
+
     test('round trip: manual + jwxt events survive restart', () async {
       await seed([_jwxt('j1', '高等数学')]);
       await c.addScheduleEvent(_other('o1'));

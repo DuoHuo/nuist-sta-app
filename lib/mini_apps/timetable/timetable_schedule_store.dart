@@ -1,5 +1,6 @@
 import '../../core/logging/app_log.dart';
 import 'timetable_date_edits.dart';
+import 'timetable_exam_parser.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_overrides.dart';
 import 'timetable_store.dart';
@@ -83,7 +84,9 @@ class ScheduleStore {
     final raw = await _read(scheduleEventsFile);
     return [
       for (final item in _list(raw, 'events'))
-        if (item is Map<String, dynamic>) ?ScheduleEvent.tryFromJson(item),
+        if (item is Map<String, dynamic>)
+          if (ScheduleEvent.tryFromJson(item) case final event?)
+            ExamParser.cleanImportedExam(event),
     ];
   }
 

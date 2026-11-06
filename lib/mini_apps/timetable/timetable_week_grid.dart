@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -90,6 +91,9 @@ class WeekGrid extends StatefulWidget {
     required this.controller,
     this.onCourseTap,
     this.onEventTap,
+    this.focusedEvent,
+    this.revealFocusedEvent = true,
+    this.onFocusedEventRevealed,
     this.enableDrag = true,
     this.previewMode = false,
   });
@@ -100,6 +104,15 @@ class WeekGrid extends StatefulWidget {
 
   /// 点日程格（考试 / 其他，§14.2）；为空时打开日程详情弹层。
   final void Function(ScheduleEvent event)? onEventTap;
+
+  /// 从考试安排进入时临时展示并强调的日程，不改动显示设置。
+  final ScheduleEvent? focusedEvent;
+
+  /// 是否执行本次自动定位；翻离目标周再回来时不重复滚动或弹详情。
+  final bool revealFocusedEvent;
+
+  /// 自动定位开始后通知页面消费本次请求。
+  final VoidCallback? onFocusedEventRevealed;
 
   /// 是否允许长按拖动调课。
   final bool enableDrag;
@@ -156,6 +169,68 @@ class _WeekGridState extends State<WeekGrid> {
   double _periodH = 0;
   int _nodes = 0;
 
+  ScheduleEvent? get _focusedEvent {
+    final target = widget.focusedEvent;
+    if (target == null || widget.previewMode) return null;
+    final event = controller.scheduleEvents
+        .where((e) => e.id == target.id)
+        .firstOrNull;
+    return event != null && controller.actualWeek(event.date) == week
+        ? event
+        : null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _revealUnplacedEvent();
+  }
+
+  @override
+  void didUpdateWidget(covariant WeekGrid oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.focusedEvent != widget.focusedEvent) {
+      _revealUnplacedEvent();
+    }
+  }
+
+  void _revealUnplacedEvent() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !widget.revealFocusedEvent) return;
+      final event = _focusedEvent;
+      if (event != null &&
+          scheduleNodeRange(controller.periods, event.start, event.end) ==
+              null) {
+        widget.onFocusedEventRevealed?.call();
+        _openEvent(context, event);
+      }
+    });
+  }
+
+  List<ScheduleGridItem> _scheduleItemsForDay(int day) {
+    final items = scheduleItemsForColumn(controller, week, day);
+    final event = _focusedEvent;
+    if (event != null &&
+        event.date.weekday == day &&
+        !items.any((item) => item.event.id == event.id)) {
+      final range = scheduleNodeRange(
+        controller.periods,
+        event.start,
+        event.end,
+      );
+      if (range != null) {
+        items.add(
+          ScheduleGridItem(
+            event: event,
+            startNode: range.startNode,
+            endNode: range.endNode,
+          ),
+        );
+      }
+    }
+    return items;
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = controller.settings;
@@ -167,7 +242,16 @@ class _WeekGridState extends State<WeekGrid> {
     final radius = settings.cellRadius;
     // 列顺序（含「每周第一天」与周末自动显示）由数据层给出；周次仍按周一开头。
     // 周末列：当周周六/周日有可见日程时也自动显示（§14.2，同「有课自动显示」）。
-    final days = visibleDaysWithEvents(controller, week);
+    final days = [...visibleDaysWithEvents(controller, week)];
+    final focusedEvent = _focusedEvent;
+    if (focusedEvent != null && !days.contains(focusedEvent.date.weekday)) {
+      days.add(focusedEvent.date.weekday);
+      days.sort(
+        (a, b) => settings.weekStartsSunday
+            ? (a % 7).compareTo(b % 7)
+            : a.compareTo(b),
+      );
+    }
     final today = DateTime.now();
     final todayDate = DateTime(today.year, today.month, today.day);
     // item 7：第 N 节下方的「其他」行，只放本周的无节次教务课。
@@ -212,6 +296,19 @@ class _WeekGridState extends State<WeekGrid> {
                           week,
                           days[i],
                         );
+                        final focusHeader =
+                            focusedEvent != null &&
+                            focusedEvent.date.weekday == days[i] &&
+                            scheduleNodeRange(
+                                  controller.periods,
+                                  focusedEvent.start,
+                                  focusedEvent.end,
+                                ) ==
+                                null;
+                        if (focusHeader &&
+                            !unplaced.any((e) => e.id == focusedEvent.id)) {
+                          unplaced.add(focusedEvent);
+                        }
                         Widget header = _DayHeader(
                           label: _weekdayLabels[days[i] - 1],
                           day: date.day,
@@ -260,7 +357,19 @@ class _WeekGridState extends State<WeekGrid> {
                             child: header,
                           );
                         }
-                        return SizedBox(width: dayW, child: header);
+                        return SizedBox(
+                          width: dayW,
+                          child: focusHeader
+                              ? _FocusedScheduleTarget(
+                                  eventId: focusedEvent.id,
+                                  reveal: widget.revealFocusedEvent,
+                                  onRevealed: widget.onFocusedEventRevealed,
+                                  radius: TimetableTheme.todayHeaderRadius,
+                                  scrollIntoView: false,
+                                  child: header,
+                                )
+                              : header,
+                        );
                       },
                     ),
                 ],
@@ -373,9 +482,9 @@ class _WeekGridState extends State<WeekGrid> {
         if (!isMovedAwayGhost(c, week)) c,
     ];
     // 日程（考试 / 其他，§14.2）：按时间映射到节次，夹在可见节数内（不消失）。
-    // 考试在 showExams 关时已被 scheduleEventsOn 过滤，不画也不计冲突。
+    // 考试受显示开关控制；从考试安排选中的目标在本页临时展示。
     final events = [
-      for (final e in scheduleItemsForColumn(controller, week, day))
+      for (final e in _scheduleItemsForDay(day))
         ScheduleGridItem(
           event: e.event,
           startNode: e.startNode.clamp(1, nodes),
@@ -384,7 +493,7 @@ class _WeekGridState extends State<WeekGrid> {
         ),
     ];
     final absorbed = <String>{};
-    for (final group in groupSlotCells(dayCells)) {
+    for (final group in _groupsForEventFocus(dayCells, events)) {
       // 与本周课重叠的日程并入该组：计入「N 门」与冲突圆点，点开时一起列出。
       // 非本周灰格与日程重叠时让位不画（同灰格让位本周课）。
       final overlapping = [
@@ -395,6 +504,13 @@ class _WeekGridState extends State<WeekGrid> {
       final extra = group.active.isEmpty
           ? const <ScheduleGridItem>[]
           : overlapping;
+      final focusedItem = extra
+          .where(
+            (e) =>
+                e.event.id == _focusedEvent?.id &&
+                !absorbed.contains(e.event.id),
+          )
+          .firstOrNull;
       absorbed.addAll([for (final e in extra) e.event.id]);
       // 拖起来的那一格：原位置空出来（不留虚影）。为了不打断进行中的长按手势，
       // 原格子的 widget 保留在树里（结构不变），只是改为透明或改显示同组剩下的课。
@@ -461,27 +577,53 @@ class _WeekGridState extends State<WeekGrid> {
             maintainState: true,
             maintainAnimation: true,
             maintainSize: true,
-            child: CourseCell(
-              controller: controller,
-              cell: cell,
-              width: width,
-              height: height,
-              radius: radius,
-              stackCount: stack,
-              onTap: widget.onCourseTap == null
-                  ? null
-                  : stack > 1
-                  ? () => _showStackSheet(
-                      context,
-                      group.active,
-                      events: [for (final e in extra) e.event],
-                    )
-                  : () => widget.onCourseTap!(cell),
-              onDragStart: draggable ? (_) => _onDragStart(dragCell) : null,
-              onDragUpdate: draggable ? _onDragUpdate : null,
-              onDragEnd: draggable ? _onDragEnd : null,
-              onDragCancel: draggable ? _onDragCancel : null,
-            ),
+            child: focusedItem != null
+                ? _FocusedScheduleTarget(
+                    eventId: focusedItem.event.id,
+                    reveal: widget.revealFocusedEvent,
+                    onRevealed: widget.onFocusedEventRevealed,
+                    radius: radius,
+                    child: ScheduleEventCell(
+                      controller: controller,
+                      event: focusedItem.event,
+                      width: width,
+                      height: height,
+                      radius: radius,
+                      stackCount: stack,
+                      onTap: () => _showStackSheet(
+                        context,
+                        group.active,
+                        events: [
+                          focusedItem.event,
+                          for (final e in extra)
+                            if (e.event.id != focusedItem.event.id) e.event,
+                        ],
+                      ),
+                    ),
+                  )
+                : CourseCell(
+                    controller: controller,
+                    cell: cell,
+                    width: width,
+                    height: height,
+                    radius: radius,
+                    stackCount: stack,
+                    onTap: widget.onCourseTap == null
+                        ? null
+                        : stack > 1
+                        ? () => _showStackSheet(
+                            context,
+                            group.active,
+                            events: [for (final e in extra) e.event],
+                          )
+                        : () => widget.onCourseTap!(cell),
+                    onDragStart: draggable
+                        ? (_) => _onDragStart(dragCell)
+                        : null,
+                    onDragUpdate: draggable ? _onDragUpdate : null,
+                    onDragEnd: draggable ? _onDragEnd : null,
+                    onDragCancel: draggable ? _onDragCancel : null,
+                  ),
           ),
         ),
       );
@@ -501,6 +643,52 @@ class _WeekGridState extends State<WeekGrid> {
       ),
     );
     return widgets;
+  }
+
+  /// 考试可能跨过多段课程；把目标连通范围合成一组，避免后画的课遮住目标。
+  List<SlotCellGroup> _groupsForEventFocus(
+    List<GridCell> cells,
+    List<ScheduleGridItem> events,
+  ) {
+    final groups = groupSlotCells(cells);
+    final target = events
+        .where((e) => e.event.id == _focusedEvent?.id)
+        .firstOrNull;
+    if (target == null) return groups;
+    var start = target.startNode;
+    var end = target.endNode;
+    final connected = <SlotCellGroup>{};
+    var expanded = true;
+    while (expanded) {
+      final oldStart = start;
+      final oldEnd = end;
+      for (final event in events) {
+        if (event.overlapsNodes(start, end)) {
+          start = math.min(start, event.startNode);
+          end = math.max(end, event.endNode);
+        }
+      }
+      for (final group in groups) {
+        if (group.active.isNotEmpty &&
+            group.startNode <= end &&
+            start <= group.endNode) {
+          connected.add(group);
+          start = math.min(start, group.startNode);
+          end = math.max(end, group.endNode);
+        }
+      }
+      expanded = start != oldStart || end != oldEnd;
+    }
+    if (connected.isEmpty) return groups;
+    return [
+      for (final group in groups)
+        if (!connected.contains(group)) group,
+      _FocusedSlotCellGroup(
+        [for (final group in connected) ...group.active],
+        startNode: start,
+        endNode: end,
+      ),
+    ];
   }
 
   void _openEvent(BuildContext context, ScheduleEvent e) {
@@ -557,30 +745,47 @@ class _WeekGridState extends State<WeekGrid> {
           );
           final width = box.width;
           final height = box.height;
-          final primary = cluster.first.event;
+          final primaryItem =
+              cluster
+                  .where((e) => e.event.id == _focusedEvent?.id)
+                  .firstOrNull ??
+              cluster.first;
+          final primary = primaryItem.event;
+          final cell = ScheduleEventCell(
+            controller: controller,
+            event: primary,
+            width: width,
+            height: height,
+            radius: radius,
+            stackCount: cluster.length,
+            activeThisWeek: primaryItem.activeThisWeek,
+            onTap: cluster.length > 1
+                ? () => _showStackSheet(
+                    context,
+                    const [],
+                    events: [
+                      primary,
+                      for (final e in cluster)
+                        if (e.event.id != primary.id) e.event,
+                    ],
+                  )
+                : () => _openEvent(context, primary),
+          );
           return Positioned(
             key: ValueKey('schedule_slot_${primary.id}'),
             left: box.left,
             top: box.top,
             width: width,
             height: height,
-            child: ScheduleEventCell(
-              controller: controller,
-              event: primary,
-              width: width,
-              height: height,
-              radius: radius,
-              stackCount: cluster.length,
-              // 叠放时以主格为准；考试更早周幽灵 → 灰显双胶囊。
-              activeThisWeek: cluster.first.activeThisWeek,
-              onTap: cluster.length > 1
-                  ? () => _showStackSheet(
-                      context,
-                      const [],
-                      events: [for (final e in cluster) e.event],
-                    )
-                  : () => _openEvent(context, primary),
-            ),
+            child: primary.id == _focusedEvent?.id
+                ? _FocusedScheduleTarget(
+                    eventId: primary.id,
+                    reveal: widget.revealFocusedEvent,
+                    onRevealed: widget.onFocusedEventRevealed,
+                    radius: radius,
+                    child: cell,
+                  )
+                : cell,
           );
         }(),
     ];
@@ -1079,6 +1284,21 @@ class SlotCellGroup {
   }
 }
 
+/// 定位考试时的课程组范围包含连接它们的考试与日程。
+class _FocusedSlotCellGroup extends SlotCellGroup {
+  _FocusedSlotCellGroup(
+    super.cells, {
+    required this.startNode,
+    required this.endNode,
+  });
+
+  @override
+  final int startNode;
+
+  @override
+  final int endNode;
+}
+
 bool _periodsOverlap(GridCell a, GridCell b) =>
     a.slot.startNode <= b.slot.endNode && b.slot.startNode <= a.slot.endNode;
 
@@ -1245,6 +1465,138 @@ class _OtherCoursesRow extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 定位完成后保持描边与阴影，再淡出；只重绘强调层，不改变格子尺寸。
+class _FocusedScheduleTarget extends StatefulWidget {
+  const _FocusedScheduleTarget({
+    required this.eventId,
+    required this.radius,
+    required this.child,
+    this.scrollIntoView = true,
+    required this.reveal,
+    this.onRevealed,
+  });
+
+  final String eventId;
+  final double radius;
+  final Widget child;
+  final bool scrollIntoView;
+  final bool reveal;
+  final VoidCallback? onRevealed;
+
+  @override
+  State<_FocusedScheduleTarget> createState() => _FocusedScheduleTargetState();
+}
+
+class _FocusedScheduleTargetState extends State<_FocusedScheduleTarget> {
+  Timer? _holdTimer;
+  bool _visible = false;
+  bool _finished = false;
+  int _revealGeneration = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleReveal();
+  }
+
+  @override
+  void didUpdateWidget(covariant _FocusedScheduleTarget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.eventId != widget.eventId) {
+      _holdTimer?.cancel();
+      _visible = false;
+      _finished = false;
+      _scheduleReveal();
+    }
+  }
+
+  void _scheduleReveal() {
+    final generation = ++_revealGeneration;
+    if (!widget.reveal) {
+      _finished = true;
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || generation != _revealGeneration) return;
+      widget.onRevealed?.call();
+      final reduceMotion = MediaQuery.disableAnimationsOf(context);
+      if (widget.scrollIntoView) {
+        await Scrollable.ensureVisible(
+          context,
+          alignment: 0.35,
+          duration: reduceMotion
+              ? Duration.zero
+              : const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted || generation != _revealGeneration) return;
+      setState(() => _visible = true);
+      _holdTimer = Timer(const Duration(milliseconds: 1800), () {
+        if (!mounted) return;
+        setState(() {
+          _visible = false;
+          if (MediaQuery.disableAnimationsOf(context)) _finished = true;
+        });
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _holdTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    return Semantics(
+      selected: _visible,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          widget.child,
+          if (!_finished)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: _visible ? 1 : 0,
+                  duration: MediaQuery.disableAnimationsOf(context)
+                      ? Duration.zero
+                      : const Duration(milliseconds: 350),
+                  onEnd: () {
+                    if (!_visible && mounted) {
+                      setState(() => _finished = true);
+                    }
+                  },
+                  child: DecoratedBox(
+                    key: Key('schedule_focus_${widget.eventId}'),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(widget.radius),
+                      border: Border.all(color: colors.accent, width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: colors.accent.withValues(
+                            alpha: colors.isDark ? 0.4 : 0.25,
+                          ),
+                          blurRadius: 10,
+                          spreadRadius: 1,
+                          blurStyle: BlurStyle.outer,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );

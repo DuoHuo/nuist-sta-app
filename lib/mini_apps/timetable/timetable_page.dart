@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'timetable_schedule_event_detail_sheet.dart';
+import 'timetable_schedule_event.dart';
 import 'timetable_change_alert.dart';
 import 'timetable_controller.dart';
 import 'timetable_export_page.dart';
@@ -15,10 +16,13 @@ import 'timetable_week_grid.dart';
 
 /// 课表周视图主页：顶栏 + PageView 翻周 + 网格。
 class TimetablePage extends StatefulWidget {
-  const TimetablePage({super.key, this.focusTomorrow = false});
+  const TimetablePage({super.key, this.focusTomorrow = false, this.focusEvent});
 
   /// 从明日通知进入时定位到明天所在周。
   final bool focusTomorrow;
+
+  /// 从考试安排进入时，定位并短暂强调这一场考试。
+  final ScheduleEvent? focusEvent;
 
   @override
   State<TimetablePage> createState() => _TimetablePageState();
@@ -28,6 +32,9 @@ class _TimetablePageState extends State<TimetablePage> {
   final _controller = TimetableController.instance;
   PageController? _pageController;
   bool _ready = false;
+  ScheduleEvent? _focusedEvent;
+  bool _eventFocusRevealed = false;
+  String? _focusUnavailableMessage;
 
   /// 每次同步结束的结果（成功 / 失败、是否自动），决定弹哪种 SnackBar。
   StreamSubscription<TimetableSyncOutcome>? _outcomeSub;
@@ -97,7 +104,9 @@ class _TimetablePageState extends State<TimetablePage> {
     if (!mounted) return;
     // 系统日期改了 / 跨周：打开时跟到本周；同周内手动翻过的周保留。
     _controller.followCurrentWeekIfChanged();
-    if (widget.focusTomorrow) {
+    if (widget.focusEvent != null) {
+      _prepareEventFocus();
+    } else if (widget.focusTomorrow) {
       final now = DateTime.now();
       final tomorrow = DateTime(now.year, now.month, now.day + 1);
       _controller.setViewingWeek(_controller.actualWeek(tomorrow) ?? 1);
@@ -110,7 +119,11 @@ class _TimetablePageState extends State<TimetablePage> {
       if (!mounted) return;
       // 打开页面时已处于过期状态（如上次进程留下的）：也提示一次。
       _maybeShowSessionExpired();
-      _openPendingCourse();
+      if (widget.focusEvent != null) {
+        _showUnavailableEventFocus();
+      } else {
+        _openPendingCourse();
+      }
     });
     await _controller.autoSyncIfNeeded();
   }
@@ -118,13 +131,60 @@ class _TimetablePageState extends State<TimetablePage> {
   @override
   void didUpdateWidget(covariant TimetablePage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.focusTomorrow && _ready) {
+    if (widget.focusEvent != oldWidget.focusEvent && _ready) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(_prepareEventFocus);
+        _showUnavailableEventFocus();
+      });
+    } else if (widget.focusTomorrow && _ready) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final now = DateTime.now();
         final tomorrow = DateTime(now.year, now.month, now.day + 1);
         _controller.setViewingWeek(_controller.actualWeek(tomorrow) ?? 1);
       });
+    }
+  }
+
+  void _prepareEventFocus() {
+    _focusedEvent = null;
+    _eventFocusRevealed = false;
+    _focusUnavailableMessage = null;
+    final target = widget.focusEvent;
+    if (target == null) return;
+    final event = _controller.scheduleEvents
+        .where((e) => e.id == target.id)
+        .firstOrNull;
+    if (event == null) {
+      _focusUnavailableMessage = '这场考试已更新或删除，请返回考试安排查看';
+      return;
+    }
+    final week = _controller.actualWeek(event.date);
+    if (week == null) {
+      _focusUnavailableMessage = '开学日期待同步，暂时无法定位考试周次';
+    } else if (week < 1 || week > _totalWeeks) {
+      _focusUnavailableMessage = '考试日期不在当前学期的课表范围内';
+    } else {
+      _focusedEvent = event;
+      _controller.setViewingWeek(week);
+    }
+  }
+
+  void _showUnavailableEventFocus() {
+    final message = _focusUnavailableMessage;
+    if (message == null) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+    final event = _controller.scheduleEvents
+        .where((e) => e.id == widget.focusEvent?.id)
+        .firstOrNull;
+    if (event != null) {
+      showScheduleEventDetailSheet(
+        context,
+        event: event,
+        controller: _controller,
+      );
     }
   }
 
@@ -395,6 +455,18 @@ class _TimetablePageState extends State<TimetablePage> {
                                 return WeekGrid(
                                   week: week,
                                   controller: _controller,
+                                  revealFocusedEvent: !_eventFocusRevealed,
+                                  onFocusedEventRevealed: () {
+                                    _eventFocusRevealed = true;
+                                  },
+                                  focusedEvent:
+                                      _focusedEvent != null &&
+                                          _controller.actualWeek(
+                                                _focusedEvent!.date,
+                                              ) ==
+                                              week
+                                      ? _focusedEvent
+                                      : null,
                                   onCourseTap: (cell) => showCourseDetailSheet(
                                     context,
                                     cell: cell,

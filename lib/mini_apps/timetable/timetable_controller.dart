@@ -10,6 +10,7 @@ import '../../core/logging/app_log.dart';
 import 'timetable_api.dart';
 import 'timetable_colors.dart';
 import 'timetable_date_edits.dart';
+import 'timetable_exam_parser.dart';
 import 'timetable_remaining_weeks.dart';
 import 'timetable_models.dart';
 import 'timetable_next_day_reminder.dart';
@@ -2409,7 +2410,9 @@ class TimetableController extends ChangeNotifier {
   Future<void> replaceJwxtExams(List<ScheduleEvent> exams) async {
     final fresh = [
       for (final e in exams)
-        e.copyWith(source: ScheduleSource.jwxt, kind: ScheduleKind.exam),
+        ExamParser.cleanImportedExam(
+          e.copyWith(source: ScheduleSource.jwxt, kind: ScheduleKind.exam),
+        ),
     ];
     final keys = {for (final e in fresh) e.jwxtKey};
     _scheduleEvents = List.unmodifiable([

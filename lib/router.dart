@@ -5,6 +5,7 @@ import 'core/app_manifest.dart';
 import 'mini_apps/campus_map/campus_place_detail_page.dart';
 import 'mini_apps/registry.dart';
 import 'mini_apps/timetable/timetable_page.dart';
+import 'mini_apps/timetable/timetable_schedule_event.dart';
 import 'mini_apps/web/mini_web_view_page.dart';
 import 'shell/home/home_page.dart';
 import 'shell/profile/about/about_page.dart';
@@ -91,9 +92,13 @@ GoRouter buildRouter() => GoRouter(
         }
         final child = manifest.isWeb
             ? MiniWebViewPage(manifest: manifest)
-            : id == 'timetable' &&
-                  state.uri.queryParameters['focus'] == 'tomorrow'
-            ? const TimetablePage(focusTomorrow: true)
+            : id == 'timetable'
+            ? TimetablePage(
+                focusTomorrow: state.uri.queryParameters['focus'] == 'tomorrow',
+                focusEvent: state.extra is ScheduleEvent
+                    ? state.extra as ScheduleEvent
+                    : null,
+              )
             : manifest.entry!(context);
         return MaterialPage<void>(key: state.pageKey, child: child);
       },

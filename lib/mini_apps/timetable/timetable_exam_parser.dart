@@ -3,7 +3,7 @@ import 'timetable_schedule_event.dart';
 /// 教务「我的考试安排」（studentWdksapApp / cxxsksap）响应解析（第 11 条，
 /// 本目录 README.md「教务考试安排接口」§2–§3）。纯函数，不做 IO、不打日志。
 ///
-/// 只取需要的字段：KCH / KCM / KSRQ / KSKSSJ / KSJSSJ / JASMC / JXLMC / ZWH / BZ /
+/// 只取需要的字段：KCH / KCM / KSRQ / KSKSSJ / KSJSSJ / JASMC / JXLMC / BZ /
 /// SFAPSJ。学号（XH / XSBH）、监考或主讲教师（ZJJSXM）与内部 ID 一律不读、不入库。
 class ExamParser {
   ExamParser._();
@@ -96,7 +96,7 @@ class ExamParser {
       start: start,
       end: end,
       location: room.isNotEmpty ? room : building,
-      note: composeNote(seat: _str(row['ZWH']), remark: _str(row['BZ'])),
+      note: cleanRemark(_str(row['BZ'])),
       courseCode: kch,
     );
     return ExamRowOk(exam);
@@ -110,11 +110,33 @@ class ExamParser {
     TimeOfDayMinutes start,
   ) => 'jwxt-exam:${ScheduleEvent.examKeyOf(courseCode, date, start)}';
 
-  /// 「座位号 12」+ 换行 + 备注；都为空 → 空串。
-  static String composeNote({required String seat, required String remark}) => [
-    if (seat.isNotEmpty) '座位号 $seat',
-    if (remark.isNotEmpty) remark,
-  ].join('\n');
+  /// 去掉教务自动生成的审核说明，保留其他考试提醒。
+  /// [removeLegacySeat] 仅用于原始教务缓存，移除旧版拼在首行的座位号。
+  static String cleanRemark(String note, {bool removeLegacySeat = false}) {
+    final lines = note.split(RegExp(r'\r\n?|\n'));
+    final kept = <String>[];
+    var removed = false;
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i].trim();
+      if (line.startsWith('考试审核通过生成') ||
+          (removeLegacySeat && i == 0 && _legacySeatLine.hasMatch(line))) {
+        removed = true;
+      } else {
+        kept.add(lines[i]);
+      }
+    }
+    return removed ? kept.join('\n').trim() : note;
+  }
+
+  /// 清理原始教务考试中的旧版备注；必须在叠加用户编辑前调用。
+  /// 手动日程和用户覆盖备注不经过此处理。
+  static ScheduleEvent cleanImportedExam(ScheduleEvent event) {
+    if (!event.isFromJwxt || !event.isExam) return event;
+    final note = cleanRemark(event.note, removeLegacySeat: true);
+    return note == event.note ? event : event.copyWith(note: note);
+  }
+
+  static final _legacySeatLine = RegExp(r'^座位号 \S+$');
 
   static final _dateRe = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$');
   static final _timeRe = RegExp(r'^(\d{2}):(\d{2})$');

@@ -9,7 +9,7 @@ import 'timetable_theme.dart';
 
 /// 课表考试在主页的直观入口（issue #30）：列出今天起往后的全部考试。
 /// 数据直接复用 [TimetableController.scheduleEvents]（课表同步时已从教务拉取），
-/// 不重复请求、不修改课表任何已有实现。
+/// 不重复请求，点击单场考试定位到课表中的对应安排。
 ///
 /// 「有考试就显示」：只要存在日期不早于今天的考试就列出，不设天数上限；
 /// 一场都没有时整张卡片隐藏（主页只少这一张卡，宫格入口仍在）。
@@ -111,7 +111,7 @@ class _TimetableExamsCardState extends State<TimetableExamsCard> {
                     controller: _controller,
                     event: e,
                     today: now,
-                    onTap: _openExams,
+                    onTap: () => context.push('/apps/timetable', extra: e),
                   ),
               ],
             ),
@@ -169,7 +169,7 @@ class _Header extends StatelessWidget {
   }
 }
 
-/// 一场考试的一行：色条 + 科目（考试胶囊）/ 日期 · 倒计时 · 时间 / 考场 / 座位备注。
+/// 一场考试的一行：色条 + 科目（考试胶囊）/ 日期 · 倒计时 · 时间 / 考场 / 备注。
 class _ExamRow extends StatelessWidget {
   const _ExamRow({
     required this.controller,
