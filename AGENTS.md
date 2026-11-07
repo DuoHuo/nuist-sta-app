@@ -107,6 +107,9 @@ fix(electricity): 修复只有一条记录时折线图不显示
 - **分层**：小程序按 `*_models` / `*_api` / `*_store` / `*_controller` / `*_page` / `*_manifest` 拆分，照现有小程序的写法来。
 - Store 的读写必须 `try/catch`，失败时退化成"没有存储"（widget 测试没有平台通道）。
 - 进入小程序用 `context.push('/apps/<id>')`，禁止用 `go`。
+- **返回交互**：Android 上可正常退回上一页的页面必须支持预测性返回的手势跟随、取消和完成，保留全局适配；禁止在 Android 上仅因页面是全屏表单或需要关闭图标就设置 `fullscreenDialog: true`。平台差异和实现方式见[返回行为与预测性返回](docs/architecture.md#返回行为与预测性返回)。
+- 返回拦截必须有明确原因，并通过 `PopScope.canPop` 提前反映当前状态；仅在保护未保存内容、关键写入或处理页面内部返回层级等必要场景拦截，原因消失后立即恢复。禁止使用 `WillPopScope` 或为省事长期设置 `canPop: false`，也禁止为了动画绕过内容保护和正确的返回顺序。
+- 普通提示必须提供退出路径；业务确需禁止关闭时，必须明确依据、作用范围和解除条件，不得把局部限制扩大为整页无法返回。
 - 门户接口一律走 `PortalSession`，不要自己实现登录；区分 `PortalNetworkError` / `PortalCredentialError` / `PortalLoginError`；`request` 的回调可能执行两次，不能放有副作用的逻辑。
 - 配色一律用 `AppPalette.of(context)`，它随当前主题明暗返回对应色值；`AppColors` / `AppColorsDark` 只用于构造主题。明暗默认跟随系统，用户也可以在「我的 → 设置」里手动选浅色或深色，所以取色时禁止假定浅色。
 - 注释和文档用中文，公开的类和方法应当写 `///` 文档注释；`lib/` 内部用相对路径 import。
@@ -131,6 +134,7 @@ fix(electricity): 修复只有一条记录时折线图不显示
 ## 9. 交付前验证
 
 - 必须通过：`dart format lib test` 后无差异、`flutter analyze` 零问题、`flutter test` 全绿、`cargo test` 正常通过。
+- 改动路由或返回拦截时，必须验证真实页面入口的返回行为，覆盖手势取消、完成及适用的拦截与恢复状态，检查明暗主题；不得只用另造的普通路由代替实际入口。真机手势未验证时必须说明。
 - 跑不了时如实说明，不得声称已通过。
 
 ## 10. PR（仅在用户要求时为其提供模板）

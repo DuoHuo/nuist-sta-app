@@ -15,7 +15,8 @@ Future<bool?> showJwxtCourseEditPage(
   bool autofocusNote = false,
 }) => Navigator.of(context).push<bool>(
   MaterialPageRoute(
-    fullscreenDialog: true,
+    // Android 的全屏对话框会禁用预测性返回，其他平台保留原有模态行为。
+    fullscreenDialog: Theme.of(context).platform != TargetPlatform.android,
     builder: (_) => JwxtCourseEditPage(
       controller: controller,
       cell: cell,

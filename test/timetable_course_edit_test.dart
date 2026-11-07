@@ -5,14 +5,17 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_detail_sheet.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
@@ -111,6 +114,32 @@ Future<void> _pumpLauncher(
   await tester.pumpAndSettle();
 }
 
+/// 通过系统通道发送返回手势，覆盖路由是否真正接收事件。
+Future<Object?> _backGesture(
+  WidgetTester tester,
+  String method, {
+  double progress = 0,
+  int edge = 0,
+}) async {
+  ByteData? response;
+  final width = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+  await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+    'flutter/backgesture',
+    const StandardMethodCodec().encodeMethodCall(
+      MethodCall(method, {
+        'touchOffset': [edge == 0 ? 5.0 : width - 5, 300.0],
+        'progress': progress,
+        'swipeEdge': edge,
+      }),
+    ),
+    (data) => response = data,
+  );
+  expect(response, isNotNull, reason: method);
+  final result = const StandardMethodCodec().decodeEnvelope(response!);
+  await tester.pumpAndSettle();
+  return result;
+}
+
 void main() {
   late Directory tmp;
   final origClock = TimetableController.clock;
@@ -130,6 +159,240 @@ void main() {
     TimetableStore.debugDirectory = null;
     _c.debugReset();
     if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+  });
+
+  group('表单预测性返回', () {
+    final jwxt = _course('j1', '测试课甲', source: CourseSource.jwxt);
+    final manual = _course('m1', '测试课乙');
+    final entries =
+        <
+          ({
+            String label,
+            Future<Object?> Function(BuildContext) open,
+            String nameKey,
+            String initialName,
+          })
+        >[
+          (
+            label: '教务课程编辑',
+            open: (context) => showJwxtCourseEditPage(
+              context,
+              controller: _c,
+              cell: _c
+                  .cellsForDay(_week, 1)
+                  .firstWhere((c) => c.course.id == 'j1'),
+            ),
+            nameKey: 'jwxt_edit_name',
+            initialName: jwxt.name,
+          ),
+          (
+            label: '手动课程添加',
+            open: (context) => showManualCourseForm(context, controller: _c),
+            nameKey: 'manual_course_name',
+            initialName: '',
+          ),
+          (
+            label: '手动课程编辑',
+            open: (context) =>
+                showManualCourseForm(context, controller: _c, initial: manual),
+            nameKey: 'manual_course_name',
+            initialName: manual.name,
+          ),
+          for (final kind in ScheduleKind.values)
+            for (final editing in [false, true])
+              (
+                label:
+                    '${kind == ScheduleKind.exam ? '考试' : '其他日程'}${editing ? '编辑' : '添加'}',
+                open: (context) => showScheduleEventEditPage(
+                  context,
+                  controller: _c,
+                  kind: kind,
+                  initial: editing
+                      ? ScheduleEvent(
+                          id: 'event-${kind.name}',
+                          kind: kind,
+                          source: ScheduleSource.manual,
+                          title: '测试安排',
+                          date: DateTime(2026, 10, 19),
+                          start: const TimeOfDayMinutes(10, 10),
+                          end: const TimeOfDayMinutes(11, 50),
+                        )
+                      : null,
+                ),
+                nameKey: 'schedule_form_title',
+                initialName: editing ? '测试安排' : '',
+              ),
+        ];
+
+    for (final (index, entry) in entries.indexed) {
+      final dark = index.isOdd;
+      final edge = dark ? 1 : 0;
+      testWidgets('${entry.label}真实入口支持跟随、取消和完成（深色 $dark）', (tester) async {
+        _load(jwxt: [jwxt], manual: [manual]);
+        var returned = false;
+        Object? result;
+        await _pumpLauncher(tester, (context) {
+          entry.open(context).then((value) {
+            returned = true;
+            result = value;
+          });
+        }, theme: dark ? appDarkTheme() : appLightTheme());
+        final field = find.byKey(Key(entry.nameKey));
+        final fieldController = tester.widget<TextFormField>(field).controller!;
+        final route = ModalRoute.of(tester.element(field))! as PageRoute;
+        final navigator = route.navigator!;
+        expect(fieldController.text, entry.initialName);
+        expect(route.fullscreenDialog, isFalse);
+        expect(route.popGestureEnabled, isTrue);
+
+        expect(
+          await _backGesture(tester, 'startBackGesture', edge: edge),
+          isTrue,
+        );
+        await _backGesture(
+          tester,
+          'updateBackGestureProgress',
+          progress: 0.4,
+          edge: edge,
+        );
+        expect(navigator.userGestureInProgress, isTrue);
+        expect(route.animation!.value, closeTo(0.6, 0.001));
+        await _backGesture(tester, 'cancelBackGesture', edge: edge);
+        expect(navigator.userGestureInProgress, isFalse);
+        expect(route.isCurrent, isTrue);
+        expect(route.animation!.value, 1);
+        expect(returned, isFalse);
+        expect(
+          tester.widget<TextFormField>(field).controller,
+          same(fieldController),
+        );
+        expect(fieldController.text, entry.initialName);
+
+        expect(
+          await _backGesture(tester, 'startBackGesture', edge: edge),
+          isTrue,
+        );
+        await _backGesture(
+          tester,
+          'updateBackGestureProgress',
+          progress: 0.4,
+          edge: edge,
+        );
+        await _backGesture(tester, 'commitBackGesture', edge: edge);
+        expect(field, findsNothing);
+        expect(find.byKey(const Key('launcher')), findsOneWidget);
+        expect(navigator.canPop(), isFalse);
+        expect(returned, isTrue);
+        expect(result, isNull, reason: '返回不应被调用方视为保存成功');
+      }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+    }
+
+    for (final entry in [entries[0], entries[2]]) {
+      final dark = entry.nameKey == 'manual_course_name';
+      testWidgets('${entry.label}未保存时拦截，继续编辑保留内容，恢复后允许手势', (tester) async {
+        _load(jwxt: [jwxt], manual: [manual]);
+        await _pumpLauncher(
+          tester,
+          (context) => entry.open(context),
+          theme: dark ? appDarkTheme() : appLightTheme(),
+        );
+        final field = find.byKey(Key(entry.nameKey));
+        final route = ModalRoute.of(tester.element(field))! as PageRoute;
+        await tester.enterText(field, '待保存修改');
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.pumpAndSettle();
+        expect(route.popDisposition, RoutePopDisposition.doNotPop);
+        expect(route.popGestureEnabled, isFalse);
+        expect(await _backGesture(tester, 'startBackGesture'), isFalse);
+        await _backGesture(tester, 'commitBackGesture');
+        expect(find.text('放弃未保存的修改？'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('course_form_discard_cancel')));
+        await tester.pumpAndSettle();
+        expect(route.isCurrent, isTrue);
+        expect(tester.widget<TextFormField>(field).controller!.text, '待保存修改');
+        expect(route.popGestureEnabled, isFalse);
+
+        await tester.enterText(field, entry.initialName);
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.pumpAndSettle();
+        expect(route.popDisposition, RoutePopDisposition.pop);
+        expect(route.popGestureEnabled, isTrue);
+        expect(await _backGesture(tester, 'startBackGesture'), isTrue);
+        await _backGesture(tester, 'updateBackGestureProgress', progress: 0.4);
+        await _backGesture(tester, 'commitBackGesture');
+        expect(field, findsNothing);
+        expect(find.byKey(const Key('launcher')), findsOneWidget);
+        expect(_c.jwxtCourses.single.name, jwxt.name);
+        expect(_c.manualCourses.single.name, manual.name);
+      }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+    }
+
+    testWidgets('从详情弹层进入编辑时预测性返回保留详情', (tester) async {
+      _load(jwxt: [jwxt]);
+      await _pumpLauncher(
+        tester,
+        (context) => showCourseDetailSheet(
+          context,
+          cell: _c.cellsForDay(_week, 1).single,
+          controller: _c,
+        ),
+        theme: appDarkTheme(),
+      );
+      final detail = find.byType(CourseDetailSheet);
+      final detailRoute = ModalRoute.of(tester.element(detail))!;
+      expect(detailRoute, isA<ModalBottomSheetRoute<void>>());
+      await tester.tap(find.byKey(const Key('course_detail_jwxt_edit')));
+      await tester.pumpAndSettle();
+      final field = find.byKey(const Key('jwxt_edit_name'));
+      final editRoute = ModalRoute.of(tester.element(field))! as PageRoute;
+      expect(await _backGesture(tester, 'startBackGesture', edge: 1), isTrue);
+      await _backGesture(
+        tester,
+        'updateBackGestureProgress',
+        progress: 0.4,
+        edge: 1,
+      );
+      expect(editRoute.animation!.value, closeTo(0.6, 0.001));
+      await _backGesture(tester, 'cancelBackGesture', edge: 1);
+      expect(editRoute.isCurrent, isTrue);
+      expect(editRoute.animation!.value, 1);
+      expect(tester.widget<TextFormField>(field).controller!.text, jwxt.name);
+      expect(detailRoute.isActive, isTrue);
+
+      expect(await _backGesture(tester, 'startBackGesture', edge: 1), isTrue);
+      await _backGesture(
+        tester,
+        'updateBackGestureProgress',
+        progress: 0.4,
+        edge: 1,
+      );
+      await _backGesture(tester, 'commitBackGesture', edge: 1);
+      expect(field, findsNothing);
+      expect(detail, findsOneWidget);
+      expect(ModalRoute.of(tester.element(detail)), same(detailRoute));
+      expect(detailRoute.isCurrent, isTrue);
+      expect(find.byKey(const Key('course_detail_jwxt_edit')), findsOneWidget);
+      expect(_c.courseEditOf(jwxt.id), isNull);
+      expect(find.text('已保存'), findsNothing);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+    testWidgets('Android 适配不改变 iOS 三类入口的全屏模态行为', (tester) async {
+      _load(jwxt: [jwxt], manual: [manual]);
+      for (final entry in [entries[0], entries[1], entries[3]]) {
+        await _pumpLauncher(
+          tester,
+          (context) => entry.open(context),
+          theme: appLightTheme(),
+        );
+        final route =
+            ModalRoute.of(tester.element(find.byKey(Key(entry.nameKey))))!
+                as PageRoute;
+        expect(route.fullscreenDialog, isTrue, reason: entry.label);
+        expect(route.popGestureEnabled, isFalse, reason: entry.label);
+        route.navigator!.pop();
+        await tester.pumpAndSettle();
+      }
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
   });
 
   for (final source in CourseSource.values) {

@@ -20,7 +20,8 @@ Future<ScheduleEvent?> showScheduleEventEditPage(
 }) {
   return Navigator.of(context).push<ScheduleEvent>(
     MaterialPageRoute(
-      fullscreenDialog: true,
+      // Android 的全屏对话框会禁用预测性返回，其他平台保留原有模态行为。
+      fullscreenDialog: Theme.of(context).platform != TargetPlatform.android,
       builder: (_) => ScheduleEventEditPage(
         controller: controller,
         kind: initial?.kind ?? kind,
@@ -249,6 +250,7 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
     return Scaffold(
       backgroundColor: TimetableTheme.colorsOf(context).pageBg,
       appBar: AppBar(
+        leading: const CloseButton(),
         title: Text(_pageTitle),
         backgroundColor: TimetableTheme.colorsOf(context).surface,
         surfaceTintColor: Colors.transparent,
