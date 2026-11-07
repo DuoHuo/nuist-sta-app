@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../../core/app_snack_bar.dart';
 import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/auth/passkey_store.dart';
 import '../../../core/auth/passkey_transfer.dart';
@@ -114,7 +115,7 @@ class _PortalExportPageState extends State<PortalExportPage> {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(text)));
+      ..showSnackBar(AppSnackBar(content: Text(text)));
   }
 
   @override

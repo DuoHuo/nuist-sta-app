@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../core/app_snack_bar.dart';
 import '../../core/app_select.dart';
 import 'campus_building_model.dart';
 import 'campus_map_api.dart';
@@ -431,12 +432,18 @@ class _ViewerMessage extends StatelessWidget {
                         );
                         if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('查看链接已复制')),
+                          AppSnackBar(
+                            tone: AppSnackBarTone.success,
+                            content: Text('查看链接已复制'),
+                          ),
                         );
                       } catch (_) {
                         if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('复制失败，请长按上方链接手动复制')),
+                          AppSnackBar(
+                            tone: AppSnackBarTone.error,
+                            content: Text('复制失败，请长按上方链接手动复制'),
+                          ),
                         );
                       }
                     },

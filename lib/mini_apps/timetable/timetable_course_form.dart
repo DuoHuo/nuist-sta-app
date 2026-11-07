@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/app_snack_bar.dart';
 import '../../core/app_select.dart';
 import 'timetable_api.dart';
 import 'timetable_color_picker.dart';
@@ -461,8 +462,12 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
       if (saved != null) {
         _leave(saved, true);
       } else if (completed) {
-        ScaffoldMessenger.maybeOf(context)
-            ?.showSnackBar(const SnackBar(content: Text('课程未能保存，请检查上课安排后重试。')));
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          AppSnackBar(
+            tone: AppSnackBarTone.error,
+            content: Text('课程未能保存，请检查上课安排后重试。'),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -473,7 +478,10 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
     final cell = widget.cell;
     if (cell == null || !cell.activeThisWeek || cell.date == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(content: Text('仅支持改单周单节课，请从对应周的课程详情进入修改。')),
+        AppSnackBar(
+          tone: AppSnackBarTone.warning,
+          content: Text('仅支持改单周单节课，请从对应周的课程详情进入修改。'),
+        ),
       );
       return;
     }
@@ -530,7 +538,10 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
         _leave(_entryCourse, true);
       } else if (completed) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          const SnackBar(content: Text('课程未能转为考试，请重新打开这次课程后重试。')),
+          AppSnackBar(
+            tone: AppSnackBarTone.error,
+            content: Text('课程未能转为考试，请重新打开这次课程后重试。'),
+          ),
         );
       }
     } finally {

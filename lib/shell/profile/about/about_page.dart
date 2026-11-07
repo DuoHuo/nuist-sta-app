@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../../../core/app_snack_bar.dart';
 import '../../../core/app_info.dart';
 import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
@@ -65,7 +66,9 @@ class _AboutPageState extends State<AboutPage> {
   void _message(String text) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(text)));
+      ..showSnackBar(
+        AppSnackBar(tone: AppSnackBarTone.success, content: Text(text)),
+      );
   }
 
   @override

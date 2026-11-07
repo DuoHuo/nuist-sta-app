@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
 import '../../core/logging/app_log.dart';
 import 'timetable_controller.dart';
@@ -90,14 +91,19 @@ class _TimetableExportPageState extends State<TimetableExportPage> {
     try {
       await Clipboard.setData(ClipboardData(text: text));
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(message)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          AppSnackBar(tone: AppSnackBarTone.success, content: Text(message)),
+        );
       }
     } catch (error, stackTrace) {
       _log.warning('copy.failed', error: error, stackTrace: stackTrace);
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('复制失败，请长按口令手动复制')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          AppSnackBar(
+            tone: AppSnackBarTone.error,
+            content: Text('复制失败，请长按口令手动复制'),
+          ),
+        );
       }
     }
   }

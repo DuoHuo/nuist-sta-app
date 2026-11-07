@@ -2,6 +2,7 @@ import 'timetable_persistence_feedback.dart';
 
 import 'package:flutter/material.dart';
 
+import '../../core/app_snack_bar.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_edit_page.dart';
 import 'timetable_schedule_event_layout.dart';
@@ -148,7 +149,11 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
     if (!mounted) return;
     if (navigator.canPop()) navigator.pop();
     messenger?.showSnackBar(
-      const SnackBar(behavior: SnackBarBehavior.floating, content: Text('已删除')),
+      AppSnackBar(
+        tone: AppSnackBarTone.success,
+        behavior: SnackBarBehavior.floating,
+        content: Text('已删除'),
+      ),
     );
   }
 
@@ -167,7 +172,8 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
     if (!mounted) return;
     setState(() => _busy = false);
     messenger?.showSnackBar(
-      SnackBar(
+      AppSnackBar(
+        tone: ok ? AppSnackBarTone.success : AppSnackBarTone.error,
         behavior: SnackBarBehavior.floating,
         content: Text(ok ? '已恢复原考试' : '恢复失败'),
       ),

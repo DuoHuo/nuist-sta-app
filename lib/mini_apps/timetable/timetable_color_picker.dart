@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/app_snack_bar.dart';
 import 'timetable_controller.dart';
 import 'timetable_course_color.dart';
 import 'timetable_date_edits.dart';
@@ -691,7 +692,10 @@ class CourseColorRow extends StatelessWidget {
             );
             if (!ok && context.mounted) {
               ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                const SnackBar(content: Text('颜色保存失败，请重新打开课程后重试')),
+                AppSnackBar(
+                  tone: AppSnackBarTone.error,
+                  content: Text('颜色保存失败，请重新打开课程后重试'),
+                ),
               );
             }
           } else {

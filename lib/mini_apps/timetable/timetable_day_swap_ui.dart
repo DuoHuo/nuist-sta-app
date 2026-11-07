@@ -2,6 +2,7 @@ import 'timetable_persistence_feedback.dart';
 
 import 'package:flutter/material.dart';
 
+import '../../core/app_snack_bar.dart';
 import 'timetable_controller.dart';
 import 'timetable_date_edits.dart';
 import 'timetable_theme.dart';
@@ -73,7 +74,7 @@ String? daySwapErrorFor(TimetableController c, DateTime a, DateTime b) {
 }
 
 void _snack(ScaffoldMessengerState? m, String text) => m?.showSnackBar(
-  SnackBar(behavior: SnackBarBehavior.floating, content: Text(text)),
+  AppSnackBar(behavior: SnackBarBehavior.floating, content: Text(text)),
 );
 
 /// 打开整天调课页；[initialFrom] 为长按表头带入的「原日期」。

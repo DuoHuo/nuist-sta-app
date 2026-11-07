@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/app_snack_bar.dart';
 import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/auth/passkey_store.dart';
 import '../../../core/auth/passkey_transfer.dart';
@@ -184,7 +185,9 @@ class _PortalImportPageState extends State<PortalImportPage> {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(text)));
+      ..showSnackBar(
+        AppSnackBar(tone: AppSnackBarTone.error, content: Text(text)),
+      );
   }
 
   // ==================== 界面 ====================

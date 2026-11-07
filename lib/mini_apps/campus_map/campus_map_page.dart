@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/app_snack_bar.dart';
+import '../../core/colors.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/schedule/weekly_classes.dart';
 import 'shuttle_api.dart';
@@ -357,31 +359,39 @@ class _CampusMapPageState extends State<CampusMapPage>
 
   void _showShuttleToast() {
     if (!mounted) return;
-    final palette = colors;
     _shuttleToast = OverlayEntry(
-      builder: (context) => Positioned(
-        left: 32,
-        right: 32,
-        bottom: MediaQuery.paddingOf(context).bottom + 88,
-        child: IgnorePointer(
-          child: Center(
-            child: Material(
-              color: palette.ink,
-              borderRadius: BorderRadius.circular(20),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 10,
+      builder: (context) {
+        final palette = AppPalette.of(context);
+        return Positioned(
+          left: 16,
+          right: 16,
+          // 为地图底部控件留空间，并在键盘出现时跟随可用区域上移。
+          bottom: max(
+            MediaQuery.paddingOf(context).bottom + 88,
+            MediaQuery.viewInsetsOf(context).bottom + 12,
+          ),
+          child: IgnorePointer(
+            child: Semantics(
+              liveRegion: true,
+              child: Material(
+                color: palette.surface,
+                elevation: 3,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(color: palette.divider),
                 ),
-                child: Text(
-                  '车辆位置暂时无法更新',
-                  style: TextStyle(color: palette.surface, fontSize: 13),
+                child: const Padding(
+                  padding: EdgeInsets.only(left: 16, right: 4),
+                  child: AppSnackBarContent(
+                    tone: AppSnackBarTone.warning,
+                    child: Text('车辆位置暂时无法更新'),
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
     Overlay.of(context).insert(_shuttleToast!);
     _shuttleToastTimer = Timer(const Duration(seconds: 2), () {
@@ -744,7 +754,7 @@ class _CampusMapPageState extends State<CampusMapPage>
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(content: Text(text), behavior: SnackBarBehavior.floating),
+        AppSnackBar(content: Text(text), behavior: SnackBarBehavior.floating),
       );
   }
 
@@ -1928,15 +1938,13 @@ class _CampusMapPageState extends State<CampusMapPage>
           return GestureDetector(
             onTap: () {
               if (reserved) {
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(const SnackBar(content: Text('卫星图暂未接入，接口已预留')));
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(AppSnackBar(content: Text('卫星图暂未接入，接口已预留')));
                 return;
               }
               if (layer == CampusMapLayer.transit && !_hasTransitStops()) {
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(const SnackBar(content: Text('校园暂无公共交通覆盖数据')));
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(AppSnackBar(content: Text('校园暂无公共交通覆盖数据')));
               }
               setState(() => _layer = layer);
               _syncShuttleLifecycle();

@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_snack_bar.dart';
 import 'package:nuist_sta_app/core/colors.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/shell/profile/profile_list_tile.dart';
@@ -41,6 +42,79 @@ double _contrast(Color a, Color b) {
 }
 
 void main() {
+  group('底部提示布局', () {
+    for (final dark in [false, true]) {
+      testWidgets('${dark ? '深色' : '浅色'}窄屏大字带键盘：文字与操作同排且可点击', (tester) async {
+        tester.view.physicalSize = const Size(320, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        var calls = 0;
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: dark ? appDarkTheme() : appLightTheme(),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: const TextScaler.linear(2),
+                viewInsets: const EdgeInsets.only(bottom: 220),
+                padding: const EdgeInsets.only(top: 24, bottom: 24),
+              ),
+              child: child!,
+            ),
+            home: Scaffold(
+              bottomNavigationBar: const SizedBox(height: 64),
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                    AppSnackBar(
+                      content: const Text('登录已过期，请重新登录后继续同步'),
+                      tone: AppSnackBarTone.warning,
+                      persist: false,
+                      action: SnackBarAction(
+                        label: '重新登录',
+                        onPressed: () => calls++,
+                      ),
+                    ),
+                  ),
+                  child: const Text('显示提示'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('显示提示'));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        final textRect = tester.getRect(find.text('登录已过期，请重新登录后继续同步'));
+        final actionRect = tester.getRect(find.byType(SnackBarAction));
+        expect(textRect.right, lessThanOrEqualTo(actionRect.left));
+        expect(actionRect.center.dy, closeTo(textRect.center.dy, 1));
+        expect(actionRect.height, greaterThanOrEqualTo(48));
+        expect(textRect.left, greaterThanOrEqualTo(16));
+        expect(actionRect.right, lessThanOrEqualTo(304));
+        expect(textRect.bottom, lessThan(580));
+        final barContext = tester.element(find.byType(SnackBar));
+        final theme = Theme.of(barContext).snackBarTheme;
+        final palette = dark ? AppPalette.dark : AppPalette.light;
+        expect(theme.backgroundColor, palette.surface);
+        expect(
+          _contrast(theme.contentTextStyle!.color!, palette.surface),
+          greaterThanOrEqualTo(4.5),
+        );
+        expect(
+          _contrast(
+            theme.actionTextColor!,
+            Color.alphaBlend(theme.actionBackgroundColor!, palette.surface),
+          ),
+          greaterThanOrEqualTo(4.5),
+        );
+        await tester.tap(find.text('重新登录'));
+        await tester.pumpAndSettle();
+        expect(calls, 1);
+        expect(find.byType(SnackBar), findsNothing);
+      });
+    }
+  });
+
   group('色板', () {
     test('浅色与深色色板的每个字段都不同值（除刻意共用的 tabInactive）', () {
       final light = AppPalette.light;

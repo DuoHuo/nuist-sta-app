@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/app_snack_bar.dart';
 import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/auth/passkey_store.dart';
 import '../../../core/auth/portal_exceptions.dart';
@@ -119,8 +120,9 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
       if (!mounted) return;
       await _load();
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('解绑未完成，请重试')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        AppSnackBar(tone: AppSnackBarTone.error, content: Text('解绑未完成，请重试')),
+      );
       return;
     }
     if (!mounted) return;
@@ -130,7 +132,10 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
       _testResult = null;
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(reloaded ? '已解除绑定' : '已解除绑定，部分卡片刷新或本地数据清理失败')),
+      AppSnackBar(
+        tone: reloaded ? AppSnackBarTone.success : AppSnackBarTone.warning,
+        content: Text(reloaded ? '已解除绑定' : '已解除绑定，部分卡片刷新或本地数据清理失败'),
+      ),
     );
   }
 

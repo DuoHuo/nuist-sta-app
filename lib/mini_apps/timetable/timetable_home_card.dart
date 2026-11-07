@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_snack_bar.dart';
 import 'timetable_schedule_home_row.dart';
 import 'timetable_controller.dart';
 import 'timetable_schedule_event.dart';
@@ -112,8 +113,9 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
     if (!mounted) return;
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        AppSnackBar(
           key: Key('home_card_sync_snackbar'),
+          tone: AppSnackBarTone.error,
           content: Text(TimetableCopy.homeRefreshFailed),
         ),
       );

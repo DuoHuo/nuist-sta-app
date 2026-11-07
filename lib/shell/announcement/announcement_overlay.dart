@@ -280,11 +280,7 @@ class _BlockingDialogState extends State<_BlockingDialog> {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
-      child: Dialog(
-        backgroundColor: AppPalette.of(context).pageBg,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: AnnouncementListPanel(items: [widget.item], dismissible: false),
-      ),
+      child: AnnouncementDialog(items: [widget.item], dismissible: false),
     );
   }
 }

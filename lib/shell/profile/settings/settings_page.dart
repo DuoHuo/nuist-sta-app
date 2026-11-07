@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../../core/app_snack_bar.dart';
 import '../../../core/app_select.dart';
 import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
@@ -276,7 +277,7 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
   void _message(String text) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(text)));
+      ..showSnackBar(AppSnackBar(content: Text(text)));
   }
 
   Future<void> _enableVerbose() async {
@@ -457,8 +458,12 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
       });
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('日志刷新失败，已保留当前内容')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          AppSnackBar(
+            tone: AppSnackBarTone.error,
+            content: Text('日志刷新失败，已保留当前内容'),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _refreshing = false);

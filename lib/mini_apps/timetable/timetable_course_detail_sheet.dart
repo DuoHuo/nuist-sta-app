@@ -2,6 +2,7 @@ import 'timetable_persistence_feedback.dart';
 
 import 'package:flutter/material.dart';
 
+import '../../core/app_snack_bar.dart';
 import 'timetable_color_picker.dart';
 import 'timetable_course_color.dart';
 import 'timetable_delete_scope_sheet.dart';
@@ -414,7 +415,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     setState(() => _restoring = false);
     if (navigator.canPop()) navigator.pop();
     messenger?.showSnackBar(
-      SnackBar(
+      AppSnackBar(
+        tone: ok ? AppSnackBarTone.success : AppSnackBarTone.error,
         behavior: SnackBarBehavior.floating,
         content: Text(
           ok ? (edit!.isWeeksScoped ? '已恢复按周修改' : '已恢复这一天') : '恢复失败',
@@ -465,7 +467,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     setState(() => _restoring = false);
     if (navigator.canPop()) navigator.pop();
     messenger?.showSnackBar(
-      SnackBar(
+      AppSnackBar(
+        tone: ok ? AppSnackBarTone.success : AppSnackBarTone.error,
         behavior: SnackBarBehavior.floating,
         content: Text(ok ? '已恢复原位置' : '恢复失败'),
       ),
@@ -489,7 +492,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     setState(() => _restoring = false);
     if (navigator.canPop()) navigator.pop();
     messenger?.showSnackBar(
-      SnackBar(
+      AppSnackBar(
+        tone: ok ? AppSnackBarTone.success : AppSnackBarTone.error,
         behavior: SnackBarBehavior.floating,
         content: Text(ok ? '已恢复原课程' : '恢复失败'),
       ),
@@ -519,7 +523,11 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     if (!saved || !mounted) return;
     if (navigator.canPop()) navigator.pop();
     messenger?.showSnackBar(
-      const SnackBar(behavior: SnackBarBehavior.floating, content: Text('已保存')),
+      AppSnackBar(
+        tone: AppSnackBarTone.success,
+        behavior: SnackBarBehavior.floating,
+        content: Text('已保存'),
+      ),
     );
   }
 
@@ -551,7 +559,10 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
           if (!mounted) return;
           if (navigator.canPop()) navigator.pop();
           messenger?.showSnackBar(
-            SnackBar(
+            AppSnackBar(
+              tone: rec == null
+                  ? AppSnackBarTone.error
+                  : AppSnackBarTone.success,
               behavior: SnackBarBehavior.floating,
               content: Text(rec == null ? '删除失败' : '已删除这一天的课'),
             ),
@@ -562,7 +573,10 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
           if (!mounted) return;
           if (navigator.canPop()) navigator.pop();
           messenger?.showSnackBar(
-            SnackBar(
+            AppSnackBar(
+              tone: rec == null
+                  ? AppSnackBarTone.error
+                  : AppSnackBarTone.success,
               behavior: SnackBarBehavior.floating,
               content: Text(rec == null ? '删除失败' : '已删除同星期匹配的课'),
             ),
@@ -613,7 +627,11 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     if (!mounted) return;
     if (navigator.canPop()) navigator.pop();
     messenger?.showSnackBar(
-      const SnackBar(behavior: SnackBarBehavior.floating, content: Text('已删除')),
+      AppSnackBar(
+        tone: AppSnackBarTone.success,
+        behavior: SnackBarBehavior.floating,
+        content: Text('已删除'),
+      ),
     );
   }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/app_snack_bar.dart';
 import '../../core/logging/app_log.dart';
 import 'timetable_store.dart';
 import 'timetable_theme.dart';
@@ -20,8 +21,9 @@ Future<T?> withTimetablePersistenceFeedback<T>(
       if (onError != null) {
         onError(message);
       } else {
-        ScaffoldMessenger.maybeOf(context)
-            ?.showSnackBar(SnackBar(content: Text(message)));
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          AppSnackBar(tone: AppSnackBarTone.error, content: Text(message)),
+        );
       }
     }
     return null;

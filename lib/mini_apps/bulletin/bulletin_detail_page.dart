@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
 import 'bulletin_api.dart';
 import 'bulletin_attachment_preview_dialog.dart';
@@ -117,7 +118,9 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
   void _message(String text) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(text)));
+      ..showSnackBar(
+        AppSnackBar(tone: AppSnackBarTone.error, content: Text(text)),
+      );
   }
 
   @override

@@ -3,11 +3,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/colors.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_api.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_controller.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_models.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_overlay.dart';
+import 'package:nuist_sta_app/shell/announcement/announcement_sheet.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_web_page.dart';
 // 复用现有 WebView 插件的平台接口，不新增测试依赖。
 // ignore: depend_on_referenced_packages
@@ -57,6 +59,128 @@ bool redDot(WidgetTester tester) =>
     tester.widget<Badge>(find.byType(Badge)).isLabelVisible;
 
 void main() {
+  for (final dark in [false, true]) {
+    for (final scenario in [
+      (name: '小屏', size: const Size(320, 640), scale: 1.0, keyboard: 0.0),
+      (name: '大字', size: const Size(320, 640), scale: 2.0, keyboard: 0.0),
+      (name: '横屏', size: const Size(740, 360), scale: 1.3, keyboard: 0.0),
+      (name: '键盘', size: const Size(375, 667), scale: 1.3, keyboard: 300.0),
+      (name: '平板', size: const Size(1024, 768), scale: 1.0, keyboard: 0.0),
+    ]) {
+      testWidgets('${dark ? '深色' : '浅色'}公告${scenario.name}下正文可读、末尾可达并能关闭', (
+        tester,
+      ) async {
+        tester.view.physicalSize = scenario.size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final c = controllerWith([
+          Announcement(
+            id: 'long',
+            title: '这是一条需要换行显示完整内容的公告标题',
+            summary: '摘要与正文之间保持紧凑而清晰的间距',
+            content: [
+              '第一段保留段内换行\n这一行属于同一段。',
+              for (var i = 0; i < 12; i++) '第 $i 段：正文可以滚动阅读，不能被固定高度裁掉。',
+              '最后一段',
+            ].join('\n\n'),
+          ),
+          a('末条', content: '全部公告阅读完成'),
+        ]);
+        addTearDown(c.dispose);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: dark ? appDarkTheme() : appLightTheme(),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: TextScaler.linear(scenario.scale),
+                viewInsets: EdgeInsets.only(bottom: scenario.keyboard),
+              ),
+              child: child!,
+            ),
+            home: Scaffold(
+              appBar: AppBar(actions: [AnnouncementBell(controller: c)]),
+              body: AnnouncementOverlay(
+                controller: c,
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('公告'));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        final panel = tester.getRect(find.byType(AnnouncementListPanel));
+        expect(panel.left, greaterThanOrEqualTo(20));
+        expect(panel.right, lessThanOrEqualTo(scenario.size.width - 20));
+        expect(panel.width, lessThanOrEqualTo(480));
+        expect(
+          panel.bottom,
+          lessThanOrEqualTo(scenario.size.height - scenario.keyboard - 24),
+        );
+        final dialog = tester.widget<Dialog>(find.byType(Dialog));
+        expect(
+          dialog.backgroundColor,
+          dark ? AppPalette.dark.surface : AppPalette.light.surface,
+        );
+        expect(find.text('第一段保留段内换行\n这一行属于同一段。'), findsOneWidget);
+        await tester.ensureVisible(find.text('全部公告阅读完成'));
+        await tester.pumpAndSettle();
+        expect(find.text('全部公告阅读完成').hitTestable(), findsOneWidget);
+        await tester.ensureVisible(find.text('我知道了'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('我知道了'));
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsNothing);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets('${dark ? '深色' : '浅色'}空公告也有关闭操作，长链接能完整换行', (tester) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final c = controllerWith([]);
+      addTearDown(c.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: dark ? appDarkTheme() : appLightTheme(),
+          home: Scaffold(
+            appBar: AppBar(actions: [AnnouncementBell(controller: c)]),
+          ),
+        ),
+      );
+      await c.ensureStarted();
+      await tester.tap(find.byTooltip('公告'));
+      await tester.pumpAndSettle();
+      expect(find.text('暂无公告'), findsOneWidget);
+      await tester.tap(find.text('我知道了'));
+      await tester.pumpAndSettle();
+      final context = tester.element(find.byType(AnnouncementBell));
+      showAnnouncementDialog(context, [
+        a(
+          '链接',
+          link: const AnnouncementLink(
+            label: '查看本次更新的完整内容与详细使用说明',
+            url: 'https://example.com',
+          ),
+        ),
+      ]);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final button = tester.getRect(find.byType(TextButton));
+      final label = tester.getRect(find.text('查看本次更新的完整内容与详细使用说明'));
+      expect(button.contains(label.topLeft), isTrue);
+      expect(
+        button.contains(label.bottomRight - const Offset(0.1, 0.1)),
+        isTrue,
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byType(Dialog), findsNothing);
+    });
+  }
+
   testWidgets('公告网页仅在有历史时拦截返回，旧查询不能覆盖最新状态', (tester) async {
     final previousPlatform = WebViewPlatform.instance;
     final platform = _AnnouncementWebViewPlatform();

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
 import 'announcement_models.dart';
 
@@ -75,8 +76,9 @@ class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
 
   void _copyLink() {
     Clipboard.setData(ClipboardData(text: widget.link.url)).catchError((_) {});
-    ScaffoldMessenger.maybeOf(context)
-        ?.showSnackBar(const SnackBar(content: Text('链接已复制')));
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      AppSnackBar(tone: AppSnackBarTone.success, content: Text('链接已复制')),
+    );
   }
 
   // 系统在手势开始前就需要知道能否退出，不能等返回回调里再异步查询。

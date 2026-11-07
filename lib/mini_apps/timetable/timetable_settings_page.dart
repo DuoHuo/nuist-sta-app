@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
 import 'timetable_appearance_page.dart';
 import 'timetable_change_log_page.dart';
@@ -353,7 +354,8 @@ Future<void> _confirmRestoreAll(
   if (changed == null || !context.mounted) return;
   final messenger = ScaffoldMessenger.maybeOf(context);
   messenger?.showSnackBar(
-    SnackBar(
+    AppSnackBar(
+      tone: changed ? AppSnackBarTone.success : AppSnackBarTone.info,
       behavior: SnackBarBehavior.floating,
       content: Text(changed ? '已恢复教务课程' : '没有需要恢复的修改'),
     ),
@@ -401,7 +403,10 @@ class _TimetableWidgetSettingsPageState
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text(TtSettingsText.pinWidgetPermissionHint)),
+        AppSnackBar(
+          tone: AppSnackBarTone.warning,
+          content: Text(TtSettingsText.pinWidgetPermissionHint),
+        ),
       );
     });
   }
@@ -1301,7 +1306,7 @@ class _ReminderCardState extends State<_ReminderCard>
     await TimetableStore.saveReminderIntroSeen();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
+      AppSnackBar(
         content: const Text(TtSettingsText.reminderIntro),
         duration: const Duration(seconds: 10),
         action: SnackBarAction(label: '查看说明', onPressed: _openGuide),

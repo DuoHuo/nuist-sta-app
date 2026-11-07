@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'app_snack_bar.dart';
 import 'colors.dart';
 
 /// 浅色主题。
@@ -38,6 +39,26 @@ ThemeData _buildTheme(Brightness brightness) {
         ),
     scaffoldBackgroundColor: palette.pageBg,
     dividerColor: palette.divider,
+    snackBarTheme: SnackBarThemeData(
+      backgroundColor: palette.surface,
+      contentTextStyle: TextStyle(
+        color: palette.titleText,
+        fontSize: 15,
+        height: 1.35,
+      ),
+      actionTextColor: appSnackBarActionColor(palette),
+      actionBackgroundColor: palette.accent.withValues(alpha: 0.08),
+      disabledActionTextColor: palette.labelText,
+      elevation: 3,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: palette.divider),
+      ),
+      behavior: SnackBarBehavior.floating,
+      insetPadding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      // 操作始终与正文同一行；正文在按钮左侧自然换行。
+      actionOverflowThreshold: 1,
+    ),
     appBarTheme: AppBarTheme(
       backgroundColor: palette.surface,
       surfaceTintColor: Colors.transparent,

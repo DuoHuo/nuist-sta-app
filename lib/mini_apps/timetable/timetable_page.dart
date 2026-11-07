@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_snack_bar.dart';
 import 'timetable_schedule_event_detail_sheet.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_change_alert.dart';
@@ -180,7 +181,7 @@ class _TimetablePageState extends State<TimetablePage> {
     final message = _focusUnavailableMessage;
     if (message == null) return;
     ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+        .showSnackBar(AppSnackBar(content: Text(message)));
     final event = _controller.scheduleEvents
         .where((e) => e.id == widget.focusEvent?.id)
         .firstOrNull;
@@ -238,8 +239,9 @@ class _TimetablePageState extends State<TimetablePage> {
     messenger.hideCurrentSnackBar();
     var fired = false;
     messenger.showSnackBar(
-      SnackBar(
+      AppSnackBar(
         key: const Key('timetable_sync_snackbar'),
+        tone: AppSnackBarTone.warning,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 6),
         // 带操作的 SnackBar 默认不自动关闭（persist），这里显式到时关闭。
@@ -280,8 +282,9 @@ class _TimetablePageState extends State<TimetablePage> {
         return;
       }
       messenger.showSnackBar(
-        const SnackBar(
+        AppSnackBar(
           key: Key('timetable_sync_snackbar'),
+          tone: AppSnackBarTone.success,
           behavior: SnackBarBehavior.floating,
           duration: Duration(seconds: 2),
           persist: false,
@@ -320,8 +323,9 @@ class _TimetablePageState extends State<TimetablePage> {
     }
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
-      SnackBar(
+      AppSnackBar(
         key: const Key('timetable_sync_snackbar'),
+        tone: AppSnackBarTone.error,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 4),
         // 「重试」等操作不让它常驻：4 秒到时自动关闭。

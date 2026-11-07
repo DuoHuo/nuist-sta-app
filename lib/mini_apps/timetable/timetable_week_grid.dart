@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/app_snack_bar.dart';
 import 'timetable_day_swap_ui.dart';
 import 'timetable_edit_scope_sheet.dart';
 import 'timetable_schedule_event.dart';
@@ -1048,14 +1049,19 @@ class _WeekGridState extends State<WeekGrid> {
         final msg = result.conflictMessage;
         if (msg != null) {
           messenger?.showSnackBar(
-            SnackBar(behavior: SnackBarBehavior.floating, content: Text(msg)),
+            AppSnackBar(
+              tone: AppSnackBarTone.warning,
+              behavior: SnackBarBehavior.floating,
+              content: Text(msg),
+            ),
           );
         }
       case MoveStatus.noChange:
         break;
       case MoveStatus.error:
         messenger?.showSnackBar(
-          const SnackBar(
+          AppSnackBar(
+            tone: AppSnackBarTone.error,
             behavior: SnackBarBehavior.floating,
             content: Text('调课失败，课程未改动'),
           ),
