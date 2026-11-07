@@ -1128,7 +1128,7 @@ class _StatusCell extends StatelessWidget {
     final Color bg;
     final Widget? mark;
     if (free == total) {
-      bg = palette.success.withValues(alpha: 0.18);
+      bg = palette.success.withValues(alpha: 0.4);
       mark = null;
     } else if (free > 0) {
       bg = palette.warning.withValues(alpha: 0.18);
@@ -1147,7 +1147,7 @@ class _StatusCell extends StatelessWidget {
     }
     return Opacity(
       // 用户特意把已过的时段勾回来，这一列就得和其他选中列一样清楚。
-      opacity: !dimmed ? 1 : (over ? 0.3 : 0.4),
+      opacity: !dimmed ? 1 : (over ? 0.45 : 0.6),
       child: Container(
         width: width,
         height: 26,

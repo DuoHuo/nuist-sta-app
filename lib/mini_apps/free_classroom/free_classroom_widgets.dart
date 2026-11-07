@@ -11,8 +11,8 @@ const kClassroomColor = Color(0xFF722ED1);
 
 /// 空教室小程序里几处「置灰 / 占用」的填充色。
 ///
-/// 浅色沿用设计稿的浅灰，深色下浅灰会亮过卡片底色，改成按色板取分隔线级别
-/// 的灰。集中放在这里，调用方只传 [AppPalette]，不必各自判断明暗。
+/// 置灰标签保持轻量，占用状态格与卡片底色拉开对比。
+/// 集中按 [AppPalette] 取色，调用方不必各自判断明暗。
 abstract final class ClassroomFillColors {
   /// 置灰标签、已过时段格的底色。
   static Color muted(AppPalette palette) =>
@@ -21,9 +21,9 @@ abstract final class ClassroomFillColors {
   /// 置灰态的前景文字与图标。
   static Color mutedForeground(AppPalette palette) => palette.chevron;
 
-  /// 「所选时段全被占用」状态格的底色，比 [muted] 再深一档。
+  /// 「所选时段全被占用」状态格的底色，比 [muted] 更明显。
   static Color busy(AppPalette palette) =>
-      palette.isDark ? palette.divider : const Color(0xFFEDEFF2);
+      Color.alphaBlend(palette.hint.withValues(alpha: 0.3), palette.surface);
 }
 
 /// 圆角卡，底色取当前色板的 surface。用 Material 而不是 Container 画底色，
