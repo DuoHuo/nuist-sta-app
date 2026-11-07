@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/app_select.dart';
 import 'timetable_api.dart';
 import 'timetable_color_picker.dart';
 import 'timetable_colors.dart';
@@ -611,26 +612,78 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
 
   Widget _dropdown<T>({
     required Key key,
+    required String label,
     required T value,
-    required List<DropdownMenuItem<T>> items,
+    required List<AppSelectOption<T>> options,
     required ValueChanged<T> onChanged,
-  }) => DropdownButtonFormField<T>(
-    key: key,
-    initialValue: value,
-    isExpanded: true,
-    itemHeight: null,
-    decoration: _decoration(),
-    style: TextStyle(
-      color: TimetableTheme.colorsOf(context).titleText,
-      fontSize: 16,
+  }) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: AppSelectFormField<T>(
+      key: key,
+      label: label,
+      initialValue: value,
+      textStyle: const TextStyle(fontSize: 16),
+      options: options,
+      onChanged: _saving ? null : onChanged,
     ),
-    dropdownColor: TimetableTheme.colorsOf(context).surface,
-    items: items,
-    onChanged: _saving
-        ? null
-        : (value) {
-            if (value != null) onChanged(value);
-          },
+  );
+
+  Widget _periodFields() => LayoutBuilder(
+    builder: (context, constraints) {
+      final start = KeyedSubtree(
+        key: const Key('course_form_start'),
+        child: _dropdown<int>(
+          key: Key('${_prefix}start'),
+          label: '开始节次',
+          value: _start,
+          options: [
+            for (final node in _nodes)
+              AppSelectOption(value: node, label: '第 $node 节'),
+          ],
+          onChanged: _changeStart,
+        ),
+      );
+      final end = KeyedSubtree(
+        key: const Key('course_form_end'),
+        child: _dropdown<int>(
+          key: Key('${_prefix}end_$_start'),
+          label: '结束节次',
+          value: _end,
+          options: [
+            for (final node in _nodes.where((node) => node >= _start))
+              AppSelectOption(value: node, label: '第 $node 节'),
+          ],
+          onChanged: _changeEnd,
+        ),
+      );
+      final text = TextPainter(
+        text: TextSpan(
+          text: '第 ${_nodes.last} 节',
+          style: DefaultTextStyle.of(context).style.copyWith(fontSize: 16),
+        ),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      // 两侧内边距、箭头及其间距也要计入，防止窄屏把节次拆成多行。
+      final requiredWidth = (text.width + 64) * 2 + 40;
+      text.dispose();
+      if (constraints.maxWidth < requiredWidth) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [start, const Text('至'), end],
+        );
+      }
+      return Row(
+        children: [
+          Expanded(child: start),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: Text('至'),
+          ),
+          Expanded(child: end),
+        ],
+      );
+    },
   );
 
   @override
@@ -719,24 +772,25 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
                               '课程类型',
                               _dropdown<CourseKind>(
                                 key: const Key('course_form_kind'),
+                                label: '课程类型',
                                 value: _kind,
-                                items: [
-                                  const DropdownMenuItem(
+                                options: [
+                                  const AppSelectOption(
                                     value: CourseKind.standard,
-                                    child: Text('普通课'),
+                                    label: '普通课',
                                   ),
-                                  const DropdownMenuItem(
+                                  const AppSelectOption(
                                     value: CourseKind.lab,
-                                    child: Text('实验课'),
+                                    label: '实验课',
                                   ),
-                                  const DropdownMenuItem(
+                                  const AppSelectOption(
                                     value: CourseKind.pe,
-                                    child: Text('体育课'),
+                                    label: '体育课',
                                   ),
                                   if (_isEdit)
-                                    const DropdownMenuItem(
+                                    const AppSelectOption(
                                       value: CourseKind.exam,
-                                      child: Text('考试'),
+                                      label: '考试',
                                     ),
                                 ],
                                 onChanged: (value) =>
@@ -777,73 +831,20 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
                               '星期',
                               _dropdown<int>(
                                 key: Key('${_prefix}day'),
+                                label: '星期',
                                 value: _day,
-                                items: [
+                                options: [
                                   for (var day = 1; day <= 7; day++)
-                                    DropdownMenuItem(
+                                    AppSelectOption(
                                       value: day,
-                                      child: Text(_dayLabels[day - 1]),
+                                      label: _dayLabels[day - 1],
                                     ),
                                 ],
                                 onChanged: (value) =>
                                     setState(() => _day = value),
                               ),
                             ),
-                            _row(
-                              '节次',
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: KeyedSubtree(
-                                      key: const Key('course_form_start'),
-                                      child: Semantics(
-                                        label: '开始节次',
-                                        child: _dropdown<int>(
-                                          key: Key('${_prefix}start'),
-                                          value: _start,
-                                          items: [
-                                            for (final node in _nodes)
-                                              DropdownMenuItem(
-                                                value: node,
-                                                child: Text('第 $node 节'),
-                                              ),
-                                          ],
-                                          onChanged: _changeStart,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  const Padding(
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                    ),
-                                    child: Text('至'),
-                                  ),
-                                  Expanded(
-                                    child: KeyedSubtree(
-                                      key: const Key('course_form_end'),
-                                      child: Semantics(
-                                        label: '结束节次',
-                                        child: _dropdown<int>(
-                                          key: Key('${_prefix}end_$_start'),
-                                          value: _end,
-                                          items: [
-                                            for (final node in _nodes.where(
-                                              (node) => node >= _start,
-                                            ))
-                                              DropdownMenuItem(
-                                                value: node,
-                                                child: Text('第 $node 节'),
-                                              ),
-                                          ],
-                                          onChanged: _changeEnd,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                            _row('节次', _periodFields()),
                             _row(
                               '实际时间',
                               Semantics(

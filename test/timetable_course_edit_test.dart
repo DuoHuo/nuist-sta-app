@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
@@ -316,16 +317,16 @@ void main() {
       expect(find.byKey(const Key('course_form_scope_sheet')), findsNothing);
       await tester.enterText(find.byKey(const Key('jwxt_edit_name')), '测试课乙');
       tester
-          .widget<DropdownButtonFormField<CourseKind>>(
+          .widget<AppSelectFormField<CourseKind>>(
             find.byKey(const Key('course_form_kind')),
           )
           .onChanged!(CourseKind.lab);
       await tester.pump();
       final start = find.descendant(
         of: find.byKey(const Key('course_form_start')),
-        matching: find.byType(DropdownButtonFormField<int>),
+        matching: find.byType(AppSelectFormField<int>),
       );
-      tester.widget<DropdownButtonFormField<int>>(start).onChanged!(5);
+      tester.widget<AppSelectFormField<int>>(start).onChanged!(5);
       await tester.pump();
       await tester.tap(find.byKey(const Key('jwxt_edit_save')));
       await tester.pumpAndSettle();

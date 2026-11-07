@@ -560,10 +560,14 @@ void main() {
       expect(_c.settings.reminderEnabled, isTrue);
       await tester.tap(find.byKey(const Key('tt_settings_reminder_lead')));
       await tester.pumpAndSettle();
+      Finder leadChoice(int minutes) => find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.text('$minutes 分钟'),
+      );
       for (final m in kReminderLeadChoices) {
-        expect(find.widgetWithText(ListTile, '$m 分钟'), findsOneWidget);
+        expect(leadChoice(m), findsOneWidget);
       }
-      await tester.tap(find.widgetWithText(ListTile, '30 分钟'));
+      await tester.tap(leadChoice(30));
       await settleIo(tester);
       expect(_c.settings.reminderLeadMinutes, 30);
     });

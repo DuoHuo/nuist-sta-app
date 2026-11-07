@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_building_model.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_building_model_page.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_api.dart';
@@ -173,9 +174,16 @@ void main() {
     ),
   );
   Future<void> select(WidgetTester tester, String label) async {
-    await tester.tap(find.byType(DropdownButtonFormField<int>));
+    await tester.tap(find.byType(AppSelectField<int>));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text(label).last);
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.byType(TextField),
+      ),
+      label,
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.text(label).last);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));

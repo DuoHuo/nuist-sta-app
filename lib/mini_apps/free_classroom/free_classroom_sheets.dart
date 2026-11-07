@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/app_select.dart';
 import '../../core/colors.dart';
 import 'free_classroom_controller.dart';
 import 'free_classroom_models.dart';
@@ -39,10 +40,22 @@ Future<SheetOption<T>?> showOptionSheet<T>(
   required String title,
   required List<SheetOption<T>> options,
   required T? current,
-}) => _present<SheetOption<T>>(
-  context,
-  (_) => _OptionSheet<T>(title: title, options: options, current: current),
-);
+}) async {
+  final picked = await showAppSelectSheet<SheetOption<T>>(
+    context,
+    title: title,
+    options: [
+      for (final option in options)
+        AppSelectOption(
+          value: option,
+          label: option.label,
+          hint: option.hint.isEmpty ? null : option.hint,
+        ),
+    ],
+    selected: options.where((option) => option.value == current).firstOrNull,
+  );
+  return picked?.value;
+}
 
 /// 单间教室的逐节占用详情。
 Future<void> showRoomDetailSheet(
@@ -168,91 +181,6 @@ class _BuildingTile extends StatelessWidget {
               color: selected ? kClassroomColor : palette.titleText,
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-// ==================== 通用单选 ====================
-
-class _OptionSheet<T> extends StatelessWidget {
-  const _OptionSheet({
-    required this.title,
-    required this.options,
-    required this.current,
-  });
-
-  final String title;
-  final List<SheetOption<T>> options;
-  final T? current;
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _SheetTitle(title),
-            const SizedBox(height: 6),
-            for (final o in options)
-              _OptionRow(
-                label: o.label,
-                hint: o.hint,
-                selected: o.value == current,
-                onTap: () => Navigator.of(context).pop(o),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _OptionRow extends StatelessWidget {
-  const _OptionRow({
-    required this.label,
-    required this.hint,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final String hint;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = AppPalette.of(context);
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                  color: selected ? kClassroomColor : palette.titleText,
-                ),
-              ),
-            ),
-            Text(hint, style: TextStyle(fontSize: 12, color: palette.hint)),
-            const SizedBox(width: 10),
-            Icon(
-              selected ? Icons.check_circle : Icons.circle_outlined,
-              size: 18,
-              color: selected ? kClassroomColor : palette.chevron,
-            ),
-          ],
         ),
       ),
     );

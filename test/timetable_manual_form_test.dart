@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -119,7 +120,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('添加课程'), findsWidgets);
     tester
-        .widget<DropdownButtonFormField<int>>(
+        .widget<AppSelectFormField<int>>(
           find.byKey(const Key('manual_course_day')),
         )
         .onChanged!(1);
@@ -312,15 +313,32 @@ void main() {
     await tester.pumpAndSettle();
     Finder field(String name) => find.descendant(
       of: find.byKey(Key('course_form_$name')),
-      matching: find.byType(DropdownButtonFormField<int>),
+      matching: find.byType(AppSelectFormField<int>),
     );
     int? value(String name) =>
-        tester.widget<DropdownButtonFormField<int>>(field(name)).initialValue;
+        tester.widget<AppSelectFormField<int>>(field(name)).initialValue;
     Future<void> startAt(int start) async {
-      tester.widget<DropdownButtonFormField<int>>(field('start')).onChanged!(
-        start,
+      await tester.ensureVisible(field('start'));
+      await tester.pumpAndSettle();
+      await tester.tap(field('start'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.byType(TextField),
+        ),
+        '第 $start 节',
       );
-      await tester.pump();
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find
+            .descendant(
+              of: find.byType(BottomSheet),
+              matching: find.text('第 $start 节'),
+            )
+            .last,
+      );
+      await tester.pumpAndSettle();
     }
 
     expect((value('start'), value('end')), (1, 2));

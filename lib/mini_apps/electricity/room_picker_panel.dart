@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/app_select.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/colors.dart';
 import 'electricity_api.dart';
@@ -233,56 +234,26 @@ class _Dropdown extends StatelessWidget {
     final active = enabled && !loading && options.isNotEmpty;
     return Row(
       children: [
-        SizedBox(
-          width: 44,
-          child: Text(
-            label,
-            style: TextStyle(fontSize: 14, color: palette.labelText),
-          ),
-        ),
+        Text(label, style: TextStyle(fontSize: 14, color: palette.labelText)),
+        const SizedBox(width: 12),
         Expanded(
-          child: Container(
-            height: 40,
-            padding: const EdgeInsets.only(left: 12, right: 8),
-            decoration: BoxDecoration(
-              color: palette.pageBg,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<ElecOption>(
-                value: value,
-                isExpanded: true,
-                items: [
-                  for (final item in options)
-                    DropdownMenuItem(
-                      value: item,
-                      child: Text(item.name, overflow: TextOverflow.ellipsis),
-                    ),
-                ],
-                onChanged: active ? onChanged : null,
-                hint: Text(
-                  loading
-                      ? '加载中…'
-                      : !enabled
-                      ? '请先选择上一级'
-                      : options.isEmpty && items != null
-                      ? '暂无数据'
-                      : '请选择',
-                  style: TextStyle(fontSize: 14, color: palette.hint),
-                ),
-                style: TextStyle(fontSize: 14, color: palette.titleText),
-                icon: loading
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Icon(
-                        Icons.expand_more,
-                        color: active ? palette.labelText : palette.hint,
-                      ),
-              ),
-            ),
+          child: AppSelectField<ElecOption>(
+            label: label,
+            value: value,
+            options: [
+              for (final item in options)
+                AppSelectOption(value: item, label: item.name),
+            ],
+            enabled: enabled,
+            loading: loading,
+            onChanged: active ? onChanged : null,
+            hint: loading
+                ? '加载中…'
+                : !enabled
+                ? '请先选择上一级'
+                : options.isEmpty && items != null
+                ? '暂无数据'
+                : '请选择',
           ),
         ),
       ],

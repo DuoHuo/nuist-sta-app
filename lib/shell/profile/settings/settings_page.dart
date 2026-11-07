@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../../core/app_select.dart';
 import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
 import '../../../core/logging/log_export_service.dart';
@@ -538,25 +539,15 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
                       ],
                     ),
                     const SizedBox(height: 8),
-                    DropdownButtonFormField<String>(
-                      key: ValueKey('log_scope:$_scope'),
-                      initialValue: _scope,
-                      isExpanded: true,
-                      itemHeight: null,
-                      decoration: const InputDecoration(
-                        labelText: '模块',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: [
-                        const DropdownMenuItem(
-                          value: null,
-                          child: Text('所有模块'),
-                        ),
+                    AppSelectField<String?>(
+                      key: const Key('log_scope'),
+                      label: '模块',
+                      showLabel: true,
+                      value: _scope,
+                      options: [
+                        const AppSelectOption(value: null, label: '所有模块'),
                         for (final scope in _scopes)
-                          DropdownMenuItem(
-                            value: scope,
-                            child: Text(scope, overflow: TextOverflow.ellipsis),
-                          ),
+                          AppSelectOption(value: scope, label: scope),
                       ],
                       onChanged: (value) => setState(() => _scope = value),
                     ),

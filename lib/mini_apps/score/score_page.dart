@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_select.dart';
 import '../../core/colors.dart';
 import '../../core/time_format.dart';
 import 'score_card.dart' show kScoreColor;
@@ -215,27 +216,15 @@ class _TermPicker extends StatelessWidget {
   final ValueChanged<String?> onChanged;
 
   @override
-  Widget build(BuildContext context) {
-    final palette = AppPalette.of(context);
-    return _Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-        child: DropdownButtonHideUnderline(
-          child: DropdownButton<String>(
-            value: selected,
-            isExpanded: true,
-            icon: const Icon(Icons.expand_more),
-            style: TextStyle(fontSize: 14, color: palette.titleText),
-            items: [
-              for (final term in terms)
-                DropdownMenuItem(value: term, child: Text(term)),
-            ],
-            onChanged: onChanged,
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => AppSelectField<String>(
+    label: '学期',
+    showLabel: true,
+    value: selected,
+    options: [
+      for (final term in terms) AppSelectOption(value: term, label: term),
+    ],
+    onChanged: onChanged,
+  );
 }
 
 class _CourseSection extends StatelessWidget {

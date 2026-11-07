@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../core/app_select.dart';
 import 'campus_building_model.dart';
 import 'campus_map_api.dart';
 import 'campus_map_widgets.dart';
@@ -196,40 +197,17 @@ class _CampusBuildingModelPageState extends State<CampusBuildingModelPage> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: DropdownButtonFormField<int>(
-                key: ValueKey(_levelIndex),
-                initialValue: _levelIndex ?? _wholeBuilding,
-                isExpanded: true,
-                itemHeight: null,
-                decoration: const InputDecoration(
-                  labelText: '查看范围',
-                  border: OutlineInputBorder(),
-                  contentPadding: EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 16,
-                  ),
-                ),
-                items: [
-                  const DropdownMenuItem(
-                    value: _wholeBuilding,
-                    child: SizedBox(
-                      height: 48,
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text('完整模型'),
-                      ),
-                    ),
-                  ),
+              child: AppSelectField<int>(
+                key: const Key('building_model_scope'),
+                label: '查看范围',
+                showLabel: true,
+                value: _levelIndex ?? _wholeBuilding,
+                options: [
+                  const AppSelectOption(value: _wholeBuilding, label: '完整模型'),
                   for (final floor in widget.model.floors)
-                    DropdownMenuItem(
+                    AppSelectOption(
                       value: floor.levelIndex,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(minHeight: 48),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(floor.displayName),
-                        ),
-                      ),
+                      label: floor.displayName,
                     ),
                 ],
                 onChanged: (value) => setState(() {

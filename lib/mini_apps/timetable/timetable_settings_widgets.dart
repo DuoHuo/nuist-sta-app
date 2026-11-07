@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../core/app_select.dart';
 import 'timetable_theme.dart';
 
 /// 课表设置与外观页共用的分组，标题和行文字使用同一条左边线。
@@ -388,36 +389,19 @@ class TimetableSettingsChoiceRow<T> extends StatelessWidget {
   final bool showInlineOptions;
 
   Future<void> _pick(BuildContext context) async {
-    final picked = await showModalBottomSheet<T>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  title,
-                  style: TimetableSettingsRow.textStyle(context),
-                ),
-              ),
-              for (final option in options.entries)
-                ListTile(
-                  title: Text('${option.value}${unit == null ? '' : ' $unit'}'),
-                  selected: option.key == selected,
-                  trailing: option.key == selected
-                      ? const Icon(Icons.check)
-                      : null,
-                  onTap: () => Navigator.pop(context, option.key),
-                ),
-            ],
+    final picked = await showAppSelectSheet<T>(
+      context,
+      title: title,
+      selected: selected,
+      options: [
+        for (final option in options.entries)
+          AppSelectOption(
+            value: option.key,
+            label: '${option.value}${unit == null ? '' : ' $unit'}',
           ),
-        ),
-      ),
+      ],
     );
-    if (picked != null) onSelected(picked);
+    if (context.mounted && picked != null) onSelected(picked.value);
   }
 
   @override

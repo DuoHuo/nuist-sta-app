@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -82,7 +83,7 @@ Future<void> _openForm(WidgetTester tester, {Course? initial}) async {
   await tester.pumpAndSettle();
   if (initial == null) {
     tester
-        .widget<DropdownButtonFormField<int>>(
+        .widget<AppSelectFormField<int>>(
           find.byKey(const Key('manual_course_day')),
         )
         .onChanged!(1);

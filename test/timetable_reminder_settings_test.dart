@@ -1,6 +1,7 @@
 // 设置页「提醒」「小组件」卡片与后台运行引导页（接口文档 §1–§2）。全部为构造数据。
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -135,44 +136,55 @@ void main() {
   testWidgets('开关走 setReminderEnabled，提前时间走 setReminderLeadMinutes', (
     tester,
   ) async {
-    final a = _FakeActions(_perm());
-    await pump(tester, a);
-    expect(find.text(TtSettingsText.reminderIntro), findsNothing);
-    expect(sw(tester, 'tt_settings_reminder'), isFalse);
-    await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-    await settleIo(tester);
-    expect(a.calls, ['enabled:true']);
-    expect(sw(tester, 'tt_settings_reminder'), isTrue);
-    final lead = find.byKey(const Key('tt_settings_reminder_lead'));
-    await tester.tap(lead);
-    await tester.pumpAndSettle();
-    Finder seg(int m) => find.widgetWithText(ListTile, '$m 分钟');
-    for (final m in kReminderLeadChoices) {
-      expect(seg(m), findsOneWidget);
+    final semantics = tester.ensureSemantics();
+    try {
+      final a = _FakeActions(_perm());
+      await pump(tester, a);
+      expect(find.text(TtSettingsText.reminderIntro), findsNothing);
+      expect(sw(tester, 'tt_settings_reminder'), isFalse);
+      await tester.tap(find.byKey(const Key('tt_settings_reminder')));
+      await settleIo(tester);
+      expect(a.calls, ['enabled:true']);
+      expect(sw(tester, 'tt_settings_reminder'), isTrue);
+      final lead = find.byKey(const Key('tt_settings_reminder_lead'));
+      await tester.tap(lead);
+      await tester.pumpAndSettle();
+      Finder seg(int m) => find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.widgetWithText(TextButton, '$m 分钟'),
+      );
+      for (final m in kReminderLeadChoices) {
+        expect(seg(m), findsOneWidget);
+      }
+      expect(
+        find.descendant(of: lead, matching: find.text('20 分钟')),
+        findsNothing,
+      );
+      expect(
+        tester.getSemantics(seg(15)).flagsCollection.isSelected,
+        ui.Tristate.isTrue,
+      );
+      await tester.tap(seg(30));
+      await tester.pumpAndSettle();
+      expect(a.calls.last, 'lead:30');
+      await settleIo(tester);
+      expect(find.text(TtSettingsText.reminderIntro), findsOneWidget);
+      expect(
+        (await tester.runAsync(TimetableStore.readReminderIntroSeen))!,
+        isTrue,
+      );
+      ScaffoldMessenger.of(tester.element(find.byType(TimetableSettingsPage)))
+          .removeCurrentSnackBar();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tt_settings_reminder')));
+      await settleIo(tester);
+      await tester.tap(find.byKey(const Key('tt_settings_reminder')));
+      await settleIo(tester);
+      expect(sw(tester, 'tt_settings_reminder'), isTrue);
+      expect(find.text(TtSettingsText.reminderIntro), findsNothing);
+    } finally {
+      semantics.dispose();
     }
-    expect(
-      find.descendant(of: lead, matching: find.text('20 分钟')),
-      findsNothing,
-    );
-    expect(tester.widget<ListTile>(seg(15)).selected, isTrue);
-    await tester.tap(seg(30));
-    await tester.pumpAndSettle();
-    expect(a.calls.last, 'lead:30');
-    await settleIo(tester);
-    expect(find.text(TtSettingsText.reminderIntro), findsOneWidget);
-    expect(
-      (await tester.runAsync(TimetableStore.readReminderIntroSeen))!,
-      isTrue,
-    );
-    ScaffoldMessenger.of(tester.element(find.byType(TimetableSettingsPage)))
-        .removeCurrentSnackBar();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-    await settleIo(tester);
-    await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-    await settleIo(tester);
-    expect(sw(tester, 'tt_settings_reminder'), isTrue);
-    expect(find.text(TtSettingsText.reminderIntro), findsNothing);
   });
 
   test('不在档位的提前量按 15 显示', () {
@@ -270,40 +282,59 @@ void main() {
   });
 
   testWidgets('小组件「同时显示」1/2/3 节：默认 2，可切换', (tester) async {
-    final a = _FakeActions(_perm());
-    await pump(tester, a);
-    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-    await tester.pumpAndSettle();
-    final row = find.byKey(const Key('tt_settings_widgetCourseCount'));
-    expect(
-      find.descendant(of: row, matching: find.text(TtSettingsText.courseCount)),
-      findsOneWidget,
-    );
-    await tester.tap(row);
-    await tester.pumpAndSettle();
-    Finder seg(int n) => find.widgetWithText(ListTile, '$n');
-    for (final n in kWidgetCourseCountOptions) {
-      expect(seg(n), findsOneWidget);
+    final semantics = tester.ensureSemantics();
+    try {
+      final a = _FakeActions(_perm());
+      await pump(tester, a);
+      await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+      await tester.pumpAndSettle();
+      final row = find.byKey(const Key('tt_settings_widgetCourseCount'));
+      expect(
+        find.descendant(
+          of: row,
+          matching: find.text(TtSettingsText.courseCount),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+      Finder seg(int n) => find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.widgetWithText(TextButton, '$n'),
+      );
+      for (final n in kWidgetCourseCountOptions) {
+        expect(seg(n), findsOneWidget);
+      }
+      expect(
+        tester.getSemantics(seg(2)).flagsCollection.isSelected,
+        ui.Tristate.isTrue,
+      );
+      await tester.tap(seg(3));
+      await settleIo(tester);
+      expect(_c.settings.widgetCourseCount, 3);
+      expect(
+        find.descendant(of: row, matching: find.text('3')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('tt_widget_preview_course_2')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('tt_widget_preview_course_1')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const ValueKey('tt_widget_preview_time_1')),
+            )
+            .data,
+        contains('20:30–21:20'),
+      );
+    } finally {
+      semantics.dispose();
     }
-    expect(tester.widget<ListTile>(seg(2)).selected, isTrue);
-    await tester.tap(seg(3));
-    await settleIo(tester);
-    expect(_c.settings.widgetCourseCount, 3);
-    expect(find.descendant(of: row, matching: find.text('3')), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('tt_widget_preview_course_2')),
-      findsNothing,
-    );
-    expect(
-      find.byKey(const ValueKey('tt_widget_preview_course_1')),
-      findsOneWidget,
-    );
-    expect(
-      tester
-          .widget<Text>(find.byKey(const ValueKey('tt_widget_preview_time_1')))
-          .data,
-      contains('20:30–21:20'),
-    );
   });
 
   testWidgets('4×2 同日课程均分高度、固定间距，详情变少也不在底部堆积留白', (tester) async {

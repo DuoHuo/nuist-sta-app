@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/free_classroom/free_classroom_controller.dart';
 import 'package:nuist_sta_app/mini_apps/free_classroom/free_classroom_models.dart';
 import 'package:nuist_sta_app/mini_apps/free_classroom/free_classroom_page.dart';
+import 'package:nuist_sta_app/mini_apps/free_classroom/free_classroom_sheets.dart';
 
 ClassroomDay _fakeDay() {
   final now = DateTime.now();
@@ -152,6 +153,48 @@ Future<void> _pumpPage(WidgetTester tester, {double width = 360}) async {
 }
 
 void main() {
+  testWidgets('单选面板保留数量提示并区分全部选项与取消', (tester) async {
+    const options = [
+      SheetOption<String>(value: null, label: '全部教室'),
+      SheetOption<String>(value: '实验室', label: '实验室', hint: '3 间'),
+    ];
+    SheetOption<String>? picked;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                picked = await showOptionSheet<String>(
+                  context,
+                  title: '房间类型',
+                  options: options,
+                  current: '实验室',
+                );
+              },
+              child: const Text('选择类型'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('选择类型'));
+    await tester.pumpAndSettle();
+    expect(find.text('3 间'), findsOneWidget);
+    await tester.tap(find.text('全部教室'));
+    await tester.pumpAndSettle();
+    expect(picked, same(options.first));
+    expect(picked?.value, isNull);
+
+    await tester.tap(find.text('选择类型'));
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(picked, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('360 宽下列表、表头、筛选卡都布局出来且无溢出', (tester) async {
     await _pumpPage(tester);
     expect(tester.takeException(), isNull);
