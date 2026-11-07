@@ -10,14 +10,17 @@ import 'score_models.dart';
 
 /// 成绩详情页：最近学期默认置顶，支持按学期查看全部课程成绩。
 class ScorePage extends StatefulWidget {
-  const ScorePage({super.key});
+  const ScorePage({super.key, this.controller});
+
+  /// 可注入独立状态；默认与学习页共享成绩数据。
+  final ScoreController? controller;
 
   @override
   State<ScorePage> createState() => _ScorePageState();
 }
 
 class _ScorePageState extends State<ScorePage> {
-  final _controller = ScoreController.instance;
+  late final _controller = widget.controller ?? ScoreController.instance;
   String? _selectedTerm;
 
   @override
@@ -63,26 +66,37 @@ class _ScorePageState extends State<ScorePage> {
           final summary = report.summaryFor(term);
           return RefreshIndicator(
             onRefresh: c.refresh,
-            child: ListView(
+            child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-              children: [
-                _OverviewCard(
-                  controller: c,
-                  report: report,
-                  summary: summary,
-                  term: term,
-                ),
-                if (terms.length > 1) ...[
-                  const SizedBox(height: 12),
-                  _TermPicker(
-                    terms: terms,
-                    selected: term,
-                    onChanged: (value) => setState(() => _selectedTerm = value),
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      children: [
+                        _OverviewCard(
+                          controller: c,
+                          report: report,
+                          summary: summary,
+                          term: term,
+                        ),
+                        if (terms.length > 1) ...[
+                          const SizedBox(height: 12),
+                          _TermPicker(
+                            terms: terms,
+                            selected: term,
+                            onChanged: (value) =>
+                                setState(() => _selectedTerm = value),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
-                ],
-                const SizedBox(height: 12),
-                _CourseSection(records: records),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                  sliver: _CourseSection(records: records),
+                ),
               ],
             ),
           );
@@ -235,40 +249,55 @@ class _CourseSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
-    return _Card(
-      child: records.isEmpty
-          ? Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                '这个学期还没有成绩记录',
-                style: TextStyle(fontSize: 13, color: palette.hint),
-              ),
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                  child: Text(
-                    '课程成绩',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: palette.titleText,
-                    ),
-                  ),
-                ),
-                for (var i = 0; i < records.length; i++) ...[
-                  _CourseTile(record: records[i]),
-                  if (i != records.length - 1)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 16),
-                      child: Divider(height: 1, color: palette.rowDivider),
-                    ),
-                ],
-                const SizedBox(height: 4),
-              ],
+    if (records.isEmpty) {
+      return SliverToBoxAdapter(
+        child: _Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              '这个学期还没有成绩记录',
+              style: TextStyle(fontSize: 13, color: palette.hint),
             ),
+          ),
+        ),
+      );
+    }
+    // 卡片背景由 sliver 统一绘制，课程行只在接近视口时构建和布局。
+    return DecoratedSliver(
+      decoration: BoxDecoration(
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      sliver: SliverList.builder(
+        itemCount: records.length + 1,
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Text(
+                '课程成绩',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: palette.titleText,
+                ),
+              ),
+            );
+          }
+          return Column(
+            children: [
+              _CourseTile(record: records[index - 1]),
+              if (index < records.length)
+                Padding(
+                  padding: const EdgeInsets.only(left: 16),
+                  child: Divider(height: 1, color: palette.rowDivider),
+                )
+              else
+                const SizedBox(height: 4),
+            ],
+          );
+        },
+      ),
     );
   }
 }

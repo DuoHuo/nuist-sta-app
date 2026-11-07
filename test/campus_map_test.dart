@@ -9,7 +9,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/colors.dart';
 import 'package:nuist_sta_app/core/schedule/weekly_classes.dart';
 import 'package:nuist_sta_app/core/theme.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_canvas.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_heading.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_location.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_navigation.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_page.dart';
@@ -60,6 +62,8 @@ void main() {
     WidgetTester tester, {
     CampusMapSource source = const UnconfiguredCampusMapSource(),
     UserLocationSource location = const DeviceUserLocation(),
+    HeadingSource heading = const DeviceHeading(),
+    String styleUrl = '',
     Size size = const Size(390, 844),
     double textScale = 1,
     ThemeData? theme,
@@ -83,6 +87,8 @@ void main() {
           child: CampusMapPage(
             source: source,
             location: location,
+            heading: heading,
+            styleUrl: styleUrl,
             useNativeMap: false,
           ),
         ),
@@ -125,6 +131,38 @@ void main() {
       }
     }
   });
+
+  for (final dark in [false, true]) {
+    testWidgets('朝向变化仅更新画布且退出停止传感器（深色：$dark）', (tester) async {
+      final heading = _TestHeading();
+      addTearDown(heading.values.close);
+      await mount(
+        tester,
+        source: TestSource(),
+        location: _LiveLocation(),
+        heading: heading,
+        styleUrl: 'test-style',
+        theme: dark ? appDarkTheme() : appLightTheme(),
+      );
+      final scaffold = tester.widget<Scaffold>(find.byType(Scaffold));
+      CampusMapCanvas canvas() => tester.widget(find.byType(CampusMapCanvas));
+      expect(heading.values.hasListener, isTrue);
+      heading.values.add(30);
+      await tester.pumpAndSettle();
+      expect(canvas().userHeading, 30);
+      expect(tester.widget<Scaffold>(find.byType(Scaffold)), same(scaffold));
+      heading.values.add(31);
+      await tester.pumpAndSettle();
+      expect(canvas().userHeading, 30, reason: '小角度抖动不触发更新');
+      heading.values.add(60);
+      await tester.pumpAndSettle();
+      expect(canvas().userHeading, 60);
+      expect(tester.widget<Scaffold>(find.byType(Scaffold)), same(scaffold));
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(heading.values.hasListener, isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('unconfigured UI has no invented places and exposes layers', (
     tester,
@@ -371,4 +409,33 @@ class _FixedLocation implements UserLocationSource {
   @override
   Future<GeoPoint> current() async =>
       const GeoPoint(longitude: 118.70695, latitude: 32.20275);
+}
+
+class _TestHeading implements HeadingSource {
+  final values = StreamController<double>();
+
+  @override
+  Stream<double> watch() => values.stream;
+}
+
+class _LiveLocation implements LiveUserLocationSource {
+  static const _fix = LocationFix(
+    point: GeoPoint(longitude: 118.70695, latitude: 32.20275),
+    accuracyM: 5,
+  );
+
+  @override
+  Future<bool> ready() async => true;
+
+  @override
+  Future<LocationFix?> lastKnown() async => _fix;
+
+  @override
+  Future<LocationFix> currentFix() async => _fix;
+
+  @override
+  Future<GeoPoint> current() async => _fix.point;
+
+  @override
+  Stream<LocationFix> watch() => const Stream.empty();
 }

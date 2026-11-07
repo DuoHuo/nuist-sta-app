@@ -1,6 +1,11 @@
+import 'dart:io';
+
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_next_day_reminder.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 
 TodayCourseItem course(
   int node, {
@@ -19,6 +24,7 @@ TodayCourseItem course(
 );
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   const periods = [
     PeriodTime(node: 1, start: '08:00', end: '08:45'),
     PeriodTime(node: 3, start: '10:10', end: '10:55'),
@@ -215,5 +221,64 @@ void main() {
     expect(due(DateTime(2026, 10, 28, 22), last: '2026-10-27'), isTrue);
     expect(due(DateTime(2026, 10, 27, 21), minute: 1260), isTrue);
     expect(nextDayReminderDateKey(DateTime(2026, 1, 2, 23)), '2026-01-02');
+  });
+
+  test('400 天提醒保留学期末调课，假期不查询课程或挤掉近期网格缓存', () async {
+    final c = TimetableController.instance;
+    final tmp = await Directory.systemTemp.createTemp('tt_reminder');
+    final originalBindingCheck = TimetableController.bindingCheck;
+    final originalClock = TimetableController.syncClock;
+    const channel = MethodChannel('nuist/timetable_next_day');
+    Map<Object?, Object?>? configuration;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'update') {
+            configuration = call.arguments as Map<Object?, Object?>;
+          }
+          return null;
+        });
+    addTearDown(() async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+      TimetableController.bindingCheck = originalBindingCheck;
+      TimetableController.syncClock = originalClock;
+      TimetableStore.debugDirectory = null;
+      c.debugReset();
+      await tmp.delete(recursive: true);
+    });
+    TimetableStore.debugDirectory = tmp;
+    TimetableController.bindingCheck = () async => true;
+    TimetableController.syncClock = () => DateTime(2027, 1, 16);
+    c.debugReset();
+    c.debugSetSnapshot(
+      TimetableSnapshot(
+        courses: [
+          Course(
+            id: 'reminder-course',
+            name: '调课后的课程',
+            slots: [
+              CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1' * 20),
+            ],
+          ),
+        ],
+        periods: TimetableController.defaultPeriods(),
+        settings: TimetableSettings(termStartDate: DateTime(2026, 8, 31)),
+      ),
+    );
+    await c.addDaySwap(DateTime(2027, 1, 11), DateTime(2027, 1, 17));
+    final lastDayCells = c.cellsForDay(20, 7);
+    expect(lastDayCells.single.course.name, '调课后的课程');
+    await c.refreshPortalBound();
+    await c.updateNextDayReminder();
+    expect(configuration?['enabled'], isTrue);
+    final payloads = configuration!['payloads'] as Map<Object?, Object?>;
+    expect(payloads.length, 400);
+    final lastDay = payloads['2027-01-16'] as Map<Object?, Object?>;
+    expect(lastDay['title'], '周末有课');
+    expect(lastDay['body'], contains('调课后的课程'));
+    final holiday = payloads['2027-01-17'] as Map<Object?, Object?>;
+    expect(holiday['title'], '明天没课');
+    expect(holiday['body'], '假期模式');
+    expect(c.cellsForDay(20, 7), same(lastDayCells));
   });
 }

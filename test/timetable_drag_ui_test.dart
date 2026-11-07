@@ -2,6 +2,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -183,8 +184,54 @@ void main() {
     var at = tester.getTopLeft(dragging);
     expect(at.dx - origin.dx, closeTo(step.width * 0.7, 0.5));
     expect(at.dy - origin.dy, closeTo(step.height * 0.3, 0.5));
-    await g.moveBy(Offset(step.width * 0.7, step.height * 1.3));
-    await tester.pump();
+    final stationaryCell = tester.widget<CourseCell>(
+      find.byType(CourseCell).first,
+    );
+    final staticGrid = tester
+        .renderObject<RenderRepaintBoundary>(
+          find.byKey(const Key('week_grid_static_layer')),
+        )
+        .child!;
+    final gridStacks = tester
+        .renderObjectList<RenderStack>(
+          find.descendant(
+            of: find.byType(WeekGrid),
+            matching: find.byType(Stack),
+          ),
+        )
+        .map((stack) => stack.toStringShort())
+        .toSet();
+    final layouts = <String>[];
+    final paints = <RenderObject>[];
+    final originalDebugPrint = debugPrint;
+    final originalPrintLayouts = debugPrintLayouts;
+    final originalProfilePaint = debugOnProfilePaint;
+    try {
+      debugPrint = (message, {wrapWidth}) {
+        if (message != null && message.startsWith('Laying out')) {
+          layouts.add(message);
+        }
+      };
+      debugPrintLayouts = true;
+      debugOnProfilePaint = paints.add;
+      await g.moveBy(Offset(step.width * 0.7, step.height * 1.3));
+      await tester.pump();
+    } finally {
+      debugPrint = originalDebugPrint;
+      debugPrintLayouts = originalPrintLayouts;
+      debugOnProfilePaint = originalProfilePaint;
+    }
+    expect(
+      layouts.where((message) => gridStacks.any(message.contains)),
+      isEmpty,
+      reason: '连续位移只更新绘制变换，不重新布局网格',
+    );
+    expect(paints, isNot(contains(staticGrid)), reason: '浮动格移动复用背景绘制层');
+    // 连续移动只更新浮层坐标，原网格保留已有组件，不逐帧重建文字和分组。
+    expect(
+      tester.widget<CourseCell>(find.byType(CourseCell).first),
+      same(stationaryCell),
+    );
     at = tester.getTopLeft(dragging);
     expect(at.dx - origin.dx, closeTo(step.width * 1.4, 0.5));
     expect(at.dy - origin.dy, closeTo(step.height * 1.6, 0.5));

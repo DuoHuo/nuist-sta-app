@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/core/theme.dart';
@@ -104,6 +105,84 @@ void main() {
     TimetableController.bindingCheck = origBinding;
     _c.debugReset();
     if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+  });
+
+  testWidgets('课程输入框移动光标与更新输入法状态不重建整张表单', (tester) async {
+    _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
+    await _openAddForm(tester);
+    final field = find.byKey(const Key('manual_course_name'));
+    await tester.enterText(field, '测试课程');
+    await tester.pumpAndSettle();
+    final kind = find.byKey(const Key('course_form_kind'));
+    final dropdown = tester.widget(kind);
+    final controller = tester.widget<TextFormField>(field).controller!;
+    controller.selection = const TextSelection.collapsed(offset: 1);
+    await tester.pump();
+    expect(tester.widget(kind), same(dropdown));
+    controller.value = controller.value.copyWith(
+      composing: const TextRange(start: 0, end: 2),
+    );
+    await tester.pump();
+    expect(tester.widget(kind), same(dropdown));
+    expect(controller.text, '测试课程');
+    final teacherField = find.byKey(const Key('manual_course_teacher'));
+    await tester.enterText(teacherField, '测试教师');
+    await tester.pump();
+    expect(tester.widget(kind), same(dropdown), reason: '已修改的表单继续输入教师不影响其他字段');
+    final teacher = tester.widget<TextFormField>(teacherField).controller!;
+    expect(teacher.text, '测试教师');
+    teacher.clear();
+    controller.clear();
+    await tester.pump();
+    expect(
+      tester
+          .widget<PopScope<Object?>>(find.byType(PopScope<Object?>).last)
+          .canPop,
+      isTrue,
+      reason: '恢复所有原值后仍及时解除未保存保护',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('备注随键盘避让时复用表单绘制内容并保持输入框可见', (tester) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
+    await _openAddForm(tester);
+    final note = find.byKey(const Key('manual_course_note'));
+    await tester.ensureVisible(note);
+    await tester.showKeyboard(note);
+    await tester.pumpAndSettle();
+    final section = tester.renderObject<RenderParagraph>(find.text('上课安排'));
+    final paints = <RenderObject>[];
+    final previousPaint = debugOnProfilePaint;
+    try {
+      debugOnProfilePaint = paints.add;
+      for (var inset = 25; inset <= 300; inset += 25) {
+        tester.view.viewInsets = FakeViewPadding(bottom: inset.toDouble());
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+    } finally {
+      debugOnProfilePaint = previousPaint;
+    }
+    expect(
+      paints.where((object) => identical(object, section)),
+      isEmpty,
+      reason: '键盘推动备注滚动时，不重绘表单的静态文字',
+    );
+    await tester.pump();
+    expect(tester.getBottomLeft(note).dy, lessThanOrEqualTo(812 - 300));
+    await tester.enterText(note, '键盘动画后继续输入');
+    expect(tester.widget<TextFormField>(note).controller!.text, '键盘动画后继续输入');
+    tester.view.resetViewInsets();
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('manual_course_save')));
+    expect(
+      find.byKey(const Key('manual_course_save')).hitTestable(),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('添加表单保存手动课程并出现在课表', (tester) async {
@@ -308,7 +387,12 @@ void main() {
   testWidgets('修改开始节次联动结束节次，保留跨度并限制到当天末节', (tester) async {
     _c.debugSetSnapshot(_snapshot(), viewingWeek: 1, manualCourses: const []);
     await tester.pumpWidget(
-      MaterialApp(home: ManualCourseForm(controller: _c)),
+      MaterialApp(
+        home: ManualCourseForm(
+          controller: _c,
+          initialSlot: _snapshot().courses.single.slots.single,
+        ),
+      ),
     );
     await tester.pumpAndSettle();
     Finder field(String name) => find.descendant(
@@ -342,14 +426,17 @@ void main() {
     }
 
     expect((value('start'), value('end')), (1, 2));
+    expect(find.byKey(const Key('manual_course_conflict')), findsOneWidget);
     await startAt(5);
     expect((value('start'), value('end')), (5, 6));
+    expect(find.byKey(const Key('manual_course_conflict')), findsNothing);
     await startAt(3);
     expect((value('start'), value('end')), (3, 4));
     await startAt(_c.lastPeriod);
     expect((value('start'), value('end')), (_c.lastPeriod, _c.lastPeriod));
     await startAt(2);
     expect((value('start'), value('end')), (2, 3), reason: '末节截断后仍记住原连堂跨度');
+    expect(find.byKey(const Key('manual_course_conflict')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

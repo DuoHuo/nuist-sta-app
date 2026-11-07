@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_colors.dart';
@@ -348,6 +349,124 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     });
+
+    for (final scenario in [
+      (size: const Size(375, 667), scale: 1.0, dark: false, keyboard: 300.0),
+      (size: const Size(667, 375), scale: 1.6, dark: true, keyboard: 150.0),
+    ]) {
+      testWidgets('选色键盘升降保持输入与保存可达 ${scenario.size} 字号${scenario.scale}', (
+        tester,
+      ) async {
+        _load();
+        await _pumpGrid(tester, dark: scenario.dark);
+        tester.view.physicalSize = scenario.size * 3;
+        tester.platformDispatcher.textScaleFactorTestValue = scenario.scale;
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        await tester.pump();
+        await _openColorPicker(tester, '测试课甲');
+        expect(tester.takeException(), isNull, reason: '选色入口适配当前屏幕与字号');
+        final picker = find.byKey(const Key('tt_color_picker'));
+        final field = find.byKey(const Key('tt_color_hex'));
+        final save = find.byKey(const Key('tt_color_custom_apply'));
+        final surface = find
+            .ancestor(of: picker, matching: find.byType(Material))
+            .first;
+        await tester.ensureVisible(field);
+        await tester.pump();
+        await tester.tap(field);
+        await tester.pump(const Duration(milliseconds: 300));
+        final editable = tester.widget<EditableText>(
+          find.descendant(of: field, matching: find.byType(EditableText)),
+        );
+        expect(editable.focusNode.hasFocus, isTrue);
+        expect(tester.testTextInput.isVisible, isTrue);
+        final title = tester.renderObject<RenderParagraph>(
+          find.descendant(of: picker, matching: find.text('课程颜色')),
+        );
+        final preview = tester.renderObject(
+          find.byKey(const Key('tt_color_display_swatch')),
+        );
+        final previousPaintCallback = debugOnProfilePaint;
+        final paints = <RenderObject>[];
+        try {
+          debugOnProfilePaint = paints.add;
+          for (var step = 1; step <= 10; step++) {
+            tester.view.viewInsets = FakeViewPadding(
+              bottom: scenario.keyboard * 3 * step / 10,
+            );
+            await tester.pump(const Duration(milliseconds: 16));
+          }
+        } finally {
+          debugOnProfilePaint = previousPaintCallback;
+        }
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump();
+        final upRect = tester.getRect(field);
+        expect(
+          paints.where((r) => identical(r, title) || identical(r, preview)),
+          isEmpty,
+          reason: '键盘升起只移动已有绘制层，不逐帧重绘静态标题和预览',
+        );
+        expect(
+          tester.getRect(surface).bottom,
+          closeTo(scenario.size.height - scenario.keyboard, 1),
+          reason: '面板材质底边贴合键盘顶边，键盘占位留在材质外',
+        );
+        expect(upRect.top, greaterThanOrEqualTo(0));
+        expect(
+          upRect.bottom,
+          lessThanOrEqualTo(scenario.size.height - scenario.keyboard + 1),
+        );
+        expect(field.hitTestable(), findsOneWidget);
+        await tester.ensureVisible(save);
+        await tester.pump();
+        expect(save.hitTestable(), findsOneWidget);
+        expect(
+          tester.getRect(save).bottom,
+          lessThanOrEqualTo(scenario.size.height - scenario.keyboard + 1),
+        );
+        await tester.ensureVisible(field);
+        await tester.pump();
+        paints.clear();
+        try {
+          debugOnProfilePaint = paints.add;
+          for (var step = 9; step >= 0; step--) {
+            tester.view.viewInsets = FakeViewPadding(
+              bottom: scenario.keyboard * 3 * step / 10,
+            );
+            await tester.pump(const Duration(milliseconds: 16));
+          }
+        } finally {
+          debugOnProfilePaint = previousPaintCallback;
+        }
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(
+          paints.where((r) => identical(r, title) || identical(r, preview)),
+          isEmpty,
+          reason: '键盘收起也应复用静态内容的绘制结果',
+        );
+        expect(field.hitTestable(), findsOneWidget);
+        expect(
+          tester.getRect(field).top,
+          greaterThanOrEqualTo(tester.getRect(picker).top),
+        );
+        expect(
+          tester.getRect(field).bottom,
+          lessThanOrEqualTo(scenario.size.height),
+        );
+        await tester.ensureVisible(save);
+        await tester.pump();
+        expect(save.hitTestable(), findsOneWidget);
+        expect(tester.takeException(), isNull, reason: '键盘升降与滚动不能产生布局溢出');
+        await tester.tap(save);
+        await _settleIo(tester);
+        expect(
+          find.byKey(const Key('course_color_scope_this')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      });
+    }
 
     testWidgets('UC04 恢复默认：清掉自选标记，回到自动色', (tester) async {
       _load();

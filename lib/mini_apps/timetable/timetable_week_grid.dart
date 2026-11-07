@@ -153,6 +153,7 @@ class _DragState {
 
 class _WeekGridState extends State<WeekGrid> {
   _DragState? _drag;
+  final _dragUpdates = ValueNotifier<int>(0);
 
   /// 松手后格子滑进落点 / 滑回原位的时长。
   static const Duration _settleDuration = Duration(milliseconds: 150);
@@ -192,6 +193,12 @@ class _WeekGridState extends State<WeekGrid> {
     if (oldWidget.focusedEvent != widget.focusedEvent) {
       _revealUnplacedEvent();
     }
+  }
+
+  @override
+  void dispose() {
+    _dragUpdates.dispose();
+    super.dispose();
   }
 
   void _revealUnplacedEvent() {
@@ -406,29 +413,47 @@ class _WeekGridState extends State<WeekGrid> {
                               height: gridH,
                               child: Stack(
                                 children: [
-                                  if (settings.showGridLines)
-                                    CustomPaint(
-                                      size: Size(dayW * days.length, gridH),
-                                      painter: _GridPainter(
-                                        days: days.length,
-                                        nodes: nodes,
-                                        periodH: periodH,
-                                        dayW: dayW,
-                                        color: TimetableTheme.colorsOf(context)
-                                            .divider,
+                                  // 网格与浮动格分开记录绘制指令，跟手位移时复用底层课程。
+                                  Positioned.fill(
+                                    child: RepaintBoundary(
+                                      key: const Key('week_grid_static_layer'),
+                                      child: Stack(
+                                        children: [
+                                          if (settings.showGridLines)
+                                            CustomPaint(
+                                              size: Size(
+                                                dayW * days.length,
+                                                gridH,
+                                              ),
+                                              painter: _GridPainter(
+                                                days: days.length,
+                                                nodes: nodes,
+                                                periodH: periodH,
+                                                dayW: dayW,
+                                                color: TimetableTheme.colorsOf(
+                                                  context,
+                                                ).divider,
+                                              ),
+                                            ),
+                                          for (
+                                            var di = 0;
+                                            di < days.length;
+                                            di++
+                                          )
+                                            ..._cellsFor(
+                                              context,
+                                              day: days[di],
+                                              dayIndex: di,
+                                              dayW: dayW,
+                                              periodH: periodH,
+                                              radius: radius,
+                                              nodes: nodes,
+                                              dpr: dpr,
+                                            ),
+                                        ],
                                       ),
                                     ),
-                                  for (var di = 0; di < days.length; di++)
-                                    ..._cellsFor(
-                                      context,
-                                      day: days[di],
-                                      dayIndex: di,
-                                      dayW: dayW,
-                                      periodH: periodH,
-                                      radius: radius,
-                                      nodes: nodes,
-                                      dpr: dpr,
-                                    ),
+                                  ),
                                   ?_draggedCell(dayW, periodH, radius),
                                 ],
                               ),
@@ -808,36 +833,50 @@ class _WeekGridState extends State<WeekGrid> {
     );
     final height = originBox.height;
     final width = originBox.width;
-    final pos = d.settleTo ?? _followTopLeft(d);
-    return AnimatedPositioned(
-      key: const Key('week_grid_dragging_cell'),
-      duration: d.settleTo == null ? Duration.zero : _settleDuration,
-      curve: Curves.easeOut,
-      left: pos.dx,
-      top: pos.dy,
+    return Positioned(
+      left: 0,
+      top: 0,
       width: width,
       height: height,
-      child: IgnorePointer(
-        child: DecoratedBox(
-          key: const Key('week_grid_dragging_shadow'),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(radius),
-            boxShadow: _dragShadow,
-          ),
-          child: CourseCell(
-            controller: controller,
-            cell: GridCell(
-              course: d.cell.course,
-              slot: d.cell.slot,
-              conflictCount: 0,
-              activeThisWeek: true,
-              date: d.cell.date,
-              dateEdit: d.cell.dateEdit,
-              swappedFrom: d.cell.swappedFrom,
+      child: ValueListenableBuilder<int>(
+        valueListenable: _dragUpdates,
+        builder: (context, _, child) {
+          final pos = d.settleTo ?? _followTopLeft(d);
+          // 改变绘制变换而非 Positioned 的布局参数，拖动与吸附都不重排整张 Stack。
+          return TweenAnimationBuilder<Offset>(
+            tween: Tween(begin: pos, end: pos),
+            duration: d.settleTo == null ? Duration.zero : _settleDuration,
+            curve: Curves.easeOut,
+            builder: (context, offset, child) =>
+                Transform.translate(offset: offset, child: child),
+            child: child,
+          );
+        },
+        child: RepaintBoundary(
+          key: const Key('week_grid_dragging_cell'),
+          child: IgnorePointer(
+            child: DecoratedBox(
+              key: const Key('week_grid_dragging_shadow'),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(radius),
+                boxShadow: _dragShadow,
+              ),
+              child: CourseCell(
+                controller: controller,
+                cell: GridCell(
+                  course: d.cell.course,
+                  slot: d.cell.slot,
+                  conflictCount: 0,
+                  activeThisWeek: true,
+                  date: d.cell.date,
+                  dateEdit: d.cell.dateEdit,
+                  swappedFrom: d.cell.swappedFrom,
+                ),
+                width: width,
+                height: height,
+                radius: radius,
+              ),
             ),
-            width: width,
-            height: height,
-            radius: radius,
           ),
         ),
       ),
@@ -865,7 +904,8 @@ class _WeekGridState extends State<WeekGrid> {
   /// 把浮动格滑到 [to]（约 150ms）。
   Future<void> _settleTo(_DragState d, Offset to) async {
     if (!mounted) return;
-    setState(() => d.settleTo = to);
+    d.settleTo = to;
+    _dragUpdates.value++;
     await Future<void>.delayed(_settleDuration);
   }
 
@@ -917,12 +957,15 @@ class _WeekGridState extends State<WeekGrid> {
     if (!d.moving && offset == Offset.zero) return;
     if (d.moving && d.offset == offset) return;
     // §13.14：长按满 0.8s 并开始移动 = 拖起，一次中等震动；拖动中换格不震。
-    if (!d.moving) HapticFeedback.mediumImpact();
-    setState(() {
-      d
-        ..moving = true
-        ..offset = offset;
-    });
+    d.offset = offset;
+    if (!d.moving) {
+      HapticFeedback.mediumImpact();
+      // 仅首次拖起重建原格（隐藏/显示同组剩余课程）。后续坐标只通知浮层，
+      // 不再逐帧重算所有列、冲突分组与文字布局。
+      setState(() => d.moving = true);
+    } else {
+      _dragUpdates.value++;
+    }
   }
 
   Future<void> _onDragEnd(LongPressEndDetails details) async {

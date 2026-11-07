@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/config/campus_config.dart';
@@ -38,7 +39,11 @@ class BulletinApi {
     if (html == null || html.isEmpty) {
       throw const FormatException('公告栏没有返回列表内容');
     }
-    return parseBulletinPage(html, currentUri: uri, pageNumber: pageNumber);
+    return compute(_parsePage, (
+      html: html,
+      uri: uri,
+      pageNumber: pageNumber,
+    ), debugLabel: 'bulletin.parse_page');
   }
 
   /// 请求并解析单条公告正文；无法识别正文时返回 null 交给 WebView 兜底。
@@ -50,7 +55,10 @@ class BulletinApi {
     );
     final html = response.data;
     if (html == null || html.isEmpty) return null;
-    return parseBulletinDetail(html, currentUri: uri);
+    return compute(_parseDetail, (
+      html: html,
+      uri: uri,
+    ), debugLabel: 'bulletin.parse_detail');
   }
 
   /// 下载公告附件到临时目录，供系统分享面板保存或打开。
@@ -76,6 +84,17 @@ class BulletinApi {
     return file;
   }
 }
+
+// 后台只接收正文与解析参数，不捕获 Dio、门户会话或平台通道。
+BulletinListPage _parsePage(({String html, Uri uri, int pageNumber}) input) =>
+    parseBulletinPage(
+      input.html,
+      currentUri: input.uri,
+      pageNumber: input.pageNumber,
+    );
+
+BulletinDetailDocument? _parseDetail(({String html, Uri uri}) input) =>
+    parseBulletinDetail(input.html, currentUri: input.uri);
 
 /// 解析官网返回的列表 HTML 和分页链接。
 BulletinListPage parseBulletinPage(

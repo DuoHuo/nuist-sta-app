@@ -166,224 +166,235 @@ class _ColorPickerState extends State<_ColorPicker> {
   @override
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
-    return Material(
-      color: colors.surface,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      child: SafeArea(
-        child: _KeyboardInset(
+    // 键盘占位放在面板材质外，面板底边与键盘顶边对齐，不把键盘区域画成面板。
+    return _KeyboardInset(
+      child: Material(
+        color: colors.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: SafeArea(
           child: SingleChildScrollView(
             key: const Key('tt_color_picker'),
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 440),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 36,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: colors.divider,
-                          borderRadius: BorderRadius.circular(2),
+            // 键盘避让时视口会滚动；静态预览和表单复用绘制层。
+            child: RepaintBoundary(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 440),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 36,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: colors.divider,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 20),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            widget.title,
-                            style: TimetableTheme.titleStyle(
-                              color: colors.titleText,
+                      const SizedBox(height: 20),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              widget.title,
+                              style: TimetableTheme.titleStyle(
+                                color: colors.titleText,
+                              ),
+                            ),
+                          ),
+                          if (widget.showReset)
+                            TextButton(
+                              key: const Key('tt_color_reset'),
+                              onPressed: _restoreDefault,
+                              child: Text(
+                                '恢复默认',
+                                style: TextStyle(color: colors.labelText),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      ValueListenableBuilder<HSVColor>(
+                        valueListenable: _hsv,
+                        builder: (context, hsv, _) {
+                          final raw = Color(hsv.toColor().toARGB32());
+                          final pair = widget.forExam
+                              ? CourseColorPair(
+                                  TimetableTheme.examCellBg(
+                                    raw,
+                                    dark: colors.isDark,
+                                  ),
+                                  TimetableTheme.examText,
+                                )
+                              : TimetableTheme.userCoursePair(
+                                  raw,
+                                  dark: colors.isDark,
+                                );
+                          final bg = TimetableTheme.blendCellBg(
+                            pair.bg,
+                            widget.opacity,
+                            dark: colors.isDark,
+                          );
+                          final autoFg = widget.forExam
+                              ? pair.fg
+                              : TimetableTheme.userCoursePair(bg).fg;
+                          final fg = TimetableTheme.cellTextFor(
+                            autoFg,
+                            widget.textColorMode,
+                          );
+                          return Container(
+                            key: const Key('tt_color_display_swatch'),
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: bg,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  widget.previewTitle,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: fg,
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  widget.opacity == 100
+                                      ? '课表效果预览'
+                                      : '课表效果预览 · 不透明度 ${widget.opacity}%',
+                                  style: TextStyle(color: fg, fontSize: 12),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                      RepaintBoundary(
+                        child: ValueListenableBuilder<HSVColor>(
+                          valueListenable: _hsv,
+                          builder: (context, hsv, _) => LayoutBuilder(
+                            builder: (context, constraints) => _SvPanel(
+                              key: const Key('tt_color_sv_panel'),
+                              width: constraints.maxWidth,
+                              height: (constraints.maxWidth * 0.58).clamp(
+                                150.0,
+                                220.0,
+                              ),
+                              hsv: hsv,
+                              onChanged: _setHsv,
                             ),
                           ),
                         ),
-                        if (widget.showReset)
-                          TextButton(
-                            key: const Key('tt_color_reset'),
-                            onPressed: _restoreDefault,
-                            child: Text(
-                              '恢复默认',
-                              style: TextStyle(color: colors.labelText),
+                      ),
+                      const SizedBox(height: 12),
+                      RepaintBoundary(
+                        child: ValueListenableBuilder<HSVColor>(
+                          valueListenable: _hsv,
+                          builder: (context, hsv, _) => _HueSlider(
+                            hsv: hsv,
+                            onChanged: (hue) =>
+                                _setHsv(_hsv.value.withHue(hue)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      ValueListenableBuilder<bool>(
+                        valueListenable: _valid,
+                        builder: (context, valid, _) => TextField(
+                          key: const Key('tt_color_hex'),
+                          controller: _hex,
+                          keyboardType: TextInputType.visiblePassword,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          textInputAction: TextInputAction.done,
+                          style: TextStyle(
+                            color: colors.titleText,
+                            letterSpacing: 1,
+                          ),
+                          decoration: InputDecoration(
+                            labelText: '色号',
+                            hintText: 'RRGGBB',
+                            prefixText: '# ',
+                            filled: true,
+                            fillColor: colors.pageBg,
+                            errorText: valid ? null : '请输入 6 位十六进制色号，如 3B82F6',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: BorderSide.none,
                             ),
                           ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    ValueListenableBuilder<HSVColor>(
-                      valueListenable: _hsv,
-                      builder: (context, hsv, _) {
-                        final raw = Color(hsv.toColor().toARGB32());
-                        final pair = widget.forExam
-                            ? CourseColorPair(
-                                TimetableTheme.examCellBg(
-                                  raw,
-                                  dark: colors.isDark,
-                                ),
-                                TimetableTheme.examText,
-                              )
-                            : TimetableTheme.userCoursePair(
-                                raw,
-                                dark: colors.isDark,
-                              );
-                        final bg = TimetableTheme.blendCellBg(
-                          pair.bg,
-                          widget.opacity,
-                          dark: colors.isDark,
-                        );
-                        final autoFg = widget.forExam
-                            ? pair.fg
-                            : TimetableTheme.userCoursePair(bg).fg;
-                        final fg = TimetableTheme.cellTextFor(
-                          autoFg,
-                          widget.textColorMode,
-                        );
-                        return Container(
-                          key: const Key('tt_color_display_swatch'),
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: bg,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          onChanged: _changeHex,
+                          onSubmitted: (_) => FocusScope.of(context).unfocus(),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Column(
+                        key: _saveAreaKey,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (_saveError case final message?) ...[
+                            TimetablePersistenceErrorText(message),
+                            const SizedBox(height: 12),
+                          ],
+                          Row(
                             children: [
-                              Text(
-                                widget.previewTitle,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: fg,
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w600,
+                              Expanded(
+                                child: SizedBox(
+                                  height: 48,
+                                  child: TextButton(
+                                    key: const Key('tt_color_cancel'),
+                                    onPressed: () => Navigator.pop(context),
+                                    child: Text(
+                                      '取消',
+                                      style: TextStyle(color: colors.labelText),
+                                    ),
+                                  ),
                                 ),
                               ),
-                              const SizedBox(height: 6),
-                              Text(
-                                widget.opacity == 100
-                                    ? '课表效果预览'
-                                    : '课表效果预览 · 不透明度 ${widget.opacity}%',
-                                style: TextStyle(color: fg, fontSize: 12),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                flex: 2,
+                                child: SizedBox(
+                                  height: 48,
+                                  child: ValueListenableBuilder<bool>(
+                                    valueListenable: _valid,
+                                    builder: (context, valid, _) =>
+                                        FilledButton(
+                                          key: const Key(
+                                            'tt_color_custom_apply',
+                                          ),
+                                          onPressed: valid && !_saving
+                                              ? _save
+                                              : null,
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor: colors.accent,
+                                            // 品牌色按钮上的白字保持明暗一致。
+                                            foregroundColor: Colors.white,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                            ),
+                                          ),
+                                          child: const Text('保存'),
+                                        ),
+                                  ),
+                                ),
                               ),
                             ],
                           ),
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 20),
-                    RepaintBoundary(
-                      child: ValueListenableBuilder<HSVColor>(
-                        valueListenable: _hsv,
-                        builder: (context, hsv, _) => LayoutBuilder(
-                          builder: (context, constraints) => _SvPanel(
-                            key: const Key('tt_color_sv_panel'),
-                            width: constraints.maxWidth,
-                            height: (constraints.maxWidth * 0.58).clamp(
-                              150.0,
-                              220.0,
-                            ),
-                            hsv: hsv,
-                            onChanged: _setHsv,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    RepaintBoundary(
-                      child: ValueListenableBuilder<HSVColor>(
-                        valueListenable: _hsv,
-                        builder: (context, hsv, _) => _HueSlider(
-                          hsv: hsv,
-                          onChanged: (hue) => _setHsv(_hsv.value.withHue(hue)),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    ValueListenableBuilder<bool>(
-                      valueListenable: _valid,
-                      builder: (context, valid, _) => TextField(
-                        key: const Key('tt_color_hex'),
-                        controller: _hex,
-                        keyboardType: TextInputType.visiblePassword,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        textInputAction: TextInputAction.done,
-                        style: TextStyle(
-                          color: colors.titleText,
-                          letterSpacing: 1,
-                        ),
-                        decoration: InputDecoration(
-                          labelText: '色号',
-                          hintText: 'RRGGBB',
-                          prefixText: '# ',
-                          filled: true,
-                          fillColor: colors.pageBg,
-                          errorText: valid ? null : '请输入 6 位十六进制色号，如 3B82F6',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            borderSide: BorderSide.none,
-                          ),
-                        ),
-                        onChanged: _changeHex,
-                        onSubmitted: (_) => FocusScope.of(context).unfocus(),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Column(
-                      key: _saveAreaKey,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (_saveError case final message?) ...[
-                          TimetablePersistenceErrorText(message),
-                          const SizedBox(height: 12),
                         ],
-                        Row(
-                          children: [
-                            Expanded(
-                              child: SizedBox(
-                                height: 48,
-                                child: TextButton(
-                                  key: const Key('tt_color_cancel'),
-                                  onPressed: () => Navigator.pop(context),
-                                  child: Text(
-                                    '取消',
-                                    style: TextStyle(color: colors.labelText),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              flex: 2,
-                              child: SizedBox(
-                                height: 48,
-                                child: ValueListenableBuilder<bool>(
-                                  valueListenable: _valid,
-                                  builder: (context, valid, _) => FilledButton(
-                                    key: const Key('tt_color_custom_apply'),
-                                    onPressed: valid && !_saving ? _save : null,
-                                    style: FilledButton.styleFrom(
-                                      backgroundColor: colors.accent,
-                                      // 品牌色按钮上的白字保持明暗一致。
-                                      foregroundColor: Colors.white,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                    ),
-                                    child: const Text('保存'),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -562,12 +573,14 @@ Future<EditScope?> showCourseColorScopeSheet(
   required GridCell cell,
 }) => showModalBottomSheet<EditScope>(
   context: context,
+  isScrollControlled: true,
+  useSafeArea: true,
   backgroundColor: TimetableTheme.colorsOf(context).surface,
   builder: (context) {
     final colors = TimetableTheme.colorsOf(context);
     final date = cell.date!;
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         key: const Key('course_color_scope_sheet'),
         padding: const EdgeInsets.all(20),
         child: Column(

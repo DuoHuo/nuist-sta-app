@@ -22,8 +22,9 @@ class BulletinDetailPage extends StatefulWidget {
 class _BulletinDetailPageState extends State<BulletinDetailPage> {
   late final BulletinApi _api;
   late final Future<BulletinDetailDocument?> _detailFuture;
+  final _bodyRows = <(BulletinDetailBlock, int?)>[];
   WebViewController? _webViewController;
-  int _progress = 0;
+  final _progress = ValueNotifier<int>(0);
   bool _failed = false;
   bool _attachmentPreviewOpen = false;
 
@@ -39,7 +40,22 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
 
   Future<BulletinDetailDocument?> _loadDetail() async {
     try {
-      return await _api.fetchDetail(widget.bulletin);
+      final detail = await _api.fetchDetail(widget.bulletin);
+      // 只展开行索引，不提前创建或布局正文组件；长名单与表格也按可见行渲染。
+      for (final block in detail?.blocks ?? const <BulletinDetailBlock>[]) {
+        switch (block.kind) {
+          case BulletinDetailBlockKind.bulletList:
+          case BulletinDetailBlockKind.numberedList:
+          case BulletinDetailBlockKind.table:
+            if (block.items.isEmpty) _bodyRows.add((block, null));
+            for (var index = 0; index < block.items.length; index++) {
+              _bodyRows.add((block, index));
+            }
+          default:
+            _bodyRows.add((block, null));
+        }
+      }
+      return detail;
     } catch (_) {
       return null;
     }
@@ -52,7 +68,7 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (progress) {
-            if (mounted) setState(() => _progress = progress);
+            if (mounted) _progress.value = progress;
           },
           onWebResourceError: (error) {
             if (error.isForMainFrame == true && mounted) {
@@ -70,8 +86,8 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
     if (controller == null) return;
     setState(() {
       _failed = false;
-      _progress = 0;
     });
+    _progress.value = 0;
     await controller.loadRequest(Uri.parse(widget.bulletin.url));
   }
 
@@ -105,6 +121,12 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
   }
 
   @override
+  void dispose() {
+    _progress.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     return Scaffold(
@@ -113,14 +135,18 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
         title: const Text('公告详情'),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(2),
-          child: _webViewController != null && _progress < 100
-              ? LinearProgressIndicator(
-                  minHeight: 2,
-                  value: _progress / 100,
-                  color: palette.accent,
-                  backgroundColor: palette.rowDivider,
-                )
-              : const SizedBox(height: 2),
+          child: ValueListenableBuilder<int>(
+            valueListenable: _progress,
+            builder: (context, progress, _) =>
+                _webViewController != null && progress < 100
+                ? LinearProgressIndicator(
+                    minHeight: 2,
+                    value: progress / 100,
+                    color: palette.accent,
+                    backgroundColor: palette.rowDivider,
+                  )
+                : const SizedBox(height: 2),
+          ),
         ),
       ),
       body: Column(
@@ -180,29 +206,40 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
     BulletinDetailDocument document,
     AppPalette palette,
   ) {
-    return ListView(
+    return ListView.builder(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
-      children: [
-        for (final block in document.blocks) _buildBlock(block, palette),
-        if (document.attachments.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          Text(
-            '附件',
-            style: TextStyle(
-              color: palette.titleText,
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
+      itemCount:
+          _bodyRows.length +
+          (document.attachments.isEmpty ? 0 : document.attachments.length + 1),
+      itemBuilder: (context, index) {
+        if (index < _bodyRows.length) {
+          final (block, itemIndex) = _bodyRows[index];
+          return _buildBlock(block, palette, itemIndex: itemIndex);
+        }
+        final attachmentIndex = index - _bodyRows.length - 1;
+        if (attachmentIndex < 0) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 8),
+            child: Text(
+              '附件',
+              style: TextStyle(
+                color: palette.titleText,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          for (final attachment in document.attachments)
-            _buildAttachment(attachment, palette),
-        ],
-      ],
+          );
+        }
+        return _buildAttachment(document.attachments[attachmentIndex], palette);
+      },
     );
   }
 
-  Widget _buildBlock(BulletinDetailBlock block, AppPalette palette) {
+  Widget _buildBlock(
+    BulletinDetailBlock block,
+    AppPalette palette, {
+    int? itemIndex,
+  }) {
     final alignment = block.centered ? TextAlign.center : TextAlign.left;
     switch (block.kind) {
       case BulletinDetailBlockKind.heading:
@@ -249,71 +286,64 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
         );
       case BulletinDetailBlockKind.bulletList:
       case BulletinDetailBlockKind.numberedList:
+        if (itemIndex == null) return const SizedBox(height: 10);
         return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Column(
+          padding: EdgeInsets.only(
+            bottom: itemIndex == block.items.length - 1 ? 15 : 5,
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              for (var index = 0; index < block.items.length; index++)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 5),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        width: 24,
-                        child: Text(
-                          block.kind == BulletinDetailBlockKind.bulletList
-                              ? '•'
-                              : '${index + 1}.',
-                          style: TextStyle(
-                            color: palette.accent,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Text(
-                          block.items[index],
-                          style: TextStyle(
-                            color: palette.titleText,
-                            fontSize: 15,
-                            height: 1.7,
-                          ),
-                        ),
-                      ),
-                    ],
+              SizedBox(
+                width: 24,
+                child: Text(
+                  block.kind == BulletinDetailBlockKind.bulletList
+                      ? '•'
+                      : '${itemIndex + 1}.',
+                  style: TextStyle(
+                    color: palette.accent,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
+              ),
+              Expanded(
+                child: Text(
+                  block.items[itemIndex],
+                  style: TextStyle(
+                    color: palette.titleText,
+                    fontSize: 15,
+                    height: 1.7,
+                  ),
+                ),
+              ),
             ],
           ),
         );
       case BulletinDetailBlockKind.table:
+        if (itemIndex == null) return const SizedBox(height: 12);
         return Container(
-          margin: const EdgeInsets.only(bottom: 12),
+          margin: EdgeInsets.only(
+            bottom: itemIndex == block.items.length - 1 ? 12 : 0,
+          ),
           decoration: BoxDecoration(
             color: palette.surface,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.vertical(
+              top: itemIndex == 0 ? const Radius.circular(8) : Radius.zero,
+              bottom: itemIndex == block.items.length - 1
+                  ? const Radius.circular(8)
+                  : Radius.zero,
+            ),
           ),
-          child: Column(
-            children: [
-              for (final row in block.items)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 9,
-                  ),
-                  decoration: BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(color: palette.rowDivider),
-                    ),
-                  ),
-                  child: Text(
-                    row,
-                    style: TextStyle(color: palette.titleText, height: 1.5),
-                  ),
-                ),
-            ],
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: palette.rowDivider)),
+            ),
+            child: Text(
+              block.items[itemIndex],
+              style: TextStyle(color: palette.titleText, height: 1.5),
+            ),
           ),
         );
       case BulletinDetailBlockKind.image:

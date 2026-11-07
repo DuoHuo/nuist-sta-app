@@ -96,9 +96,10 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
         Navigator.of(context).overlay!.context.findRenderObject()! as RenderBox;
     final box = _anchor.currentContext!.findRenderObject()! as RenderBox;
     final options = List<AppSelectOption<T>>.of(widget.options);
+    final selected = widget.value;
     final focusOption =
         options
-            .where((option) => option.enabled && option.value == widget.value)
+            .where((option) => option.enabled && option.value == selected)
             .firstOrNull ??
         options.where((option) => option.enabled).firstOrNull;
     final width = box.size.width;
@@ -106,6 +107,8 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
       Rect.fromLTWH(0, 0, width, 0),
       Offset.zero & overlay.size,
     );
+    _SelectMeasureEnvironment? measuredEnvironment;
+    var menuHeight = 0.0;
     // 使用独立弹出路由承接系统返回，避免触发表单自身的放弃修改提示。
     return showMenu<AppSelectOption<T>>(
       context: context,
@@ -118,21 +121,28 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
             Offset.zero,
             ancestor: overlay,
           );
-          final height = options.fold<double>(
-            _selectMenuPadding.vertical,
-            (sum, option) =>
-                sum +
-                _optionHeight(
-                  context,
-                  option,
-                  width - _selectMenuPadding.horizontal,
-                  selected: option.value == widget.value,
-                ),
+          final environment = _selectMeasureEnvironment(
+            context,
+            width - _selectMenuPadding.horizontal,
           );
+          if (measuredEnvironment != environment) {
+            measuredEnvironment = environment;
+            menuHeight = options.fold<double>(
+              _selectMenuPadding.vertical,
+              (sum, option) =>
+                  sum +
+                  _optionHeight(
+                    context,
+                    option,
+                    environment.width,
+                    selected: option.value == selected,
+                  ),
+            );
+          }
           final below =
               overlay.size.height - offset.dy - anchorBox.size.height - 16;
-          final top = height > below && offset.dy > below
-              ? offset.dy - height - 8
+          final top = menuHeight > below && offset.dy > below
+              ? offset.dy - menuHeight - 8
               : offset.dy + anchorBox.size.height + 8;
           position = RelativeRect.fromRect(
             Rect.fromLTWH(offset.dx, top, anchorBox.size.width, 0),
@@ -165,10 +175,10 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
             padding: EdgeInsets.zero,
             height: _selectMinHeight,
             child: Semantics(
-              selected: option.value == widget.value,
+              selected: option.value == selected,
               child: Ink(
                 decoration: BoxDecoration(
-                  color: option.value == widget.value
+                  color: option.value == selected
                       ? Color.alphaBlend(
                           palette.accent.withValues(alpha: .1),
                           palette.surface,
@@ -184,7 +194,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                     child: _OptionContent(
                       label: option.label,
                       hint: option.hint,
-                      selected: option.value == widget.value,
+                      selected: option.value == selected,
                       enabled: option.enabled,
                     ),
                   ),
@@ -448,6 +458,13 @@ Future<AppSelectOption<T>?> showAppSelectSheet<T>(
   bool searchable = true,
 }) {
   final palette = AppPalette.of(context);
+  final snapshot = List<AppSelectOption<T>>.unmodifiable(options);
+  final sheet = _AppSelectSheet<T>(
+    title: title,
+    options: snapshot,
+    selected: selected,
+    searchable: searchable && snapshot.length > 6,
+  );
   return showModalBottomSheet<AppSelectOption<T>>(
     context: context,
     isScrollControlled: true,
@@ -467,12 +484,7 @@ Future<AppSelectOption<T>?> showAppSelectSheet<T>(
             duration: Duration(milliseconds: 220),
             reverseDuration: Duration(milliseconds: 140),
           ),
-    builder: (context) => _AppSelectSheet<T>(
-      title: title,
-      options: List.unmodifiable(options),
-      selected: selected,
-      searchable: searchable && options.length > 6,
-    ),
+    builder: (context) => sheet,
   );
 }
 
@@ -497,14 +509,18 @@ class _AppSelectSheetState<T> extends State<_AppSelectSheet<T>> {
   final _search = TextEditingController();
   final _scroll = ScrollController();
   final _headerKey = GlobalKey();
+  final _listKey = GlobalKey();
   String _query = '';
   bool _positioned = false;
   late List<String> _searchLabels;
   late List<AppSelectOption<T>> _filtered;
   final Map<AppSelectOption<T>, double> _optionHeights = {};
-  List<double>? _filteredHeights;
   _SelectMeasureEnvironment? _measureEnvironment;
   T? _measuredSelection;
+  Object? _headerInputs;
+  double _headerHeight = 0;
+  Object? _layoutInputs;
+  Widget? _layoutBody;
 
   @override
   void initState() {
@@ -535,19 +551,10 @@ class _AppSelectSheetState<T> extends State<_AppSelectSheet<T>> {
             for (var index = 0; index < widget.options.length; index++)
               if (_searchLabels[index].contains(_query)) widget.options[index],
           ];
-    _filteredHeights = null;
   }
 
-  List<double> _heightsFor(BuildContext context, double width) {
-    final environment = (
-      width: width,
-      direction: Directionality.of(context),
-      textScaler: MediaQuery.textScalerOf(context),
-      locale: Localizations.maybeLocaleOf(context),
-      labelStyle: _selectTextStyle(context),
-      selectedStyle: _selectTextStyle(context, emphasized: true),
-      hintStyle: _selectTextStyle(context, fontSize: 12, secondary: true),
-    );
+  void _prepareMeasurements(BuildContext context, double width) {
+    final environment = _selectMeasureEnvironment(context, width);
     // 键盘动画只改变可用高度，不改变文字排版；搜索也复用同一选项的精确行高。
     // 宽度、字体、缩放、语言或选中样式变化时才重新测量，保留长标签的真实高度。
     if (_measureEnvironment != environment ||
@@ -555,20 +562,20 @@ class _AppSelectSheetState<T> extends State<_AppSelectSheet<T>> {
       _measureEnvironment = environment;
       _measuredSelection = widget.selected;
       _optionHeights.clear();
-      _filteredHeights = null;
     }
-    return _filteredHeights ??= [
-      for (final option in _filtered)
-        _optionHeights.putIfAbsent(
-          option,
-          () => _optionHeight(
-            context,
-            option,
-            width,
-            selected: option.value == widget.selected,
-          ),
-        ),
-    ];
+  }
+
+  double _heightFor(BuildContext context, double width, int index) {
+    final option = _filtered[index];
+    final cached = _optionHeights[option];
+    if (cached != null) return cached;
+    // 只测量布局实际访问的选项；首次展开不为整张长列表创建 TextPainter。
+    return _optionHeights[option] = _optionHeight(
+      context,
+      option,
+      width,
+      selected: option.value == widget.selected,
+    );
   }
 
   @override
@@ -684,9 +691,175 @@ class _AppSelectSheetState<T> extends State<_AppSelectSheet<T>> {
 
   @override
   Widget build(BuildContext context) {
-    final palette = AppPalette.of(context);
-    final media = MediaQuery.of(context);
     final filtered = _filtered;
+    return _SelectSheetKeyboardArea(
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final width = constraints.maxWidth;
+              final palette = AppPalette.of(context);
+              _prepareMeasurements(context, width);
+              final headerInputs = (
+                _measureEnvironment,
+                widget.title,
+                widget.searchable,
+              );
+              if (_headerInputs != headerInputs) {
+                _headerInputs = headerInputs;
+                final titleHeight = _selectTextHeight(
+                  context,
+                  widget.title,
+                  _selectTextStyle(context, fontSize: 17, emphasized: true),
+                  width - _selectMinHeight,
+                );
+                _headerHeight =
+                    math.max(_selectMinHeight, titleHeight) +
+                    (widget.searchable
+                        ? 12 +
+                              math.max(
+                                _selectMinHeight,
+                                MediaQuery.textScalerOf(context).scale(16) *
+                                        1.4 +
+                                    20,
+                              )
+                        : 0);
+              }
+              // 头部以外至少留两行空间；横屏键盘与大字时改为整面板滚动。
+              final compact =
+                  constraints.maxHeight < _headerHeight + _selectMinHeight * 2;
+              // 长列表必然铺满视口，无需 shrinkWrap 在每次键盘布局中重算内容高度。
+              // 短列表继续贴合内容，横屏和大字体仍可切换成包含头部的滚动区域。
+              final fillAvailable =
+                  _headerHeight + filtered.length * _selectMinHeight >=
+                  constraints.maxHeight;
+              final layoutInputs = (
+                _measureEnvironment,
+                Theme.of(context),
+                filtered,
+                widget.title,
+                widget.selected,
+                widget.searchable,
+                compact,
+                fillAvailable,
+              );
+              // 键盘逐帧改变的是约束；排版和模式没变时直接复用整个内容子树。
+              if (_layoutInputs == layoutInputs) return _layoutBody!;
+              _layoutInputs = layoutInputs;
+              final header = _header(context);
+              if (!_positioned) {
+                _positioned = true;
+                final selectedIndex = filtered.indexWhere(
+                  (option) => option.value == widget.selected,
+                );
+                var offset = 0.0;
+                for (var index = 0; index < selectedIndex; index++) {
+                  offset += _heightFor(context, width, index);
+                }
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted && _scroll.hasClients) {
+                    final headerBox = _headerKey.currentContext
+                        ?.findRenderObject();
+                    final headerOffset =
+                        compact && selectedIndex > 0 && headerBox is RenderBox
+                        ? headerBox.size.height
+                        : 0.0;
+                    // 懒列表初次给出的是估算总高度，不能据此截短精确的已选项偏移。
+                    // 滚动布局会在抵达末尾后按实际内容自动校正。
+                    _scroll.jumpTo(offset + headerOffset);
+                  }
+                });
+              }
+              final list = Scrollbar(
+                key: _listKey,
+                controller: _scroll,
+                child: CustomScrollView(
+                  controller: _scroll,
+                  shrinkWrap: !fillAvailable,
+                  slivers: [
+                    if (compact) SliverToBoxAdapter(child: header),
+                    if (filtered.isEmpty)
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          child: Center(
+                            child: Semantics(
+                              liveRegion: true,
+                              child: Text(
+                                _query.isEmpty ? '暂无可选项' : '没有匹配的选项',
+                                style: _selectTextStyle(
+                                  context,
+                                  secondary: true,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      SliverVariedExtentList.builder(
+                        itemCount: filtered.length,
+                        itemExtentBuilder: (index, dimensions) =>
+                            _heightFor(context, width, index),
+                        itemBuilder: (context, index) {
+                          final option = filtered[index];
+                          return MergeSemantics(
+                            child: Semantics(
+                              selected: option.value == widget.selected,
+                              child: TextButton(
+                                onPressed: option.enabled
+                                    ? () => Navigator.pop(context, option)
+                                    : null,
+                                style: _optionStyle(
+                                  palette,
+                                  selected: option.value == widget.selected,
+                                ),
+                                child: _OptionContent(
+                                  label: option.label,
+                                  hint: option.hint,
+                                  selected: option.value == widget.selected,
+                                  enabled: option.enabled,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                  ],
+                ),
+              );
+              return _layoutBody = compact
+                  ? list
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        header,
+                        if (fillAvailable)
+                          Expanded(child: list)
+                        else
+                          Flexible(child: list),
+                      ],
+                    );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// 仅外壳订阅键盘尺寸，让稳定的搜索框和候选列表参与布局而不逐帧重建。
+class _SelectSheetKeyboardArea extends StatelessWidget {
+  const _SelectSheetKeyboardArea({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
     final maxHeight = math.max(
       0.0,
       (media.size.height - media.viewInsets.bottom - media.padding.top) * .65,
@@ -695,129 +868,7 @@ class _AppSelectSheetState<T> extends State<_AppSelectSheet<T>> {
       padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxHeight),
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final width = constraints.maxWidth;
-                final titleHeight = _selectTextHeight(
-                  context,
-                  widget.title,
-                  _selectTextStyle(context, fontSize: 17, emphasized: true),
-                  width - _selectMinHeight,
-                );
-                final headerHeight =
-                    math.max(_selectMinHeight, titleHeight) +
-                    (widget.searchable
-                        ? 12 +
-                              math.max(
-                                _selectMinHeight,
-                                media.textScaler.scale(16) * 1.4 + 20,
-                              )
-                        : 0);
-                // 头部以外至少留两行空间；横屏键盘与大字时改为整面板滚动。
-                final compact =
-                    constraints.maxHeight < headerHeight + _selectMinHeight * 2;
-                final header = _header(context);
-                final heights = _heightsFor(context, width);
-                if (!_positioned) {
-                  _positioned = true;
-                  final selectedIndex = filtered.indexWhere(
-                    (option) => option.value == widget.selected,
-                  );
-                  final offset = heights
-                      .take(math.max(0, selectedIndex))
-                      .fold(0.0, (sum, height) => sum + height);
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted && _scroll.hasClients) {
-                      final headerBox = _headerKey.currentContext
-                          ?.findRenderObject();
-                      final headerOffset =
-                          compact && selectedIndex > 0 && headerBox is RenderBox
-                          ? headerBox.size.height
-                          : 0.0;
-                      _scroll.jumpTo(
-                        (offset + headerOffset).clamp(
-                          0,
-                          _scroll.position.maxScrollExtent,
-                        ),
-                      );
-                    }
-                  });
-                }
-                final list = Scrollbar(
-                  controller: _scroll,
-                  child: CustomScrollView(
-                    controller: _scroll,
-                    shrinkWrap: true,
-                    slivers: [
-                      if (compact) SliverToBoxAdapter(child: header),
-                      if (filtered.isEmpty)
-                        SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            child: Center(
-                              child: Semantics(
-                                liveRegion: true,
-                                child: Text(
-                                  _query.isEmpty ? '暂无可选项' : '没有匹配的选项',
-                                  style: _selectTextStyle(
-                                    context,
-                                    secondary: true,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        )
-                      else
-                        SliverVariedExtentList.builder(
-                          itemCount: filtered.length,
-                          itemExtentBuilder: (index, dimensions) =>
-                              heights[index],
-                          itemBuilder: (context, index) {
-                            final option = filtered[index];
-                            return MergeSemantics(
-                              child: Semantics(
-                                selected: option.value == widget.selected,
-                                child: TextButton(
-                                  onPressed: option.enabled
-                                      ? () => Navigator.pop(context, option)
-                                      : null,
-                                  style: _optionStyle(
-                                    palette,
-                                    selected: option.value == widget.selected,
-                                  ),
-                                  child: _OptionContent(
-                                    label: option.label,
-                                    hint: option.hint,
-                                    selected: option.value == widget.selected,
-                                    enabled: option.enabled,
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                    ],
-                  ),
-                );
-                return compact
-                    ? list
-                    : Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          header,
-                          Flexible(child: list),
-                        ],
-                      );
-              },
-            ),
-          ),
-        ),
+        child: child,
       ),
     );
   }
@@ -844,6 +895,19 @@ ButtonStyle _optionStyle(AppPalette palette, {required bool selected}) =>
 
 const _selectTextHeightBehavior = TextHeightBehavior(
   leadingDistribution: TextLeadingDistribution.even,
+);
+
+_SelectMeasureEnvironment _selectMeasureEnvironment(
+  BuildContext context,
+  double width,
+) => (
+  width: width,
+  direction: Directionality.of(context),
+  textScaler: MediaQuery.textScalerOf(context),
+  locale: Localizations.maybeLocaleOf(context),
+  labelStyle: _selectTextStyle(context),
+  selectedStyle: _selectTextStyle(context, emphasized: true),
+  hintStyle: _selectTextStyle(context, fontSize: 12, secondary: true),
 );
 
 // 不继承按钮行高；测量和绘制共用字号、字距、系统粗体与字体设置。

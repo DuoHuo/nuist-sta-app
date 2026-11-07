@@ -121,7 +121,7 @@ class _CampusMapPageState extends State<CampusMapPage>
   StreamSubscription<LocationFix>? _locationSub;
   // 朝向订阅与当前朝向（度，0 = 正北）。
   StreamSubscription<double>? _headingSub;
-  double? _userHeading;
+  final _userHeading = ValueNotifier<double?>(null);
   int _focusToken = 0;
   bool _locating = false;
   // 面板实际遮挡的高度（逻辑像素，按 24px 量化以减少重建）。
@@ -200,18 +200,18 @@ class _CampusMapPageState extends State<CampusMapPage>
     try {
       _headingSub = widget.heading.watch().listen(
         (degrees) {
-          final current = _userHeading;
-          // 转动 3° 以上才重建，地图端还会再节流一次。
+          final current = _userHeading.value;
+          // 转动 3° 以上只更新地图，避免重建面板并重算附近楼宇与课程。
           if (!mounted ||
               (current != null && headingDelta(current, degrees).abs() < 3)) {
             return;
           }
-          setState(() => _userHeading = degrees);
+          _userHeading.value = degrees;
         },
         onError: (Object _) {
           unawaited(_headingSub?.cancel());
           _headingSub = null;
-          if (mounted) setState(() => _userHeading = null);
+          if (mounted) _userHeading.value = null;
         },
         cancelOnError: true,
       );
@@ -260,6 +260,8 @@ class _CampusMapPageState extends State<CampusMapPage>
           unawaited(_locationSub?.cancel());
           unawaited(_headingSub?.cancel());
           _locationSub = null;
+          _headingSub = null;
+          if (mounted) _userHeading.value = null;
         },
         cancelOnError: true,
       );
@@ -460,6 +462,8 @@ class _CampusMapPageState extends State<CampusMapPage>
     _searchTimer?.cancel();
     _sheetTimer?.cancel();
     unawaited(_locationSub?.cancel());
+    unawaited(_headingSub?.cancel());
+    _userHeading.dispose();
     _searchRevision++;
     _sheet.removeListener(_sheetChanged);
     _placeRevision++;
@@ -907,70 +911,72 @@ class _CampusMapPageState extends State<CampusMapPage>
                                   wide: wide,
                                   message: _campus.warning,
                                 ))
-                        : CampusMapCanvas(
-                            styleUrl: _style,
-                            useNativeMap: widget.useNativeMap,
-                            places: _campus.places,
-                            shuttleVehicles: _shuttle.vehicles,
-                            shuttleDirections: _shuttle.directions,
-                            selectedPlace: _place,
-                            floor: _floor,
-                            selectedRoom: _room,
-                            rooms: _floorData.rooms,
-                            buildingGeoJson: _campus.buildingGeoJson,
-                            featuresGeoJson: _campus.featuresGeoJson,
-                            floorGeoJson: _floorData.geoJson,
-                            ghostFloorsGeoJson: _ghostFloors,
-                            streetCoverageGeoJson:
-                                _campus.streetCoverageGeoJson,
-                            routeGeoJson: _route?.geoJson,
-                            streetCoverage: _layer == CampusMapLayer.streetView,
-                            mapLayer: _layer,
-                            showRoute: _route != null,
-                            routePassedGeoJson: _isNavigating
-                                ? _routePassed
-                                : null,
-                            navigating: _following,
-                            fitRoute: !_isNavigating || _overview,
-                            navPoint: _navPoint,
-                            navBearing: _isNavigating
-                                ? _navProgress?.bearing
-                                : null,
-                            category: _category,
-                            resetToken: _resetToken,
-                            zoomDelta: _zoomDelta,
-                            userPoint: _navPoint ?? _userPoint,
-                            userHeading: _userPoint == null
-                                ? null
-                                : _userHeading,
-                            focusToken: _focusToken,
-                            markerPlaces: _markerPlaces(),
-                            viewportInsets: _isNavigating
-                                // 导航时把自己放在屏幕偏下处，多看前方的路（同百度）。
-                                ? EdgeInsets.only(
-                                    top: _topInset + 140,
-                                    bottom: _navInset,
-                                  )
-                                : wide
-                                ? EdgeInsets.only(
-                                    left: 352 + 32,
-                                    top: _route == null ? 0 : _topInset,
-                                  )
-                                : EdgeInsets.only(
-                                    top: _route == null ? 0 : _topInset,
-                                    bottom: _place == null ? 0 : _sheetInset,
-                                  ),
-                            onPlaceSelected: _selectPlace,
-                            onRoomSelected: (room) {
-                              _routeRevision++;
-                              setState(() {
-                                _room = room;
-                                _route = null;
-                                _routing = false;
-                              });
-                              _expandSheet(.43);
-                            },
-                            onStreetEntry: _openStreet,
+                        : ValueListenableBuilder<double?>(
+                            valueListenable: _userHeading,
+                            builder: (context, heading, _) => CampusMapCanvas(
+                              styleUrl: _style,
+                              useNativeMap: widget.useNativeMap,
+                              places: _campus.places,
+                              shuttleVehicles: _shuttle.vehicles,
+                              shuttleDirections: _shuttle.directions,
+                              selectedPlace: _place,
+                              floor: _floor,
+                              selectedRoom: _room,
+                              rooms: _floorData.rooms,
+                              buildingGeoJson: _campus.buildingGeoJson,
+                              featuresGeoJson: _campus.featuresGeoJson,
+                              floorGeoJson: _floorData.geoJson,
+                              ghostFloorsGeoJson: _ghostFloors,
+                              streetCoverageGeoJson:
+                                  _campus.streetCoverageGeoJson,
+                              routeGeoJson: _route?.geoJson,
+                              streetCoverage:
+                                  _layer == CampusMapLayer.streetView,
+                              mapLayer: _layer,
+                              showRoute: _route != null,
+                              routePassedGeoJson: _isNavigating
+                                  ? _routePassed
+                                  : null,
+                              navigating: _following,
+                              fitRoute: !_isNavigating || _overview,
+                              navPoint: _navPoint,
+                              navBearing: _isNavigating
+                                  ? _navProgress?.bearing
+                                  : null,
+                              category: _category,
+                              resetToken: _resetToken,
+                              zoomDelta: _zoomDelta,
+                              userPoint: _navPoint ?? _userPoint,
+                              userHeading: _userPoint == null ? null : heading,
+                              focusToken: _focusToken,
+                              markerPlaces: _markerPlaces(),
+                              viewportInsets: _isNavigating
+                                  // 导航时把自己放在屏幕偏下处，多看前方的路（同百度）。
+                                  ? EdgeInsets.only(
+                                      top: _topInset + 140,
+                                      bottom: _navInset,
+                                    )
+                                  : wide
+                                  ? EdgeInsets.only(
+                                      left: 352 + 32,
+                                      top: _route == null ? 0 : _topInset,
+                                    )
+                                  : EdgeInsets.only(
+                                      top: _route == null ? 0 : _topInset,
+                                      bottom: _place == null ? 0 : _sheetInset,
+                                    ),
+                              onPlaceSelected: _selectPlace,
+                              onRoomSelected: (room) {
+                                _routeRevision++;
+                                setState(() {
+                                  _room = room;
+                                  _route = null;
+                                  _routing = false;
+                                });
+                                _expandSheet(.43);
+                              },
+                              onStreetEntry: _openStreet,
+                            ),
                           ),
                   ),
                   if (_isNavigating)

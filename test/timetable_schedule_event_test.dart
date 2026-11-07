@@ -284,6 +284,18 @@ void main() {
       );
       await tester.pump();
       expect(save().onPressed, isNotNull);
+      final saveButton = save();
+      final title = tester
+          .widget<TextFormField>(find.byKey(const Key('schedule_form_title')))
+          .controller!;
+      title.selection = const TextSelection.collapsed(offset: 1);
+      await tester.pump();
+      expect(save(), same(saveButton), reason: '光标变化不重建整张日程表单');
+      title.value = title.value.copyWith(
+        composing: const TextRange(start: 0, end: 2),
+      );
+      await tester.pump();
+      expect(save(), same(saveButton), reason: '输入法 composing 不影响保存按钮');
       await tester.tap(find.byKey(const Key('schedule_form_save')));
       await _settleIo(tester);
       final saved = _c.scheduleEvents.single;

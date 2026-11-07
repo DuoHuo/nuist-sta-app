@@ -203,15 +203,17 @@ class TimetableController extends ChangeNotifier {
         final week = actualWeek(tomorrow);
         // 无开学日时 actualWeek 为 null，停止；有开学日则始终有周次（可超出学期）。
         if (week == null) break;
+        final outsideTerm = week < 1 || week > totalWeeks;
         final payload = buildNextDayReminder(
           tomorrow: tomorrow,
-          courses: coursesOnDate(tomorrow),
+          // 假期文案不读取课程；跳过查询也避免 400 天空结果挤掉网格的近期缓存。
+          courses: outsideTerm ? const [] : coursesOnDate(tomorrow),
           periods: periods,
           startTimeOf: (item) =>
               timeForSlot(item.course, item.slot, date: tomorrow).start,
           loggedIn: _portalBound,
           hasCache: true,
-          outsideTerm: week < 1 || week > totalWeeks,
+          outsideTerm: outsideTerm,
         );
         if (payload != null) {
           payloads[nextDayReminderDateKey(eve)] = payload.toJson();
@@ -563,12 +565,38 @@ class TimetableController extends ChangeNotifier {
   List<Course> conflictsFor(CourseSlot candidate, {String? excludeId}) =>
       courseConflicts(combinedCourses, candidate, excludeId: excludeId);
 
-  /// 网格展示用合并列表：教务在前、手动在后。
-  List<Course> get combinedCourses =>
-      List.unmodifiable([..._applied.courses, ..._manualCourses]);
+  Object? _combinedCourseSources;
+  List<Course> _combinedCourses = const [];
+
+  /// 网格展示用合并列表：教务在前、手动在后；源数据变化时才重新合并。
+  List<Course> get combinedCourses {
+    final applied = _applied.courses;
+    final sources = (applied, _manualCourses);
+    if (_combinedCourseSources != sources) {
+      _combinedCourseSources = sources;
+      _combinedCourses = List.unmodifiable([...applied, ..._manualCourses]);
+    }
+    return _combinedCourses;
+  }
 
   /// 同 [combinedCourses]（周视图/首页使用）。
   List<Course> get courses => combinedCourses;
+
+  /// 周网格内容的变化标识，仅供界面比较，不包含临时浏览周或同步进度。
+  /// 所有内容和配色集合均以新引用替换；布局尺寸、主题和系统日期由界面监听。
+  Object get weekGridContentKey => (
+    _snapshot,
+    _manualCourses,
+    _overrides,
+    _courseEdits,
+    _daySwaps,
+    _dateEdits,
+    _scheduleEvents,
+    _examOverrides,
+    _userColors,
+    _otherColors,
+    courseColorMap,
+  );
 
   /// 学期固定为 20 周，不随课程或考试安排变化，无课周也可浏览。
   int get totalWeeks => kDefaultTotalWeeks;
@@ -1195,6 +1223,13 @@ class TimetableController extends ChangeNotifier {
     _manualCourses = const [];
     _overrides = const [];
     _effJwxt = null;
+    _combinedCourseSources = null;
+    _combinedCourses = const [];
+    _dayCellSources = null;
+    _dayCells.clear();
+    _effectiveEventSources = null;
+    _effectiveEventCache = const [];
+    _eventsByDate.clear();
     _scheduleEvents = const [];
     _otherColors = const {};
     _userColors = const {};
@@ -2277,31 +2312,54 @@ class TimetableController extends ChangeNotifier {
     }
   }
 
+  Object? _effectiveEventSources;
+  List<ScheduleEvent> _effectiveEventCache = const [];
+  final _eventsByDate = <DateTime, List<ScheduleEvent>>{};
+
   /// 套用考试覆盖后的日程（删除的教务考试不在其中），id 不变。
-  List<ScheduleEvent> get _effectiveEvents => [
-    for (final e in _scheduleEvents)
-      if (!e.isFromJwxt)
-        e
-      else if (_examOverrides[e.jwxtKey] case final o?)
-        ?o.applyTo(e)
-      else
-        e,
-  ];
+  /// 日程与覆盖记录都按新集合替换，翻周等界面通知不重复套用和排序。
+  List<ScheduleEvent> get _effectiveEvents {
+    final sources = (_scheduleEvents, _examOverrides);
+    if (_effectiveEventSources != sources) {
+      _effectiveEventSources = sources;
+      _effectiveEventCache = List.unmodifiable([
+        for (final e in _scheduleEvents)
+          if (!e.isFromJwxt)
+            e
+          else if (_examOverrides[e.jwxtKey] case final o?)
+            ?o.applyTo(e)
+          else
+            e,
+      ]);
+      _eventsByDate.clear();
+      for (final event in _effectiveEventCache) {
+        final date = event.date;
+        (_eventsByDate[DateTime(date.year, date.month, date.day)] ??= []).add(
+          event,
+        );
+      }
+      for (final events in _eventsByDate.values) {
+        events.sort((a, b) => a.start.compareTo(b.start));
+      }
+    }
+    return _effectiveEventCache;
+  }
 
   /// 全部日程（考试 + 其他，含教务与手动；已套用教务考试的编辑/删除），
   /// 未按 showExams 开关过滤。
-  List<ScheduleEvent> get scheduleEvents => List.unmodifiable(_effectiveEvents);
+  List<ScheduleEvent> get scheduleEvents => _effectiveEvents;
 
   /// 某天要显示的日程：考试受 [TimetableSettings.showExams] 控制，「其他」不受。
   /// 按开始时间排序。
-  List<ScheduleEvent> scheduleEventsOn(DateTime date) => [
-    for (final e in _effectiveEvents)
-      if (e.date.year == date.year &&
-          e.date.month == date.month &&
-          e.date.day == date.day &&
-          (!e.isExam || settings.showExams))
-        e,
-  ]..sort((a, b) => a.start.compareTo(b.start));
+  List<ScheduleEvent> scheduleEventsOn(DateTime date) {
+    _effectiveEvents;
+    return [
+      for (final e
+          in _eventsByDate[DateTime(date.year, date.month, date.day)] ??
+              const <ScheduleEvent>[])
+        if (!e.isExam || settings.showExams) e,
+    ];
+  }
 
   /// 首页卡片用：今天（[now] 默认 [clock]）最后一个可见项目的结束时间。
   /// 计入当天的课（已套用调课/编辑/删除）+ 可见日程（showExams 关时不计考试，
@@ -2924,6 +2982,35 @@ class TimetableController extends ChangeNotifier {
   ///   对不上的记录忽略（不删）。挪到别的日期的记录在目标日期显示。
   /// 每格带 [GridCell.date]（本列日期）。
   List<GridCell> cellsForDay(int week, int day) {
+    // 只保留最近三周规模的列，翻周/拖动重建和首页读取可复用；导出整学期
+    // 或生成长期提醒时不会无限积累。课程、覆盖、调课集合均以新引用替换。
+    final sources = (
+      combinedCourses,
+      _daySwaps,
+      _dateEdits,
+      settings.showNonCurrentWeek,
+      weekStartDate(1),
+    );
+    if (_dayCellSources != sources) {
+      _dayCellSources = sources;
+      _dayCells.clear();
+    }
+    final key = (week, day);
+    final cached = _dayCells.remove(key);
+    if (cached != null) {
+      _dayCells[key] = cached;
+      return cached;
+    }
+    final cells = List<GridCell>.unmodifiable(_buildCellsForDay(week, day));
+    if (_dayCells.length >= 21) _dayCells.remove(_dayCells.keys.first);
+    _dayCells[key] = cells;
+    return cells;
+  }
+
+  Object? _dayCellSources;
+  final _dayCells = <(int, int), List<GridCell>>{};
+
+  List<GridCell> _buildCellsForDay(int week, int day) {
     final date = dateOfColumn(week, day);
     final candidates = (_daySwaps.isEmpty && _dateEdits.isEmpty)
         ? _baseCandidates(week, day)

@@ -11,6 +11,23 @@ const _terms = [
   AppSelectOption(value: 3, label: '第三学期'),
 ];
 
+class _ReadTrackedOption extends AppSelectOption<int> {
+  const _ReadTrackedOption({
+    required super.value,
+    required super.label,
+    super.hint,
+    required this.onLabelRead,
+  });
+
+  final VoidCallback onLabelRead;
+
+  @override
+  String get label {
+    onLabelRead();
+    return super.label;
+  }
+}
+
 List<AppSelectOption<int>> _buildings() => [
   for (var index = 1; index <= 9; index++)
     AppSelectOption(
@@ -239,6 +256,173 @@ void main() {
     }
   });
 
+  testWidgets('长选项列表首次展开不测量屏外项，键盘动画和搜索复用缓存', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(400, 850);
+    addTearDown(tester.view.reset);
+    final selected = ValueNotifier<int?>(0);
+    addTearDown(selected.dispose);
+    var offscreenReads = 0;
+    final options = [
+      for (var index = 0; index < 119; index++)
+        AppSelectOption(value: index, label: '选项 $index'),
+      _ReadTrackedOption(
+        value: 119,
+        label: '选项 119',
+        hint: '需要精确测量的屏外补充说明',
+        onLabelRead: () => offscreenReads++,
+      ),
+    ];
+    await tester.pumpWidget(_host(_controlled(selected, options)));
+    await _open(tester);
+    expect(find.text('选项 119'), findsNothing);
+    final initialReads = offscreenReads;
+    expect(initialReads, 1, reason: '仅建立搜索文本，未测量屏外选项');
+    options.add(const AppSelectOption(value: 120, label: '打开后添加的选项'));
+
+    await tester.tap(_searchField());
+    for (final inset in [50.0, 100.0, 150.0, 200.0, 250.0, 0.0]) {
+      tester.view.viewInsets = FakeViewPadding(bottom: inset);
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    // 末项始终在屏外；键盘不能重新遍历其文本或重新测量整张候选列表。
+    expect(offscreenReads, initialReads);
+    await tester.enterText(_searchField(), '选项 1');
+    await tester.pumpAndSettle();
+    expect(find.text('选项 119'), findsNothing);
+    expect(offscreenReads, initialReads);
+    await tester.tap(find.byTooltip('清空搜索'));
+    await tester.pumpAndSettle();
+    expect(offscreenReads, initialReads);
+    await tester.enterText(_searchField(), '打开后添加');
+    await tester.pumpAndSettle();
+    expect(find.text('没有匹配的选项'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('键盘连续升起时保留搜索头部与已构建候选项', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(400, 850);
+    addTearDown(tester.view.reset);
+    final selected = ValueNotifier<int?>(0);
+    addTearDown(selected.dispose);
+    await tester.pumpWidget(
+      _host(
+        _controlled(selected, [
+          for (var index = 0; index < 120; index++)
+            AppSelectOption(value: index, label: '选项 $index'),
+        ]),
+      ),
+    );
+    await _open(tester);
+    await tester.tap(_searchField());
+    await tester.pumpAndSettle();
+    final search = tester.widget(_searchField());
+    final rebuilds = <String, int>{};
+    final previous = debugOnRebuildDirtyWidget;
+    addTearDown(() => debugOnRebuildDirtyWidget = previous);
+    debugOnRebuildDirtyWidget = (element, builtOnce) {
+      previous?.call(element, builtOnce);
+      final name = element.widget.runtimeType.toString();
+      if (name == '_OptionContent' ||
+          name == 'CustomScrollView' ||
+          name.startsWith('_AppSelectSheet<')) {
+        rebuilds[name] = (rebuilds[name] ?? 0) + 1;
+      }
+    };
+    for (var frame = 1; frame <= 12; frame++) {
+      tester.view.viewInsets = FakeViewPadding(bottom: frame * 20.0);
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(rebuilds, isEmpty, reason: '键盘 12 帧的重复构建：$rebuilds');
+    expect(tester.widget(_searchField()), same(search));
+    expect(tester.getRect(_searchField()).bottom, lessThan(850 - 240));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('选项高度缓存随面板宽度和系统字体缩放失效', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(600, 1000);
+    addTearDown(tester.view.reset);
+    final selected = ValueNotifier<int?>(null);
+    addTearDown(selected.dispose);
+    const firstLabel = '用于查询的教学楼及附属楼层，包含需要完整显示的长选项名称';
+    const firstHint = '主楼、附属教室以及更多补充说明都必须保持完整显示';
+    var offscreenReads = 0;
+    final options = [
+      const AppSelectOption(value: 0, label: firstLabel, hint: firstHint),
+      for (var index = 1; index < 119; index++)
+        AppSelectOption(value: index, label: '选项 $index'),
+      _ReadTrackedOption(
+        value: 119,
+        label: '选项 119',
+        onLabelRead: () => offscreenReads++,
+      ),
+    ];
+    Widget host({double scale = 1}) => _host(
+      _controlled(selected, options),
+      textScaler: TextScaler.linear(scale),
+    );
+    Finder firstButton() => find.ancestor(
+      of: find.text(firstLabel),
+      matching: find.byType(TextButton),
+    );
+
+    await tester.pumpWidget(host());
+    await _open(tester);
+    final wideHeight = tester.getSize(firstButton()).height;
+    final initialReads = offscreenReads;
+
+    tester.view.physicalSize = const Size(320, 1000);
+    await tester.pumpAndSettle();
+    final narrowHeight = tester.getSize(firstButton()).height;
+    expect(narrowHeight, greaterThan(wideHeight));
+    expect(offscreenReads, initialReads, reason: '变窄后仍不测量屏外项');
+    final narrowReads = offscreenReads;
+
+    await tester.pumpWidget(host(scale: 1.6));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(firstButton()).height, greaterThan(narrowHeight));
+    expect(offscreenReads, narrowReads, reason: '字体变大后仍不测量屏外项');
+    expect(
+      tester.getRect(find.text(firstHint)).bottom,
+      lessThanOrEqualTo(tester.getRect(firstButton()).bottom),
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.enterText(_searchField(), '119');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('选项 119'));
+    await tester.pumpAndSettle();
+    expect(selected.value, 119);
+    expect(find.byType(BottomSheet), findsNothing);
+  });
+
+  testWidgets('长短标签混排时首次展开能定位到已选末项', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(360, 800);
+    addTearDown(tester.view.reset);
+    final selected = ValueNotifier<int?>(119);
+    addTearDown(selected.dispose);
+    final options = [
+      for (var index = 0; index < 120; index++)
+        AppSelectOption(
+          value: index,
+          label: index < 30 ? '选项 $index' : '需要完整换行显示的教学楼及附属楼层选项 $index',
+          hint: index < 30 ? null : '包含更多教室、楼层与场地的补充说明，不能按短选项的高度截断',
+        ),
+    ];
+    await tester.pumpWidget(_host(_controlled(selected, options)));
+    await _open(tester);
+    expect(find.text(options.last.label).hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text(options.last.label).hitTestable());
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(selected.value, 119);
+  });
+
   testWidgets('禁用、加载及空列表保留提示且不响应选择', (tester) async {
     final changes = <int>[];
     await tester.pumpWidget(
@@ -431,8 +615,26 @@ void main() {
       );
       await _open(tester);
       await tester.tap(_searchField());
-      tester.view.viewInsets = FakeViewPadding(bottom: scenario.keyboard);
+      await tester.enterText(_searchField(), '教学楼');
       await tester.pumpAndSettle();
+      final searchController = tester
+          .widget<TextField>(_searchField())
+          .controller!;
+      searchController.selection = const TextSelection.collapsed(offset: 1);
+      await tester.pump();
+      final searchElement = tester.element(_searchField());
+      final focused = FocusManager.instance.primaryFocus;
+      for (var frame = 1; frame <= 12; frame++) {
+        tester.view.viewInsets = FakeViewPadding(
+          bottom: scenario.keyboard * frame / 12,
+        );
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await tester.pumpAndSettle();
+      expect(tester.element(_searchField()), same(searchElement));
+      expect(FocusManager.instance.primaryFocus, same(focused));
+      expect(searchController.text, '教学楼');
+      expect(searchController.selection.baseOffset, 1);
       await tester.ensureVisible(_searchField());
       await tester.pumpAndSettle();
       expect(

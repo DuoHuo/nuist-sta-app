@@ -32,6 +32,9 @@ class _TimetablePageState extends State<TimetablePage> {
   final _controller = TimetableController.instance;
   PageController? _pageController;
   bool _ready = false;
+  Object? _weekPagerInputs;
+  Widget? _weekPager;
+  double? _dragStartPage;
   bool _viewingWeekCleared = false;
   ScheduleEvent? _focusedEvent;
   bool _eventFocusRevealed = false;
@@ -351,6 +354,20 @@ class _TimetablePageState extends State<TimetablePage> {
     _controller.setViewingWeek(index + 1);
   }
 
+  bool _trackWeekDrag(ScrollNotification notification) {
+    if (notification.depth != 0 ||
+        notification.metrics.axis != Axis.horizontal) {
+      return false;
+    }
+    if (notification is ScrollStartNotification &&
+        notification.dragDetails != null) {
+      _dragStartPage = _pageController?.page?.roundToDouble();
+    } else if (notification is ScrollEndNotification) {
+      _dragStartPage = null;
+    }
+    return false;
+  }
+
   /// item 5：顶栏周数下方的横向周条是否展开。
   bool _weekStripOpen = false;
 
@@ -358,6 +375,8 @@ class _TimetablePageState extends State<TimetablePage> {
 
   /// 周条选中某周：先收起，再按 item 3 的规则（[animateWeekPage]）翻过去。
   Future<void> _selectWeek(int week) async {
+    // 正在吸附时改为程序化滚动不一定产生 ScrollEnd，不能沿用旧拖动的相邻周限制。
+    _dragStartPage = null;
     setState(() => _weekStripOpen = false);
     final pc = _pageController;
     if (pc != null && pc.hasClients) {
@@ -450,42 +469,7 @@ class _TimetablePageState extends State<TimetablePage> {
                       child:
                           _controller.hasCourses ||
                               _controller.scheduleEvents.isNotEmpty
-                          ? PageView.builder(
-                              controller: _pageController,
-                              itemCount: _totalWeeks,
-                              onPageChanged: _onPageChanged,
-                              itemBuilder: (context, index) {
-                                final week = index + 1;
-                                if (TimetablePerf.armed) {
-                                  WidgetsBinding.instance.addPostFrameCallback(
-                                    (_) => TimetablePerf.markGridFirstFrame(
-                                      courses: _controller.courses.length,
-                                    ),
-                                  );
-                                }
-                                return WeekGrid(
-                                  week: week,
-                                  controller: _controller,
-                                  revealFocusedEvent: !_eventFocusRevealed,
-                                  onFocusedEventRevealed: () {
-                                    _eventFocusRevealed = true;
-                                  },
-                                  focusedEvent:
-                                      _focusedEvent != null &&
-                                          _controller.actualWeek(
-                                                _focusedEvent!.date,
-                                              ) ==
-                                              week
-                                      ? _focusedEvent
-                                      : null,
-                                  onCourseTap: (cell) => showCourseDetailSheet(
-                                    context,
-                                    cell: cell,
-                                    controller: _controller,
-                                  ),
-                                );
-                              },
-                            )
+                          ? _buildWeekPager()
                           : _EmptyState(
                               loggedIn: _controller.portalBound,
                               loading: _controller.loading,
@@ -508,9 +492,122 @@ class _TimetablePageState extends State<TimetablePage> {
     );
   }
 
+  Widget _buildWeekPager() {
+    final now = DateTime.now();
+    final inputs = (
+      _controller.weekGridContentKey,
+      _controller.weekStartDate(1),
+      DateTime(now.year, now.month, now.day),
+      _pageController,
+      _focusedEvent,
+      _eventFocusRevealed,
+    );
+    // PageView 经过半页时会通知浏览周，只更新页头和周条。保留同一个组件，
+    // 避免滚动过程中再次构建两侧周网格及其所有文字；真实内容变化仍立即更新。
+    if (_weekPagerInputs == inputs) return _weekPager!;
+    _weekPagerInputs = inputs;
+    return _weekPager = NotificationListener<ScrollNotification>(
+      onNotification: _trackWeekDrag,
+      child: PageView.builder(
+        controller: _pageController,
+        // 自定义物理模型负责吸附，避免 PageView 再叠加默认半页阈值。
+        pageSnapping: false,
+        physics: _WeekPagePhysics(dragStartPage: () => _dragStartPage),
+        itemCount: _totalWeeks,
+        onPageChanged: _onPageChanged,
+        itemBuilder: (context, index) {
+          final week = index + 1;
+          if (TimetablePerf.armed) {
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => TimetablePerf.markGridFirstFrame(
+                courses: _controller.courses.length,
+              ),
+            );
+          }
+          return WeekGrid(
+            week: week,
+            controller: _controller,
+            revealFocusedEvent: !_eventFocusRevealed,
+            onFocusedEventRevealed: () {
+              _eventFocusRevealed = true;
+            },
+            focusedEvent:
+                _focusedEvent != null &&
+                    _controller.actualWeek(_focusedEvent!.date) == week
+                ? _focusedEvent
+                : null,
+            onCourseTap: (cell) => showCourseDetailSheet(
+              context,
+              cell: cell,
+              controller: _controller,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   String _dateLabel() {
     final now = DateTime.now();
     return '${now.year}/${now.month}/${now.day}';
+  }
+}
+
+/// 低速拖过四分之一页即可翻周，跟手位移不变；速度足够时沿用快速甩动规则。
+class _WeekPagePhysics extends PageScrollPhysics {
+  const _WeekPagePhysics({required this.dragStartPage, super.parent});
+
+  final double? Function() dragStartPage;
+
+  @override
+  _WeekPagePhysics applyTo(ScrollPhysics? ancestor) => _WeekPagePhysics(
+    dragStartPage: dragStartPage,
+    parent: buildParent(ancestor),
+  );
+
+  @override
+  Simulation? createBallisticSimulation(
+    ScrollMetrics position,
+    double velocity,
+  ) {
+    if ((velocity <= 0 && position.pixels <= position.minScrollExtent) ||
+        (velocity >= 0 && position.pixels >= position.maxScrollExtent)) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+    final start = dragStartPage();
+    if (start == null) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+    final page = position is PageMetrics
+        ? position.page!
+        : position.pixels / position.viewportDimension;
+    final tolerance = toleranceFor(position);
+    final double targetPage;
+    if (velocity.abs() > tolerance.velocity) {
+      // 与 PageScrollPhysics 一样按松手速度选方向，单次拖动最多进入相邻一周。
+      targetPage = (page + velocity.sign * 0.5).roundToDouble().clamp(
+        start - 1,
+        start + 1,
+      );
+    } else {
+      final distance = page - start;
+      targetPage = start + (distance.abs() >= 0.25 ? distance.sign : 0);
+    }
+    final pageExtent =
+        position.viewportDimension *
+        (position is PageMetrics ? position.viewportFraction : 1);
+    final target = (position.pixels + (targetPage - page) * pageExtent).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    if (target == position.pixels) return null;
+    return ScrollSpringSimulation(
+      spring,
+      position.pixels,
+      target,
+      velocity,
+      tolerance: tolerance,
+    );
   }
 }
 

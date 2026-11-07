@@ -4,9 +4,11 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_api.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_detail_page.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_models.dart';
+import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_store.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_tagger.dart';
 
 void main() {
@@ -78,21 +80,25 @@ void main() {
         </div>
       ''');
     addTearDown(() => dio.close(force: true));
-    await tester.pumpWidget(
-      MaterialApp(
-        home: BulletinDetailPage(
-          bulletin: const Bulletin(
-            id: '123',
-            title: '测试公告',
-            url: 'https://bulletin.campus.invalid/info/1/123.htm',
-            officialCategory: '其他',
-            publisher: '测试单位',
-            publishedAt: '2026-10-19',
+    final api = _AwaitableBulletinApi(dio: dio);
+    await tester.runAsync(() async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BulletinDetailPage(
+            bulletin: const Bulletin(
+              id: '123',
+              title: '测试公告',
+              url: 'https://bulletin.campus.invalid/info/1/123.htm',
+              officialCategory: '其他',
+              publisher: '测试单位',
+              publishedAt: '2026-10-19',
+            ),
+            api: api,
           ),
-          api: BulletinApi(dio: dio),
         ),
-      ),
-    );
+      );
+      await api.detail;
+    });
     await tester.pumpAndSettle();
 
     expect(find.text('请提交申请材料。'), findsOneWidget);
@@ -102,6 +108,171 @@ void main() {
       tester.widget<ListTile>(find.widgetWithText(ListTile, '申请表.pdf')).onTap,
       isNotNull,
     );
+  });
+
+  test('接口后台解析列表与长正文，保留分页、附件和网页兜底', () async {
+    final uri = Uri.parse('https://bulletin.campus.invalid/');
+    const listHtml = '''
+      <ul><li class="news">
+        <a href="/info/1001/12345.htm">专题学术报告通知</a>
+        <span class="wjj">[学术报告]</span>
+        <span class="news_org">测试单位</span>
+        <span class="news_date">2026-09-27</span>
+      </li></ul>
+      <div class="wp_paging">总共 100 条 <a href="index_2.htm">下页</a></div>
+    ''';
+    final dio = Dio()..httpClientAdapter = _BulletinAdapter(listHtml);
+    addTearDown(() => dio.close(force: true));
+    final api = BulletinApi(dio: dio);
+    final page = await api.fetchPage(uri, pageNumber: 1);
+    expect(
+      page.toJson(),
+      parseBulletinPage(listHtml, currentUri: uri, pageNumber: 1).toJson(),
+    );
+
+    dio.httpClientAdapter = _BulletinAdapter(
+      '<div class="wp_articlecontent">'
+      '${List.generate(1000, (i) => '<p>合成段落 $i</p>').join()}'
+      '<a href="/files/test.pdf">测试附件.pdf</a></div>',
+    );
+    final document = await api.fetchDetail(page.items.single);
+    expect(document!.blocks.first.text, '合成段落 0');
+    expect(document.blocks.map((b) => b.text), contains('合成段落 999'));
+    expect(document.attachments.single.name, '测试附件.pdf');
+    expect(document.attachments.single.url, '${uri}files/test.pdf');
+
+    dio.httpClientAdapter = _BulletinAdapter('该信息仅允许校内地址访问');
+    expect(await api.fetchDetail(page.items.single), isNull);
+  });
+
+  for (final dark in [false, true]) {
+    for (final kind in [
+      BulletinDetailBlockKind.bulletList,
+      BulletinDetailBlockKind.numberedList,
+      BulletinDetailBlockKind.table,
+    ]) {
+      testWidgets('长公告逐行挂载并保留末尾附件：$kind，dark=$dark', (tester) async {
+        tester.view.physicalSize = const Size(375, 667);
+        tester.view.devicePixelRatio = 1;
+        tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+        addTearDown(tester.view.reset);
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        final api = _DocumentBulletinApi(
+          BulletinDetailDocument(
+            blocks: [
+              const BulletinDetailBlock(
+                kind: BulletinDetailBlockKind.heading,
+                text: '正文标题',
+              ),
+              BulletinDetailBlock(
+                kind: kind,
+                items: List.generate(200, (index) => '合成名单条目 $index'),
+              ),
+              const BulletinDetailBlock(
+                kind: BulletinDetailBlockKind.paragraph,
+                text: '正文结束',
+              ),
+            ],
+            attachments: const [
+              BulletinAttachment(
+                name: '名单说明.pdf',
+                url: 'https://bulletin.campus.invalid/files/example.pdf',
+              ),
+            ],
+          ),
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: dark ? appDarkTheme() : appLightTheme(),
+            home: BulletinDetailPage(
+              bulletin: const Bulletin(
+                id: 'synthetic-long',
+                title: '测试公告',
+                url: 'https://bulletin.campus.invalid/info/long.htm',
+                officialCategory: '其他',
+                publisher: '测试单位',
+                publishedAt: '2026-11-07',
+              ),
+              api: api,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('正文标题'), findsOneWidget);
+        expect(find.text('合成名单条目 0'), findsOneWidget);
+        expect(find.text('合成名单条目 199', skipOffstage: false), findsNothing);
+        expect(
+          find
+              .byWidgetPredicate(
+                (widget) =>
+                    widget is Text &&
+                    (widget.data?.startsWith('合成名单条目') ?? false),
+                skipOffstage: false,
+              )
+              .evaluate()
+              .length,
+          lessThan(30),
+        );
+        await tester.scrollUntilVisible(
+          find.text('名单说明.pdf'),
+          500,
+          maxScrolls: 100,
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('正文结束'), findsOneWidget);
+        expect(find.text('合成名单条目 199'), findsOneWidget);
+        expect(find.text('合成名单条目 0', skipOffstage: false), findsNothing);
+        if (kind == BulletinDetailBlockKind.numberedList) {
+          expect(find.text('200.'), findsOneWidget);
+        }
+        expect(find.text('名单说明.pdf').hitTestable(), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+
+  test('公告缓存后台编解码保留全部字段，连续保存按调用顺序完成', () async {
+    final directory = await Directory.systemTemp.createTemp('bulletin-cache-');
+    addTearDown(() => directory.delete(recursive: true));
+    final store = BulletinStore(resolveDirectory: () async => directory);
+    final items = List.generate(
+      200,
+      (i) => Bulletin(
+        id: 'synthetic-$i',
+        title: '合成公告 $i',
+        url: 'https://bulletin.campus.invalid/info/1/$i.htm',
+        officialCategory: '学术报告',
+        publisher: '测试单位',
+        publishedAt: '2026-09-27',
+      ),
+    );
+    final data = BulletinLocalData(
+      subscription: const BulletinSubscription(
+        enabled: true,
+        topics: {BulletinTopic.academicTalks},
+      ),
+      pages: {'all|1': BulletinListPage(items: items, pageNumber: 1)},
+      feed: items.take(3).toList(),
+      knownIds: items.map((item) => item.id).toSet(),
+      baselineReady: true,
+    );
+    await store.save(data);
+    expect((await store.read()).toJson(), data.toJson());
+
+    final first = store.save(data);
+    const latest = BulletinLocalData(baselineReady: true);
+    final second = store.save(latest);
+    expect((await store.read()).toJson(), latest.toJson());
+    await Future.wait([first, second]);
+
+    final file = File(
+      '${directory.path}${Platform.pathSeparator}announcements'
+      '${Platform.pathSeparator}announcements.json',
+    );
+    await file.writeAsString('{');
+    expect((await store.read()).toJson(), const BulletinLocalData().toJson());
+    await store.save(data);
+    expect((await store.read()).toJson(), data.toJson());
   });
 
   group('公告附件下载文件名', () {
@@ -153,6 +324,26 @@ void main() {
       });
     }
   });
+}
+
+class _AwaitableBulletinApi extends BulletinApi {
+  _AwaitableBulletinApi({required super.dio});
+
+  Future<BulletinDetailDocument?>? detail;
+
+  @override
+  Future<BulletinDetailDocument?> fetchDetail(Bulletin bulletin) =>
+      detail = super.fetchDetail(bulletin);
+}
+
+class _DocumentBulletinApi extends BulletinApi {
+  _DocumentBulletinApi(this.document);
+
+  final BulletinDetailDocument document;
+
+  @override
+  Future<BulletinDetailDocument?> fetchDetail(Bulletin bulletin) async =>
+      document;
 }
 
 class _BulletinAdapter implements HttpClientAdapter {

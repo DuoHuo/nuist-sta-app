@@ -90,6 +90,7 @@ class ScheduleEventEditPage extends StatefulWidget {
 class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _title;
+  late bool _hasTitle;
   late final TextEditingController _location;
   late final TextEditingController _note;
   late final TextEditingController _courseCode;
@@ -114,6 +115,7 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
     _kind = i?.kind ?? widget.kind;
     _title = TextEditingController(text: i?.title ?? '')
       ..addListener(_onTitleChanged);
+    _hasTitle = _title.text.trim().isNotEmpty;
     _location = TextEditingController(text: i?.location ?? '');
     _note = TextEditingController(text: i?.note ?? '');
     _courseCode = TextEditingController(text: i?.courseCode ?? '');
@@ -134,7 +136,12 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
     }
   }
 
-  void _onTitleChanged() => setState(() {});
+  void _onTitleChanged() {
+    final hasTitle = _title.text.trim().isNotEmpty;
+    // 页面只关心保存按钮是否可用；文字、光标和输入法状态由输入框更新。
+    if (hasTitle == _hasTitle) return;
+    setState(() => _hasTitle = hasTitle);
+  }
 
   @override
   void dispose() {
@@ -246,7 +253,7 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
 
   @override
   Widget build(BuildContext context) {
-    final canSave = !_saving && _title.text.trim().isNotEmpty;
+    final canSave = !_saving && _hasTitle;
     return Scaffold(
       backgroundColor: TimetableTheme.colorsOf(context).pageBg,
       appBar: AppBar(

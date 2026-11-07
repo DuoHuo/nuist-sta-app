@@ -10,14 +10,18 @@ import 'innovation_credit_models.dart';
 
 /// 双创学分详情页：状态头（总分 / 成绩评定 / 项数）→ 全部已认定项目列表。
 class InnovationCreditPage extends StatefulWidget {
-  const InnovationCreditPage({super.key});
+  const InnovationCreditPage({super.key, this.controller});
+
+  /// 可注入独立状态；默认与学习页共享双创学分数据。
+  final InnovationCreditController? controller;
 
   @override
   State<InnovationCreditPage> createState() => _InnovationCreditPageState();
 }
 
 class _InnovationCreditPageState extends State<InnovationCreditPage> {
-  final _controller = InnovationCreditController.instance;
+  late final _controller =
+      widget.controller ?? InnovationCreditController.instance;
 
   @override
   void initState() {
@@ -36,14 +40,22 @@ class _InnovationCreditPageState extends State<InnovationCreditPage> {
         builder: (context, _) {
           final c = _controller;
           final credit = c.credit;
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            children: [
-              _StatusHeader(controller: c),
-              if (credit != null) ...[
-                const SizedBox(height: 12),
-                _ItemList(items: credit.items),
-              ],
+          return CustomScrollView(
+            slivers: [
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  12,
+                  16,
+                  credit == null ? 24 : 12,
+                ),
+                sliver: SliverToBoxAdapter(child: _StatusHeader(controller: c)),
+              ),
+              if (credit != null)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                  sliver: _ItemList(items: credit.items),
+                ),
             ],
           );
         },
@@ -190,30 +202,38 @@ class _ItemList extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     if (items.isEmpty) {
-      return _Card(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Center(
-            child: Text(
-              '暂无已认定的双创学分',
-              style: TextStyle(fontSize: 13, color: palette.hint),
+      return SliverToBoxAdapter(
+        child: _Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Center(
+              child: Text(
+                '暂无已认定的双创学分',
+                style: TextStyle(fontSize: 13, color: palette.hint),
+              ),
             ),
           ),
         ),
       );
     }
-    return _Card(
-      child: Column(
-        children: [
-          for (var i = 0; i < items.length; i++) ...[
-            _ItemTile(item: items[i]),
-            if (i != items.length - 1)
+    // 保留整张圆角卡片的外观，每个项目独立参与滚动视口的懒布局。
+    return DecoratedSliver(
+      decoration: BoxDecoration(
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      sliver: SliverList.builder(
+        itemCount: items.length,
+        itemBuilder: (context, index) => Column(
+          children: [
+            _ItemTile(item: items[index]),
+            if (index != items.length - 1)
               Padding(
                 padding: const EdgeInsets.only(left: 16),
                 child: Divider(height: 1, color: palette.rowDivider),
               ),
           ],
-        ],
+        ),
       ),
     );
   }

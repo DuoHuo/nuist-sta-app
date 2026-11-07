@@ -55,6 +55,10 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
   late final TextEditingController _teacher;
   late final TextEditingController _location;
   late final TextEditingController _note;
+  late (String, String, String, String) _lastText;
+  late (bool, int?) _lastBuiltTextState;
+  Object? _conflictInputs;
+  String? _conflictDescription;
   late final Course? _entryCourse;
   late final CourseSlot? _entrySlot;
   late final int _totalWeeks;
@@ -192,20 +196,50 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
       end: _end,
       userArgb: _userArgb,
     );
+    _lastText = (_name.text, _teacher.text, _location.text, _note.text);
     for (final field in [_name, _teacher, _location, _note]) {
       field.addListener(_changed);
     }
     if (widget.autofocusNote) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
+        final target = _noteAnchor.currentContext;
+        // 先定位备注再打开键盘，避免额外的滚动动画与 IME 逐帧避让同时抢位置。
+        if (target != null) Scrollable.ensureVisible(target, alignment: .25);
         _noteFocus.requestFocus();
-        _reveal(_noteAnchor);
       });
     }
   }
 
   void _changed() {
-    if (mounted) setState(() {});
+    final text = (_name.text, _teacher.text, _location.text, _note.text);
+    // 光标、选区和输入法 composing 由输入框自己处理，不必重算表单冲突。
+    if (!mounted || text == _lastText) return;
+    _lastText = text;
+    // 文本本身由输入框更新；只有未保存状态或自动配色变化才影响其余表单。
+    if (_textState == _lastBuiltTextState) return;
+    setState(() {});
+  }
+
+  (bool, int?) get _textState => (_dirty, _isExam ? null : _defaultColorIndex);
+
+  String? _describeConflicts(CourseSlot candidate) {
+    final inputs = (
+      widget.controller.combinedCourses,
+      candidate.day,
+      candidate.startNode,
+      candidate.endNode,
+      candidate.weeks,
+    );
+    // 输入课程名称、教师或备注不会改变时段冲突；数据或上课安排改变后再重算。
+    if (_conflictInputs != inputs) {
+      _conflictInputs = inputs;
+      _conflictDescription = describeManualConflicts(
+        candidate,
+        widget.controller.conflictsFor(candidate, excludeId: _entryCourse?.id),
+      );
+    }
+    return _conflictDescription;
   }
 
   @override
@@ -688,6 +722,7 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
 
   @override
   Widget build(BuildContext context) {
+    _lastBuiltTextState = _textState;
     final colors = TimetableTheme.colorsOf(context);
     final examWeek = _isExam && widget.cell?.date != null
         ? widget.controller.weekOfDate(widget.cell!.date!)
@@ -706,10 +741,7 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
             : '0',
       ).join(),
     );
-    final conflict = describeManualConflicts(
-      candidate,
-      widget.controller.conflictsFor(candidate, excludeId: _entryCourse?.id),
-    );
+    final conflict = _describeConflicts(candidate);
     final swatch = _userArgb == null
         ? TimetableTheme.autoCoursePair(
             _defaultColorIndex,
@@ -753,253 +785,257 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
                         keyboardDismissBehavior:
                             ScrollViewKeyboardDismissBehavior.onDrag,
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _textField(
-                              name: 'name',
-                              label: _isExam ? '考试名称' : '课程名称',
-                              controller: _name,
-                              focus: _nameFocus,
-                              nextFocus: _isExam
-                                  ? _locationFocus
-                                  : _teacherFocus,
-                              anchor: _nameAnchor,
-                              required: true,
-                              hint: '必填',
-                            ),
-                            _row(
-                              '课程类型',
-                              _dropdown<CourseKind>(
-                                key: const Key('course_form_kind'),
-                                label: '课程类型',
-                                value: _kind,
-                                options: [
-                                  const AppSelectOption(
-                                    value: CourseKind.standard,
-                                    label: '普通课',
-                                  ),
-                                  const AppSelectOption(
-                                    value: CourseKind.lab,
-                                    label: '实验课',
-                                  ),
-                                  const AppSelectOption(
-                                    value: CourseKind.pe,
-                                    label: '体育课',
-                                  ),
-                                  if (_isEdit)
-                                    const AppSelectOption(
-                                      value: CourseKind.exam,
-                                      label: '考试',
-                                    ),
-                                ],
-                                onChanged: (value) =>
-                                    setState(() => _kind = value),
-                              ),
-                            ),
-                            if (!_isExam)
+                        // 键盘推动视口和光标滚动时复用表单绘制，不重画屏外控件。
+                        child: RepaintBoundary(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
                               _textField(
-                                name: 'teacher',
-                                label: '任课教师',
-                                controller: _teacher,
-                                focus: _teacherFocus,
-                                nextFocus: _locationFocus,
-                                hint: '选填',
+                                name: 'name',
+                                label: _isExam ? '考试名称' : '课程名称',
+                                controller: _name,
+                                focus: _nameFocus,
+                                nextFocus: _isExam
+                                    ? _locationFocus
+                                    : _teacherFocus,
+                                anchor: _nameAnchor,
+                                required: true,
+                                hint: '必填',
                               ),
-                            _textField(
-                              name: 'location',
-                              label: _isExam ? '考试地点' : '上课地点',
-                              controller: _location,
-                              focus: _locationFocus,
-                              nextFocus: _noteFocus,
-                              hint: '教室、实验室或场地',
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.only(
-                                top: 24,
-                                bottom: 4,
-                              ),
-                              child: Text(
-                                _isExam ? '考试安排' : '上课安排',
-                                style: TextStyle(
-                                  color: colors.labelText,
-                                  fontSize: 13,
+                              _row(
+                                '课程类型',
+                                _dropdown<CourseKind>(
+                                  key: const Key('course_form_kind'),
+                                  label: '课程类型',
+                                  value: _kind,
+                                  options: [
+                                    const AppSelectOption(
+                                      value: CourseKind.standard,
+                                      label: '普通课',
+                                    ),
+                                    const AppSelectOption(
+                                      value: CourseKind.lab,
+                                      label: '实验课',
+                                    ),
+                                    const AppSelectOption(
+                                      value: CourseKind.pe,
+                                      label: '体育课',
+                                    ),
+                                    if (_isEdit)
+                                      const AppSelectOption(
+                                        value: CourseKind.exam,
+                                        label: '考试',
+                                      ),
+                                  ],
+                                  onChanged: (value) =>
+                                      setState(() => _kind = value),
                                 ),
                               ),
-                            ),
-                            _row(
-                              '星期',
-                              _dropdown<int>(
-                                key: Key('${_prefix}day'),
-                                label: '星期',
-                                value: _day,
-                                options: [
-                                  for (var day = 1; day <= 7; day++)
-                                    AppSelectOption(
-                                      value: day,
-                                      label: _dayLabels[day - 1],
-                                    ),
-                                ],
-                                onChanged: (value) =>
-                                    setState(() => _day = value),
+                              if (!_isExam)
+                                _textField(
+                                  name: 'teacher',
+                                  label: '任课教师',
+                                  controller: _teacher,
+                                  focus: _teacherFocus,
+                                  nextFocus: _locationFocus,
+                                  hint: '选填',
+                                ),
+                              _textField(
+                                name: 'location',
+                                label: _isExam ? '考试地点' : '上课地点',
+                                controller: _location,
+                                focus: _locationFocus,
+                                nextFocus: _noteFocus,
+                                hint: '教室、实验室或场地',
                               ),
-                            ),
-                            _row('节次', _periodFields()),
-                            _row(
-                              '实际时间',
-                              Semantics(
-                                liveRegion: true,
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  top: 24,
+                                  bottom: 4,
+                                ),
                                 child: Text(
-                                  _clockText,
-                                  key: const Key('course_form_clock'),
+                                  _isExam ? '考试安排' : '上课安排',
                                   style: TextStyle(
                                     color: colors.labelText,
                                     fontSize: 13,
                                   ),
                                 ),
                               ),
-                            ),
-                            KeyedSubtree(
-                              key: _weeksAnchor,
-                              child: KeyedSubtree(
-                                key: const Key('course_form_weeks'),
-                                child: _row(
-                                  _isExam ? '考试周次' : '上课周次',
-                                  _isExam
-                                      ? Text(
-                                          widget.cell?.date == null
-                                              ? '请从对应周的课程详情进入'
-                                              : '第 ${widget.controller.weekOfDate(widget.cell!.date!)} 周（仅这次课）',
-                                        )
-                                      : InkWell(
-                                          key: Key('${_prefix}weeks'),
-                                          onTap: _busy ? null : _pickWeeks,
-                                          child: ConstrainedBox(
-                                            constraints: const BoxConstraints(
-                                              minHeight: 52,
-                                            ),
-                                            child: Row(
-                                              children: [
-                                                Expanded(
-                                                  child: Text(
-                                                    _weeks.isEmpty
-                                                        ? '请选择周次'
-                                                        : formatWeeks(_weeks),
+                              _row(
+                                '星期',
+                                _dropdown<int>(
+                                  key: Key('${_prefix}day'),
+                                  label: '星期',
+                                  value: _day,
+                                  options: [
+                                    for (var day = 1; day <= 7; day++)
+                                      AppSelectOption(
+                                        value: day,
+                                        label: _dayLabels[day - 1],
+                                      ),
+                                  ],
+                                  onChanged: (value) =>
+                                      setState(() => _day = value),
+                                ),
+                              ),
+                              _row('节次', _periodFields()),
+                              _row(
+                                '实际时间',
+                                Semantics(
+                                  liveRegion: true,
+                                  child: Text(
+                                    _clockText,
+                                    key: const Key('course_form_clock'),
+                                    style: TextStyle(
+                                      color: colors.labelText,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              KeyedSubtree(
+                                key: _weeksAnchor,
+                                child: KeyedSubtree(
+                                  key: const Key('course_form_weeks'),
+                                  child: _row(
+                                    _isExam ? '考试周次' : '上课周次',
+                                    _isExam
+                                        ? Text(
+                                            widget.cell?.date == null
+                                                ? '请从对应周的课程详情进入'
+                                                : '第 ${widget.controller.weekOfDate(widget.cell!.date!)} 周（仅这次课）',
+                                          )
+                                        : InkWell(
+                                            key: Key('${_prefix}weeks'),
+                                            onTap: _busy ? null : _pickWeeks,
+                                            child: ConstrainedBox(
+                                              constraints: const BoxConstraints(
+                                                minHeight: 52,
+                                              ),
+                                              child: Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Text(
+                                                      _weeks.isEmpty
+                                                          ? '请选择周次'
+                                                          : formatWeeks(_weeks),
+                                                    ),
                                                   ),
-                                                ),
-                                                Icon(
-                                                  Icons.chevron_right,
-                                                  size: 20,
-                                                  color: colors.chevron,
-                                                ),
-                                              ],
+                                                  Icon(
+                                                    Icons.chevron_right,
+                                                    size: 20,
+                                                    color: colors.chevron,
+                                                  ),
+                                                ],
+                                              ),
                                             ),
                                           ),
-                                        ),
+                                  ),
                                 ),
                               ),
-                            ),
-                            if (_weeksError && !_isExam)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 8),
-                                child: Text(
-                                  '请至少选择一周',
-                                  style: TextStyle(color: colors.danger),
+                              if (_weeksError && !_isExam)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: Text(
+                                    '请至少选择一周',
+                                    style: TextStyle(color: colors.danger),
+                                  ),
                                 ),
-                              ),
-                            if (conflict != null)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 12),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Icon(
-                                      Icons.info_outline,
-                                      size: 20,
-                                      color: colors.warning,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        '$conflict，仍可保存。',
-                                        key: Key('${_prefix}conflict'),
-                                        style: TextStyle(
-                                          color: colors.labelText,
-                                          fontSize: 13,
+                              if (conflict != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 12),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Icon(
+                                        Icons.info_outline,
+                                        size: 20,
+                                        color: colors.warning,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          '$conflict，仍可保存。',
+                                          key: Key('${_prefix}conflict'),
+                                          style: TextStyle(
+                                            color: colors.labelText,
+                                            fontSize: 13,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            Padding(
-                              key: _noteAnchor,
-                              padding: const EdgeInsets.only(top: 20),
-                              child: TextFormField(
-                                key: Key('${_prefix}note'),
-                                controller: _note,
-                                focusNode: _noteFocus,
-                                enabled: !_saving,
-                                minLines: 2,
-                                maxLines: 5,
-                                style: TextStyle(
-                                  color: colors.titleText,
-                                  fontSize: 16,
-                                ),
-                                decoration: InputDecoration(
-                                  labelText: '备注（选填）',
-                                  hintText: '例如：记得带实验报告',
-                                  alignLabelWithHint: true,
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(6),
+                                    ],
                                   ),
-                                  contentPadding: const EdgeInsets.all(12),
+                                ),
+                              Padding(
+                                key: _noteAnchor,
+                                padding: const EdgeInsets.only(top: 20),
+                                child: TextFormField(
+                                  key: Key('${_prefix}note'),
+                                  controller: _note,
+                                  focusNode: _noteFocus,
+                                  enabled: !_saving,
+                                  minLines: 2,
+                                  maxLines: 5,
+                                  style: TextStyle(
+                                    color: colors.titleText,
+                                    fontSize: 16,
+                                  ),
+                                  decoration: InputDecoration(
+                                    labelText: '备注（选填）',
+                                    hintText: '例如：记得带实验报告',
+                                    alignLabelWithHint: true,
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    contentPadding: const EdgeInsets.all(12),
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(height: 8),
-                            if (!_isExam)
-                              _row(
-                                '课程颜色',
-                                InkWell(
-                                  key: Key('${_prefix}color'),
-                                  onTap: _busy ? null : _pickColor,
-                                  child: ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                      minHeight: 52,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Container(
-                                          width: 14,
-                                          height: 14,
-                                          decoration: BoxDecoration(
-                                            color: swatch,
-                                            shape: BoxShape.circle,
-                                            border: Border.all(
-                                              color: colors.divider,
+                              const SizedBox(height: 8),
+                              if (!_isExam)
+                                _row(
+                                  '课程颜色',
+                                  InkWell(
+                                    key: Key('${_prefix}color'),
+                                    onTap: _busy ? null : _pickColor,
+                                    child: ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                        minHeight: 52,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            width: 14,
+                                            height: 14,
+                                            decoration: BoxDecoration(
+                                              color: swatch,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color: colors.divider,
+                                              ),
                                             ),
                                           ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Text(
-                                            _userArgb == null ? '自动' : '自选颜色',
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              _userArgb == null ? '自动' : '自选颜色',
+                                            ),
                                           ),
-                                        ),
-                                        Icon(
-                                          Icons.chevron_right,
-                                          size: 20,
-                                          color: colors.chevron,
-                                        ),
-                                      ],
+                                          Icon(
+                                            Icons.chevron_right,
+                                            size: 20,
+                                            color: colors.chevron,
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
+                                  divider: false,
                                 ),
-                                divider: false,
-                              ),
-                            const SizedBox(height: 12),
-                          ],
+                              const SizedBox(height: 12),
+                            ],
+                          ),
                         ),
                       ),
                     ),

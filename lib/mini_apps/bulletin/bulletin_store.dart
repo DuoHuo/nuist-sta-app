@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/logging/app_log.dart';
@@ -16,6 +17,7 @@ class BulletinStore {
 
   static const _fileName = 'announcements.json';
   final Future<Directory?> Function() _resolveDirectory;
+  Future<void> _pendingSave = Future.value();
 
   static Future<Directory?> _applicationDirectory() async {
     try {
@@ -50,13 +52,15 @@ class BulletinStore {
   /// 读取本地数据；不可用时返回空数据。
   Future<BulletinLocalData> read() => _log.inSpan(() async {
     try {
+      await _pendingSave;
       final file = await _file();
       if (file == null || !await file.exists()) {
         return const BulletinLocalData();
       }
-      final json = jsonDecode(await file.readAsString());
-      return BulletinLocalData.fromJson(
-        json is Map<String, dynamic> ? json : null,
+      return await compute(
+        _decodeLocalData,
+        await file.readAsString(),
+        debugLabel: 'bulletin.decode_cache',
       );
     } catch (error, stackTrace) {
       _log.warning('cache.read_failed', error: error, stackTrace: stackTrace);
@@ -65,13 +69,35 @@ class BulletinStore {
   });
 
   /// 保存本地数据；存储不可用时安静降级。
-  Future<void> save(BulletinLocalData data) => _log.inSpan(() async {
-    try {
-      final file = await _file();
-      if (file == null) return;
-      await file.writeAsString(jsonEncode(data.toJson()), flush: true);
-    } catch (error, stackTrace) {
-      _log.warning('cache.write_failed', error: error, stackTrace: stackTrace);
-    }
-  });
+  Future<void> save(BulletinLocalData data) {
+    // 后台编码耗时不定，按调用顺序落盘，避免旧快照晚完成覆盖新设置。
+    return _pendingSave = _pendingSave.then(
+      (_) => _log.inSpan(() async {
+        try {
+          final file = await _file();
+          if (file == null) return;
+          final encoded = await compute(
+            _encodeLocalData,
+            data,
+            debugLabel: 'bulletin.encode_cache',
+          );
+          await file.writeAsString(encoded, flush: true);
+        } catch (error, stackTrace) {
+          _log.warning(
+            'cache.write_failed',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
+      }),
+    );
+  }
 }
+
+// 编解码与模型构造都在后台完成；存储降级和日志仍由调用方处理。
+BulletinLocalData _decodeLocalData(String raw) {
+  final json = jsonDecode(raw);
+  return BulletinLocalData.fromJson(json is Map<String, dynamic> ? json : null);
+}
+
+String _encodeLocalData(BulletinLocalData data) => jsonEncode(data.toJson());
