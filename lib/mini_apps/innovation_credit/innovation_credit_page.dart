@@ -172,19 +172,12 @@ class _StatusHeader extends StatelessWidget {
             SizedBox(
               width: 40,
               height: 40,
-              child: c.loading
-                  ? const Center(
-                      child: SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    )
-                  : IconButton(
-                      icon: const Icon(Icons.refresh),
-                      color: palette.accent,
-                      onPressed: c.refresh,
-                    ),
+              // 刷新不显示转圈：数据更新一律静默进行（issue #31）。
+              child: IconButton(
+                icon: const Icon(Icons.refresh),
+                color: palette.accent,
+                onPressed: c.refresh,
+              ),
             ),
           ],
         ),

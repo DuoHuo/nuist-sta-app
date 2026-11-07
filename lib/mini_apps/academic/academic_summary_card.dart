@@ -83,7 +83,7 @@ class _AcademicSummaryCardState extends State<AcademicSummaryCard> {
                       summary == null ? '' : formatShortTime(summary.fetchedAt),
                       style: TextStyle(fontSize: 11, color: palette.hint),
                     ),
-                    _RefreshButton(loading: c.loading, onPressed: c.refresh),
+                    _RefreshButton(onPressed: c.refresh),
                   ] else
                     const SizedBox(height: 32),
                 ],
@@ -293,32 +293,24 @@ class _Placeholder extends StatelessWidget {
 
 /// 刷新图标按钮，加载中原位换成小转圈，占位尺寸不变。
 class _RefreshButton extends StatelessWidget {
-  const _RefreshButton({required this.loading, required this.onPressed});
+  const _RefreshButton({required this.onPressed});
 
-  final bool loading;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
+    // 刷新过程不显示转圈：数据更新一律静默进行（issue #31）。
     return SizedBox(
       width: 32,
       height: 32,
-      child: loading
-          ? const Center(
-              child: SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          : IconButton(
-              padding: EdgeInsets.zero,
-              iconSize: 18,
-              color: palette.accent,
-              icon: const Icon(Icons.refresh),
-              onPressed: onPressed,
-            ),
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        color: palette.accent,
+        icon: const Icon(Icons.refresh),
+        onPressed: onPressed,
+      ),
     );
   }
 }

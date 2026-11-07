@@ -92,8 +92,10 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
                     const Spacer(),
                     if (showValue) ...[
                       Text(
+                        // 静默刷新后这里的 error 只剩「凭据失效」一类，
+                        // 直接提示用户去重新绑定（issue #31）。
                         error != null
-                            ? '更新失败'
+                            ? '需重新绑定'
                             : latest == null
                             ? ''
                             : formatShortTime(latest.time),
@@ -104,7 +106,7 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
                               : palette.hint,
                         ),
                       ),
-                      _RefreshButton(loading: c.loading, onPressed: c.refresh),
+                      _RefreshButton(onPressed: c.refresh),
                     ] else
                       const SizedBox(height: 32),
                   ],
@@ -166,11 +168,10 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
   }
 }
 
-/// 刷新图标按钮，加载中原位换成小转圈，占位尺寸不变。
+/// 刷新图标按钮。加载中不再换成转圈：数据更新一律静默进行（issue #31）。
 class _RefreshButton extends StatelessWidget {
-  const _RefreshButton({required this.loading, required this.onPressed});
+  const _RefreshButton({required this.onPressed});
 
-  final bool loading;
   final VoidCallback onPressed;
 
   @override
@@ -178,21 +179,13 @@ class _RefreshButton extends StatelessWidget {
     return SizedBox(
       width: 32,
       height: 32,
-      child: loading
-          ? const Center(
-              child: SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          : IconButton(
-              padding: EdgeInsets.zero,
-              iconSize: 18,
-              color: AppPalette.of(context).accent,
-              icon: const Icon(Icons.refresh),
-              onPressed: onPressed,
-            ),
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        color: AppPalette.of(context).accent,
+        icon: const Icon(Icons.refresh),
+        onPressed: onPressed,
+      ),
     );
   }
 }

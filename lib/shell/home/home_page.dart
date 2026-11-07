@@ -4,8 +4,8 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_info.dart';
 import '../../core/app_manifest.dart';
 import '../../core/colors.dart';
-import '../../core/logging/app_log.dart';
 import '../../core/pull_to_refresh.dart';
+import '../../core/refresh/silent_refresh.dart';
 import '../../mini_apps/registry.dart';
 import '../announcement/announcement_overlay.dart';
 import 'app_grid_item.dart';
@@ -14,15 +14,14 @@ import 'app_grid_item.dart';
 /// 全量注册表 [appRegistry]。
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
-  static final _log = AppLog.logger('shell.home');
 
   /// 并发刷新所有提供了 [AppManifest.onHomeRefresh] 的首页卡片。
-  static Future<void> _refreshAll() => _log.startSpan().run(
-    () => Future.wait([
-      for (final app in appRegistry.apps)
-        if (app.onHomeRefresh case final refresh?) refresh(),
-    ]),
-  );
+  ///
+  /// 走 [SilentRefresh.runAll]：单个模块失败自动重试且只写诊断日志，不打断其他
+  /// 卡片，界面上也不出现「更新中 / 更新失败」的动画与文案（issue #31）。
+  static Future<void> _refreshAll() => SilentRefresh.runAll('shell.home', {
+    for (final app in appRegistry.apps) app.id: ?app.onHomeRefresh,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -35,6 +34,8 @@ class HomePage extends StatelessWidget {
       body: AnnouncementOverlay(
         child: PullToRefresh(
           onRefresh: _refreshAll,
+          // 刷新全程静默：不显示转圈（issue #31）。
+          silent: true,
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),

@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/app_info.dart';
+import 'core/app_snack_bar.dart';
 import 'core/logging/app_log.dart';
 import 'core/network/vpn_gateway.dart';
+import 'core/refresh/silent_refresh.dart';
 import 'core/schedule/weekly_classes.dart';
 import 'core/theme.dart';
 import 'core/theme_mode.dart';
@@ -27,6 +29,9 @@ class NuistApp extends StatefulWidget {
 class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   static final _log = AppLog.logger('app.lifecycle');
   late final GoRouter _router = buildRouter();
+
+  /// 全局 SnackBar 入口：用户主动刷新成功后在这里弹一次「已更新」。
+  final _messengerKey = GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<List<ConnectivityResult>>? _networkSubscription;
   String? _network;
 
@@ -43,6 +48,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
       if (r != null) _openRoute(r);
     });
     WidgetsBinding.instance.addObserver(this);
+    SilentRefresh.updated.addListener(_onRefreshUpdated);
     if (!kIsWeb && !Platform.environment.containsKey('FLUTTER_TEST')) {
       try {
         _networkSubscription = Connectivity().onConnectivityChanged.listen(
@@ -108,6 +114,25 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     _router.push(route);
   }
 
+  /// 用户主动刷新成功后的统一轻提示。
+  ///
+  /// issue #31 的口径是「不展示更新过程、不展示失败，只展示更新成功」：失败与
+  /// 网络重试只写诊断日志，成功才给这一次反馈。
+  void _onRefreshUpdated() {
+    final messenger = _messengerKey.currentState;
+    if (messenger == null) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        AppSnackBar(
+          // 上游 0.2.6 起底部提示统一用 AppSnackBar（成功用对勾图标）。
+          tone: AppSnackBarTone.success,
+          content: const Text('已更新'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _log.debug('state.changed', fields: {'state': state.name});
@@ -118,6 +143,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    SilentRefresh.updated.removeListener(_onRefreshUpdated);
     WidgetsBinding.instance.removeObserver(this);
     _networkSubscription?.cancel();
     super.dispose();
@@ -130,6 +156,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
       valueListenable: AppThemeMode.instance,
       builder: (context, themeMode, _) => MaterialApp.router(
         title: kAppName,
+        scaffoldMessengerKey: _messengerKey,
         theme: appLightTheme(),
         darkTheme: appDarkTheme(),
         themeMode: themeMode,
