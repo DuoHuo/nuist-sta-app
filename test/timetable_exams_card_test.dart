@@ -349,6 +349,22 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byType(TimetableExamsPage), findsOneWidget);
       }
+
+      // 上一次退出动画尚未结束时重新定位，旧页面销毁不能清掉新页面的周次。
+      await tester.tap(find.byKey(const Key('exams_page_row_future')));
+      await tester.pumpAndSettle();
+      router.pop();
+      await tester.pump(const Duration(milliseconds: 16));
+      router.push<void>(
+        '/apps/timetable',
+        extra: _c.scheduleEvents.firstWhere((event) => event.id == 'past'),
+      );
+      await tester.pumpAndSettle();
+      expect(_c.viewingWeek, 6);
+      expect(
+        find.byKey(const Key('schedule_cell_past')).hitTestable(),
+        findsOneWidget,
+      );
     });
 
     testWidgets('深色减少动画：隐藏的周末晚间考试可见并自动滚动，不改显示设置', (tester) async {

@@ -845,6 +845,13 @@ class TimetableController extends ChangeNotifier {
 
   void goToCurrentWeek() => setViewingWeek(currentWeek);
 
+  /// 课表页退出时清除临时浏览周，下一次进入从本周开始。
+  /// 不通知正在退出或销毁的页面，避免退出动画跳周及卸载时重建。
+  void clearViewingWeek() {
+    _viewingWeek = _defaultViewingWeek;
+    _lastSeenCurrentWeek = currentWeek;
+  }
+
   /// 「回到本周」（同 [goToCurrentWeek]；已在本周时不通知）。
   void jumpToCurrentWeek() => goToCurrentWeek();
 

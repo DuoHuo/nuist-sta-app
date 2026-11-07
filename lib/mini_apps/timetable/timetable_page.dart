@@ -32,6 +32,7 @@ class _TimetablePageState extends State<TimetablePage> {
   final _controller = TimetableController.instance;
   PageController? _pageController;
   bool _ready = false;
+  bool _viewingWeekCleared = false;
   ScheduleEvent? _focusedEvent;
   bool _eventFocusRevealed = false;
   String? _focusUnavailableMessage;
@@ -74,6 +75,7 @@ class _TimetablePageState extends State<TimetablePage> {
   /// 开学日/本周变化（如同步后）时让 PageView 跟随 viewingWeek，
   /// 避免顶栏周次与网格日期错位。
   void _syncPageToViewingWeek() {
+    if (_viewingWeekCleared) return;
     final pc = _pageController;
     if (pc == null) return;
     if (!pc.hasClients) {
@@ -101,8 +103,8 @@ class _TimetablePageState extends State<TimetablePage> {
 
   Future<void> _bootstrap() async {
     await _controller.ensureStarted();
-    if (!mounted) return;
-    // 系统日期改了 / 跨周：打开时跟到本周；同周内手动翻过的周保留。
+    if (!mounted || _viewingWeekCleared) return;
+    // 退出时已清除浏览周；离开期间跨周或修改系统日期时，再对齐到本周。
     _controller.followCurrentWeekIfChanged();
     if (widget.focusEvent != null) {
       _prepareEventFocus();
@@ -333,10 +335,19 @@ class _TimetablePageState extends State<TimetablePage> {
     _controller.removeListener(_maybeShowSessionExpired);
     _controller.removeListener(_syncPageToViewingWeek);
     _pageController?.dispose();
+    _clearViewingWeek();
     super.dispose();
   }
 
+  /// 成功退出即清理；旧页面稍后销毁时不再覆盖新打开页面的周次。
+  void _clearViewingWeek() {
+    if (_viewingWeekCleared) return;
+    _viewingWeekCleared = true;
+    _controller.clearViewingWeek();
+  }
+
   void _onPageChanged(int index) {
+    if (_viewingWeekCleared) return;
     _controller.setViewingWeek(index + 1);
   }
 
@@ -356,7 +367,7 @@ class _TimetablePageState extends State<TimetablePage> {
         reduceMotion: MediaQuery.disableAnimationsOf(context),
       );
     }
-    if (mounted) _controller.setViewingWeek(week);
+    if (mounted && !_viewingWeekCleared) _controller.setViewingWeek(week);
   }
 
   /// 周条展开 / 收起 200ms；减少动画时不套 AnimatedSize，直接出现 / 消失。
@@ -397,7 +408,7 @@ class _TimetablePageState extends State<TimetablePage> {
   @override
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
-    return Scaffold(
+    final scaffold = Scaffold(
       // 输入只出现在弹层，键盘升降时保持背景课表的尺寸，避免重排整个周视图。
       resizeToAvoidBottomInset: false,
       backgroundColor: colors.pageBg,
@@ -488,6 +499,12 @@ class _TimetablePageState extends State<TimetablePage> {
           },
         ),
       ),
+    );
+    return PopScope<void>(
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) _clearViewingWeek();
+      },
+      child: scaffold,
     );
   }
 

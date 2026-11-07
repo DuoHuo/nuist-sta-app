@@ -5,12 +5,15 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
+import 'package:nuist_sta_app/router.dart';
 
 final _c = TimetableController.instance;
 
@@ -124,6 +127,94 @@ void main() {
       ),
     );
     await _io(tester, 5);
+  }
+
+  for (final brightness in Brightness.values) {
+    testWidgets('${brightness.name}：实际课表退出清除浏览周，取消返回和设置返回保留状态', (tester) async {
+      _load(manual: [_course('a', '测试课甲')]);
+      final router = buildRouter()..go('/profile');
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        MaterialApp.router(
+          theme: brightness == Brightness.dark
+              ? appDarkTheme()
+              : appLightTheme(),
+          routerConfig: router,
+        ),
+      );
+      await tester.pumpAndSettle();
+      router.push<void>('/apps/timetable');
+      await tester.pumpAndSettle();
+      expect(_c.viewingWeek, _week);
+
+      await tester.drag(find.byType(PageView), const Offset(-600, 0));
+      await tester.pumpAndSettle();
+      expect(_c.viewingWeek, _week + 1);
+      await tester.tap(find.byKey(const Key('timetable_settings_button')));
+      await tester.pumpAndSettle();
+      router.pop();
+      await tester.pumpAndSettle();
+      expect(_c.viewingWeek, _week + 1);
+
+      await tester.tap(find.textContaining('第 8 周', findRichText: true));
+      await tester.pumpAndSettle();
+      final route =
+          ModalRoute.of(tester.element(find.byType(TimetablePage)))!
+              as PageRoute;
+      final edge = brightness == Brightness.light ? 0 : 1;
+      Future<void> gesture(String method, {double progress = 0}) async {
+        ByteData? response;
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'flutter/backgesture',
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall(method, {
+              'touchOffset': [edge == 0 ? 5.0 : 795.0, 300.0],
+              'progress': progress,
+              'swipeEdge': edge,
+            }),
+          ),
+          (data) => response = data,
+        );
+        expect(response, isNotNull);
+        final result = const StandardMethodCodec().decodeEnvelope(response!);
+        if (method == 'startBackGesture') expect(result, isTrue);
+        await tester.pumpAndSettle();
+      }
+
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', progress: 0.4);
+      expect(route.animation!.value, closeTo(0.6, 0.001));
+      await gesture('cancelBackGesture');
+      expect(route.isCurrent, isTrue);
+      expect(_c.viewingWeek, _week + 1);
+      expect(find.byKey(const Key('timetable_week_strip')), findsOneWidget);
+
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', progress: 0.4);
+      await gesture('commitBackGesture');
+      expect(find.byType(TimetablePage), findsNothing);
+      expect(_c.viewingWeek, _week);
+      expect(router.routeInformationProvider.value.uri.path, '/profile');
+
+      router.push<void>('/apps/timetable');
+      await tester.pumpAndSettle();
+      expect(_c.viewingWeek, _week);
+      expect(find.textContaining('第 7 周', findRichText: true), findsOneWidget);
+      expect(find.byKey(const Key('timetable_week_strip')), findsNothing);
+      expect(
+        tester.widget<PageView>(find.byType(PageView)).controller!.page,
+        6,
+      );
+
+      router.pop();
+      await tester.pumpAndSettle();
+      TimetableController.clock = () => DateTime(2026, 10, 19, 9);
+      router.push<void>('/apps/timetable');
+      await tester.pumpAndSettle();
+      expect(_c.viewingWeek, _week + 1);
+      expect(find.textContaining('第 8 周', findRichText: true), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
   }
 
   group('item 6 周条回本周', () {

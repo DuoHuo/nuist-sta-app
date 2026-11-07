@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,6 +10,16 @@ import 'colors.dart';
 const _selectMinHeight = 40.0;
 const _selectOptionPadding = EdgeInsets.symmetric(horizontal: 12, vertical: 8);
 const _selectMenuPadding = EdgeInsets.symmetric(horizontal: 6, vertical: 4);
+
+typedef _SelectMeasureEnvironment = ({
+  double width,
+  TextDirection direction,
+  TextScaler textScaler,
+  Locale? locale,
+  TextStyle labelStyle,
+  TextStyle selectedStyle,
+  TextStyle hintStyle,
+});
 
 /// 统一选择器中的一个选项；用选项包装结果，区分空值选项与取消。
 @immutable
@@ -488,6 +499,77 @@ class _AppSelectSheetState<T> extends State<_AppSelectSheet<T>> {
   final _headerKey = GlobalKey();
   String _query = '';
   bool _positioned = false;
+  late List<String> _searchLabels;
+  late List<AppSelectOption<T>> _filtered;
+  final Map<AppSelectOption<T>, double> _optionHeights = {};
+  List<double>? _filteredHeights;
+  _SelectMeasureEnvironment? _measureEnvironment;
+  T? _measuredSelection;
+
+  @override
+  void initState() {
+    super.initState();
+    _updateOptions();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AppSelectSheet<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!listEquals(oldWidget.options, widget.options)) {
+      _optionHeights.clear();
+      _updateOptions();
+    }
+  }
+
+  void _updateOptions() {
+    _searchLabels = [
+      for (final option in widget.options) option.label.toLowerCase(),
+    ];
+    _updateFiltered();
+  }
+
+  void _updateFiltered() {
+    _filtered = _query.isEmpty
+        ? widget.options
+        : [
+            for (var index = 0; index < widget.options.length; index++)
+              if (_searchLabels[index].contains(_query)) widget.options[index],
+          ];
+    _filteredHeights = null;
+  }
+
+  List<double> _heightsFor(BuildContext context, double width) {
+    final environment = (
+      width: width,
+      direction: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      locale: Localizations.maybeLocaleOf(context),
+      labelStyle: _selectTextStyle(context),
+      selectedStyle: _selectTextStyle(context, emphasized: true),
+      hintStyle: _selectTextStyle(context, fontSize: 12, secondary: true),
+    );
+    // 键盘动画只改变可用高度，不改变文字排版；搜索也复用同一选项的精确行高。
+    // 宽度、字体、缩放、语言或选中样式变化时才重新测量，保留长标签的真实高度。
+    if (_measureEnvironment != environment ||
+        _measuredSelection != widget.selected) {
+      _measureEnvironment = environment;
+      _measuredSelection = widget.selected;
+      _optionHeights.clear();
+      _filteredHeights = null;
+    }
+    return _filteredHeights ??= [
+      for (final option in _filtered)
+        _optionHeights.putIfAbsent(
+          option,
+          () => _optionHeight(
+            context,
+            option,
+            width,
+            selected: option.value == widget.selected,
+          ),
+        ),
+    ];
+  }
 
   @override
   void dispose() {
@@ -497,7 +579,12 @@ class _AppSelectSheetState<T> extends State<_AppSelectSheet<T>> {
   }
 
   void _filter(String value) {
-    setState(() => _query = value.trim().toLowerCase());
+    final query = value.trim().toLowerCase();
+    if (_query == query) return;
+    setState(() {
+      _query = query;
+      _updateFiltered();
+    });
     if (_scroll.hasClients) _scroll.jumpTo(0);
   }
 
@@ -599,9 +686,7 @@ class _AppSelectSheetState<T> extends State<_AppSelectSheet<T>> {
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     final media = MediaQuery.of(context);
-    final filtered = widget.options
-        .where((option) => option.label.toLowerCase().contains(_query))
-        .toList();
+    final filtered = _filtered;
     final maxHeight = math.max(
       0.0,
       (media.size.height - media.viewInsets.bottom - media.padding.top) * .65,
@@ -636,15 +721,7 @@ class _AppSelectSheetState<T> extends State<_AppSelectSheet<T>> {
                 final compact =
                     constraints.maxHeight < headerHeight + _selectMinHeight * 2;
                 final header = _header(context);
-                final heights = [
-                  for (final option in filtered)
-                    _optionHeight(
-                      context,
-                      option,
-                      width,
-                      selected: option.value == widget.selected,
-                    ),
-                ];
+                final heights = _heightsFor(context, width);
                 if (!_positioned) {
                   _positioned = true;
                   final selectedIndex = filtered.indexWhere(
