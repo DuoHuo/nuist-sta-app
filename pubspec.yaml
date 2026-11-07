@@ -125,5 +125,5 @@ flutter_launcher_icons:
   min_sdk_android: 24
   adaptive_icon_background: "#FFFFFF"
   adaptive_icon_foreground: "assets/images/app_icon.png"
-  # 四边各内缩 20%，画面占 108dp 画布的 60%（约 65dp），整体落入 66dp 安全区，避免启动器遮罩裁掉角色头部。
-  adaptive_icon_foreground_inset: 20
+  # 源图已向左下调整构图；四边内缩 14%，人物比原先放大 20%，双耳保留在 66dp 安全圆内，允许裁切底部身体。
+  adaptive_icon_foreground_inset: 14
