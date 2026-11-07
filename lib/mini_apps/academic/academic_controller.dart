@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
-import '../../core/logging/app_log.dart';
+import '../../core/refresh/silent_refresh.dart';
 import '../../core/time_format.dart';
 import 'academic_api.dart';
 import 'academic_models.dart';
@@ -37,7 +37,6 @@ class AcademicController extends ChangeNotifier {
   final Future<bool> Function() _bindingCheck;
 
   static final AcademicController instance = AcademicController._();
-  static final _log = AppLog.logger('academic.controller');
 
   AcademicSummary? _summary;
   bool _loading = false;
@@ -106,14 +105,25 @@ class AcademicController extends ChangeNotifier {
   }
 
   /// 手动刷新合并在途请求；绑定变化会等待旧请求后另行刷新。
-  Future<void> refresh() => _runRefresh();
+  Future<void> refresh() => _runRefresh(userInitiated: true);
 
-  Future<void> _runRefresh({bool checkBinding = true}) => _refreshing ??=
-      _refresh(_bindingGeneration, checkBinding: checkBinding).whenComplete(() {
+  Future<void> _runRefresh({
+    bool checkBinding = true,
+    bool userInitiated = false,
+  }) => _refreshing ??=
+      _refresh(
+        _bindingGeneration,
+        checkBinding: checkBinding,
+        userInitiated: userInitiated,
+      ).whenComplete(() {
         _refreshing = null;
       });
 
-  Future<void> _refresh(int generation, {required bool checkBinding}) async {
+  Future<void> _refresh(
+    int generation, {
+    required bool checkBinding,
+    bool userInitiated = false,
+  }) async {
     _loading = true;
     _error = null;
     notifyListeners();
@@ -124,17 +134,23 @@ class AcademicController extends ChangeNotifier {
         _portalBound = bound;
       }
       if (!_portalBound) return;
-      await _log.operation('refresh', () async {
-        final summary = await _fetch();
-        if (generation != _bindingGeneration) return;
-        await _saveCache(summary);
-        if (generation != _bindingGeneration) return;
-        _summary = summary;
-      });
-    } on PortalException catch (e) {
+      await SilentRefresh.run(
+        'academic.controller',
+        action: () async {
+          final summary = await _fetch();
+          if (generation != _bindingGeneration) return;
+          await _saveCache(summary);
+          if (generation != _bindingGeneration) return;
+          _summary = summary;
+        },
+        userInitiated: userInitiated,
+      );
+    } on PortalCredentialError catch (e) {
+      // 凭据失效必须让用户重新绑定：这条提示不能跟着其他失败一起静默掉。
       if (generation == _bindingGeneration) _error = e.message;
-    } catch (e) {
-      if (generation == _bindingGeneration) _error = '刷新失败：$e';
+    } catch (_) {
+      // 其余失败（网络、登录跳转、解析）已由 SilentRefresh 重试并写日志，
+      // 界面上不再展示失败文案（issue #31）。
     } finally {
       if (generation == _bindingGeneration) {
         _loading = false;

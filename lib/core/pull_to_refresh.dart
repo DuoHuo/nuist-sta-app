@@ -19,10 +19,16 @@ class PullToRefresh extends StatefulWidget {
     super.key,
     required this.onRefresh,
     required this.child,
+    this.silent = false,
   });
 
   final RefreshCallback onRefresh;
   final Widget child;
+
+  /// 刷新过程中不显示任何转圈动画（数据更新一律静默进行，issue #31）。
+  ///
+  /// 下拉过程中的进度提示仍然保留：那是手势反馈，不是「更新中」动画。
+  final bool silent;
 
   @override
   State<PullToRefresh> createState() => _PullToRefreshState();
@@ -102,7 +108,13 @@ class _PullToRefreshState extends State<PullToRefresh> {
     final drag = _drag;
     if (drag == null) return;
     setState(() => _drag = null);
-    if (drag >= _threshold) _indicatorKey.currentState?.show();
+    if (drag < _threshold) return;
+    if (widget.silent) {
+      // 静默模式：不弹指示器，直接后台跑。
+      unawaited(_refresh());
+    } else {
+      _indicatorKey.currentState?.show();
+    }
   }
 
   bool _handleOverscrollIndicator(OverscrollIndicatorNotification n) {
@@ -131,13 +143,9 @@ class _PullToRefreshState extends State<PullToRefresh> {
     final progress = drag == null ? 0.0 : (drag / _threshold).clamp(0.0, 1.0);
     return Stack(
       children: [
-        RefreshIndicator(
-          key: _indicatorKey,
-          color: AppColors.accent,
-          // 拖拽由本组件自己判断，内部指示器只负责刷新动画。
-          notificationPredicate: (_) => false,
-          onRefresh: _refresh,
-          child: NotificationListener<OverscrollIndicatorNotification>(
+        if (widget.silent)
+          // 静默模式不挂 RefreshIndicator：刷新中不出现任何转圈。
+          NotificationListener<OverscrollIndicatorNotification>(
             onNotification: _handleOverscrollIndicator,
             child: NotificationListener<ScrollNotification>(
               onNotification: _handleScroll,
@@ -148,8 +156,27 @@ class _PullToRefreshState extends State<PullToRefresh> {
                 child: widget.child,
               ),
             ),
+          )
+        else
+          RefreshIndicator(
+            key: _indicatorKey,
+            color: AppColors.accent,
+            // 拖拽由本组件自己判断，内部指示器只负责刷新动画。
+            notificationPredicate: (_) => false,
+            onRefresh: _refresh,
+            child: NotificationListener<OverscrollIndicatorNotification>(
+              onNotification: _handleOverscrollIndicator,
+              child: NotificationListener<ScrollNotification>(
+                onNotification: _handleScroll,
+                child: Listener(
+                  onPointerMove: _handlePointerMove,
+                  onPointerUp: _handlePointerEnd,
+                  onPointerCancel: _handlePointerEnd,
+                  child: widget.child,
+                ),
+              ),
+            ),
           ),
-        ),
         if (drag != null && drag > 0)
           Positioned(
             top: -40 + 80 * progress,
