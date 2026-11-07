@@ -150,7 +150,12 @@ jobs:
         run: flutter test --dart-define=VPN_NATIVE_LIBRARY=${{ github.workspace }}/build/rust-host/debug/libnuist_vpn.so
 
       - name: Build debug APK
-        run: flutter build apk --debug --target-platform android-arm64
+        run: |
+          BASE_VERSION="$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' pubspec.yaml)"
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          test -n "$BASE_VERSION"
+          flutter build apk --debug --target-platform android-arm64 \
+            --build-name="${BASE_VERSION}+${SHORT_SHA}"
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
