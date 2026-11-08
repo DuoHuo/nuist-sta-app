@@ -4,6 +4,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_colors.dart';
@@ -384,14 +385,12 @@ void main() {
       double maxHeight, {
       String name = '测试课甲乙丙丁',
       String? location,
-      bool hasClass = true,
-      bool hasTeacher = true,
+      String teacher = '教师',
       TextScaler scaler = TextScaler.noScaling,
     }) => planCellContent(
       name: name,
       location: location ?? loc,
-      hasClass: hasClass,
-      hasTeacher: hasTeacher,
+      teacher: teacher,
       nameStyle: nameStyle,
       subStyle: subStyle,
       nameSize: 12,
@@ -411,50 +410,56 @@ void main() {
       expect(nameAll, greaterThan(nameLine * 1.5));
     });
 
-    test('空间足够：课名、代码、地点、老师全显示', () {
+    test('空间足够：课名、地点、空行、老师全显示', () {
       final p = plan(nameAll + sub + locH + sub + 1);
-      expect(p.showClass, isTrue);
       expect(p.showTeacher, isTrue);
+      expect(p.teacherGap, closeTo(sub, 0.01));
       expect(p.fits, isTrue);
       expect(p.nameSize, 12);
     });
 
-    test('LC02 略不足：先隐藏课程代码，其余保持', () {
+    test('LC02 空间稍不足：保留教师与空行，优先截断课名', () {
       final p = plan(nameAll + locH + sub + sub / 2);
-      expect(p.showClass, isFalse);
       expect(p.showTeacher, isTrue);
-      expect(p.nameLines, greaterThanOrEqualTo(2));
+      expect(p.teacherGap, closeTo(sub, 0.01));
+      expect(p.nameLines, 1);
       expect(p.nameSize, 12);
     });
 
-    test('LC03 更紧：代码和老师都隐藏，课名、地点完整', () {
-      final p = plan(nameAll + locH + sub / 2);
-      expect(p.showClass, isFalse);
-      expect(p.showTeacher, isFalse);
-      expect(p.nameLines * nameLine, closeTo(nameAll, 0.5));
+    test('LC03 多位教师：完整多行教师计入高度，课名让位', () {
+      final teacher = cellTeacherText('教师甲、教师乙、教师丙');
+      final teacherH = h(teacher, subStyle);
+      expect(teacherH, greaterThan(sub * 2));
+      final p = plan(nameLine + locH + teacherH + sub + 0.5, teacher: teacher);
+      expect(p.showTeacher, isTrue);
+      expect(p.teacherGap, closeTo(sub, 0.01));
+      expect(p.nameLines, 1);
       expect(p.nameSize, 12);
+      expect(p.fits, isTrue);
     });
 
     test('LC04 再紧：课名截断（至少 1 行），字号不变', () {
-      final p = plan(nameLine + locH + 0.5);
+      final p = plan(nameLine + locH + sub * 2 + 0.5);
       expect(p.nameLines, 1);
-      expect(p.showClass, isFalse);
-      expect(p.showTeacher, isFalse);
+      expect(p.showTeacher, isTrue);
       expect(p.nameSize, 12);
       expect(p.fits, isTrue);
     });
 
     test('LC05 再紧：本格字号逐级缩小（每级 1sp），最小 10sp', () {
-      final p = plan(nameLine + locH - 2);
+      final p = plan(nameLine + locH + sub * 2 - 2);
       expect(p.nameSize, lessThan(12));
       expect(p.nameSize, greaterThanOrEqualTo(10));
       expect(p.subSize, greaterThanOrEqualTo(10));
       expect(p.nameLines, greaterThanOrEqualTo(1));
-      // 极端：放不下也不低于 10sp；地点完整、课名 1 行。
+      expect(p.showTeacher, isTrue);
+      // 极端：放不下也不低于 10sp；地点和教师完整、课名 1 行。
       final x = plan(4);
       expect(x.nameSize, 10);
       expect(x.subSize, 10);
       expect(x.nameLines, 1);
+      expect(x.showTeacher, isTrue);
+      expect(x.teacherGap, greaterThan(0));
       expect(x.fits, isFalse);
       // 系统字号 ×2：实际字号（×2）同样不低于 10sp。
       final y = plan(4, scaler: const TextScaler.linear(2));
@@ -462,10 +467,10 @@ void main() {
       expect(y.subSize * 2, closeTo(10, 1e-6));
     });
 
-    test('LC08 地点为空：让位从课程代码开始照常', () {
-      final p = plan(nameAll + sub + sub / 2, location: '');
-      expect(p.showClass, isFalse);
+    test('LC08 地点为空：显示老师，仍在老师前预留一行', () {
+      final p = plan(nameAll + sub * 2 + 1, location: '');
       expect(p.showTeacher, isTrue);
+      expect(p.teacherGap, closeTo(sub, 0.01));
     });
 
     for (final (hgt, scale) in [
@@ -474,8 +479,8 @@ void main() {
       (90.0, 1.0),
       (90.0, 2.0),
     ]) {
-      testWidgets('LC01/LC06/LC07 格高 $hgt · 系统字号 ×$scale · 字号大 · 窄格：地点完整、'
-          '不溢出、字号 ≥10sp', (tester) async {
+      testWidgets('LC01/LC06/LC07 设置格高 $hgt · 系统字号 ×$scale · 窄格：自动拉高保留完整内容、'
+          '字号 ≥10sp', (tester) async {
         // 360dp 宽、7 列：窄格。
         tester.view.physicalSize = const Size(360 * 3, 1600 * 3);
         tester.view.devicePixelRatio = 3;
@@ -523,6 +528,31 @@ void main() {
         )) {
           expect(n.maxLines, greaterThanOrEqualTo(1));
           expect(n.style.fontSize! * scale, greaterThanOrEqualTo(10 - 1e-6));
+        }
+        expect(_c.settings.periodHeight, hgt);
+        for (final element in find.byType(CourseCell).evaluate()) {
+          final cell = find.byWidget(element.widget);
+          final rect = tester.getRect(cell);
+          expect(rect.height, greaterThan(hgt - TimetableTheme.cellMargin * 2));
+          final content = find.descendant(
+            of: cell,
+            matching: find.byType(OverflowBox),
+          );
+          final paragraphs = find.descendant(
+            of: content,
+            matching: find.byType(RichText),
+          );
+          for (final paragraph in paragraphs.evaluate()) {
+            final rendered = find.byWidget(paragraph.widget);
+            expect(
+              tester.getRect(rendered).bottom,
+              lessThanOrEqualTo(rect.bottom),
+            );
+            expect(
+              tester.renderObject<RenderParagraph>(rendered).didExceedMaxLines,
+              isFalse,
+            );
+          }
         }
       });
     }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_home_card.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_plan.dart';
@@ -71,7 +72,7 @@ void main() {
 
   final sampleMissing = !_samplePath.existsSync();
 
-  testWidgets('周格课程格：周二数据结构课程设计显示四段实验时刻', (tester) async {
+  testWidgets('周格课程格不显示实验时刻，详情仍显示四段压缩时刻', (tester) async {
     loadSample();
     final cells = ctl
         .cellsForDay(18, 2)
@@ -101,12 +102,112 @@ void main() {
       );
       expect(
         find.text(_uiTimes[i]),
-        findsOneWidget,
+        findsNothing,
         reason: 'week cell ${cell.slot.startNode}-${cell.slot.endNode}',
       );
+      expect(find.byKey(const Key('course_cell_time')), findsNothing);
       expect(find.textContaining(_courseName), findsOneWidget);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: CourseDetailSheet(cell: cell, controller: ctl),
+          ),
+        ),
+      );
+      expect(find.text(_uiTimes[i]), findsOneWidget);
     }
   }, skip: sampleMissing);
+
+  testWidgets('普通、实验和体育课程格均无时间行，只为实验胶囊额外预留高度', (tester) async {
+    final heights = <(int, CourseKind), double>{};
+    var labBadgeHeight = 0.0;
+    for (final end in [1, 2]) {
+      for (final kind in [CourseKind.standard, CourseKind.lab, CourseKind.pe]) {
+        final slot = CourseSlot(
+          day: 1,
+          startNode: 1,
+          endNode: end,
+          weeks: '1' * 20,
+          kind: kind,
+        );
+        final course = Course(id: 'same', name: '测试课程', slots: [slot]);
+        ctl.debugSetSnapshot(
+          TimetableSnapshot(
+            periods: TimetableController.defaultPeriods(),
+            settings: TimetableSettings(
+              termStartDate: _termStart,
+              showLocation: false,
+              showTeacher: false,
+            ),
+          ),
+          viewingWeek: 1,
+          manualCourses: [course],
+        );
+        final cell = GridCell(
+          course: course,
+          slot: slot,
+          conflictCount: 0,
+          activeThisWeek: true,
+          date: _termStart,
+        );
+        final widget = CourseCell(
+          cell: cell,
+          controller: ctl,
+          width: 200,
+          height: 180,
+          radius: 4,
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (context) {
+                  heights[(end, kind)] = widget.preferredHeight(context);
+                  return SizedBox(width: 200, height: 180, child: widget);
+                },
+              ),
+            ),
+          ),
+        );
+        expect(tester.takeException(), isNull);
+        expect(find.byKey(const Key('course_cell_time')), findsNothing);
+        expect(find.textContaining('08:00'), findsNothing);
+        final labBadge = find.byKey(const Key('course_cell_lab_pill'));
+        if (kind == CourseKind.lab && end == 2) {
+          expect(labBadge, findsOneWidget);
+          labBadgeHeight = tester.getSize(labBadge).height;
+        } else {
+          expect(labBadge, findsNothing);
+        }
+        if (end == 2) {
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: CourseDetailSheet(cell: cell, controller: ctl),
+              ),
+            ),
+          );
+          expect(
+            find.text(
+              kind == CourseKind.standard ? '08:00–09:40' : '08:00–09:30',
+            ),
+            findsOneWidget,
+          );
+        }
+      }
+    }
+    for (final end in [1, 2]) {
+      expect(
+        heights[(end, CourseKind.pe)],
+        heights[(end, CourseKind.standard)],
+      );
+    }
+    expect(heights[(1, CourseKind.lab)], heights[(1, CourseKind.standard)]);
+    expect(
+      heights[(2, CourseKind.lab)]! - heights[(2, CourseKind.standard)]!,
+      closeTo(labBadgeHeight + 2, 0.01),
+    );
+  });
 
   testWidgets('首页今日课卡片：周二数据结构课程设计显示四段实验时刻', (tester) async {
     loadSample();

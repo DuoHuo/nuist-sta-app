@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
-import 'timetable_timing.dart';
 import 'timetable_overrides.dart';
 import 'timetable_theme.dart';
 import 'timetable_course_color.dart';
@@ -27,6 +26,7 @@ class CourseCell extends StatelessWidget {
     this.onDragEnd,
     this.onDragCancel,
     this.pairOverride,
+    this.fontReferenceWidth,
   });
 
   /// 长按拖动调课的触发时长（spec §13.2：按住约 0.8 秒后开始移动才拖起来）。
@@ -35,6 +35,9 @@ class CourseCell extends StatelessWidget {
   final GridCell cell;
   final double height;
   final double width;
+
+  /// 整周统一的字号参考格宽，避免列宽像素取整差异触发不同字号。
+  final double? fontReferenceWidth;
   final double radius;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
@@ -56,6 +59,74 @@ class CourseCell extends StatelessWidget {
   final CourseColorPair? pairOverride;
 
   TimetableController get _ctl => controller ?? TimetableController.instance;
+
+  /// 当前格宽下完整显示课名、地点、教师和标签所需的高度，不含格外边距。
+  double preferredHeight(BuildContext context) {
+    final ctl = _ctl;
+    final settings = ctl.settings;
+    final scaler = MediaQuery.textScalerOf(context);
+    final direction = Directionality.of(context);
+    final base = DefaultTextStyle.of(context).style;
+    final contentWidth = math.max(1.0, (fontReferenceWidth ?? width) - 8);
+    final sizes = TimetableTheme.cellTextSizesForWidth(
+      maxWidth: math.max(1.0, (fontReferenceWidth ?? width) - 8),
+      nameStyle: base.merge(TimetableTheme.cellStyle()),
+      factor: settings.fontScale.factor,
+      textScaler: scaler,
+      textDirection: direction,
+    );
+    final nameStyle = base
+        .merge(TimetableTheme.cellStyle())
+        .copyWith(fontSize: sizes.nameSize);
+    final subStyle = base
+        .merge(TimetableTheme.cellSubStyle())
+        .copyWith(fontSize: sizes.subSize);
+    final locationStyle = base
+        .merge(TimetableTheme.cellLocationStyle())
+        .copyWith(fontSize: sizes.subSize);
+    double textHeight(String text, TextStyle style) {
+      if (text.isEmpty) return 0;
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: direction,
+        textScaler: scaler,
+      )..layout(maxWidth: contentWidth);
+      final height = painter.height;
+      painter.dispose();
+      return height;
+    }
+
+    final name = layoutCellCourseName(
+      courseDisplayName(course: cell.course, slot: cell.slot),
+      style: nameStyle,
+      maxWidth: contentWidth,
+      textScaler: scaler,
+      textDirection: direction,
+    );
+    final location = settings.showLocation && cell.slot.location.isNotEmpty
+        ? cellLocationText(cell.slot.location)
+        : '';
+    final teacher = settings.showTeacher
+        ? cellTeacherText(cell.slot.teacher)
+        : '';
+    final source = slotOriginOf(cell.slot)?.original ?? cell.slot;
+    final showParity =
+        cell.activeThisWeek &&
+        source.parity != WeekParity.all &&
+        _weekCount(source.weeks) > 1 &&
+        _weekCount(cell.slot.weeks) > 1;
+    final showLab = _showsLabLabel && cell.slot.span > 1;
+    final badgeHeight =
+        showLab || showParity || stackCount > 1 || !cell.activeThisWeek
+        ? _badgeReserveFor(context, showLab: showLab)
+        : 0.0;
+    return 8 +
+        badgeHeight +
+        textHeight(name, nameStyle) +
+        textHeight(location, locationStyle) +
+        (teacher.isNotEmpty ? textHeight('课', subStyle) : 0) +
+        textHeight(teacher, subStyle);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -104,9 +175,12 @@ class CourseCell extends StatelessWidget {
     // item 14：白字 / 黑字强制；非本周格仍用 offWeekText。
     final fg = active
         ? TimetableTheme.cellTextFor(
-            ctl.userColorOf(cell.course) == null
-                ? pair.fg
-                : TimetableTheme.userCoursePair(bg).fg,
+            TimetableTheme.readableCellText(
+              bg,
+              ctl.userColorOf(cell.course) == null
+                  ? pair.fg
+                  : TimetableTheme.userCoursePair(bg).fg,
+            ),
             settings.cellTextColor,
           )
         : colors.offWeekText;
@@ -175,7 +249,7 @@ class CourseCell extends StatelessWidget {
                         box,
                         fg,
                         showBottomBadge,
-                        showLab ? labBadgeReserve : badgeReserve,
+                        _badgeReserveFor(context, showLab: showLab),
                       ),
                     ),
                   ),
@@ -257,7 +331,7 @@ class CourseCell extends StatelessWidget {
                                 key: const Key('course_cell_lab_pill'),
                                 fontSize: labPillFontSize,
                                 paddingH: labPillPaddingH,
-                                height: labPillHeight,
+                                height: _labPillHeight(context),
                                 borderAlpha: labPillBorderAlpha,
                               ),
                               if (fits) ...[
@@ -314,10 +388,11 @@ class CourseCell extends StatelessWidget {
   }
 
   /// 按可用高度排版格内文字（spec §13.9，替代 §2.4 / §13.3 的旧优先级）：
-  /// 先为底部胶囊预留空间；地点永不截断（逐字换行，不限行数）。空间不够时依次
-  /// ① 隐藏课程代码 [xx] ② 隐藏老师 ③ 课名截断（至少 1 行，末尾省略）
-  /// ④ 本格字号逐级缩小（每级 1sp，最小 10sp，取整）。见 [planCellContent]。
-  /// 到下限仍放不下：地点完整、课名 1 行省略号截断，不再继续缩；
+  /// 先为底部胶囊预留空间；不显示课序号，地点与老师之间留一行。
+  /// 地点和教师完整换行显示，不限行数。空间不够时依次
+  /// ① 课名截断（至少 1 行，末尾省略）
+  /// ② 本格字号逐级缩小（每级 1sp，最小 10sp，取整）。见 [planCellContent]。
+  /// 到下限仍放不下：地点和教师完整排版、课名 1 行省略号截断，不再继续缩；
   /// 超出格子的部分被裁掉，不报 overflow。
   Widget _content(
     BuildContext context,
@@ -330,31 +405,33 @@ class CourseCell extends StatelessWidget {
     final base = DefaultTextStyle.of(context).style;
     final settings = _ctl.settings;
     final factor = settings.fontScale.factor;
+    final contentWidth = fontReferenceWidth == null
+        ? box.maxWidth
+        : math.max(1.0, fontReferenceWidth! - 8);
+    final sizes = TimetableTheme.cellTextSizesForWidth(
+      maxWidth: contentWidth,
+      nameStyle: base.merge(TimetableTheme.cellStyle(color: fg)),
+      factor: factor,
+      textScaler: scaler,
+      textDirection: Directionality.of(context),
+    );
     var avail = box.maxHeight.isFinite ? box.maxHeight : double.infinity;
     if (showBadge) avail -= badgeReserve;
-    final showTime =
-        timingKindOf(course: cell.course, slot: cell.slot) !=
-        CourseTimingKind.standard;
-    final time = showTime
-        ? _ctl.timeForSlot(cell.course, cell.slot, date: cell.date)
-        : null;
-    if (showTime) {
-      avail -= cellFontSize(TimetableTheme.cellSubSize, factor, scaler) * 1.3;
-    }
     final hasLoc = settings.showLocation && cell.slot.location.isNotEmpty;
-    final teacher = cell.slot.teacher.trim();
+    final rawTeacher = cell.slot.teacher.trim();
+    final teacher = cellTeacherText(rawTeacher);
     final hasTeacher = settings.showTeacher && teacher.isNotEmpty;
     final locText = hasLoc ? cellLocationText(cell.slot.location) : '';
     final plan = planCellContent(
       name: courseDisplayName(course: cell.course, slot: cell.slot),
       location: locText,
-      hasClass: cell.course.classId.isNotEmpty,
-      hasTeacher: hasTeacher,
+      teacher: hasTeacher ? teacher : '',
       nameStyle: base.merge(TimetableTheme.cellStyle(color: fg)),
       subStyle: base.merge(TimetableTheme.cellSubStyle(color: fg)),
-      nameSize: cellFontSize(TimetableTheme.cellSize, factor, scaler),
-      subSize: cellFontSize(TimetableTheme.cellSubSize, factor, scaler),
-      maxWidth: box.maxWidth,
+      locationStyle: base.merge(TimetableTheme.cellLocationStyle(color: fg)),
+      nameSize: sizes.nameSize,
+      subSize: sizes.subSize,
+      maxWidth: contentWidth,
       maxHeight: avail,
       textScaler: scaler,
       textDirection: Directionality.of(context),
@@ -363,10 +440,14 @@ class CourseCell extends StatelessWidget {
         .copyWith(fontSize: plan.nameSize);
     final subStyle = TimetableTheme.cellSubStyle(color: fg)
         .copyWith(fontSize: plan.subSize);
+    final locationStyle = TimetableTheme.cellLocationStyle(color: fg)
+        .copyWith(fontSize: plan.subSize);
 
     // OverflowBox：极端情况下内容可超出格子高度，由外层 ClipRect 裁掉而不是报溢出。
     return OverflowBox(
       alignment: AlignmentDirectional.topStart,
+      minWidth: contentWidth,
+      maxWidth: contentWidth,
       minHeight: 0,
       maxHeight: double.infinity,
       child: Column(
@@ -378,14 +459,6 @@ class CourseCell extends StatelessWidget {
             style: nameStyle,
             maxLines: plan.nameLines,
           ),
-          if (plan.showClass)
-            Text(
-              '[${cell.course.classId}]',
-              key: const Key('course_cell_class'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: subStyle,
-            ),
           if (hasLoc)
             // 地点永不截断：不限行数、无省略号（§13.9）。
             Text(
@@ -393,21 +466,15 @@ class CourseCell extends StatelessWidget {
               key: const Key('course_cell_location'),
               semanticsLabel: '@${cell.slot.location}',
               softWrap: true,
-              style: subStyle,
+              style: locationStyle,
             ),
-          if (time?.start != null && time?.end != null)
-            Text(
-              '${time!.start}–${time.end}',
-              key: const Key('course_cell_time'),
-              maxLines: 1,
-              style: subStyle,
-            ),
+          if (plan.teacherGap > 0) SizedBox(height: plan.teacherGap),
           if (plan.showTeacher)
             Text(
               teacher,
               key: const Key('course_cell_teacher'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              semanticsLabel: rawTeacher,
+              softWrap: true,
               style: subStyle,
             ),
         ],
@@ -416,14 +483,8 @@ class CourseCell extends StatelessWidget {
   }
 
   /// 格内字号：基准 × 文字大小系数（§13.3），乘系统缩放后不小于 10sp；结果取整避免发虚。
-  static double cellFontSize(double base, double factor, TextScaler scaler) {
-    final scale = scaler.scale(1);
-    final sized = base * factor;
-    if (scale <= 0) return TimetableTheme.snapFontSp(sized);
-    final minUnscaled = 10 / scale;
-    final v = sized < minUnscaled ? minUnscaled : sized;
-    return TimetableTheme.snapFontSp(v);
-  }
+  static double cellFontSize(double base, double factor, TextScaler scaler) =>
+      TimetableTheme.cellFontSize(base, factor, scaler);
 
   /// 非本周格底部胶囊文字（§13.8：替代原课名前缀写法）。
   static const String offWeekLabel = '非本周';
@@ -453,6 +514,29 @@ class CourseCell extends StatelessWidget {
 
   /// 实验胶囊行的预留高度：16dp 胶囊 + bottom 3 - 内边距 4 + 余量。
   static const double labBadgeReserve = 16;
+
+  double _labPillHeight(BuildContext context) => TimetableTheme.cellBadgeSize(
+    context,
+    labPillLabel,
+    maxWidth: width,
+    fontSize: labPillFontSize,
+    paddingH: labPillPaddingH,
+    minimumHeight: labPillHeight,
+  ).height;
+
+  double _badgeReserveFor(BuildContext context, {required bool showLab}) {
+    if (showLab) return math.max(labBadgeReserve, _labPillHeight(context) + 2);
+    final source = slotOriginOf(cell.slot)?.original ?? cell.slot;
+    final label = stackCount > 1
+        ? '$stackCount 门'
+        : !cell.activeThisWeek
+        ? offWeekLabel
+        : source.parity == WeekParity.odd
+        ? '单周'
+        : '双周';
+    final size = TimetableTheme.cellBadgeSize(context, label, maxWidth: width);
+    return math.max(badgeReserve, size.height + 2);
+  }
 
   /// Micro 胶囊（单/双周、「非本周」、「N 门」与「实验」共用样式）：
   /// 文字与描边都用该课文字色 [fg]，无填充。
@@ -529,8 +613,8 @@ class CellContentPlan {
     required this.nameSize,
     required this.subSize,
     required this.nameLines,
-    required this.showClass,
     required this.showTeacher,
+    required this.teacherGap,
     required this.fits,
   });
 
@@ -540,26 +624,28 @@ class CellContentPlan {
 
   /// 课名最多行数（≥1，末行省略）。
   final int nameLines;
-  final bool showClass;
   final bool showTeacher;
 
-  /// false：已缩到最小字号仍放不下（地点完整、课名 1 行，超出部分被裁）。
+  /// 教师显示时，教师前留一行副文字高度；不显示教师时为 0。
+  final double teacherGap;
+
+  /// false：已缩到最小字号仍放不下（地点和教师完整排版、课名 1 行，超出部分被裁）。
   final bool fits;
 }
 
-/// 格内让位（spec §13.9）。地点（[location]，已是 [cellLocationText] 结果，空串表示不显示）
-/// 永不截断；高度不够时依次 ① 隐藏代码 ② 隐藏老师 ③ 课名截断到能放下的行数（≥1）
-/// ④ 字号每级缩小 1sp（实际字号，含系统缩放），最小 10sp；算完取整。
-/// 到下限仍放不下：地点完整、课名 1 行省略号截断，不再继续缩。
-/// 缩小后代码与老师保持隐藏，只尽量多给课名行数。
+/// 格内让位。地点（[location]，已是 [cellLocationText] 结果）和教师（[teacher]）
+/// 完整换行显示，空串表示不显示；教师前始终留一行，课序号不参与格内排版。
+/// 高度不够时依次 ① 课名截断到能放下的行数（≥1）
+/// ② 字号每级缩小 1sp（实际字号，含系统缩放），最小 10sp；算完取整。
+/// 到下限仍放不下：地点和教师完整排版、课名 1 行省略号截断，不再继续缩。
 /// [nameSize]/[subSize] 为未乘系统缩放的起始字号。
 CellContentPlan planCellContent({
   required String name,
   required String location,
-  required bool hasClass,
-  required bool hasTeacher,
+  required String teacher,
   required TextStyle nameStyle,
   required TextStyle subStyle,
+  TextStyle? locationStyle,
   required double nameSize,
   required double subSize,
   required double maxWidth,
@@ -589,7 +675,10 @@ CellContentPlan planCellContent({
 
   final scale = textScaler.scale(1);
   final unit = scale > 0 ? 1 / scale : 1.0;
-  final minSize = scale > 0 ? kCellMinFontSize / scale : kCellMinFontSize;
+  final minSize = scale > 0
+      ? (kCellMinFontSize / scale).ceilToDouble()
+      : kCellMinFontSize;
+  final hasTeacher = teacher.isNotEmpty;
   const eps = 0.01;
   bool fit(double h) => h <= maxHeight + eps;
   for (var i = 0; ; i++) {
@@ -599,6 +688,7 @@ CellContentPlan planCellContent({
     final ss = TimetableTheme.snapFontSp(math.max(minSize, subSize - i * unit));
     final nSt = nameStyle.copyWith(fontSize: ns);
     final sSt = subStyle.copyWith(fontSize: ss);
+    final lSt = (locationStyle ?? subStyle).copyWith(fontSize: ss);
     final nameH = heightOf('课', nSt);
     final subH = heightOf('课', sSt);
     final laid = layoutCellCourseName(
@@ -609,42 +699,47 @@ CellContentPlan planCellContent({
       textDirection: textDirection,
     );
     final needed = linesOf(laid, nSt);
-    final locH = location.isEmpty ? 0.0 : heightOf(location, sSt);
-    final classH = hasClass ? subH : 0.0;
-    final teacherH = hasTeacher ? subH : 0.0;
+    final locH = location.isEmpty ? 0.0 : heightOf(location, lSt);
+    final teacherH = hasTeacher ? heightOf(teacher, sSt) : 0.0;
+    final teacherGap = hasTeacher ? subH : 0.0;
+    final secondaryH = locH + teacherH + teacherGap;
     final full = needed * nameH;
-    CellContentPlan plan(int lines, bool cls, bool tch, {bool fits = true}) =>
-        CellContentPlan(
-          nameSize: ns,
-          subSize: ss,
-          nameLines: lines,
-          showClass: cls,
-          showTeacher: tch,
-          fits: fits,
-        );
-    if (i == 0) {
-      if (fit(full + classH + locH + teacherH)) {
-        return plan(needed, hasClass, hasTeacher);
-      }
-      // ① 隐藏课程代码。
-      if (fit(full + locH + teacherH)) return plan(needed, false, hasTeacher);
+    CellContentPlan plan(int lines, {bool fits = true}) => CellContentPlan(
+      nameSize: ns,
+      subSize: ss,
+      nameLines: lines,
+      showTeacher: hasTeacher,
+      teacherGap: teacherGap,
+      fits: fits,
+    );
+    if (fit(full + secondaryH)) {
+      return plan(needed);
     }
-    // ② 隐藏老师。
-    if (fit(full + locH)) return plan(needed, false, false);
-    // ③ 课名截断（至少 1 行）。
-    if (fit(nameH + locH)) {
-      final lines = ((maxHeight - locH + eps) / nameH).floor().clamp(1, needed);
-      return plan(lines, false, false);
+    // ① 课名截断（至少 1 行），保留完整地点和教师。
+    if (fit(nameH + secondaryH)) {
+      final lines = ((maxHeight - secondaryH + eps) / nameH).floor().clamp(
+        1,
+        needed,
+      );
+      return plan(lines);
     }
-    // ④ 字号再小一级；到 10sp 仍放不下：地点完整、课名 1 行。
+    // ② 字号再小一级；到 10sp 仍放不下：地点和教师完整排版、课名 1 行。
     if (ns <= minSize + 1e-6 && ss <= minSize + 1e-6) {
-      return plan(1, false, false, fits: false);
+      return plan(1, fits: false);
     }
   }
 }
 
 /// 格内最小字号（sp，含系统缩放）。
 const double kCellMinFontSize = 10;
+
+/// 教师名单按姓名换行，避免将前后两位教师的名字连在一起拆行。
+String cellTeacherText(String teacher) => teacher
+    .trim()
+    .split(RegExp(r'[,，、;；]\s*'))
+    .map((name) => name.trim())
+    .where((name) => name.isNotEmpty)
+    .join('\n');
 
 /// 格内地点文字「@地点」：在相邻两个非汉字（字母、数字、符号）之间插入 U+200B，
 /// 让「A101」这类串也能逐字换行（汉字之间本来就可断行）。只插不可见字符，可见文字不变。
@@ -704,7 +799,7 @@ final _trailingRomanParen = RegExp(r'^(.*\S)([\u2160-\u217F]+)(（[^（）]*）)
 ///   单元本身放不下 → 退回下面的括注规则（在「（」前断）。
 /// * 末尾括注：普通排版已完整 → 原样；「末字+括注」放得下 → 末字前断
 ///   （「学术英 / 语（1）」）；否则括注放得下 → 「（」前断（「学术英 / 语 / （1）」）；
-///   括注一行都放不下 → 退回 [formatCellCourseName]。
+///   长括注一行放不下 → 自然换行，不把超宽括注粘成不可断单元。
 ///
 /// 判断「是否完整/放得下」全部用与 [Text] 相同样式的 [TextPainter] 实际排版结果，
 /// 而不是自行估算第 1 行在哪里结束。
@@ -764,7 +859,7 @@ String layoutCellCourseName(
     return '${chars.skipLast(1)}\n${chars.last}$paren';
   }
   if (fitsOneLine(paren)) return '$head\n$paren';
-  return formatCellCourseName(name);
+  return plain;
 }
 
 /// 课程格课名：最多 [maxLines] 行省略，按格宽避免括注拆行。

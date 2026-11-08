@@ -635,14 +635,18 @@ void main() {
       );
     });
 
-    testWidgets('ST09 文字大小三档：取整后课名 11 / 12 / 14', (tester) async {
+    testWidgets('ST09 宽格文字大小三档：取整后课名 11 / 12 / 14', (tester) async {
       for (final (scale, size) in [
         (CellFontScale.small, 11.0),
         (CellFontScale.standard, 12.0),
         (CellFontScale.large, 14.0),
       ]) {
         load(
-          settings: base().copyWith(fontScale: scale),
+          settings: base().copyWith(
+            fontScale: scale,
+            showSaturday: false,
+            showSunday: false,
+          ),
           manual: [_course('a', '测试课甲')],
         );
         await pumpGrid(tester);

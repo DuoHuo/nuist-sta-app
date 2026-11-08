@@ -436,6 +436,40 @@ abstract final class TimetableTheme {
         CellTextColorMode.black => forcedBlackText,
       };
 
+  /// 根据已混合的实际格子背景保证自动文字的对比度至少为 4.5，文字始终不透明。
+  /// 已可读时保留原色，否则向对比度更高的黑或白调整，尽量保留原有色相。
+  /// 强制黑字或白字的用户设置仍由 [cellTextFor] 在此计算之后应用。
+  static Color readableCellText(Color background, Color preferred) {
+    final bgLuminance = background.computeLuminance();
+    double contrast(Color color) {
+      final luminance = color.computeLuminance();
+      return bgLuminance >= luminance
+          ? (bgLuminance + 0.05) / (luminance + 0.05)
+          : (luminance + 0.05) / (bgLuminance + 0.05);
+    }
+
+    final opaque = preferred.withValues(alpha: 1);
+    if (contrast(opaque) >= 4.5) return opaque;
+    const black = Color(0xFF000000);
+    final target = contrast(black) >= contrast(forcedWhiteText)
+        ? black
+        : forcedWhiteText;
+    var result = target;
+    var lower = 0.0;
+    var upper = 1.0;
+    for (var i = 0; i < 12; i++) {
+      final amount = (lower + upper) / 2;
+      final candidate = Color.lerp(opaque, target, amount)!;
+      if (contrast(candidate) >= 4.5) {
+        upper = amount;
+        result = candidate;
+      } else {
+        lower = amount;
+      }
+    }
+    return result;
+  }
+
   /// 考试格底色：浅色原样；深色往 #121316 混 25%（白字 [examText]）。
   /// 用户自选的考试色同样在显示时换算，不另存。
   static Color examCellBg(Color exam, {bool dark = false}) =>
@@ -525,7 +559,12 @@ abstract final class TimetableTheme {
   static const double bodySize = 14;
   static const FontWeight bodyWeight = FontWeight.w400;
   static const double cellSize = 12;
-  static const FontWeight cellWeight = FontWeight.w600;
+
+  /// 选择中等字重字体，可变字体进一步使用 450，保留适度加粗。
+  static const FontWeight cellWeight = FontWeight.w500;
+  static const List<FontVariation> cellFontVariations = [
+    FontVariation.weight(450),
+  ];
   static const double cellSubSize = 11;
   static const FontWeight cellSubWeight = FontWeight.w400;
   static const double captionSize = 12;
@@ -571,6 +610,57 @@ abstract final class TimetableTheme {
   static double snapFontSp(double sp) {
     if (!sp.isFinite) return sp;
     return sp.roundToDouble();
+  }
+
+  /// 格内字号随用户设置和系统字号缩放，实际字号不小于 10sp。
+  static double cellFontSize(double base, double factor, TextScaler scaler) {
+    final scale = scaler.scale(1);
+    final sized = base * factor;
+    if (scale <= 0) return snapFontSp(sized);
+    final minUnscaled = (10 / scale).ceilToDouble();
+    final snapped = snapFontSp(sized);
+    return snapped < minUnscaled ? minUnscaled : snapped;
+  }
+
+  /// 窄格以每行三个汉字为锚点缩小字号；足够宽时保持用户设置，不放大。
+  /// 副文字按相同比例缩小，保留实际 10sp 下限。
+  static ({double nameSize, double subSize}) cellTextSizesForWidth({
+    required double maxWidth,
+    required TextStyle nameStyle,
+    double factor = 1,
+    TextScaler textScaler = TextScaler.noScaling,
+    TextDirection textDirection = TextDirection.ltr,
+  }) {
+    final initialSize = cellFontSize(cellSize, factor, textScaler);
+    var nameSize = initialSize;
+    if (maxWidth.isFinite && maxWidth > 0) {
+      final scale = textScaler.scale(1);
+      final unit = scale > 0 ? 1 / scale : 1.0;
+      final minimum = scale > 0 ? (10 / scale).ceilToDouble() : 10.0;
+      for (var step = 0; ; step++) {
+        final candidate = initialSize - step * unit;
+        nameSize = snapFontSp(candidate < minimum ? minimum : candidate);
+        final painter = TextPainter(
+          text: TextSpan(
+            text: '课课课',
+            style: nameStyle.copyWith(fontSize: nameSize),
+          ),
+          textDirection: textDirection,
+          textScaler: textScaler,
+        )..layout();
+        final fits = painter.width <= maxWidth + 0.01;
+        painter.dispose();
+        if (fits || nameSize <= minimum + 0.01) break;
+      }
+    }
+    return (
+      nameSize: nameSize,
+      subSize: cellFontSize(
+        cellSubSize,
+        factor * nameSize / initialSize,
+        textScaler,
+      ),
+    );
   }
 
   static const double periodHeight = 64;
@@ -635,6 +725,7 @@ abstract final class TimetableTheme {
   static TextStyle cellStyle({Color? color}) => TextStyle(
     fontSize: cellSize,
     fontWeight: cellWeight,
+    fontVariations: cellFontVariations,
     color: color ?? titleText,
     // 1.1：中文上下笔画不被切；再低会裁切（设计定稿）。
     height: 1.1,
@@ -646,6 +737,35 @@ abstract final class TimetableTheme {
     color: color ?? labelText,
     height: 1.1,
   );
+
+  /// 课程与日程地点：沿用副文字字号，与课程名使用相同字重。
+  static TextStyle cellLocationStyle({Color? color}) =>
+      cellSubStyle(color: color)
+          .copyWith(fontWeight: cellWeight, fontVariations: cellFontVariations);
+
+  /// 胶囊实际尺寸，包含内边距与描边，按当前宽度和系统字号测量。
+  static Size cellBadgeSize(
+    BuildContext context,
+    String text, {
+    required double maxWidth,
+    double fontSize = badgeSize,
+    double paddingH = 5,
+    double minimumHeight = 0,
+  }) {
+    final textWidth = maxWidth - paddingH * 2 - 2;
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: DefaultTextStyle.of(context).style.copyWith(fontSize: fontSize),
+      ),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout(maxWidth: textWidth > 0 ? textWidth : 1);
+    final width = painter.width + paddingH * 2 + 2;
+    final height = painter.height + 2;
+    painter.dispose();
+    return Size(width, height < minimumHeight ? minimumHeight : height);
+  }
 
   static TextStyle captionStyle({Color? color}) => TextStyle(
     fontSize: captionSize,

@@ -143,7 +143,7 @@ void main() {
     );
   });
 
-  testWidgets('周格与详情显示实际时刻，仍能定位原始记录', (tester) async {
+  testWidgets('周格不显示实际时刻，详情保留时刻并能定位原始记录', (tester) async {
     load(TimetableParser.parseKbRows([row(1, 2)]).courses);
     final cell = ctl.cellsForDay(1, 1).single;
     await tester.pumpWidget(
@@ -163,7 +163,7 @@ void main() {
         ),
       ),
     );
-    expect(find.text('08:00–09:30'), findsOneWidget);
+    expect(find.text('08:00–09:30'), findsNothing);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(

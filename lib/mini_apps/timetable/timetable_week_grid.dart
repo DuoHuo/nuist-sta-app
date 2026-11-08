@@ -169,6 +169,7 @@ class _WeekGridState extends State<WeekGrid> {
   List<int> _days = const [];
   double _dayW = 0;
   double _periodH = 0;
+  double _fontReferenceWidth = 0;
   int _nodes = 0;
 
   ScheduleEvent? get _focusedEvent {
@@ -243,7 +244,7 @@ class _WeekGridState extends State<WeekGrid> {
   Widget build(BuildContext context) {
     final settings = controller.settings;
     final nodes = settings.nodesPerDay.clamp(1, TimetableTheme.maxNodesPerDay);
-    final periodH = settings.periodHeight.clamp(
+    final basePeriodH = settings.periodHeight.clamp(
       TimetableTheme.periodHeightMin,
       TimetableTheme.periodHeightMax,
     );
@@ -269,8 +270,27 @@ class _WeekGridState extends State<WeekGrid> {
       builder: (context, constraints) {
         final periodW = TimetableTheme.periodColumnWidth;
         final dayW = (constraints.maxWidth - periodW) / days.length;
-        final gridH = periodH * nodes;
         final dpr = MediaQuery.devicePixelRatioOf(context);
+        // 格宽单独向上对齐像素，左右位置仍独立对齐；多出的不足一个像素
+        // 使用格外边距，避免某一列少一个像素就把整列字号缩小一级。
+        final rawCellWidth = dayW - TimetableTheme.cellMargin * 2;
+        _fontReferenceWidth = dpr.isFinite && dpr > 0
+            ? (rawCellWidth * dpr).ceilToDouble() / dpr
+            : rawCellWidth;
+        // 用户行高作为下限；整周共用内容所需的行高，保持节次与拖动坐标对齐。
+        // 长按开始到调课结束期间冻结，防止组内主课程切换时格子在手指下跳动。
+        final periodH = _drag != null && _periodH > 0
+            ? _periodH
+            : _preferredPeriodHeight(
+                context,
+                days: days,
+                dayW: dayW,
+                basePeriodH: basePeriodH,
+                radius: radius,
+                nodes: nodes,
+                dpr: dpr,
+              );
+        final gridH = periodH * nodes;
         _days = days;
         _dayW = dayW;
         _periodH = periodH;
@@ -492,6 +512,144 @@ class _WeekGridState extends State<WeekGrid> {
         a.weeks == b.weeks;
   }
 
+  /// 测量与绘制共用当前列的数据，保留调课虚影过滤和日程节次夹紧规则。
+  ({List<GridCell> courses, List<ScheduleGridItem> events}) _dayLayoutItems(
+    int day,
+    int nodes,
+  ) => (
+    courses: [
+      for (final c in controller.cellsForDay(week, day))
+        if (!isMovedAwayGhost(c, week)) c,
+    ],
+    events: [
+      for (final e in _scheduleItemsForDay(day))
+        ScheduleGridItem(
+          event: e.event,
+          startNode: e.startNode.clamp(1, nodes),
+          endNode: e.endNode.clamp(1, nodes),
+          activeThisWeek: e.activeThisWeek,
+        ),
+    ],
+  );
+
+  /// 根据可见格内的完整内容增加统一节次行高，不回写用户的高度设置。
+  double _preferredPeriodHeight(
+    BuildContext context, {
+    required List<int> days,
+    required double dayW,
+    required double basePeriodH,
+    required double radius,
+    required int nodes,
+    required double dpr,
+  }) {
+    var result = basePeriodH;
+    // 格子上下边分别对齐物理像素，预留一个物理像素避免取整后差一点高度。
+    final pixelAllowance = dpr.isFinite && dpr > 0 ? 1 / dpr : 1.0;
+    void take(double preferredHeight, int span) {
+      result = math.max(
+        result,
+        (preferredHeight + TimetableTheme.cellMargin * 2 + pixelAllowance) /
+            span,
+      );
+    }
+
+    for (var di = 0; di < days.length; di++) {
+      final width = _fontReferenceWidth;
+      if (width <= 0) continue;
+      final items = _dayLayoutItems(days[di], nodes);
+      final absorbed = <String>{};
+      for (final group in _groupsForEventFocus(items.courses, items.events)) {
+        final overlapping = [
+          for (final e in items.events)
+            if (e.overlapsNodes(group.startNode, group.endNode)) e,
+        ];
+        // 与日程重叠而让位的非本周格不参与高度需求。
+        if (group.active.isEmpty && overlapping.isNotEmpty) continue;
+        final extra = group.active.isEmpty
+            ? const <ScheduleGridItem>[]
+            : overlapping;
+        final focusedItem = extra
+            .where(
+              (e) =>
+                  e.event.id == _focusedEvent?.id &&
+                  !absorbed.contains(e.event.id),
+            )
+            .firstOrNull;
+        absorbed.addAll([for (final e in extra) e.event.id]);
+        var start = group.startNode;
+        var end = group.endNode;
+        for (final e in extra) {
+          start = math.min(start, e.startNode);
+          end = math.max(end, e.endNode);
+        }
+        if (start > nodes) continue;
+        final groupSpan = end.clamp(1, nodes) - start.clamp(1, nodes) + 1;
+        final stack = group.active.length + extra.length;
+        if (focusedItem != null) {
+          take(
+            ScheduleEventCell(
+              controller: controller,
+              event: focusedItem.event,
+              width: width,
+              fontReferenceWidth: _fontReferenceWidth,
+              height: 0,
+              radius: radius,
+              stackCount: stack,
+            ).preferredHeight(context),
+            groupSpan,
+          );
+          continue;
+        }
+        // 本周组内每门都测量，拖起主课后剩余课程仍能完整显示；灰组只画主课。
+        final courses = group.active.isEmpty ? [group.primary] : group.active;
+        for (final cell in courses) {
+          final span = cell.slot.startNode > nodes
+              ? groupSpan
+              : cell.slot.endNode.clamp(1, nodes) -
+                    cell.slot.startNode.clamp(1, nodes) +
+                    1;
+          take(
+            CourseCell(
+              controller: controller,
+              cell: cell,
+              width: width,
+              fontReferenceWidth: _fontReferenceWidth,
+              height: 0,
+              radius: radius,
+              stackCount: stack,
+            ).preferredHeight(context),
+            span,
+          );
+        }
+      }
+      // 已吸收入课程组的日程只在冲突列表显示，不能让它们把整周额外拉长。
+      for (final cluster in _eventClusters([
+        for (final e in items.events)
+          if (!absorbed.contains(e.event.id)) e,
+      ])) {
+        final primary =
+            cluster.where((e) => e.event.id == _focusedEvent?.id).firstOrNull ??
+            cluster.first;
+        final start = cluster.map((e) => e.startNode).reduce(math.min);
+        final end = cluster.map((e) => e.endNode).reduce(math.max);
+        take(
+          ScheduleEventCell(
+            controller: controller,
+            event: primary.event,
+            width: width,
+            fontReferenceWidth: _fontReferenceWidth,
+            height: 0,
+            radius: radius,
+            stackCount: cluster.length,
+            activeThisWeek: primary.activeThisWeek,
+          ).preferredHeight(context),
+          end - start + 1,
+        );
+      }
+    }
+    return result;
+  }
+
   List<Widget> _cellsFor(
     BuildContext context, {
     required int day,
@@ -503,21 +661,11 @@ class _WeekGridState extends State<WeekGrid> {
     required double dpr,
   }) {
     final widgets = <Widget>[];
-    final dayCells = [
-      for (final c in controller.cellsForDay(week, day))
-        if (!isMovedAwayGhost(c, week)) c,
-    ];
+    final items = _dayLayoutItems(day, nodes);
+    final dayCells = items.courses;
     // 日程（考试 / 其他，§14.2）：按时间映射到节次，夹在可见节数内（不消失）。
     // 考试受显示开关控制；从考试安排选中的目标在本页临时展示。
-    final events = [
-      for (final e in _scheduleItemsForDay(day))
-        ScheduleGridItem(
-          event: e.event,
-          startNode: e.startNode.clamp(1, nodes),
-          endNode: e.endNode.clamp(1, nodes),
-          activeThisWeek: e.activeThisWeek,
-        ),
-    ];
+    final events = items.events;
     final absorbed = <String>{};
     for (final group in _groupsForEventFocus(dayCells, events)) {
       // 与本周课重叠的日程并入该组：计入「N 门」与冲突圆点，点开时一起列出。
@@ -584,7 +732,7 @@ class _WeekGridState extends State<WeekGrid> {
       );
       final left = box.left;
       final top = box.top;
-      final width = box.width;
+      final width = _fontReferenceWidth;
       final height = box.height;
       final draggable =
           widget.enableDrag &&
@@ -613,6 +761,7 @@ class _WeekGridState extends State<WeekGrid> {
                       controller: controller,
                       event: focusedItem.event,
                       width: width,
+                      fontReferenceWidth: _fontReferenceWidth,
                       height: height,
                       radius: radius,
                       stackCount: stack,
@@ -631,6 +780,7 @@ class _WeekGridState extends State<WeekGrid> {
                     controller: controller,
                     cell: cell,
                     width: width,
+                    fontReferenceWidth: _fontReferenceWidth,
                     height: height,
                     radius: radius,
                     stackCount: stack,
@@ -727,17 +877,8 @@ class _WeekGridState extends State<WeekGrid> {
     showScheduleEventDetailSheet(context, event: e, controller: controller);
   }
 
-  /// 不与本周课重叠的日程格（§14.2）：彼此节次重叠的成组，只画一格（按开始时间、
-  /// 名称排序的第一项）并显示「N 门」与冲突圆点，点开列出；不可拖动。
-  List<Widget> _eventCellsFor(
-    BuildContext context, {
-    required List<ScheduleGridItem> items,
-    required int dayIndex,
-    required double dayW,
-    required double periodH,
-    required double radius,
-    required double dpr,
-  }) {
+  /// 相互重叠的日程共用一格；测量与绘制采用相同的排序和并集范围。
+  List<List<ScheduleGridItem>> _eventClusters(List<ScheduleGridItem> items) {
     final sorted = List.of(items)
       ..sort((a, b) {
         final byNode = a.startNode.compareTo(b.startNode);
@@ -757,8 +898,22 @@ class _WeekGridState extends State<WeekGrid> {
         curEnd = e.endNode;
       }
     }
+    return clusters;
+  }
+
+  /// 不与本周课重叠的日程格（§14.2）：彼此节次重叠的成组，只画一格（按开始时间、
+  /// 名称排序的第一项）并显示「N 门」与冲突圆点，点开列出；不可拖动。
+  List<Widget> _eventCellsFor(
+    BuildContext context, {
+    required List<ScheduleGridItem> items,
+    required int dayIndex,
+    required double dayW,
+    required double periodH,
+    required double radius,
+    required double dpr,
+  }) {
     return [
-      for (final cluster in clusters)
+      for (final cluster in _eventClusters(items))
         () {
           final start = cluster.map((e) => e.startNode).reduce(math.min);
           final end = cluster.map((e) => e.endNode).reduce(math.max);
@@ -769,7 +924,7 @@ class _WeekGridState extends State<WeekGrid> {
             height: (end - start + 1) * periodH - TimetableTheme.cellMargin * 2,
             dpr: dpr,
           );
-          final width = box.width;
+          final width = _fontReferenceWidth;
           final height = box.height;
           final primaryItem =
               cluster
@@ -781,6 +936,7 @@ class _WeekGridState extends State<WeekGrid> {
             controller: controller,
             event: primary,
             width: width,
+            fontReferenceWidth: _fontReferenceWidth,
             height: height,
             radius: radius,
             stackCount: cluster.length,
@@ -833,7 +989,7 @@ class _WeekGridState extends State<WeekGrid> {
       dpr: MediaQuery.devicePixelRatioOf(context),
     );
     final height = originBox.height;
-    final width = originBox.width;
+    final width = _fontReferenceWidth;
     return Positioned(
       left: 0,
       top: 0,
@@ -874,6 +1030,7 @@ class _WeekGridState extends State<WeekGrid> {
                   swappedFrom: d.cell.swappedFrom,
                 ),
                 width: width,
+                fontReferenceWidth: _fontReferenceWidth,
                 height: height,
                 radius: radius,
               ),

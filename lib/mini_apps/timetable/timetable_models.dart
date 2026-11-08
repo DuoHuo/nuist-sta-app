@@ -538,7 +538,7 @@ class TimetableSettings {
   /// 格子里显示地点（§13.3，默认开）。
   final bool showLocation;
 
-  /// 格子里显示老师（默认关；排在地点下面，空间不够先截掉）。
+  /// 格子里显示老师（默认关；排在地点下面，完整换行显示）。
   final bool showTeacher;
 
   /// 格子文字大小（默认标准，系数见 [CellFontScale.factor]）。
@@ -1003,7 +1003,7 @@ class TodayCourseItem {
 /// 从教务 `cxxszhxqkb.rows` / `xswpkc.rows` 解析课程。
 ///
 /// 字段映射（抓包确认）：
-/// - KCM 课名 · KCH 课号 · **KXH 课序号（网格 `[02]`，不用 JXBID）**
+/// - KCM 课名 · KCH 课号 · **KXH 课序号（如 `[02]`，不在网格显示，不用 JXBID）**
 /// - JXBID 教学班 ID（过长，仅去重指纹）
 /// - SKZC 周次位串 · SKXQ 星期 · KSJC/JSJC 起止节次
 /// - JASMC 教室（常为 **null** → 空串；UI 无地点时不显示 `@`）
@@ -1091,7 +1091,7 @@ class TimetableParser {
         weeks = '';
       }
 
-      // 展示用课序号：KXH（如 "02"）。不用 JXBID（超长教学班 ID）。
+      // 课序号：KXH（如 "02"），保留原始字段。不用 JXBID（超长教学班 ID）。
       final classId = _text(row, ['KXH']);
       final jxbId = _text(row, ['JXBID', 'JXBH']); // 仅指纹去重
       final teacher = _text(row, ['SKJS', 'JSXM']);

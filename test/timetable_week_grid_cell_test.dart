@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
@@ -239,6 +240,16 @@ void main() {
       required double periodHeight,
       required int end,
       bool showTeacher = false,
+      bool showLocation = true,
+      String name = '高数',
+      String location = '学而楼C303多媒体教室东侧',
+      String teacher = '教师A',
+      Brightness? brightness,
+      double textScale = 1,
+      double screenWidth = 1080 / 2.625,
+      double dpr = 2.625,
+      CellFontScale fontScale = CellFontScale.large,
+      List<Course> extraCourses = const [],
     }) async {
       _c.debugSetSnapshot(
         TimetableSnapshot(
@@ -246,33 +257,46 @@ void main() {
           settings: TimetableSettings(
             termStartDate: DateTime(2026, 9, 7),
             periodHeight: periodHeight,
-            fontScale: CellFontScale.large,
+            fontScale: fontScale,
             showTeacher: showTeacher,
+            showLocation: showLocation,
           ),
         ),
         viewingWeek: 1,
         manualCourses: [
           Course(
             id: 'm',
-            name: '高数',
+            name: name,
+            classId: '08',
             slots: [
               CourseSlot(
                 day: 1,
                 startNode: 1,
                 endNode: end,
                 weeks: '1' * 16,
-                location: '学而楼C303多媒体教室东侧',
-                teacher: '教师A',
+                location: location,
+                teacher: teacher,
               ),
             ],
           ),
+          ...extraCourses,
         ],
       );
-      tester.view.physicalSize = const Size(1080, 2400);
-      tester.view.devicePixelRatio = 2.625;
+      tester.view.physicalSize = Size(screenWidth * dpr, 2400);
+      tester.view.devicePixelRatio = dpr;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
         MaterialApp(
+          theme: brightness == null
+              ? null
+              : brightness == Brightness.dark
+              ? appDarkTheme()
+              : appLightTheme(),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: TextScaler.linear(textScale)),
+            child: child!,
+          ),
           home: Scaffold(body: WeekGrid(week: 1, controller: _c)),
         ),
       );
@@ -319,11 +343,23 @@ void main() {
       expect(loc.bottom <= cell.bottom + 0.01, isTrue);
     });
 
-    testWidgets('LC03 空间不够时老师先让位：地点完整优先于老师', (tester) async {
+    testWidgets('LC03 单节长内容自动拉高：地点与教师保留完整且不裁剪', (tester) async {
       await pumpGrid(tester, periodHeight: 64, end: 1, showTeacher: true);
       expect(tester.takeException(), isNull);
       expect(find.byKey(const Key('course_cell_location')), findsOneWidget);
-      expect(find.byKey(const Key('course_cell_teacher')), findsNothing);
+      final teacher = tester.widget<Text>(
+        find.byKey(const Key('course_cell_teacher')),
+      );
+      expect(teacher.data, '教师A');
+      expect(teacher.maxLines, isNull);
+      expect(teacher.overflow, isNot(TextOverflow.ellipsis));
+      final cellRect = tester.getRect(find.byType(CourseCell));
+      expect(cellRect.height, greaterThan(64 - TimetableTheme.cellMargin * 2));
+      expect(
+        tester.getRect(find.byKey(const Key('course_cell_teacher'))).bottom,
+        lessThanOrEqualTo(cellRect.bottom),
+      );
+      expect(_c.settings.periodHeight, 64);
       expect(locationLines(tester), greaterThanOrEqualTo(2));
       expect(
         tester
@@ -331,6 +367,359 @@ void main() {
             .maxLines,
         isNull,
       );
+    });
+
+    for (final brightness in Brightness.values) {
+      for (final scale in [1.0, 2.0]) {
+        testWidgets('375dp · $brightness · 字号 ×$scale：长内容完整拉高，节次统一对齐', (
+          tester,
+        ) async {
+          for (final (showLocation, showTeacher, locationValue) in [
+            (true, true, '楼A1'),
+            (false, true, '楼A1'),
+            (true, true, ''),
+            (true, false, '楼A1'),
+          ]) {
+            final hasLocation = showLocation && locationValue.isNotEmpty;
+            await pumpGrid(
+              tester,
+              periodHeight: 52,
+              end: 1,
+              name: '测试课程名称很长(1)',
+              location: locationValue,
+              teacher: '教师甲、教师乙、教师丙',
+              showLocation: showLocation,
+              showTeacher: showTeacher,
+              brightness: brightness,
+              textScale: scale,
+              screenWidth: 375,
+              extraCourses: [
+                for (final (id, day, start, end, name) in [
+                  ('two', 1, 2, 3, '短课'),
+                  ('one', 2, 3, 3, '单节课'),
+                ])
+                  Course(
+                    id: id,
+                    name: name,
+                    slots: [
+                      CourseSlot(
+                        day: day,
+                        startNode: start,
+                        endNode: end,
+                        weeks: '1' * 16,
+                      ),
+                    ],
+                  ),
+              ],
+            );
+            expect(tester.takeException(), isNull);
+            expect(find.text('[08]'), findsNothing);
+            expect(find.byKey(const Key('course_cell_class')), findsNothing);
+            Finder cell(String id) => find.byWidgetPredicate(
+              (widget) => widget is CourseCell && widget.cell.course.id == id,
+            );
+            final mainCell = cell('m');
+            final mainRect = tester.getRect(mainCell);
+            final twoRect = tester.getRect(cell('two'));
+            final oneRect = tester.getRect(cell('one'));
+            final periodH = twoRect.top - mainRect.top;
+            expect(periodH, greaterThan(52));
+            expect(_c.settings.periodHeight, 52);
+            expect(oneRect.top - mainRect.top, closeTo(periodH * 2, 1));
+            expect(
+              twoRect.height,
+              closeTo(periodH * 2 - TimetableTheme.cellMargin * 2, 1),
+            );
+            expect(oneRect.height, closeTo(mainRect.height, 0.5));
+            final labels = [
+              for (final node in ['1', '2'])
+                find.byWidgetPredicate(
+                  (widget) =>
+                      widget is Text &&
+                      widget.data == node &&
+                      widget.style?.fontSize == 12 &&
+                      widget.style?.fontWeight == FontWeight.w600,
+                ),
+            ];
+            expect(
+              tester.getCenter(labels[1]).dy - tester.getCenter(labels[0]).dy,
+              closeTo(periodH, 0.5),
+            );
+            final nameWidget = find.descendant(
+              of: mainCell,
+              matching: find.byType(CourseNameText),
+            );
+            final name = find.descendant(
+              of: nameWidget,
+              matching: find.byType(Text),
+            );
+            final nameStyle = tester.widget<CourseNameText>(nameWidget).style;
+            expect(nameStyle.fontWeight, FontWeight.w500);
+            expect(
+              nameStyle.fontVariations?.any(
+                (variation) =>
+                    variation.axis == 'wght' && variation.value == 450,
+              ),
+              isTrue,
+            );
+            expect(
+              tester
+                  .widget<Text>(name)
+                  .data!
+                  .replaceAll('\n', '')
+                  .replaceAll('\u2060', ''),
+              '测试课程名称很长（1）',
+            );
+            final nameParagraph = tester.renderObject<RenderParagraph>(
+              find.descendant(of: name, matching: find.byType(RichText)),
+            );
+            expect(nameParagraph.didExceedMaxLines, isFalse);
+            final anchor = TextPainter(
+              text: TextSpan(text: '课课课', style: nameParagraph.text.style),
+              textDirection: nameParagraph.textDirection,
+              textScaler: nameParagraph.textScaler,
+            )..layout();
+            expect(
+              anchor.width,
+              lessThanOrEqualTo(nameParagraph.constraints.maxWidth + 0.01),
+            );
+            anchor.dispose();
+            final location = find.byKey(const Key('course_cell_location'));
+            final teacher = find.byKey(const Key('course_cell_teacher'));
+            expect(location, hasLocation ? findsOneWidget : findsNothing);
+            expect(teacher, showTeacher ? findsOneWidget : findsNothing);
+            if (hasLocation) {
+              final locationStyle = tester.widget<Text>(location).style!;
+              expect(locationStyle.fontWeight, FontWeight.w500);
+              expect(
+                locationStyle.fontVariations?.any(
+                  (variation) =>
+                      variation.axis == 'wght' && variation.value == 450,
+                ),
+                isTrue,
+              );
+              expect(
+                tester.getRect(location).bottom,
+                lessThanOrEqualTo(mainRect.bottom),
+              );
+            }
+            final content = find.descendant(
+              of: mainCell,
+              matching: find.byType(OverflowBox),
+            );
+            expect(
+              find.descendant(of: content, matching: find.byType(SizedBox)),
+              showTeacher ? findsOneWidget : findsNothing,
+            );
+            if (showTeacher) {
+              final teacherText = tester.widget<Text>(teacher);
+              expect(teacherText.data, '教师甲\n教师乙\n教师丙');
+              expect(teacherText.semanticsLabel, '教师甲、教师乙、教师丙');
+              expect(teacherText.maxLines, isNull);
+              expect(teacherText.overflow, isNot(TextOverflow.ellipsis));
+              final paragraph = tester.renderObject<RenderParagraph>(
+                find.descendant(of: teacher, matching: find.byType(RichText)),
+              );
+              expect(paragraph.didExceedMaxLines, isFalse);
+              final tops = {
+                for (final box in paragraph.getBoxesForSelection(
+                  TextSelection(
+                    baseOffset: 0,
+                    extentOffset: teacherText.data!.length,
+                  ),
+                ))
+                  box.top.round(),
+              };
+              expect(tops.length, 3);
+              for (final name in RegExp(
+                r'[^\n]+',
+              ).allMatches(teacherText.data!)) {
+                final boxes = paragraph.getBoxesForSelection(
+                  TextSelection(baseOffset: name.start, extentOffset: name.end),
+                );
+                expect(
+                  boxes.map((box) => box.top.round()).toSet(),
+                  hasLength(1),
+                );
+              }
+              final line = TextPainter(
+                text: TextSpan(text: '课', style: paragraph.text.style),
+                textDirection: paragraph.textDirection,
+                textScaler: paragraph.textScaler,
+              )..layout();
+              final lineHeight = line.height;
+              line.dispose();
+              final teacherRect = tester.getRect(teacher);
+              final previous = tester.getRect(hasLocation ? location : name);
+              expect(
+                teacherRect.top - previous.bottom,
+                closeTo(lineHeight, 0.01),
+              );
+              expect(teacherRect.bottom, lessThanOrEqualTo(mainRect.bottom));
+            }
+          }
+        });
+      }
+    }
+
+    testWidgets('1200px / DPR3.25：修复周二少一像素，七列保持12sp与相同断行', (tester) async {
+      const courseName = '测试课程名称很长（1）';
+      const teachers = '教师甲、教师乙、教师丙';
+      const dpr = 3.25;
+      const screenWidth = 1200 / dpr;
+      final dayWidth = (screenWidth - TimetableTheme.periodColumnWidth) / 7;
+      final oldWidths = [
+        for (var day = 0; day < 7; day++)
+          ((day * dayWidth + dayWidth - TimetableTheme.cellMargin) * dpr)
+                  .round() -
+              ((day * dayWidth + TimetableTheme.cellMargin) * dpr).round(),
+      ];
+      expect(oldWidths.toSet(), {145, 146});
+      expect(oldWidths[1], 145);
+      expect(oldWidths[3], 146);
+      expect(145 / dpr - 8, lessThan(36.75));
+      expect(146 / dpr - 8, greaterThan(36.75));
+      await pumpGrid(
+        tester,
+        periodHeight: 52,
+        end: 1,
+        name: courseName,
+        location: '楼A1',
+        teacher: teachers,
+        showTeacher: true,
+        screenWidth: screenWidth,
+        dpr: dpr,
+        fontScale: CellFontScale.standard,
+        extraCourses: [
+          for (var day = 2; day <= 7; day++)
+            Course(
+              id: 'same_$day',
+              name: courseName,
+              slots: [
+                CourseSlot(
+                  day: day,
+                  startNode: 1,
+                  endNode: 1,
+                  weeks: '1' * 16,
+                  location: '楼A1',
+                  teacher: teachers,
+                ),
+              ],
+            ),
+        ],
+      );
+      expect(tester.takeException(), isNull);
+      final cells = tester
+          .widgetList<CourseCell>(find.byType(CourseCell))
+          .toList();
+      expect(cells, hasLength(7));
+      final widths = cells.map((cell) => (cell.width * dpr).round()).toSet();
+      expect(widths, {146});
+      final nameSizes = <double?>{};
+      final teacherSizes = <double?>{};
+      final paragraphWidths = <double>{};
+      final titleLines = <List<String>>[];
+      for (final cell in cells) {
+        final finder = find.byWidget(cell);
+        final nameFinder = find.descendant(
+          of: finder,
+          matching: find.byType(CourseNameText),
+        );
+        final name = tester.widget<CourseNameText>(nameFinder);
+        final titleFinder = find.descendant(
+          of: nameFinder,
+          matching: find.byType(RichText),
+        );
+        final title = tester.renderObject<RenderParagraph>(titleFinder);
+        paragraphWidths.add(title.constraints.maxWidth);
+        expect(title.constraints.maxWidth, closeTo(146 / dpr - 8, 0.01));
+        final anchor = TextPainter(
+          text: TextSpan(text: '课课课', style: title.text.style),
+          textDirection: title.textDirection,
+          textScaler: title.textScaler,
+        )..layout();
+        expect(anchor.width, closeTo(36.75, 0.01));
+        anchor.dispose();
+        expect(title.didExceedMaxLines, isFalse);
+        final text = title.text.toPlainText();
+        final rows = <int, StringBuffer>{};
+        for (var i = 0; i < text.length; i++) {
+          final character = text[i];
+          if (character == '\n' || character == '\u2060') continue;
+          final boxes = title.getBoxesForSelection(
+            TextSelection(baseOffset: i, extentOffset: i + 1),
+          );
+          expect(boxes, isNotEmpty);
+          rows
+              .putIfAbsent(boxes.first.top.round(), StringBuffer.new)
+              .write(character);
+        }
+        final tops = rows.keys.toList()..sort();
+        final lines = [for (final top in tops) rows[top].toString()];
+        expect(lines.join(), courseName);
+        if (titleLines.isNotEmpty) expect(lines, titleLines.first);
+        titleLines.add(lines);
+        final teacherFinder = find.descendant(
+          of: finder,
+          matching: find.byKey(const Key('course_cell_teacher')),
+        );
+        final teacher = tester.widget<Text>(teacherFinder);
+        nameSizes.add(name.style.fontSize);
+        teacherSizes.add(teacher.style!.fontSize);
+        expect(teacher.data, '教师甲\n教师乙\n教师丙');
+        expect(teacher.semanticsLabel, teachers);
+        final paragraph = tester.renderObject<RenderParagraph>(
+          find.descendant(of: teacherFinder, matching: find.byType(RichText)),
+        );
+        expect(paragraph.didExceedMaxLines, isFalse);
+        for (final start in [0, 4, 8]) {
+          final boxes = paragraph.getBoxesForSelection(
+            TextSelection(baseOffset: start, extentOffset: start + 3),
+          );
+          expect(boxes.map((box) => box.top.round()).toSet(), hasLength(1));
+        }
+        expect(
+          tester.getRect(teacherFinder).bottom,
+          lessThanOrEqualTo(tester.getRect(finder).bottom),
+        );
+        final cellRect = tester.getRect(finder);
+        final content = find.descendant(
+          of: finder,
+          matching: find.byType(OverflowBox),
+        );
+        for (final element
+            in find
+                .descendant(of: content, matching: find.byType(RichText))
+                .evaluate()) {
+          final rect = tester.getRect(find.byWidget(element.widget));
+          expect(rect.left, greaterThanOrEqualTo(cellRect.left - 0.01));
+          expect(rect.right, lessThanOrEqualTo(cellRect.right + 0.01));
+          expect(rect.top, greaterThanOrEqualTo(cellRect.top - 0.01));
+          expect(rect.bottom, lessThanOrEqualTo(cellRect.bottom + 0.01));
+        }
+      }
+      expect(nameSizes, {12.0});
+      expect(teacherSizes, hasLength(1));
+      expect(paragraphWidths, hasLength(1));
+      expect(_c.settings.periodHeight, 52);
+    });
+
+    testWidgets('宽格短内容保持设置行高，不写回自动适应高度', (tester) async {
+      await pumpGrid(
+        tester,
+        periodHeight: 52,
+        end: 1,
+        name: '短课',
+        location: '',
+        teacher: '',
+        screenWidth: 840,
+      );
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.getRect(find.byType(CourseCell)).height,
+        closeTo(52 - TimetableTheme.cellMargin * 2, 0.5),
+      );
+      expect(_c.settings.periodHeight, 52);
     });
   });
 

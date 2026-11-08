@@ -1,9 +1,11 @@
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 
 void main() {
   group('C01 colorIndex', () {
@@ -83,6 +85,82 @@ void main() {
       expect(courseColorIndexForName('高等数学A（1）'), 4);
       expect(courseColorIndexForName('数据结构'), 12);
       expect(courseColorIndexForName('大学物理'), 5);
+    });
+  });
+
+  group('自动文字按实际背景保证对比度', () {
+    double contrast(Color background, Color foreground) {
+      final bg = background.computeLuminance();
+      final fg = foreground.computeLuminance();
+      return bg >= fg ? (bg + 0.05) / (fg + 0.05) : (fg + 0.05) / (bg + 0.05);
+    }
+
+    test('青、琥珀、青绿预设：明暗主题及不同透明度均可读', () {
+      for (final index in [9, 10, 3]) {
+        for (final dark in [false, true]) {
+          final pair = TimetableTheme.autoCoursePair(index, dark: dark);
+          for (final opacity in [30, 80, 100]) {
+            final background = TimetableTheme.blendCellBg(
+              pair.bg,
+              opacity,
+              dark: dark,
+            );
+            final foreground = TimetableTheme.readableCellText(
+              background,
+              pair.fg,
+            );
+            expect(contrast(background, foreground), greaterThanOrEqualTo(4.5));
+            expect(foreground.a, 1);
+            if (contrast(background, pair.fg) >= 4.5) {
+              expect(foreground, pair.fg);
+            }
+          }
+        }
+      }
+    });
+
+    test('自选中灰：原先黑白候选均不足时修正文字，明暗混合后重新计算', () {
+      const raw = Color(0xFF808080);
+      for (final dark in [false, true]) {
+        for (final opacity in [30, 80, 100]) {
+          final background = TimetableTheme.blendCellBg(
+            raw,
+            opacity,
+            dark: dark,
+          );
+          final preferred = TimetableTheme.userCoursePair(background).fg;
+          final foreground = TimetableTheme.readableCellText(
+            background,
+            preferred,
+          );
+          expect(contrast(background, foreground), greaterThanOrEqualTo(4.5));
+          expect(foreground.a, 1);
+          if (opacity == 100) {
+            expect(contrast(background, preferred), lessThan(4.5));
+            expect(foreground, isNot(preferred));
+          }
+        }
+      }
+    });
+
+    test('已可读颜色保留，透明文字转为不透明，强制黑白设置仍有效', () {
+      const background = Color(0xFFFFFFFF);
+      const preferred = Color(0xFF123456);
+      expect(TimetableTheme.readableCellText(background, preferred), preferred);
+      final foreground = TimetableTheme.readableCellText(
+        background,
+        preferred.withValues(alpha: 0.4),
+      );
+      expect(foreground, preferred);
+      expect(foreground.a, 1);
+      expect(
+        TimetableTheme.cellTextFor(foreground, CellTextColorMode.white),
+        TimetableTheme.forcedWhiteText,
+      );
+      expect(
+        TimetableTheme.cellTextFor(foreground, CellTextColorMode.black),
+        TimetableTheme.forcedBlackText,
+      );
     });
   });
 }

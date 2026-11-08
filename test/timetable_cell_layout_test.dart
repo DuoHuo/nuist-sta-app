@@ -10,6 +10,8 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_grid.dart';
 
 final _c = TimetableController.instance;
@@ -173,6 +175,285 @@ void main() {
       expect(lines, 3); // 学术英 / 语 / （1）
       expect(parenTops, hasLength(1));
     });
+
+    test('长括注自然换行，不粘连宽于格子的单元，闭括号不独占一行', () {
+      const name = '艺术哲学：美是如何诞生的（网络课程）';
+      final style = TimetableTheme.cellStyle();
+      final width = TimetableTheme.cellSize * 3;
+      final text = layoutCellCourseName(name, style: style, maxWidth: width);
+      expect(text, name);
+      expect(text, isNot(contains('\u2060')));
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: width);
+      addTearDown(painter.dispose);
+      expect(painter.computeLineMetrics().length, greaterThan(1));
+      final closing = painter.getBoxesForSelection(
+        TextSelection(baseOffset: text.length - 1, extentOffset: text.length),
+      );
+      final preceding = painter.getBoxesForSelection(
+        TextSelection(
+          baseOffset: text.length - 2,
+          extentOffset: text.length - 1,
+        ),
+      );
+      expect(closing, isNotEmpty);
+      expect(preceding, isNotEmpty);
+      expect(closing.single.top, preceding.single.top);
+    });
+  });
+
+  group('格宽按三汉字锚点缩小字号', () {
+    test('足宽保留基准字号，略窄后仍能完整容纳三汉字且不放大', () {
+      final style = TimetableTheme.cellStyle();
+      final anchor = TextPainter(
+        text: TextSpan(text: '课程名', style: style),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      addTearDown(anchor.dispose);
+      final wide = TimetableTheme.cellTextSizesForWidth(
+        maxWidth: anchor.width + 10,
+        nameStyle: style,
+      );
+      expect(wide.nameSize, TimetableTheme.cellSize);
+      expect(wide.subSize, TimetableTheme.cellSubSize);
+      final width = anchor.width - 1;
+      final narrow = TimetableTheme.cellTextSizesForWidth(
+        maxWidth: width,
+        nameStyle: style,
+      );
+      expect(narrow.nameSize, lessThan(wide.nameSize));
+      expect(narrow.nameSize, greaterThanOrEqualTo(kCellMinFontSize));
+      expect(narrow.subSize, lessThanOrEqualTo(wide.subSize));
+      final fitted = TextPainter(
+        text: TextSpan(
+          text: '课程名',
+          style: style.copyWith(fontSize: narrow.nameSize),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: width);
+      addTearDown(fitted.dispose);
+      expect(fitted.computeLineMetrics(), hasLength(1));
+    });
+
+    for (final scale in [1.0, 1.6]) {
+      testWidgets('375dp · 系统字号 ×$scale：课程与考试标题均能一行容纳三汉字', (tester) async {
+        _c.debugReset();
+        addTearDown(_c.debugReset);
+        tester.view.physicalSize = const Size(375, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        _c.debugSetSnapshot(
+          TimetableSnapshot(
+            periods: TimetableController.defaultPeriods(),
+            settings: TimetableSettings(
+              termStartDate: DateTime(2026, 9, 7),
+              fontScale: CellFontScale.large,
+            ),
+          ),
+          viewingWeek: 1,
+        );
+        const title = '计算机网络';
+        final slot = CourseSlot(
+          day: 1,
+          startNode: 1,
+          endNode: 2,
+          weeks: '1' * 16,
+          location: '楼A1',
+        );
+        final course = Course(id: 'network', name: title, slots: [slot]);
+        final event = ScheduleEvent(
+          id: 'exam-network',
+          kind: ScheduleKind.exam,
+          source: ScheduleSource.manual,
+          title: title,
+          date: DateTime(2026, 9, 8),
+          start: const TimeOfDayMinutes(8, 0),
+          end: const TimeOfDayMinutes(9, 40),
+          location: '楼A1',
+        );
+        final width = _cellWidthFor(375);
+        await tester.pumpWidget(
+          MaterialApp(
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: TextScaler.linear(scale)),
+              child: child!,
+            ),
+            home: Scaffold(
+              body: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CourseCell(
+                    controller: _c,
+                    cell: GridCell(
+                      course: course,
+                      slot: slot,
+                      conflictCount: 0,
+                      activeThisWeek: true,
+                    ),
+                    width: width,
+                    height: 160,
+                    radius: TimetableTheme.cellRadius,
+                  ),
+                  ScheduleEventCell(
+                    controller: _c,
+                    event: event,
+                    width: width,
+                    height: 160,
+                    radius: TimetableTheme.cellRadius,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+        final heading = find.text(title);
+        expect(heading, findsNWidgets(2));
+        final paragraphs = tester
+            .renderObjectList<RenderParagraph>(
+              find.descendant(of: heading, matching: find.byType(RichText)),
+            )
+            .toList();
+        for (final paragraph in paragraphs) {
+          final tops = paragraph
+              .getBoxesForSelection(
+                const TextSelection(baseOffset: 0, extentOffset: 3),
+              )
+              .map((box) => box.top)
+              .toSet();
+          expect(tops, hasLength(1));
+          expect(paragraph.didExceedMaxLines, isFalse);
+        }
+        expect(
+          paragraphs[0].text.style!.fontSize,
+          paragraphs[1].text.style!.fontSize,
+        );
+        expect(tester.takeException(), isNull);
+      });
+    }
+  });
+
+  testWidgets('375dp · 字号 ×1.6：非本周考试同宽排版，正文不被边框或胶囊遮挡', (tester) async {
+    _c.debugReset();
+    addTearDown(_c.debugReset);
+    tester.view.physicalSize = const Size(375, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    _c.debugSetSnapshot(
+      TimetableSnapshot(
+        settings: TimetableSettings(
+          termStartDate: DateTime(2026, 9, 7),
+          fontScale: CellFontScale.large,
+        ),
+      ),
+      viewingWeek: 1,
+    );
+    final event = ScheduleEvent(
+      id: 'off-week-exam',
+      kind: ScheduleKind.exam,
+      source: ScheduleSource.manual,
+      title: '测试考试',
+      date: DateTime(2026, 9, 8),
+      start: const TimeOfDayMinutes(8, 0),
+      end: const TimeOfDayMinutes(9, 40),
+      location: '测试楼',
+    );
+    final referenceWidth = _cellWidthFor(375);
+    for (final stackCount in [1, 2]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: const TextScaler.linear(1.6)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final width in [referenceWidth, referenceWidth + 1])
+                    ScheduleEventCell(
+                      controller: _c,
+                      event: event,
+                      width: width,
+                      fontReferenceWidth: referenceWidth,
+                      height:
+                          ScheduleEventCell(
+                            controller: _c,
+                            event: event,
+                            width: width,
+                            fontReferenceWidth: referenceWidth,
+                            height: 0,
+                            radius: TimetableTheme.cellRadius,
+                            activeThisWeek: false,
+                            stackCount: stackCount,
+                          ).preferredHeight(context) +
+                          1,
+                      radius: TimetableTheme.cellRadius,
+                      activeThisWeek: false,
+                      stackCount: stackCount,
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(tester.takeException(), isNull);
+      expect(find.byType(ScheduleEventCell), findsNWidgets(2));
+      for (final element in find.byType(ScheduleEventCell).evaluate()) {
+        final cell = find.byWidget(element.widget);
+        final cellRect = tester.getRect(cell);
+        final border = find.descendant(
+          of: cell,
+          matching: find.byKey(const Key('schedule_cell_off_week_border')),
+        );
+        expect(border, findsOneWidget);
+        expect(tester.getRect(border), cellRect);
+        final ink = tester.widget<Ink>(
+          find.descendant(of: cell, matching: find.byType(Ink)),
+        );
+        expect((ink.decoration! as BoxDecoration).border, isNull);
+        final content = find.descendant(
+          of: cell,
+          matching: find.byType(OverflowBox),
+        );
+        final texts = find.descendant(of: content, matching: find.byType(Text));
+        final mainRects = [
+          for (final text in texts.evaluate())
+            tester.getRect(find.byWidget(text.widget)),
+        ];
+        final paragraphs = tester.renderObjectList<RenderParagraph>(
+          find.descendant(of: content, matching: find.byType(RichText)),
+        );
+        for (final paragraph in paragraphs) {
+          expect(
+            paragraph.constraints.maxWidth,
+            closeTo(referenceWidth - 8, 0.01),
+          );
+        }
+        final badgeKeys = stackCount > 1
+            ? ['schedule_cell_stack_badge']
+            : ['schedule_cell_exam_pill', 'schedule_cell_off_week_pill'];
+        final badges = [
+          for (final key in badgeKeys)
+            tester.getRect(
+              find.descendant(of: cell, matching: find.byKey(Key(key))),
+            ),
+        ];
+        final topBadge = badges
+            .map((rect) => rect.top)
+            .reduce((a, b) => a < b ? a : b);
+        for (final rect in mainRects) {
+          expect(rect.left, greaterThanOrEqualTo(cellRect.left + 4 - 0.01));
+          expect(rect.right, lessThanOrEqualTo(cellRect.right - 4 + 0.01));
+          expect(rect.bottom, lessThanOrEqualTo(topBadge - 1));
+        }
+      }
+    }
   });
 
   group('B02b 真实 WeekGrid 排版：罗马数字+括注为一个单元、不重复', () {

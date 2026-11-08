@@ -579,14 +579,28 @@ void main() {
       );
     }
 
-    void expectCellColors(WidgetTester tester, Color fg) {
+    void expectCellColors(WidgetTester tester) {
       final ink = tester.widget<Ink>(find.byType(Ink));
       final pair = TimetableTheme.autoCoursePair(
         coursePresetIndexForCourse(
           Course(id: 'k', name: '测试课K', slots: const []),
         ),
       );
-      expect((ink.decoration! as BoxDecoration).color, pair.bg);
+      final background = (ink.decoration! as BoxDecoration).color!;
+      expect(
+        background,
+        TimetableTheme.blendCellBg(
+          pair.bg,
+          TimetableController.instance.settings.cellOpacity,
+        ),
+      );
+      final fg = TimetableTheme.readableCellText(background, pair.fg);
+      final bgLuminance = background.computeLuminance();
+      final fgLuminance = fg.computeLuminance();
+      final contrast = bgLuminance >= fgLuminance
+          ? (bgLuminance + 0.05) / (fgLuminance + 0.05)
+          : (fgLuminance + 0.05) / (bgLuminance + 0.05);
+      expect(contrast, greaterThanOrEqualTo(4.5));
       final dot = tester.widget<Container>(
         find.byKey(const Key('course_cell_conflict_dot')),
       );
@@ -611,27 +625,13 @@ void main() {
 
     testWidgets('角标/文字用 id 哈希自动色（忽略旧 colorIndex）', (tester) async {
       await pumpCell(tester, 2);
-      expectCellColors(
-        tester,
-        TimetableTheme.autoCoursePair(
-          coursePresetIndexForCourse(
-            Course(id: 'k', name: '测试课K', slots: const []),
-          ),
-        ).fg,
-      );
+      expectCellColors(tester);
       TimetableController.instance.debugReset();
     });
 
     testWidgets('另一旧色号仍同 id 同色', (tester) async {
       await pumpCell(tester, 10);
-      expectCellColors(
-        tester,
-        TimetableTheme.autoCoursePair(
-          coursePresetIndexForCourse(
-            Course(id: 'k', name: '测试课K', slots: const []),
-          ),
-        ).fg,
-      );
+      expectCellColors(tester);
       TimetableController.instance.debugReset();
     });
   });

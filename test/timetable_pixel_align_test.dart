@@ -256,8 +256,7 @@ void main() {
     final p = planCellContent(
       name: '测试课甲乙丙丁',
       location: loc,
-      hasClass: true,
-      hasTeacher: true,
+      teacher: '',
       nameStyle: nameStyle,
       subStyle: subStyle,
       nameSize: 12,
@@ -272,8 +271,7 @@ void main() {
     final x = planCellContent(
       name: '测试课甲乙丙丁',
       location: loc,
-      hasClass: true,
-      hasTeacher: true,
+      teacher: '',
       nameStyle: nameStyle,
       subStyle: subStyle,
       nameSize: 12,
