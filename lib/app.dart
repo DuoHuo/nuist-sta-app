@@ -32,6 +32,9 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
 
   /// 全局 SnackBar 入口：用户主动刷新成功后在这里弹一次「已更新」。
   final _messengerKey = GlobalKey<ScaffoldMessengerState>();
+
+  /// 上一次「已更新」提示的时间：下拉会并发刷新多个模块，同批成功只弹一次。
+  DateTime? _lastUpdatedAt;
   StreamSubscription<List<ConnectivityResult>>? _networkSubscription;
   String? _network;
 
@@ -121,6 +124,14 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   void _onRefreshUpdated() {
     final messenger = _messengerKey.currentState;
     if (messenger == null) return;
+    // 一次下拉会并发刷新多张卡，逐个成功都会通知；400ms 内的连续通知只弹一次。
+    final now = DateTime.now();
+    final last = _lastUpdatedAt;
+    if (last != null &&
+        now.difference(last) < const Duration(milliseconds: 400)) {
+      return;
+    }
+    _lastUpdatedAt = now;
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(

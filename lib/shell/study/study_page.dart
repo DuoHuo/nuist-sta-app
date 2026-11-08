@@ -26,8 +26,6 @@ class StudyPage extends StatelessWidget {
       appBar: AppBar(title: const Text('学习')),
       body: PullToRefresh(
         onRefresh: () => _refreshAll(apps),
-        // 刷新全程静默：不显示转圈（issue #31）。
-        silent: true,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),

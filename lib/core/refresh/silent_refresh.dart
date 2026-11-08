@@ -121,15 +121,15 @@ class SilentRefresh {
     }
   }
 
-  /// 并发跑一批刷新任务，各自静默、互不影响。
+  /// 并发跑一批刷新任务，各自静默、互不影响，返回是否有任一模块成功。
   ///
   /// 用于首页与学习页的下拉刷新：壳只负责并发调度与日志，不感知各模块的
-  /// 业务状态。[tasks] 的键是模块 id，进日志字段便于定位失败来源。
+  /// 业务状态；「已更新」提示由各模块自己的 [run] 在成功时发出。
+  /// [tasks] 的键是模块 id，进日志字段便于定位失败来源。
   static Future<bool> runAll(
     String scope,
-    Map<String, Future<void> Function()> tasks, {
-    bool userInitiated = true,
-  }) async {
+    Map<String, Future<void> Function()> tasks,
+  ) async {
     final results = await Future.wait([
       for (final entry in tasks.entries)
         run(
@@ -140,8 +140,8 @@ class SilentRefresh {
           rethrowNonNetwork: false,
         ),
     ]);
-    final anySuccess = results.contains(true);
-    if (anySuccess && userInitiated) notifyUpdated();
-    return anySuccess;
+    // 成功提示由 [run] 在每次真正成功时发出：批量并发时「有任一成功」不代表
+    // 其他模块也成功，这里不能再统一提示，否则会把失败的刷新也报成「已更新」。
+    return results.contains(true);
   }
 }

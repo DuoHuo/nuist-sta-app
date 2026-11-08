@@ -34,7 +34,6 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
         final c = _controller;
         final room = c.room;
         final latest = c.latest;
-        final error = c.error;
 
         final String centerText;
         final Color centerColor;
@@ -90,23 +89,13 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
                       ),
                     ),
                     const Spacer(),
+                    // 右上角刷新按钮已删除（作者意见）；最后刷新时间保留，
+                    // 失败不再在卡片上提示。
                     if (showValue) ...[
                       Text(
-                        // 静默刷新后这里的 error 只剩「凭据失效」一类，
-                        // 直接提示用户去重新绑定（issue #31）。
-                        error != null
-                            ? '需重新绑定'
-                            : latest == null
-                            ? ''
-                            : formatShortTime(latest.time),
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: error != null
-                              ? Theme.of(context).colorScheme.error
-                              : palette.hint,
-                        ),
+                        latest == null ? '' : formatShortTime(latest.time),
+                        style: TextStyle(fontSize: 11, color: palette.hint),
                       ),
-                      _RefreshButton(onPressed: c.refresh),
                     ] else
                       const SizedBox(height: 32),
                   ],
@@ -164,28 +153,6 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
           ),
         );
       },
-    );
-  }
-}
-
-/// 刷新图标按钮。加载中不再换成转圈：数据更新一律静默进行（issue #31）。
-class _RefreshButton extends StatelessWidget {
-  const _RefreshButton({required this.onPressed});
-
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 32,
-      height: 32,
-      child: IconButton(
-        padding: EdgeInsets.zero,
-        iconSize: 18,
-        color: AppPalette.of(context).accent,
-        icon: const Icon(Icons.refresh),
-        onPressed: onPressed,
-      ),
     );
   }
 }

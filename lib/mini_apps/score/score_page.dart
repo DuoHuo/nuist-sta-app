@@ -152,14 +152,22 @@ class _OverviewCard extends StatelessWidget {
                 SizedBox(
                   width: 32,
                   height: 32,
-                  // 刷新不显示转圈：数据更新一律静默进行（issue #31）。
-                  child: IconButton(
-                    padding: EdgeInsets.zero,
-                    iconSize: 18,
-                    color: kScoreColor,
-                    icon: const Icon(Icons.refresh),
-                    onPressed: controller.refresh,
-                  ),
+                  // 子页面是用户手动刷新：只在手动刷新期间显示加载动画（作者意见）。
+                  child: controller.manualRefreshing
+                      ? const Center(
+                          child: SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : IconButton(
+                          padding: EdgeInsets.zero,
+                          iconSize: 18,
+                          color: kScoreColor,
+                          icon: const Icon(Icons.refresh),
+                          onPressed: controller.refresh,
+                        ),
                 ),
               ],
             ),

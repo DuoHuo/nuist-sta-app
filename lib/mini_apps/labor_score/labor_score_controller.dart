@@ -40,6 +40,7 @@ class LaborScoreController extends ChangeNotifier {
 
   LaborScore? _score;
   bool _loading = false;
+  bool _manualRefreshing = false;
   String? _error;
   bool _portalBound = true;
   bool _started = false;
@@ -49,6 +50,11 @@ class LaborScoreController extends ChangeNotifier {
 
   LaborScore? get score => _score;
   bool get loading => _loading;
+
+  /// 是否正在做**用户手动**触发的刷新（页面用它显示按钮加载动画）。
+  ///
+  /// 首屏自动刷新一律不显示动画，避免进入页面就转圈。
+  bool get manualRefreshing => _manualRefreshing;
 
   /// 最近一次刷新失败的原因，成功后清空。
   String? get error => _error;
@@ -125,6 +131,7 @@ class LaborScoreController extends ChangeNotifier {
     bool userInitiated = false,
   }) async {
     _loading = true;
+    _manualRefreshing = userInitiated;
     _error = null;
     notifyListeners();
     try {
@@ -134,7 +141,7 @@ class LaborScoreController extends ChangeNotifier {
         _portalBound = bound;
       }
       if (!_portalBound) return;
-      await SilentRefresh.run(
+      final succeeded = await SilentRefresh.run(
         'labor_score.controller',
         action: () async {
           final score = await _fetch();
@@ -145,6 +152,10 @@ class LaborScoreController extends ChangeNotifier {
         },
         userInitiated: userInitiated,
       );
+      // 手动刷新失败要给用户一个可见的错误提示，但不暴露原始异常。
+      if (!succeeded && userInitiated && generation == _bindingGeneration) {
+        _error = '刷新失败，请稍后再试';
+      }
     } on PortalCredentialError catch (e) {
       // 凭据失效必须让用户重新绑定：这条提示不能跟着其他失败一起静默掉。
       if (generation == _bindingGeneration) _error = e.message;
@@ -154,6 +165,7 @@ class LaborScoreController extends ChangeNotifier {
     } finally {
       if (generation == _bindingGeneration) {
         _loading = false;
+        _manualRefreshing = false;
         notifyListeners();
       }
     }

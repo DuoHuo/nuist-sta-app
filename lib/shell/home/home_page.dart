@@ -34,8 +34,6 @@ class HomePage extends StatelessWidget {
       body: AnnouncementOverlay(
         child: PullToRefresh(
           onRefresh: _refreshAll,
-          // 刷新全程静默：不显示转圈（issue #31）。
-          silent: true,
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),

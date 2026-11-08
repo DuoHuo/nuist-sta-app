@@ -121,7 +121,7 @@ void main() {
       expect(calls, 1, reason: '凭据类失败不重试');
     });
 
-    test('批量刷新不因单个模块抛错中断，并合并成一次提示', () async {
+    test('批量刷新不因单个模块抛错中断，且批量层不再统一提示', () async {
       final before = SilentRefresh.updated.value;
       var second = 0;
       final ok = await SilentRefresh.runAll('test.silent_refresh', {
@@ -130,7 +130,27 @@ void main() {
       });
       expect(ok, isTrue);
       expect(second, 1);
-      expect(SilentRefresh.updated.value, before + 1);
+      // 批量层「有任一成功」不代表其他模块成功，不能据此提示「已更新」，
+      // 否则失败的刷新也会被报成成功。
+      expect(SilentRefresh.updated.value, before);
+    });
+
+    test('批量里各模块自己成功时各发一次提示（界面侧做去重）', () async {
+      final before = SilentRefresh.updated.value;
+      final ok = await SilentRefresh.runAll('test.silent_refresh', {
+        'a': () => SilentRefresh.run(
+          'test.silent_refresh',
+          action: () async {},
+          userInitiated: true,
+        ),
+        'b': () => SilentRefresh.run(
+          'test.silent_refresh',
+          action: () async {},
+          userInitiated: true,
+        ),
+      });
+      expect(ok, isTrue);
+      expect(SilentRefresh.updated.value, before + 2);
     });
 
     test('批量刷新全部失败时返回 false 且不提示', () async {

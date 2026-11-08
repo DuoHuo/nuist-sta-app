@@ -60,6 +60,7 @@ class ElectricityController extends ChangeNotifier {
   ElecRoom? _room;
   ElecReading? _latest;
   bool _loading = false;
+  bool _manualRefreshing = false;
   String? _error;
   bool _portalBound = true;
   Future<void>? _starting;
@@ -70,6 +71,9 @@ class ElectricityController extends ChangeNotifier {
   ElecRoom? get room => _room;
   ElecReading? get latest => _latest;
   bool get loading => _loading;
+
+  /// 是否正在做**用户手动**触发的刷新（页面用它显示按钮加载动画）。
+  bool get manualRefreshing => _manualRefreshing;
 
   /// 最近一次刷新失败的原因，成功后清空。
   String? get error => _error;
@@ -146,10 +150,11 @@ class ElectricityController extends ChangeNotifier {
       return;
     }
     _loading = true;
+    _manualRefreshing = userInitiated;
     _error = null;
     notifyListeners();
     try {
-      await SilentRefresh.run(
+      final succeeded = await SilentRefresh.run(
         'electricity.controller',
         action: () async {
           final kwh = await _queryBalance(room);
@@ -163,14 +168,18 @@ class ElectricityController extends ChangeNotifier {
         },
         userInitiated: userInitiated,
       );
+      // 手动刷新失败要给用户一个可见的错误提示，但不暴露原始异常。
+      if (!succeeded && userInitiated && revision == _bindingRevision) {
+        _error = '刷新失败，请稍后再试';
+      }
     } on PortalCredentialError catch (e) {
       // 凭据失效必须让用户重新绑定：这条提示不能跟着其他失败一起静默掉。
       if (revision == _bindingRevision) _error = e.message;
     } catch (_) {
-      // 其余失败（网络、登录跳转、解析）已由 SilentRefresh 重试并写日志，
-      // 界面上不再展示失败文案（issue #31）。
+      // 其余失败（网络、登录跳转、解析）已由 SilentRefresh 重试并写日志。
     } finally {
       _loading = false;
+      _manualRefreshing = false;
       notifyListeners();
     }
   }
