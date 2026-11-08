@@ -8,6 +8,7 @@ import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/logging/app_log.dart';
 import 'timetable_api.dart';
+import 'timetable_change_format.dart';
 import 'timetable_colors.dart';
 import 'timetable_date_edits.dart';
 import 'timetable_exam_parser.dart';
@@ -23,6 +24,7 @@ import 'timetable_sync_diff.dart';
 import 'timetable_theme.dart';
 import 'timetable_timing.dart';
 import 'timetable_week_layout.dart';
+import 'timetable_week_format.dart';
 
 /// 教务同步状态。
 enum TimetableSyncStatus { idle, syncing, success, failure }
@@ -40,7 +42,9 @@ TimetableSyncFailure classifySyncError(Object e) {
     return TimetableSyncFailure.network;
   }
   if (e is JwxtHttpError) {
-    if (e.status == 401) return TimetableSyncFailure.sessionExpired;
+    if (e.status == 401 || e.status == 403) {
+      return TimetableSyncFailure.sessionExpired;
+    }
     return e.status >= 500
         ? TimetableSyncFailure.server
         : TimetableSyncFailure.unknown;
@@ -55,7 +59,9 @@ TimetableSyncFailure classifySyncError(Object e) {
       case DioExceptionType.badResponse:
         final code = e.response?.statusCode ?? 0;
         if (code >= 500) return TimetableSyncFailure.server;
-        if (code == 401) return TimetableSyncFailure.sessionExpired;
+        if (code == 401 || code == 403) {
+          return TimetableSyncFailure.sessionExpired;
+        }
         return TimetableSyncFailure.unknown;
       default:
         final inner = e.error;
@@ -2589,6 +2595,300 @@ class TimetableController extends ChangeNotifier {
   /// 这门教务课当前的编辑/删除记录（没有返回 null）。编辑页预填用。
   CourseEdit? courseEditOf(String courseId) => _courseEdits[courseId];
 
+  /// 按恢复范围生成课程详情的本地差异；只读取当前状态，不写入修改记录。
+  List<CourseDetailChangeGroup> courseDetailChanges(GridCell cell) {
+    final groups = <CourseDetailChangeGroup>[];
+    final base = baseOccurrenceOf(cell);
+    final dateEdit = cell.dateEdit;
+    if (dateEdit != null && base != null) {
+      final beforeDate = dateEdit.isWeeksScoped && cell.date != null
+          ? mondayOfWeek(cell.date!)
+                .add(Duration(days: dateEdit.date.weekday - 1))
+          : dateEdit.date;
+      var beforeSlot = base.course.slots[base.slotIndex].copyWith(
+        day: beforeDate.weekday,
+      );
+      var beforeCourse = base.course;
+      // 恢复单日记录后，匹配的按周记录仍会生效；从真实候选中排除当前记录
+      // 预览恢复值，避免将继承字段误当成本次修改，也不临时改动控制器状态。
+      for (final candidate in _applyDateEdits(
+        beforeDate,
+        beforeDate.weekday,
+        _swapCandidates(
+          _weekOfDate(beforeDate),
+          beforeDate.weekday,
+          beforeDate,
+        ),
+        excludedEditId: dateEdit.id,
+      )) {
+        if (!candidate.active || candidate.course.id != dateEdit.courseId) {
+          continue;
+        }
+        final edit = candidate.dateEdit;
+        final matches = edit == null
+            ? candidate.slot.startNode == dateEdit.origStart &&
+                  candidate.slot.endNode == dateEdit.origEnd
+            : edit.matches(
+                    dateEdit.courseId,
+                    beforeDate,
+                    dateEdit.origStart,
+                    dateEdit.origEnd,
+                  ) ||
+                  edit.matchesWeek(
+                    dateEdit.courseId,
+                    _weekOfDate(beforeDate),
+                    beforeDate.weekday,
+                    dateEdit.origStart,
+                    dateEdit.origEnd,
+                  );
+        if (!matches) continue;
+        beforeCourse = candidate.course;
+        beforeSlot = candidate.slot;
+        break;
+      }
+      groups.add(
+        CourseDetailChangeGroup(
+          scope: CourseDetailChangeScope.occurrence,
+          title: dateEdit.isWeeksScoped ? '已按周修改' : '这一天已单独修改',
+          affectedScope: _detailDateScope(dateEdit),
+          changes: _detailSlotChanges(
+            beforeCourse,
+            beforeSlot,
+            cell.course,
+            cell.slot,
+            beforeDate: dateEdit.isWeeksScoped ? null : beforeDate,
+            afterDate: dateEdit.isWeeksScoped ? null : cell.date,
+          ),
+        ),
+      );
+    }
+    if (base != null) {
+      final slot = base.course.slots[base.slotIndex];
+      final info = overrideInfoFor(base.course, base.slotIndex);
+      if (info != null) {
+        final origin = slotOriginOf(slot)!.original;
+        final moved = [
+          for (final peer in base.course.slots)
+            if (_sameSlot(slotOriginOf(peer)?.original ?? peer, origin) &&
+                peer.ref != origin.ref)
+              peer,
+        ];
+        final range = info.originalStart == info.originalEnd
+            ? '第 ${info.originalStart} 节'
+            : '第 ${info.originalStart}–${info.originalEnd} 节';
+        groups.add(
+          CourseDetailChangeGroup(
+            scope: CourseDetailChangeScope.position,
+            title: '已调课：原 ${_detailWeekday(info.originalDay)} $range',
+            affectedScope: formatWeeks(
+              moved.expand(weeksOf),
+              maxSegments: null,
+            ),
+            changes: [
+              for (final peer in moved)
+                CourseDetailChange(
+                  field: moved.length == 1
+                      ? '上课时间'
+                      : '上课时间（${formatWeeks(weeksOf(peer), maxSegments: null)}）',
+                  before: _detailTime(
+                    info.originalDay,
+                    info.originalStart,
+                    info.originalEnd,
+                  ),
+                  after: _detailTime(peer.day, peer.startNode, peer.endNode),
+                ),
+            ],
+          ),
+        );
+      }
+    }
+    final original = _jwxtCourseById(cell.course.id);
+    if (original != null && isJwxtOverridden(courseId: original.id)) {
+      Course? current;
+      for (final course in courses) {
+        if (course.id == original.id) current = course;
+      }
+      final changes = <CourseDetailChange>[];
+      for (final raw in original.slots) {
+        final replacements = <CourseSlot>[
+          if (current != null)
+            for (final slot in current.slots)
+              if (_sameSlot(slotOriginOf(slot)?.original ?? slot, raw)) slot,
+        ];
+        final retained = <int>{};
+        for (final slot in replacements) {
+          retained.addAll(weeksOf(slot));
+          final added = weeksOf(slot).toSet().difference(weeksOf(raw).toSet());
+          if (added.isNotEmpty) {
+            changes.add(
+              CourseDetailChange(
+                field: '上课安排',
+                before: '未安排',
+                after:
+                    '${formatWeeks(added, maxSegments: null)} · '
+                    '${_detailTime(slot.day, slot.startNode, slot.endNode)}',
+              ),
+            );
+          }
+          final context =
+              '${formatWeeks(weeksOf(slot), maxSegments: null)} · '
+              '${_detailTime(raw.day, raw.startNode, raw.endNode)}';
+          changes.addAll(
+            _detailSlotChanges(
+              original,
+              raw.copyWith(weeks: slot.weeks),
+              current!,
+              slot,
+              context: context,
+            ),
+          );
+        }
+        final removed = weeksOf(raw).toSet().difference(retained);
+        if (removed.isNotEmpty) {
+          changes.add(
+            CourseDetailChange(
+              field: '上课安排',
+              before:
+                  '${formatWeeks(removed, maxSegments: null)} · '
+                  '${_detailTime(raw.day, raw.startNode, raw.endNode)}',
+              after: '已删除',
+            ),
+          );
+        }
+      }
+      // 整门恢复也清除单日记录，因此其他日期的修改同样需要可见。
+      for (final edit in dateEditsOf(original.id)) {
+        final candidate = _activeCandidateFor(edit);
+        if (candidate == null) continue;
+        final context = _detailDateScope(edit);
+        if (edit.isDelete) {
+          changes.add(
+            CourseDetailChange(
+              field: '上课安排（$context）',
+              before: _detailTime(
+                candidate.slot.day,
+                candidate.slot.startNode,
+                candidate.slot.endNode,
+              ),
+              after: '已删除',
+            ),
+          );
+        } else {
+          final after = _withDateEdit(candidate, edit, edit.targetDate.weekday);
+          changes.addAll(
+            _detailSlotChanges(
+              candidate.course,
+              candidate.slot,
+              after.course,
+              after.slot,
+              beforeDate: edit.isWeeksScoped ? null : edit.date,
+              afterDate: edit.isWeeksScoped ? null : edit.targetDate,
+              context: context,
+            ),
+          );
+        }
+      }
+      groups.add(
+        CourseDetailChangeGroup(
+          scope: CourseDetailChangeScope.course,
+          title: '课程已修改',
+          affectedScope: '整门课程的编辑、调课和单日修改',
+          changes: changes,
+        ),
+      );
+    }
+    return groups;
+  }
+
+  List<CourseDetailChange> _detailSlotChanges(
+    Course beforeCourse,
+    CourseSlot beforeSlot,
+    Course afterCourse,
+    CourseSlot afterSlot, {
+    DateTime? beforeDate,
+    DateTime? afterDate,
+    String context = '',
+  }) {
+    final changes = <CourseDetailChange>[];
+    String field(String value) => context.isEmpty ? value : '$value（$context）';
+    void add(String label, String before, String after) {
+      if (before == after) return;
+      changes.add(
+        CourseDetailChange(
+          field: field(label),
+          before: before.isEmpty ? '未填写' : before,
+          after: after.isEmpty ? '未填写' : after,
+        ),
+      );
+    }
+
+    add(
+      '课程名称',
+      courseDisplayName(course: beforeCourse, slot: beforeSlot),
+      courseDisplayName(course: afterCourse, slot: afterSlot),
+    );
+    add(
+      '上课时间',
+      _detailTime(
+        beforeSlot.day,
+        beforeSlot.startNode,
+        beforeSlot.endNode,
+        date: beforeDate,
+      ),
+      _detailTime(
+        afterSlot.day,
+        afterSlot.startNode,
+        afterSlot.endNode,
+        date: afterDate,
+      ),
+    );
+    add('教师', beforeSlot.teacher, afterSlot.teacher);
+    add('地点', beforeSlot.location, afterSlot.location);
+    add('备注', beforeSlot.note, afterSlot.note);
+    add(
+      '课程类型',
+      _detailKind(courseKindOf(course: beforeCourse, slot: beforeSlot)),
+      _detailKind(courseKindOf(course: afterCourse, slot: afterSlot)),
+    );
+    final beforeColor = userColorOf(beforeCourse.forSlot(beforeSlot));
+    final afterColor = userColorOf(afterCourse.forSlot(afterSlot));
+    if (beforeColor != afterColor) {
+      changes.add(
+        CourseDetailChange(
+          field: field('颜色'),
+          before: beforeColor == null ? '默认配色' : '自选颜色',
+          after: afterColor == null ? '默认配色' : '自选颜色',
+          beforeColor: beforeColor,
+          afterColor: afterColor,
+        ),
+      );
+    }
+    return changes;
+  }
+
+  static String _detailWeekday(int day) => day >= 1 && day <= 7
+      ? '周${const ['一', '二', '三', '四', '五', '六', '日'][day - 1]}'
+      : '时间未填写';
+
+  static String _detailTime(int day, int start, int end, {DateTime? date}) {
+    final prefix = date == null ? '' : '${date.month}月${date.day}日 ';
+    final range = start == end ? '第 $start 节' : '第 $start–$end 节';
+    return '$prefix${_detailWeekday(day)} $range';
+  }
+
+  static String _detailKind(CourseKind kind) => switch (kind) {
+    CourseKind.standard => '普通课',
+    CourseKind.lab => '实验课',
+    CourseKind.pe => '体育课',
+    CourseKind.exam => '考试',
+  };
+
+  static String _detailDateScope(CourseDateEdit edit) => edit.isWeeksScoped
+      ? '${formatWeeks(edit.weeks, maxSegments: null)} · ${_detailWeekday(edit.date.weekday)}'
+      : edit.isWeekdayMatch
+      ? '全部${_detailWeekday(edit.weekday ?? edit.date.weekday)}的匹配课程'
+      : '${edit.date.month}月${edit.date.day}日 ${_detailWeekday(edit.date.weekday)}';
+
   /// 被删除的教务课（原始数据，供「已删除课程」列表/恢复用）。
   List<Course> get deletedJwxtCourses => [
     for (final c in _snapshot.courses)
@@ -3092,22 +3392,30 @@ class TimetableController extends ChangeNotifier {
   }
 
   /// 套用单日 / 多周修改后的候选格。
-  List<_Cand> _applyDateEdits(DateTime date, int day, List<_Cand> cands) {
+  List<_Cand> _applyDateEdits(
+    DateTime date,
+    int day,
+    List<_Cand> cands, {
+    String? excludedEditId,
+  }) {
     final week = _weekOfDate(date);
+    final edits = excludedEditId == null
+        ? _dateEdits
+        : _dateEdits.where((edit) => edit.id != excludedEditId);
     final here = [
-      for (final e in _dateEdits)
+      for (final e in edits)
         if (e.scope == DateEditScope.oneDay && isSameDate(e.date, date)) e,
     ];
     final weekScoped = [
-      for (final e in _dateEdits)
+      for (final e in edits)
         if (e.isWeeksScoped) e,
     ];
     final weekdayDels = [
-      for (final e in _dateEdits)
+      for (final e in edits)
         if (e.isWeekdayMatch && e.isDelete) e,
     ];
     final incoming = [
-      for (final e in _dateEdits)
+      for (final e in edits)
         if (!e.isDelete &&
             e.scope == DateEditScope.oneDay &&
             e.movesToOtherDate &&

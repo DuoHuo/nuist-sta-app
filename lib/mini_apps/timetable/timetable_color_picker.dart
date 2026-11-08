@@ -633,11 +633,15 @@ class CourseColorRow extends StatelessWidget {
     required this.controller,
     required this.course,
     this.cell,
+    this.controlHeight = 48,
   });
 
   final TimetableController controller;
   final Course course;
   final GridCell? cell;
+
+  /// 详情标题行可压缩按钮的垂直占位，色块仍保持原尺寸。
+  final double controlHeight;
 
   @override
   Widget build(BuildContext context) {
@@ -663,7 +667,12 @@ class CourseColorRow extends StatelessWidget {
     return IconButton(
       key: const Key('course_detail_color'),
       tooltip: '修改课程颜色',
-      constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+      constraints: BoxConstraints.tightFor(width: 48, height: controlHeight),
+      style: controlHeight < 48
+          ? IconButton.styleFrom(
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            )
+          : null,
       onPressed: () async {
         final pick = await showTimetableColorPicker(
           context,

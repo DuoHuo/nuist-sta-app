@@ -356,6 +356,10 @@ class TimetableApi {
   })?
   debugPostResponse;
 
+  /// 测试钩子：替换门户客户端，保留应用首页检查和业务请求流程。
+  @visibleForTesting
+  static Future<PortalHttp> Function({required bool force})? debugClientFor;
+
   /// 一次同步内最多强制重登一次。
   static bool _reloginUsed = false;
 
@@ -396,13 +400,13 @@ class TimetableApi {
     final status = response.statusCode ?? 0;
     // 分类顺序：
     // 1) 5xx → 服务器错误（即使返回 HTML），绝不重登；
-    // 2) 401 / 跳到 authserver/login / 200 HTML 登录页 → 会话失效；
+    // 2) 401 / 403 / 跳到 authserver/login / 200 HTML 登录页 → 会话失效；
     // 3) 200 HTML 但不是登录页（如 WebVPN 维护页）→ 未知错误，不重登；
     // 4) 200 JSON code != "0" → 未知错误（见下方）。
     if (status >= 500) {
       throw JwxtHttpError(url.path.split('/').last, status);
     }
-    if (status == 401 || _isSessionExpiredResponse(response)) {
+    if (status == 401 || status == 403 || _isSessionExpiredResponse(response)) {
       a.ready = false;
       return const _SessionExpired();
     }
@@ -479,7 +483,11 @@ class TimetableApi {
   }) async {
     final a = app ?? _wdkb;
     final session = PortalSession.instance;
-    final http = await session.clientFor(PortalServices.jwxt, force: force);
+    final clientFor =
+        debugClientFor ??
+        ({required bool force}) =>
+            session.clientFor(PortalServices.jwxt, force: force);
+    final http = await clientFor(force: force);
     if (a.ready && !force) return http;
     final response = await http.followRedirects(
       await http.get(
@@ -490,7 +498,11 @@ class TimetableApi {
     if (_looksLikeLoginPage(response)) {
       a.ready = false;
       if (!force) {
-        final fresh = await session.clientFor(PortalServices.jwxt, force: true);
+        if (_reloginUsed) {
+          throw const JwxtSessionExpiredError('教务会话失效且本次同步已重登过，请稍后再试');
+        }
+        _reloginUsed = true;
+        final fresh = await clientFor(force: true);
         final retry = await fresh.followRedirects(
           await fresh.get(
             a.indexUrl,
@@ -525,6 +537,7 @@ class TimetableApi {
   }
 
   static bool _looksLikeLoginPage(Response<dynamic> response) {
+    if (response.statusCode == 401 || response.statusCode == 403) return true;
     if (response.realUri.host.contains('authserver')) return true;
     final body = response.data;
     return body is String &&

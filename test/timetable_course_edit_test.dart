@@ -13,6 +13,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_edit_page.dar
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_overrides.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_detail_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_edit_page.dart';
@@ -627,16 +628,63 @@ void main() {
       expect(_c.jwxtCourses.single.name, '测试课甲');
     });
 
-    testWidgets('JE06/JE07 修改标签打开恢复入口，恢复后回到教务值', (tester) async {
-      _load(jwxt: [jwxt]);
+    testWidgets('JE06/JE07 紧凑修改标签显示字段 diff，恢复后回到教务值', (tester) async {
+      _load(jwxt: [jwxt.copyWith(classId: '02', credit: 3)]);
       await tester.runAsync(
         () => _c.editJwxtCourse('j1', location: '测试楼 B202'),
       );
       await openDetail(tester, 'j1');
       expect(find.text('测试楼 B202'), findsOneWidget);
       expect(find.text('课程已修改'), findsOneWidget);
+      expect(
+        tester.getSize(find.byKey(const Key('course_detail_modified'))).height,
+        lessThanOrEqualTo(24),
+      );
+      expect(
+        tester.getSize(find.byKey(const Key('course_detail_metadata'))).height,
+        lessThanOrEqualTo(24),
+      );
+      final header = tester.getRect(
+        find.byKey(const Key('course_detail_header')),
+      );
+      final metadata = tester.getRect(
+        find.byKey(const Key('course_detail_metadata')),
+      );
+      final time = tester.getRect(find.byKey(const Key('course_detail_time')));
+      expect(metadata.top - header.bottom, 0);
+      expect(time.top - metadata.bottom, 0);
+      final title = tester.getRect(
+        find.byKey(const Key('course_detail_title')),
+      );
+      final courseInfo = tester.getRect(find.text('课序 02 · 3 学分'));
+      final clock = tester.getRect(
+        find
+            .descendant(
+              of: find.byKey(const Key('course_detail_time')),
+              matching: find.byType(Text),
+            )
+            .first,
+      );
+      expect(
+        clock.top - courseInfo.bottom,
+        closeTo(courseInfo.top - title.bottom, 1),
+      );
       await tester.tap(find.byKey(const Key('course_detail_modified')));
       await tester.pumpAndSettle();
+      final diff = find.byKey(const Key('course_detail_diff_course'));
+      expect(diff, findsOneWidget);
+      expect(
+        find.descendant(of: diff, matching: find.text('修改前：测试楼 A101')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: diff, matching: find.text('修改后：测试楼 B202')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: diff, matching: find.text('教师')),
+        findsNothing,
+      );
       expect(
         find.byKey(const Key('course_detail_restore_course')),
         findsOneWidget,
@@ -657,6 +705,45 @@ void main() {
       expect(find.byKey(const Key('course_detail_delete')), findsOneWidget);
       expect(find.byKey(const Key('course_detail_jwxt_edit')), findsNothing);
       expect(find.text('恢复原课程'), findsNothing);
+    });
+
+    testWidgets('单日改节次叠加调课时，diff 仍能恢复底层原位置', (tester) async {
+      _load(jwxt: [jwxt]);
+      await tester.runAsync(
+        () => _c.moveSlot(
+          _c.courses.single,
+          0,
+          toDay: 2,
+          toStartPeriod: 5,
+          week: _week,
+          scope: MoveScope.thisWeek,
+        ),
+      );
+      await tester.runAsync(
+        () => _c.editOccurrence(_c.cellsForDay(_week, 2).single, toStart: 7),
+      );
+      await _pumpLauncher(
+        tester,
+        (context) => showCourseDetailSheet(
+          context,
+          cell: _c.cellsForDay(_week, 2).single,
+          controller: _c,
+        ),
+      );
+      await tester.tap(find.byKey(const Key('course_detail_date_edit')));
+      await tester.pumpAndSettle();
+      final position = find.byKey(const Key('course_detail_diff_position'));
+      expect(position, findsOneWidget);
+      expect(
+        find.descendant(of: position, matching: find.text('修改后：周二 第 5–6 节')),
+        findsOneWidget,
+      );
+      final restore = find.byKey(const Key('course_detail_restore'));
+      await tester.ensureVisible(restore);
+      await tester.tap(restore);
+      await _settleIo(tester);
+      expect(_c.slotOverrides, isEmpty);
+      expect(_c.cellsForDay(_week, 1).single.slot.startNode, 3);
     });
   });
 
@@ -721,7 +808,7 @@ void main() {
         ]) {
           final size = tester.getSize(find.byKey(Key(key)));
           expect(size.width, greaterThanOrEqualTo(48));
-          expect(size.height, greaterThanOrEqualTo(48));
+          expect(size.height, greaterThanOrEqualTo(32));
         }
         final scroll = tester.state<ScrollableState>(
           find.descendant(
@@ -730,6 +817,22 @@ void main() {
           ),
         );
         expect(scroll.position.maxScrollExtent, greaterThan(0));
+        await tester.tap(find.byKey(const Key('course_detail_date_edit')));
+        await tester.pumpAndSettle();
+        final diff = find.byKey(const Key('course_detail_diff_occurrence'));
+        expect(diff, findsOneWidget);
+        expect(
+          find.descendant(of: diff, matching: find.text('修改前：未填写')),
+          findsOneWidget,
+        );
+        expect(find.textContaining('修改后：请提前准备实验报告'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.ensureVisible(
+          find.byKey(const Key('course_detail_restore_day')),
+        );
+        expect(tester.takeException(), isNull);
+        Navigator.of(tester.element(diff)).pop();
+        await tester.pumpAndSettle();
         await tester.ensureVisible(find.byKey(const Key('course_detail_note')));
         await tester.tapAt(
           tester.getTopLeft(find.byKey(const Key('course_detail_note'))) +

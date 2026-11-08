@@ -1,6 +1,41 @@
 import 'timetable_sync_diff.dart';
 import 'timetable_week_format.dart';
 
+/// 课程详情中本地修改对应的恢复范围。
+enum CourseDetailChangeScope { occurrence, position, course }
+
+/// 一个已变化字段的旧值与新值，颜色额外保留原始色值供界面预览。
+class CourseDetailChange {
+  const CourseDetailChange({
+    required this.field,
+    required this.before,
+    required this.after,
+    this.beforeColor,
+    this.afterColor,
+  });
+
+  final String field;
+  final String before;
+  final String after;
+  final int? beforeColor;
+  final int? afterColor;
+}
+
+/// 课程详情中的差异分组，影响范围与对应恢复操作保持一致。
+class CourseDetailChangeGroup {
+  const CourseDetailChangeGroup({
+    required this.scope,
+    required this.title,
+    required this.affectedScope,
+    required this.changes,
+  });
+
+  final CourseDetailChangeScope scope;
+  final String title;
+  final String affectedScope;
+  final List<CourseDetailChange> changes;
+}
+
 /// 变动记录展示文案（弹窗摘要 / 变动记录页明细）。
 abstract final class TimetableChangeFormat {
   static const _weekdays = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];

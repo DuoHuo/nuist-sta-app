@@ -3,13 +3,13 @@ import 'timetable_persistence_feedback.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/app_snack_bar.dart';
+import 'timetable_change_format.dart';
 import 'timetable_color_picker.dart';
 import 'timetable_course_color.dart';
 import 'timetable_delete_scope_sheet.dart';
 import 'timetable_course_edit_page.dart';
 import 'timetable_controller.dart';
 import 'timetable_models.dart';
-import 'timetable_overrides.dart';
 import 'timetable_theme.dart';
 import 'timetable_manual_course_form.dart';
 import 'timetable_week_format.dart';
@@ -147,6 +147,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                           controller: widget.controller,
                           course: course,
                           cell: cell,
+                          controlHeight: 32,
                         ),
                         IconButton(
                           key: Key(
@@ -158,7 +159,10 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                           onPressed: _restoring ? null : () => _edit(course),
                           constraints: const BoxConstraints.tightFor(
                             width: 48,
-                            height: 48,
+                            height: 32,
+                          ),
+                          style: IconButton.styleFrom(
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
                           icon: Icon(
                             Icons.edit_outlined,
@@ -176,7 +180,10 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                           onPressed: _restoring ? null : () => _delete(course),
                           constraints: const BoxConstraints.tightFor(
                             width: 48,
-                            height: 48,
+                            height: 32,
+                          ),
+                          style: IconButton.styleFrom(
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
                           icon: Icon(
                             Icons.delete_outline,
@@ -188,8 +195,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
                 Wrap(
+                  key: const Key('course_detail_metadata'),
                   spacing: 8,
                   runSpacing: 4,
                   crossAxisAlignment: WrapCrossAlignment.center,
@@ -233,8 +240,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                       ),
                   ],
                 ),
-                const SizedBox(height: 12),
                 _InfoRow(
+                  key: const Key('course_detail_time'),
                   icon: Icons.access_time,
                   text: clock,
                   secondaryText: [
@@ -242,6 +249,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                     if (clock != range) range,
                   ].join(' · '),
                   emphasized: true,
+                  verticalPadding: 4,
                 ),
                 _InfoRow(
                   icon: Icons.place_outlined,
@@ -321,10 +329,8 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
   Future<void> _showChanges() async {
     final cell = _cell;
     final course = cell.course;
-    final slotIndex = _slotIndexOf(course, cell.slot);
-    final overrideInfo = slotIndex < 0
-        ? null
-        : widget.controller.overrideInfoFor(course, slotIndex);
+    final base = widget.controller.baseOccurrenceOf(cell);
+    final changes = widget.controller.courseDetailChanges(cell);
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -343,49 +349,33 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                 ),
               ),
               const SizedBox(height: 12),
-              if (cell.dateEdit != null)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(
-                    cell.dateEdit!.isWeeksScoped ? '已按周修改' : '这一天已单独修改',
-                  ),
-                  subtitle: const Text('恢复这条记录的课程信息、时间和颜色修改'),
-                  trailing: TextButton(
-                    key: const Key('course_detail_restore_day'),
-                    onPressed: () {
-                      Navigator.pop(sheetContext);
-                      _restoreDay();
-                    },
-                    child: Text(cell.dateEdit!.isWeeksScoped ? '恢复' : '恢复这一天'),
-                  ),
-                ),
-              if (overrideInfo != null)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(_overrideText(overrideInfo)),
-                  trailing: TextButton(
-                    key: const Key('course_detail_restore'),
-                    onPressed: () {
-                      Navigator.pop(sheetContext);
-                      _restore(course, slotIndex);
-                    },
-                    child: const Text('恢复原位置'),
-                  ),
-                ),
-              if (course.source == CourseSource.jwxt &&
-                  widget.controller.isJwxtOverridden(courseId: course.id))
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('课程已修改'),
-                  subtitle: const Text('恢复整门课程的编辑、调课和单日修改'),
-                  trailing: TextButton(
-                    key: const Key('course_detail_restore_course'),
-                    onPressed: () {
-                      Navigator.pop(sheetContext);
-                      _restoreCourse(course);
-                    },
-                    child: const Text('恢复原课程'),
-                  ),
+              for (final group in changes)
+                _CourseChangeSection(
+                  group: group,
+                  restoreKey: Key(switch (group.scope) {
+                    CourseDetailChangeScope.occurrence =>
+                      'course_detail_restore_day',
+                    CourseDetailChangeScope.position => 'course_detail_restore',
+                    CourseDetailChangeScope.course =>
+                      'course_detail_restore_course',
+                  }),
+                  restoreLabel: switch (group.scope) {
+                    CourseDetailChangeScope.occurrence =>
+                      cell.dateEdit!.isWeeksScoped ? '恢复' : '恢复这一天',
+                    CourseDetailChangeScope.position => '恢复原位置',
+                    CourseDetailChangeScope.course => '恢复原课程',
+                  },
+                  onRestore: () {
+                    Navigator.pop(sheetContext);
+                    switch (group.scope) {
+                      case CourseDetailChangeScope.occurrence:
+                        _restoreDay();
+                      case CourseDetailChangeScope.position:
+                        _restore(base!.course, base.slotIndex);
+                      case CourseDetailChangeScope.course:
+                        _restoreCourse(course);
+                    }
+                  },
                 ),
             ],
           ),
@@ -428,14 +418,6 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
   bool _restoring = false;
 
   static const _weekdayCn = ['一', '二', '三', '四', '五', '六', '日'];
-
-  static String _overrideText(SlotOverrideInfo info) {
-    final wd = _weekdayCn[(info.originalDay - 1).clamp(0, 6)];
-    final range = info.originalStart == info.originalEnd
-        ? '第 ${info.originalStart} 节'
-        : '第 ${info.originalStart}–${info.originalEnd} 节';
-    return '已调课：原 周$wd $range';
-  }
 
   static int _slotIndexOf(Course course, CourseSlot slot) {
     final i = course.slots.indexWhere((s) => identical(s, slot));
@@ -695,14 +677,124 @@ class _DetailTag extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(4),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [tag],
-          ),
+          constraints: const BoxConstraints(minWidth: 48),
+          child: tag,
         ),
       ),
+    );
+  }
+}
+
+/// 按恢复范围展示字段差异，长文本上下排列以适配窄屏和大字体。
+class _CourseChangeSection extends StatelessWidget {
+  const _CourseChangeSection({
+    required this.group,
+    required this.restoreKey,
+    required this.restoreLabel,
+    required this.onRestore,
+  });
+
+  final CourseDetailChangeGroup group;
+  final Key restoreKey;
+  final String restoreLabel;
+  final VoidCallback onRestore;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    return Padding(
+      key: Key('course_detail_diff_${group.scope.name}'),
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            group.title,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+              color: colors.titleText,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '影响范围：${group.affectedScope}',
+            style: TextStyle(fontSize: 12, color: colors.labelText),
+          ),
+          if (group.changes.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                '当前没有生效的字段差异',
+                style: TextStyle(fontSize: 14, color: colors.labelText),
+              ),
+            ),
+          for (final change in group.changes)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    change.field,
+                    style: TextStyle(fontSize: 13, color: colors.labelText),
+                  ),
+                  const SizedBox(height: 4),
+                  _changeValue(
+                    context,
+                    '修改前',
+                    change.before,
+                    change.beforeColor,
+                  ),
+                  const SizedBox(height: 4),
+                  _changeValue(context, '修改后', change.after, change.afterColor),
+                ],
+              ),
+            ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              key: restoreKey,
+              onPressed: onRestore,
+              child: Text(restoreLabel),
+            ),
+          ),
+          Divider(height: 1, color: colors.divider),
+        ],
+      ),
+    );
+  }
+
+  Widget _changeValue(
+    BuildContext context,
+    String label,
+    String value,
+    int? color,
+  ) {
+    final colors = TimetableTheme.colorsOf(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (color != null) ...[
+          Container(
+            width: 16,
+            height: 16,
+            margin: const EdgeInsets.only(top: 2),
+            decoration: BoxDecoration(
+              color: Color(color),
+              border: Border.all(color: colors.labelText),
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
+        Expanded(
+          child: Text(
+            '$label：$value',
+            style: TextStyle(fontSize: 14, color: colors.titleText),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -714,6 +806,7 @@ class _InfoRow extends StatelessWidget {
     required this.text,
     this.secondaryText = '',
     this.emphasized = false,
+    this.verticalPadding = 7,
     this.onTap,
   });
 
@@ -721,13 +814,14 @@ class _InfoRow extends StatelessWidget {
   final String text;
   final String secondaryText;
   final bool emphasized;
+  final double verticalPadding;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
     final row = Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
+      padding: EdgeInsets.symmetric(vertical: verticalPadding),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

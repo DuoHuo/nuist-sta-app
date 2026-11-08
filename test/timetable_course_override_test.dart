@@ -6,6 +6,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart'
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_change_format.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_overrides.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
@@ -172,6 +173,117 @@ void main() {
       colorChanged: colorChanged,
     );
   }
+
+  group('课程详情本地差异', () {
+    test('恢复单日记录仍继承按周修改，颜色 diff 不重复继承字段', () async {
+      await seed([_jwxt('j1', '测试课程')]);
+      await c.editOccurrenceWeeks(
+        cellAt('j1', 2, 1),
+        weeks: [2, 3],
+        location: '教二-202',
+      );
+      await c.editOccurrence(cellAt('j1', 2, 1), location: '教三-303');
+      var cell = cellAt('j1', 2, 1);
+      var occurrence = c.courseDetailChanges(cell).single;
+      expect(occurrence.changes.map((change) => change.field), ['地点']);
+      expect(occurrence.changes.single.before, '教二-202');
+      expect(occurrence.changes.single.after, '教三-303');
+      await c.restoreDateEdit(cell.dateEdit!.id);
+      expect(cellAt('j1', 2, 1).slot.location, '教二-202');
+
+      await c.setOccurrenceColor(cellAt('j1', 2, 1), 0xFF123456);
+      cell = cellAt('j1', 2, 1);
+      occurrence = c.courseDetailChanges(cell).single;
+      expect(occurrence.changes.map((change) => change.field), ['颜色']);
+      expect(occurrence.changes.single.afterColor, 0xFF123456);
+      await c.restoreDateEdit(cell.dateEdit!.id);
+      expect(cellAt('j1', 2, 1).slot.location, '教二-202');
+    });
+
+    test('单日差异继承整门修改，只列本次变化字段', () async {
+      await seed([_jwxt('j1', '测试课程')]);
+      await c.editJwxtCourse('j1', location: '教二-202');
+      await c.editOccurrence(cellAt('j1', 2, 1), location: '教三-303');
+      final groups = c.courseDetailChanges(cellAt('j1', 2, 1));
+      final occurrence = groups.singleWhere(
+        (group) => group.scope == CourseDetailChangeScope.occurrence,
+      );
+      expect(occurrence.affectedScope, '9月7日 周一');
+      expect(occurrence.changes.map((change) => change.field), ['地点']);
+      expect(occurrence.changes.single.before, '教二-202');
+      expect(occurrence.changes.single.after, '教三-303');
+      expect(
+        groups.any((group) => group.scope == CourseDetailChangeScope.course),
+        isTrue,
+      );
+    });
+
+    test('整门差异包含其他时段和单日删除，当前未改格仍可查看', () async {
+      final original = _jwxt('j1', '测试课程').copyWith(
+        slots: [
+          _jwxt('x', 'x').slots.single,
+          _jwxt('x', 'x', day: 3, start: 5, end: 6).slots.single,
+        ],
+      );
+      await seed([original]);
+      await saveForm(cellAt('j1', 2, 3), location: '教二-202');
+      await c.deleteOccurrence(cellAt('j1', 3, 3));
+      final course = c
+          .courseDetailChanges(cellAt('j1', 2, 1))
+          .singleWhere(
+            (group) => group.scope == CourseDetailChangeScope.course,
+          );
+      expect(
+        course.changes.any(
+          (change) =>
+              change.field.startsWith('地点') &&
+              change.before == '教一-101' &&
+              change.after == '教二-202',
+        ),
+        isTrue,
+      );
+      expect(
+        course.changes.any(
+          (change) => change.field.contains('9月16日') && change.after == '已删除',
+        ),
+        isTrue,
+      );
+    });
+
+    test('恢复原位置差异包含同一原时段的所有调课周次', () async {
+      await seed([_jwxt('j1', '测试课程')]);
+      await c.moveSlot(
+        shown('j1'),
+        0,
+        toDay: 4,
+        toStartPeriod: 3,
+        week: 2,
+        scope: MoveScope.thisWeek,
+      );
+      final remaining = shown('j1');
+      final index = remaining.slots.indexWhere(
+        (slot) => slot.day == 1 && slot.hasClassInWeek(3),
+      );
+      await c.moveSlot(
+        remaining,
+        index,
+        toDay: 5,
+        toStartPeriod: 5,
+        week: 3,
+        scope: MoveScope.thisWeek,
+      );
+      final position = c
+          .courseDetailChanges(cellAt('j1', 2, 4))
+          .singleWhere(
+            (group) => group.scope == CourseDetailChangeScope.position,
+          );
+      expect(position.affectedScope, '第 2–3 周');
+      expect(position.changes.map((change) => change.after).toSet(), {
+        '周四 第 3–4 节',
+        '周五 第 5–6 节',
+      });
+    });
+  });
 
   group('统一课程编辑数据', () {
     for (final source in [CourseSource.jwxt, CourseSource.manual]) {
