@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/colors.dart';
-import '../../core/time_format.dart';
 import 'score_controller.dart';
 import 'score_models.dart';
 
@@ -82,14 +81,8 @@ class _ScoreCardState extends State<ScoreCard> {
                       ),
                     ),
                     const Spacer(),
-                    if (c.portalBound) ...[
-                      Text(
-                        report == null ? '' : formatShortTime(report.fetchedAt),
-                        style: TextStyle(fontSize: 11, color: palette.hint),
-                      ),
-                      _RefreshButton(loading: c.loading, onPressed: c.refresh),
-                    ] else
-                      const SizedBox(height: 32),
+                    // 学习页不再显示刷新时间与刷新按钮（作者意见：全部删去）。
+                    const SizedBox(height: 32),
                   ],
                 ),
                 Padding(padding: const EdgeInsets.only(right: 8), child: body),
@@ -238,36 +231,6 @@ class _Placeholder extends StatelessWidget {
             ),
         ],
       ),
-    );
-  }
-}
-
-class _RefreshButton extends StatelessWidget {
-  const _RefreshButton({required this.loading, required this.onPressed});
-
-  final bool loading;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 32,
-      height: 32,
-      child: loading
-          ? const Center(
-              child: SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          : IconButton(
-              padding: EdgeInsets.zero,
-              iconSize: 18,
-              color: kScoreColor,
-              icon: const Icon(Icons.refresh),
-              onPressed: onPressed,
-            ),
     );
   }
 }

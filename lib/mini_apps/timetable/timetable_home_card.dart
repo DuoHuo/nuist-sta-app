@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/app_snack_bar.dart';
 import 'timetable_schedule_home_row.dart';
 import 'timetable_controller.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_models.dart';
-import 'timetable_copy.dart';
 import 'timetable_theme.dart';
 import 'timetable_week_layout.dart';
 import 'timetable_course_color.dart';
@@ -67,21 +65,6 @@ String formatClassRemaining(int minutes) {
 
 /// 兼容旧测试：默认上限；实际截断读 [TimetableSettings.homeMaxItems]。
 
-/// 首页「x 分钟前同步」：只读 [lastSync]（通常是 controller.lastSyncSuccessAt），
-/// UI 不自己记时间。null → null（调用方不展示该行）。
-String? formatSyncAgo(DateTime? lastSync, DateTime now) {
-  if (lastSync == null) return null;
-  var secs = now.difference(lastSync).inSeconds;
-  if (secs < 0) secs = 0;
-  if (secs < 60) return TimetableCopy.homeSyncJustNow;
-  final mins = secs ~/ 60;
-  if (mins < 60) return TimetableCopy.homeSyncMinutesAgoLabel(mins);
-  final hours = mins ~/ 60;
-  if (hours < 24) return TimetableCopy.homeSyncHoursAgoLabel(hours);
-  final days = hours ~/ 24;
-  return TimetableCopy.homeSyncDaysAgoLabel(days < 1 ? 1 : days);
-}
-
 const int kHomeMaxItems = kDefaultHomeMaxItems;
 
 /// 首页「今日课表」卡片（spec §6），课表唯一入口。
@@ -103,23 +86,6 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
   void initState() {
     super.initState();
     _controller.ensureStarted();
-  }
-
-  /// item 2：标题行刷新按钮，与首页下拉一致，只走 [TimetableController.refreshLocal]
-  /// 重读本地磁盘；不拉教务。失败弹「刷新失败」；同步时刻读 [lastSyncSuccessAt]，
-  /// UI 不另存。远程全量同步只在周课表页顶栏。
-  Future<void> _manualSync() async {
-    final ok = await _controller.refreshLocal();
-    if (!mounted) return;
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        AppSnackBar(
-          key: Key('home_card_sync_snackbar'),
-          tone: AppSnackBarTone.error,
-          content: Text(TimetableCopy.homeRefreshFailed),
-        ),
-      );
-    }
   }
 
   void _openTimetable() => context.push('/apps/timetable');
@@ -290,27 +256,11 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     header,
-                    if (formatSyncAgo(_controller.lastSyncSuccessAt, now)
-                        case final syncAgo?) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        syncAgo,
-                        key: const Key('home_card_sync_ago'),
-                        style: TimetableTheme.microStyle(color: colors.hint),
-                      ),
-                    ],
+                    // 「刚刚同步 / x 分钟前同步」已按作者意见删除。
                     const SizedBox(height: 6),
                     ...body,
                   ],
                 ),
-              ),
-              // item 2：刷新按钮 48dp 热区；叠在标题行右侧而不参与行高。
-              // 否则 48dp 的按钮会把只有 21dp 高的标题行撑高，标题上下各多出约
-              // 13.5dp 白；同步失败静默处理，不显示缓存时间。
-              Positioned(
-                top: 0,
-                right: TimetableTheme.cardPaddingH + _chevronSize,
-                child: _RefreshButton(onRefresh: _manualSync),
               ),
             ],
           ),
@@ -427,67 +377,6 @@ class _CardHeader extends StatelessWidget {
           const SizedBox(width: TimetableTheme.iconTapSize),
           Icon(Icons.chevron_right, color: colors.chevron, size: _chevronSize),
         ],
-      ),
-    );
-  }
-}
-
-/// item 2：标题行右侧刷新按钮（热区 48dp）。
-/// 点一下转一整圈后停，不跟 [TimetableSyncStatus.syncing] 挂加载态。
-class _RefreshButton extends StatefulWidget {
-  const _RefreshButton({required this.onRefresh});
-
-  final Future<void> Function() onRefresh;
-
-  @override
-  State<_RefreshButton> createState() => _RefreshButtonState();
-}
-
-class _RefreshButtonState extends State<_RefreshButton>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _spin = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 900),
-  );
-  bool _busy = false;
-
-  @override
-  void dispose() {
-    _spin.dispose();
-    super.dispose();
-  }
-
-  Future<void> _handleTap() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    // 先启动一整圈；刷新完成也要等动画跑完，避免中途停在半圈。
-    final turn = _spin.forward(from: 0);
-    try {
-      await widget.onRefresh();
-    } finally {
-      await turn;
-      if (mounted) {
-        _spin.value = 0;
-        setState(() => _busy = false);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = TimetableTheme.colorsOf(context);
-    return SizedBox(
-      width: TimetableTheme.iconTapSize,
-      height: TimetableTheme.iconTapSize,
-      child: IconButton(
-        key: const Key('home_card_refresh'),
-        tooltip: _busy ? '正在刷新' : '刷新课表',
-        onPressed: _busy ? null : _handleTap,
-        icon: RotationTransition(
-          key: const Key('home_card_refresh_spin'),
-          turns: _spin,
-          child: Icon(Icons.refresh, size: 20, color: colors.labelText),
-        ),
       ),
     );
   }

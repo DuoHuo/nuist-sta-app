@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/logging/app_log.dart';
+import '../../core/refresh/silent_refresh.dart';
 import 'electricity_api.dart';
 import 'electricity_models.dart';
 import 'electricity_store.dart';
@@ -59,6 +60,7 @@ class ElectricityController extends ChangeNotifier {
   ElecRoom? _room;
   ElecReading? _latest;
   bool _loading = false;
+  bool _manualRefreshing = false;
   String? _error;
   bool _portalBound = true;
   Future<void>? _starting;
@@ -69,6 +71,9 @@ class ElectricityController extends ChangeNotifier {
   ElecRoom? get room => _room;
   ElecReading? get latest => _latest;
   bool get loading => _loading;
+
+  /// 是否正在做**用户手动**触发的刷新（页面用它显示按钮加载动画）。
+  bool get manualRefreshing => _manualRefreshing;
 
   /// 最近一次刷新失败的原因，成功后清空。
   String? get error => _error;
@@ -113,19 +118,26 @@ class ElectricityController extends ChangeNotifier {
   }
 
   /// 重读绑定状态并刷新余额；并发调用共用同一次请求。
-  Future<void> refresh() => _refresh();
+  Future<void> refresh() => _refresh(userInitiated: true);
 
-  Future<void> _refresh({bool? knownBinding}) {
+  Future<void> _refresh({bool? knownBinding, bool userInitiated = false}) {
     if (_refreshing case final refreshing?) return refreshing;
     late final Future<void> future;
-    future = _refreshCurrent(knownBinding: knownBinding).whenComplete(() {
-      if (identical(_refreshing, future)) _refreshing = null;
-    });
+    future =
+        _refreshCurrent(
+          knownBinding: knownBinding,
+          userInitiated: userInitiated,
+        ).whenComplete(() {
+          if (identical(_refreshing, future)) _refreshing = null;
+        });
     _refreshing = future;
     return future;
   }
 
-  Future<void> _refreshCurrent({bool? knownBinding}) async {
+  Future<void> _refreshCurrent({
+    bool? knownBinding,
+    bool userInitiated = false,
+  }) async {
     final revision = _bindingRevision;
     await _ensureLocalLoaded();
     if (revision != _bindingRevision) return;
@@ -138,25 +150,36 @@ class ElectricityController extends ChangeNotifier {
       return;
     }
     _loading = true;
+    _manualRefreshing = userInitiated;
     _error = null;
     notifyListeners();
     try {
-      await _log.operation('refresh', () async {
-        final kwh = await _queryBalance(room);
-        if (revision != _bindingRevision) return;
-        final reading = ElecReading(time: DateTime.now(), kwh: kwh);
-        await _appendReading(room, reading);
-        // 拉取期间用户可能换了宿舍，那这次结果就不该盖到新宿舍头上。
-        if (revision == _bindingRevision && identical(_room, room)) {
-          _latest = reading;
-        }
-      });
-    } on PortalException catch (e) {
+      final succeeded = await SilentRefresh.run(
+        'electricity.controller',
+        action: () async {
+          final kwh = await _queryBalance(room);
+          if (revision != _bindingRevision) return;
+          final reading = ElecReading(time: DateTime.now(), kwh: kwh);
+          await _appendReading(room, reading);
+          // 拉取期间用户可能换了宿舍，那这次结果就不该盖到新宿舍头上。
+          if (revision == _bindingRevision && identical(_room, room)) {
+            _latest = reading;
+          }
+        },
+        userInitiated: userInitiated,
+      );
+      // 手动刷新失败要给用户一个可见的错误提示，但不暴露原始异常。
+      if (!succeeded && userInitiated && revision == _bindingRevision) {
+        _error = '刷新失败，请稍后再试';
+      }
+    } on PortalCredentialError catch (e) {
+      // 凭据失效必须让用户重新绑定：这条提示不能跟着其他失败一起静默掉。
       if (revision == _bindingRevision) _error = e.message;
-    } catch (e) {
-      if (revision == _bindingRevision) _error = '刷新失败：$e';
+    } catch (_) {
+      // 其余失败（网络、登录跳转、解析）已由 SilentRefresh 重试并写日志。
     } finally {
       _loading = false;
+      _manualRefreshing = false;
       notifyListeners();
     }
   }

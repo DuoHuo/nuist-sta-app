@@ -152,7 +152,8 @@ class _OverviewCard extends StatelessWidget {
                 SizedBox(
                   width: 32,
                   height: 32,
-                  child: controller.loading
+                  // 子页面是用户手动刷新：只在手动刷新期间显示加载动画（作者意见）。
+                  child: controller.manualRefreshing
                       ? const Center(
                           child: SizedBox(
                             width: 14,
@@ -199,7 +200,7 @@ class _OverviewCard extends StatelessWidget {
             if (controller.error != null) ...[
               const SizedBox(height: 10),
               Text(
-                '刷新失败：${controller.error}',
+                controller.error!,
                 style: TextStyle(
                   fontSize: 11,
                   color: Theme.of(context).colorScheme.error,

@@ -93,16 +93,8 @@ class _StudentInfoCardState extends State<StudentInfoCard> {
                     ),
                     const Spacer(),
                   ],
-                  if (c.portalBound) ...[
-                    // 刷新失败不单独报错：有缓存就照常显示它的时间，和其他
-                    // 三张卡一致。
-                    Text(
-                      info == null ? '' : formatShortTime(info.fetchedAt),
-                      style: TextStyle(fontSize: 11, color: palette.hint),
-                    ),
-                    _RefreshButton(loading: c.loading, onPressed: c.refresh),
-                  ] else
-                    const SizedBox(height: 32),
+                  // 学习页不再显示刷新时间与刷新按钮（作者意见：全部删去）。
+                  const SizedBox(height: 32),
                 ],
               ),
               Padding(padding: const EdgeInsets.only(right: 8), child: body),
@@ -352,33 +344,3 @@ class _Placeholder extends StatelessWidget {
 }
 
 /// 刷新图标按钮，加载中原位换成小转圈，占位尺寸不变。
-class _RefreshButton extends StatelessWidget {
-  const _RefreshButton({required this.loading, required this.onPressed});
-
-  final bool loading;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = AppPalette.of(context);
-    return SizedBox(
-      width: 32,
-      height: 32,
-      child: loading
-          ? const Center(
-              child: SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          : IconButton(
-              padding: EdgeInsets.zero,
-              iconSize: 18,
-              color: palette.accent,
-              icon: const Icon(Icons.refresh),
-              onPressed: onPressed,
-            ),
-    );
-  }
-}

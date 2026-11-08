@@ -34,7 +34,6 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
         final c = _controller;
         final room = c.room;
         final latest = c.latest;
-        final error = c.error;
 
         final String centerText;
         final Color centerColor;
@@ -90,21 +89,13 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
                       ),
                     ),
                     const Spacer(),
+                    // 右上角刷新按钮已删除（作者意见）；最后刷新时间保留，
+                    // 失败不再在卡片上提示。
                     if (showValue) ...[
                       Text(
-                        error != null
-                            ? '更新失败'
-                            : latest == null
-                            ? ''
-                            : formatShortTime(latest.time),
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: error != null
-                              ? Theme.of(context).colorScheme.error
-                              : palette.hint,
-                        ),
+                        latest == null ? '' : formatShortTime(latest.time),
+                        style: TextStyle(fontSize: 11, color: palette.hint),
                       ),
-                      _RefreshButton(loading: c.loading, onPressed: c.refresh),
                     ] else
                       const SizedBox(height: 32),
                   ],
@@ -162,37 +153,6 @@ class _ElectricityHomeCardState extends State<ElectricityHomeCard> {
           ),
         );
       },
-    );
-  }
-}
-
-/// 刷新图标按钮，加载中原位换成小转圈，占位尺寸不变。
-class _RefreshButton extends StatelessWidget {
-  const _RefreshButton({required this.loading, required this.onPressed});
-
-  final bool loading;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 32,
-      height: 32,
-      child: loading
-          ? const Center(
-              child: SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          : IconButton(
-              padding: EdgeInsets.zero,
-              iconSize: 18,
-              color: AppPalette.of(context).accent,
-              icon: const Icon(Icons.refresh),
-              onPressed: onPressed,
-            ),
     );
   }
 }

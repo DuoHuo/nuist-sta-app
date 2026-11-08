@@ -172,7 +172,8 @@ class _StatusHeader extends StatelessWidget {
             SizedBox(
               width: 40,
               height: 40,
-              child: c.loading
+              // 子页面是用户手动刷新：只在手动刷新期间显示加载动画（作者意见）。
+              child: c.manualRefreshing
                   ? const Center(
                       child: SizedBox(
                         width: 16,

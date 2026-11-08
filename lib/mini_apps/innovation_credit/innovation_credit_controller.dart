@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
-import '../../core/logging/app_log.dart';
+import '../../core/refresh/silent_refresh.dart';
 import '../../core/time_format.dart';
 import 'innovation_credit_api.dart';
 import 'innovation_credit_models.dart';
@@ -38,10 +38,10 @@ class InnovationCreditController extends ChangeNotifier {
 
   static final InnovationCreditController instance =
       InnovationCreditController._();
-  static final _log = AppLog.logger('innovation_credit.controller');
 
   InnovationCredit? _credit;
   bool _loading = false;
+  bool _manualRefreshing = false;
   String? _error;
   bool _portalBound = true;
   bool _started = false;
@@ -51,6 +51,11 @@ class InnovationCreditController extends ChangeNotifier {
 
   InnovationCredit? get credit => _credit;
   bool get loading => _loading;
+
+  /// 是否正在做**用户手动**触发的刷新（页面用它显示按钮加载动画）。
+  ///
+  /// 首屏自动刷新一律不显示动画，避免进入页面就转圈。
+  bool get manualRefreshing => _manualRefreshing;
 
   /// 最近一次刷新失败的原因，成功后清空。
   String? get error => _error;
@@ -107,15 +112,27 @@ class InnovationCreditController extends ChangeNotifier {
   }
 
   /// 手动刷新合并在途请求；绑定变化会等待旧请求后另行刷新。
-  Future<void> refresh() => _runRefresh();
+  Future<void> refresh() => _runRefresh(userInitiated: true);
 
-  Future<void> _runRefresh({bool checkBinding = true}) => _refreshing ??=
-      _refresh(_bindingGeneration, checkBinding: checkBinding).whenComplete(() {
+  Future<void> _runRefresh({
+    bool checkBinding = true,
+    bool userInitiated = false,
+  }) => _refreshing ??=
+      _refresh(
+        _bindingGeneration,
+        checkBinding: checkBinding,
+        userInitiated: userInitiated,
+      ).whenComplete(() {
         _refreshing = null;
       });
 
-  Future<void> _refresh(int generation, {required bool checkBinding}) async {
+  Future<void> _refresh(
+    int generation, {
+    required bool checkBinding,
+    bool userInitiated = false,
+  }) async {
     _loading = true;
+    _manualRefreshing = userInitiated;
     _error = null;
     notifyListeners();
     try {
@@ -125,20 +142,31 @@ class InnovationCreditController extends ChangeNotifier {
         _portalBound = bound;
       }
       if (!_portalBound) return;
-      await _log.operation('refresh', () async {
-        final credit = await _fetch();
-        if (generation != _bindingGeneration) return;
-        await _saveCache(credit);
-        if (generation != _bindingGeneration) return;
-        _credit = credit;
-      });
-    } on PortalException catch (e) {
+      final succeeded = await SilentRefresh.run(
+        'innovation_credit.controller',
+        action: () async {
+          final credit = await _fetch();
+          if (generation != _bindingGeneration) return;
+          await _saveCache(credit);
+          if (generation != _bindingGeneration) return;
+          _credit = credit;
+        },
+        userInitiated: userInitiated,
+      );
+      // 手动刷新失败要给用户一个可见的错误提示，但不暴露原始异常。
+      if (!succeeded && userInitiated && generation == _bindingGeneration) {
+        _error = '刷新失败，请稍后再试';
+      }
+    } on PortalCredentialError catch (e) {
+      // 凭据失效必须让用户重新绑定：这条提示不能跟着其他失败一起静默掉。
       if (generation == _bindingGeneration) _error = e.message;
-    } catch (e) {
-      if (generation == _bindingGeneration) _error = '刷新失败：$e';
+    } catch (_) {
+      // 其余失败（网络、登录跳转、解析）已由 SilentRefresh 重试并写日志，
+      // 界面上不再展示失败文案（issue #31）。
     } finally {
       if (generation == _bindingGeneration) {
         _loading = false;
+        _manualRefreshing = false;
         notifyListeners();
       }
     }
