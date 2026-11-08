@@ -668,6 +668,7 @@ class CourseColorRow extends StatelessWidget {
       key: const Key('course_detail_color'),
       tooltip: '修改课程颜色',
       constraints: BoxConstraints.tightFor(width: 48, height: controlHeight),
+      padding: controlHeight < 48 ? const EdgeInsets.all(6) : null,
       style: controlHeight < 48
           ? IconButton.styleFrom(
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,

@@ -156,6 +156,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                                 : 'course_detail_jwxt_edit',
                           ),
                           tooltip: '编辑课程',
+                          padding: const EdgeInsets.all(6),
                           onPressed: _restoring ? null : () => _edit(course),
                           constraints: const BoxConstraints.tightFor(
                             width: 48,
@@ -177,6 +178,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                                 : 'course_detail_jwxt_delete',
                           ),
                           tooltip: '删除课程',
+                          padding: const EdgeInsets.all(6),
                           onPressed: _restoring ? null : () => _delete(course),
                           constraints: const BoxConstraints.tightFor(
                             width: 48,

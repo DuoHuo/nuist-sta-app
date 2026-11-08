@@ -808,7 +808,7 @@ void main() {
         ]) {
           final size = tester.getSize(find.byKey(Key(key)));
           expect(size.width, greaterThanOrEqualTo(48));
-          expect(size.height, greaterThanOrEqualTo(32));
+          expect(size.height, 32);
         }
         final scroll = tester.state<ScrollableState>(
           find.descendant(
