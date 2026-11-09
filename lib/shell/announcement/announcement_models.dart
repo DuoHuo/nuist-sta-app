@@ -81,8 +81,6 @@ class Announcement {
     this.remind = AnnouncementRemind.none,
     this.dismissible = true,
     this.tone = AnnouncementTone.normal,
-    this.minAppVersion,
-    this.maxAppVersion,
     this.link,
   });
 
@@ -100,8 +98,6 @@ class Announcement {
   /// 服务端原值；实际是否阻断看 [blocking]。
   final bool dismissible;
   final AnnouncementTone tone;
-  final String? minAppVersion;
-  final String? maxAppVersion;
   final AnnouncementLink? link;
 
   /// 不可关闭的公告。必须带 expiresAt，否则视为可关闭，避免永久挡住首页。
@@ -129,8 +125,6 @@ class Announcement {
       remind: AnnouncementRemind.parse(raw['remind']),
       dismissible: dismissible is bool ? dismissible : true,
       tone: AnnouncementTone.parse(raw['tone']),
-      minAppVersion: _parseString(raw['minAppVersion']),
-      maxAppVersion: _parseString(raw['maxAppVersion']),
       link: AnnouncementLink.tryParse(raw['link']),
     );
   }
@@ -147,8 +141,6 @@ class Announcement {
     'remind': remind.name,
     'dismissible': dismissible,
     'tone': tone.name,
-    'minAppVersion': minAppVersion,
-    'maxAppVersion': maxAppVersion,
     'link': link?.toJson(),
   };
 }
@@ -175,45 +167,13 @@ List<Announcement> parseAnnouncementResponse(Object? data) {
   return _parseItems(decoded['items'] as List);
 }
 
-/// 比较语义化版本号：取 `+` 前部分按 `.` 拆数字，缺位补 0，非数字段视为 0。
-int compareVersions(String a, String b) {
-  List<int> parts(String v) => v
-      .split('+')
-      .first
-      .split('.')
-      .map((s) => int.tryParse(s.trim()) ?? 0)
-      .toList();
-  final pa = parts(a), pb = parts(b);
-  final n = pa.length > pb.length ? pa.length : pb.length;
-  for (var i = 0; i < n; i++) {
-    final x = i < pa.length ? pa[i] : 0;
-    final y = i < pb.length ? pb[i] : 0;
-    if (x != y) return x.compareTo(y);
-  }
-  return 0;
-}
-
-/// 客户端过滤与排序：去掉过期、不在版本区间内的项（[appVersion] 为 null 时
-/// 不做版本过滤）；置顶优先，再按发布时间降序（无发布时间排最后）。
+/// 只过滤本地已过期的公告，版本范围由服务端处理。
+/// 置顶优先，再按发布时间降序（无发布时间排最后）。
 List<Announcement> visibleAnnouncements(
   List<Announcement> all, {
   required DateTime now,
-  required String? appVersion,
 }) {
-  final list = all.where((a) {
-    if (a.isExpired(now)) return false;
-    if (appVersion != null) {
-      if (a.minAppVersion != null &&
-          compareVersions(appVersion, a.minAppVersion!) < 0) {
-        return false;
-      }
-      if (a.maxAppVersion != null &&
-          compareVersions(appVersion, a.maxAppVersion!) > 0) {
-        return false;
-      }
-    }
-    return true;
-  }).toList();
+  final list = all.where((a) => !a.isExpired(now)).toList();
   list.sort((a, b) {
     if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
     final pa = a.publishedAt, pb = b.publishedAt;
@@ -225,19 +185,34 @@ List<Announcement> visibleAnnouncements(
   return list;
 }
 
-/// 公告本地缓存：原始列表 + 条件请求用的校验头。
+/// 公告本地缓存：服务端筛选后的列表、客户端上下文和条件请求校验头。
 class AnnouncementCache {
   const AnnouncementCache({
     required this.items,
+    this.schemaVersion = currentSchemaVersion,
+    this.cacheKey,
     this.etag,
     this.lastModified,
     required this.fetchedAt,
   });
 
+  /// 当前缓存格式；旧版无客户端上下文的缓存不能复用。
+  static const int currentSchemaVersion = 2;
+
   final List<Announcement> items;
+  final int schemaVersion;
+
+  /// 不含设备标识的客户端变体键；信息缺失时新响应只在当前进程内展示。
+  final String? cacheKey;
   final String? etag;
   final String? lastModified;
   final DateTime fetchedAt;
+
+  /// 只有格式及完整客户端上下文一致时才允许展示缓存或复用条件头。
+  bool matches(String? currentKey) =>
+      currentKey != null &&
+      schemaVersion == currentSchemaVersion &&
+      cacheKey == currentKey;
 
   /// 从 JSON 还原；结构不对时抛 [FormatException]。
   factory AnnouncementCache.fromJson(Object? json) {
@@ -248,6 +223,10 @@ class AnnouncementCache {
     if (fetchedAt == null) throw const FormatException('公告缓存缺少时间');
     return AnnouncementCache(
       items: _parseItems(json['items'] as List),
+      schemaVersion: json['schemaVersion'] is int
+          ? json['schemaVersion'] as int
+          : 0,
+      cacheKey: _parseString(json['cacheKey']),
       etag: _parseString(json['etag']),
       lastModified: _parseString(json['lastModified']),
       fetchedAt: fetchedAt,
@@ -255,6 +234,8 @@ class AnnouncementCache {
   }
 
   Map<String, dynamic> toJson() => {
+    'schemaVersion': schemaVersion,
+    'cacheKey': cacheKey,
     'items': [for (final a in items) a.toJson()],
     'etag': etag,
     'lastModified': lastModified,

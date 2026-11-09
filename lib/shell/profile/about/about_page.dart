@@ -7,6 +7,7 @@ import '../../../core/app_snack_bar.dart';
 import '../../../core/app_info.dart';
 import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
+import 'contributor_avatar.dart';
 import 'contributor_controller.dart';
 import 'contributor_models.dart';
 
@@ -209,13 +210,7 @@ class _ContributorChip extends StatelessWidget {
               alignment: Alignment.center,
               child: avatar == null
                   ? initial
-                  : Image.network(
-                      avatar,
-                      width: 44,
-                      height: 44,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => initial,
-                    ),
+                  : ContributorAvatar(url: avatar, fallback: initial),
             ),
           ),
           const SizedBox(height: 4),

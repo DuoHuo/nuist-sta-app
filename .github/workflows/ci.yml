@@ -155,7 +155,7 @@ jobs:
           SHORT_SHA="$(git rev-parse --short=7 HEAD)"
           test -n "$BASE_VERSION"
           flutter build apk --debug --target-platform android-arm64 \
-            --build-name="${BASE_VERSION}+${SHORT_SHA}"
+            --build-name="${BASE_VERSION}+${SHORT_SHA}" --dart-define=APP_CHANNEL=ci
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7

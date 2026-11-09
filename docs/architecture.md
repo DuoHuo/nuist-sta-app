@@ -20,7 +20,7 @@ lib/
 │   ├── config/         # campus_config.dart 校园地址与密钥（hex 编码）—— 见 configuration.md；
 │   │                   # api_endpoints.dart 社团自有服务地址（明文）
 │   ├── logging/        # 结构化日志、Trace/Span、轮转存储与用户导出
-│   ├── network/        # 校园 VPN：vpnDio() 与 Rust 原生库的 FFI 封装
+│   ├── network/        # 自有服务客户端与元数据；校园 VPN 与 Rust 原生库的 FFI 封装
 │   ├── schedule/       # WeeklyClasses：「本周课程」跨小程序接口（课表提供，地图读取）
 │   ├── app_manifest.dart   # AppManifest：小程序描述
 │   ├── app_registry.dart   # AppRegistry：注册校验与宫格、学习卡片、入口索引
@@ -255,6 +255,38 @@ UI 侧用 `ListenableBuilder(listenable: controller, builder: …)` 订阅。跨
   所以底图和压在底图上的状态栏图标维持浅色；面板、浮层、弹层等界面外壳跟随主题
 - WebView 承载的网页（H5 小程序、公告详情、门户登录绑定）是学校自己的页面，
   只适配容器层（顶栏、进度条、加载态、错误页），不注入 CSS / JS 反色
+
+## 自有服务请求与公告缓存
+
+公告、贡献者、WakeUp 分享和同域头像通过 `core/network/owned_api_client.dart` 的
+`createOwnedApiDio()` 请求自有服务。初始请求只允许访问 `api_endpoints.dart` 配置的 HTTPS 原点，
+按协议、精确主机和端口检查，拒绝带用户信息的地址；添加客户端元数据，不复用门户 Cookie。
+重定向遵循 Dio 默认行为及调用方配置。已有外部头像仍通过不带设备头的图片加载路径处理。
+
+`ClientMetadataProvider` 惰性读取并在进程内缓存包名、版本、渠道与 Android 信息。
+渠道由 `APP_CHANNEL` 构建参数显式指定为 `release/dev/ci`，本地默认 `dev`；
+不能由 Flutter 的 release/debug 模式或包名猜测。非法渠道省略且记录安全的诊断事件。
+原生通道 `nuist/client_metadata` 在后台读取受限的厂商属性，返回可识别的 ROM 名称和
+市场版本，以及不包含包名和渠道的 SSAID 派生值；不把原始 Android ID、完整固件字符串或系统指纹传回 Dart。
+元数据单项不可用时省略，不阻断业务。没有采集开关，字段与用途见 [隐私说明](../PRIVACY.md)。
+
+标识类型为 `ssaid_sha256_v1`，计算方式是 `SHA256('nuist-sta:ssaid:v1:' + canonicalSSAID)`；
+服务端直接保存客户端标识，不再进行二次 HMAC 或哈希。相同标识跨包名、渠道去重，应用版本
+仍按包名、渠道分别保存。Android SSAID 也受签名影响，因此不保证不同签名的构建共用标识。
+
+ROM 解析接受 OriginOS Ocean 这一明确市场代号，其余版本仍按受限数字格式处理。
+ANCO 环境优先于普通 ROM 判断，类别为 `HarmonyOSNEXT`；从宿主软件版本属性提取鸿蒙
+版本，去掉机型、构建号与补丁后缀，不从 Android 版本或兼容层 API 编号反推宿主版本。
+这个类别表示鸿蒙的 Android 兼容环境，不能仅凭这些属性区分卓易通和出境易。
+属性与真实样例参考 [DeviceCompat 源码](https://github.com/getActivity/DeviceCompat/blob/main/library/src/main/java/com/hjq/device/compat/DeviceOs.java)、
+[OriginOS 样例](https://github.com/getActivity/DeviceCompat/issues/6) 和
+[ColorOS 版本讨论](https://github.com/getActivity/DeviceCompat/issues/10)；这些属性并非厂商保证稳定的公开 API。
+
+公告的版本范围由服务端按数字 versionCode 判断。客户端只处理过期、排序、已读及阻断公告
+到期释放，不再比较版本字符串。公告缓存包含格式版本和平台、包名、渠道、versionCode 变体；
+先取得完整上下文，再复用匹配缓存及其条件请求头。升级、渠道变化、旧格式或上下文缺失时不
+展示旧缓存，离线也不退回其他版本的公告。无缓存却收到 304 时最多补一次无条件请求。
+服务端筛选后没返回某个 ID 不代表该公告已删除，因此已读记录独立保留。
 
 ## 校园 VPN 网络请求
 

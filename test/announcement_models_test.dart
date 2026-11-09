@@ -1,4 +1,4 @@
-// 公告模型：容错解析、过滤、排序、版本比较、缓存序列化。
+// 公告模型：容错解析、过期过滤、排序、客户端缓存上下文。
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_models.dart';
 
@@ -69,7 +69,7 @@ void main() {
     expect(b.blocking, isTrue);
   });
 
-  test('过期与版本区间过滤', () {
+  test('只过滤过期公告，旧版本区间字段不再参与客户端判断', () {
     final now = DateTime.utc(2026, 1, 1);
     final all = [
       Announcement.tryParse(
@@ -82,21 +82,12 @@ void main() {
         item('eq', {'minAppVersion': '1.10.0', 'maxAppVersion': '1.10'}),
       )!,
     ];
-    final ids = visibleAnnouncements(
-      all,
-      now: now,
-      appVersion: '1.10.0',
-    ).map((a) => a.id).toSet();
-    expect(ids, {'ok', 'min', 'eq'});
-    final noVer = visibleAnnouncements(all, now: now, appVersion: null);
-    expect(noVer.map((a) => a.id).toSet(), {'ok', 'min', 'max', 'eq'});
-  });
-
-  test('compareVersions', () {
-    expect(compareVersions('1.2', '1.2.0'), 0);
-    expect(compareVersions('1.10', '1.9'), greaterThan(0));
-    expect(compareVersions('0.1.0+4', '0.1.0'), 0);
-    expect(compareVersions('0.0.9', '0.1'), lessThan(0));
+    final ids = visibleAnnouncements(all, now: now).map((a) => a.id).toSet();
+    expect(ids, {'ok', 'min', 'max', 'eq'});
+    for (final announcement in all) {
+      expect(announcement.toJson(), isNot(contains('minAppVersion')));
+      expect(announcement.toJson(), isNot(contains('maxAppVersion')));
+    }
   });
 
   test('置顶优先，再按发布时间降序', () {
@@ -115,7 +106,6 @@ void main() {
     final ids = visibleAnnouncements(
       all,
       now: DateTime.utc(2026, 6),
-      appVersion: null,
     ).map((a) => a.id);
     expect(ids, ['p', 'b', 'a', 'n']);
   });
@@ -146,12 +136,33 @@ void main() {
     });
     final cache = AnnouncementCache(
       items: items,
+      cacheKey: 'current-context',
       etag: '"e"',
       lastModified: 'Wed, 01 Jan 2026 00:00:00 GMT',
       fetchedAt: DateTime.utc(2026, 1, 2),
     );
     final back = AnnouncementCache.fromJson(cache.toJson());
     expect(back.toJson(), cache.toJson());
+    expect(back.matches('current-context'), isTrue);
+    expect(back.matches('different-context'), isFalse);
+    expect(back.matches(null), isFalse);
     expect(() => AnnouncementCache.fromJson({'x': 1}), throwsFormatException);
+  });
+
+  test('旧缓存和未知格式均不能复用，即使条目与校验头仍能解析', () {
+    final old = {
+      'items': [item('old')],
+      'etag': '"old"',
+      'fetchedAt': '2026-01-01T00:00:00Z',
+    };
+    final legacy = AnnouncementCache.fromJson(old);
+    expect(legacy.items.single.id, 'old');
+    expect(legacy.matches('current-context'), isFalse);
+    final future = AnnouncementCache.fromJson({
+      ...old,
+      'schemaVersion': AnnouncementCache.currentSchemaVersion + 1,
+      'cacheKey': 'current-context',
+    });
+    expect(future.matches('current-context'), isFalse);
   });
 }

@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../core/config/api_endpoints.dart';
+import '../../core/network/owned_api_client.dart';
 import 'timetable_export_models.dart';
 
 /// 仅调用社团服务器生成口令，独立客户端不携带门户 Cookie 或凭据。
@@ -9,8 +10,8 @@ class TimetableExportApi {
     : _ownsDio = dio == null,
       _dio =
           dio ??
-          Dio(
-            BaseOptions(
+          createOwnedApiDio(
+            options: BaseOptions(
               connectTimeout: const Duration(seconds: 10),
               sendTimeout: const Duration(seconds: 20),
               receiveTimeout: const Duration(seconds: 60),

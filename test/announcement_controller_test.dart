@@ -1,8 +1,19 @@
 // 公告 controller：条件请求、304、失败回退、红点、已读、不可关闭保护。
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/network/client_metadata.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_api.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_controller.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_models.dart';
+
+const currentMetadata = ClientMetadata(
+  platform: 'android',
+  appPackage: 'dev.duohuo.nuist_sta_app',
+  appChannel: 'release',
+  appVersion: '0.2.8',
+  appVersionCode: 2800,
+);
 
 Announcement a(
   String id, {
@@ -22,13 +33,21 @@ class Harness {
     this.cache,
     Set<String>? readIds,
     AnnouncementFetchResult Function()? respond,
+    this.metadata = currentMetadata,
+    this.metadataProvider,
   }) : readIds = readIds ?? <String>{},
        respond =
-           respond ?? (() => const AnnouncementFetchResult(notModified: true));
+           respond ??
+           (() => AnnouncementFetchResult(
+             notModified: cache != null,
+             items: cache == null ? const [] : null,
+           ));
 
   AnnouncementCache? cache;
   Set<String> readIds;
   AnnouncementFetchResult Function() respond;
+  final ClientMetadata metadata;
+  final Future<ClientMetadata> Function()? metadataProvider;
   DateTime clock = DateTime.utc(2026, 1, 1);
   final calls = <(String?, String?)>[];
 
@@ -42,11 +61,16 @@ class Harness {
     readReadIds: () async => readIds,
     saveReadIds: (ids) async => readIds = ids,
     now: () => clock,
+    metadataProvider: metadataProvider ?? (() async => metadata),
   );
 }
 
-AnnouncementCache cacheOf(List<Announcement> items) => AnnouncementCache(
+AnnouncementCache cacheOf(
+  List<Announcement> items, {
+  ClientMetadata metadata = currentMetadata,
+}) => AnnouncementCache(
   items: items,
+  cacheKey: metadata.cacheKey,
   etag: '"e"',
   lastModified: 'LM',
   fetchedAt: DateTime.utc(2025),
@@ -125,14 +149,159 @@ void main() {
     expect(h.controller.hasUnread, isTrue);
   });
 
-  test('已读集清理列表中已不存在的 id', () async {
+  test('筛选后的列表不清理其他版本的已读标记', () async {
     final h = Harness(
       readIds: {'1', 'gone'},
       respond: () =>
           AnnouncementFetchResult(notModified: false, items: [a('1')]),
     );
     await h.controller.ensureStarted();
-    expect(h.readIds, {'1'});
+    expect(h.readIds, {'1', 'gone'});
+    expect(h.controller.hasUnread, isFalse);
+  });
+
+  test('取得客户端上下文前不读取或展示缓存', () async {
+    final metadata = Completer<ClientMetadata>();
+    var cacheReads = 0;
+    final c = AnnouncementController.test(
+      metadataProvider: () => metadata.future,
+      readCache: () async {
+        cacheReads++;
+        return cacheOf([a('cached')]);
+      },
+      fetch: ({etag, lastModified}) async =>
+          const AnnouncementFetchResult(notModified: true),
+    );
+    addTearDown(c.dispose);
+    final started = c.ensureStarted();
+    await Future<void>.delayed(Duration.zero);
+    expect(cacheReads, 0);
+    expect(c.visible, isEmpty);
+    metadata.complete(currentMetadata);
+    await started;
+    expect(cacheReads, 1);
+    expect(c.visible.single.id, 'cached');
+  });
+
+  for (final scenario in [
+    (
+      name: '升级版本',
+      metadata: const ClientMetadata(
+        platform: 'android',
+        appPackage: 'dev.duohuo.nuist_sta_app',
+        appChannel: 'release',
+        appVersion: '0.2.9',
+        appVersionCode: 2900,
+      ),
+    ),
+    (
+      name: '更换包名',
+      metadata: const ClientMetadata(
+        platform: 'android',
+        appPackage: 'dev.duohuo.nuist_sta_app.debug',
+        appChannel: 'release',
+        appVersion: '0.2.8',
+        appVersionCode: 2800,
+      ),
+    ),
+    (
+      name: '更换渠道',
+      metadata: const ClientMetadata(
+        platform: 'android',
+        appPackage: 'dev.duohuo.nuist_sta_app',
+        appChannel: 'ci',
+        appVersion: '0.2.8',
+        appVersionCode: 2800,
+      ),
+    ),
+  ]) {
+    test('${scenario.name}后离线不展示旧公告，也不发送旧条件头', () async {
+      final stored = cacheOf([
+        a('old', dismissible: false, expiresAt: DateTime.utc(2030)),
+      ]);
+      final h = Harness(
+        cache: stored,
+        metadata: scenario.metadata,
+        readIds: {'old'},
+        respond: () => throw Exception('offline'),
+      );
+      await h.controller.ensureStarted();
+      expect(h.calls.single, (null, null));
+      expect(h.controller.visible, isEmpty);
+      expect(h.controller.blocking, isEmpty);
+      expect(h.cache, same(stored));
+      expect(h.readIds, {'old'});
+    });
+  }
+
+  test('旧格式缓存失效，新响应覆盖缓存但保留已读状态', () async {
+    final old = cacheOf([a('same')]).toJson()
+      ..remove('schemaVersion')
+      ..remove('cacheKey');
+    final h = Harness(
+      cache: AnnouncementCache.fromJson(old),
+      readIds: {'same', 'another-version'},
+      respond: () => AnnouncementFetchResult(
+        notModified: false,
+        items: [a('same', remind: AnnouncementRemind.popup)],
+        etag: '"new"',
+      ),
+    );
+    await h.controller.ensureStarted();
+    expect(h.calls.single, (null, null));
+    expect(h.cache!.matches(currentMetadata.cacheKey), isTrue);
+    expect(h.cache!.etag, '"new"');
+    expect(h.controller.unreadPopup, isEmpty);
+    expect(h.readIds, {'same', 'another-version'});
+  });
+
+  for (final failProvider in [false, true]) {
+    test('${failProvider ? '读取元数据失败' : '版本号缺失'}仍请求新公告，不复用或覆盖缓存', () async {
+      final stored = cacheOf([a('old')]);
+      final h = Harness(
+        cache: stored,
+        metadata: const ClientMetadata(
+          platform: 'android',
+          appPackage: 'dev.duohuo.nuist_sta_app',
+          appChannel: 'release',
+          appVersion: '0.2.8',
+        ),
+        metadataProvider: failProvider
+            ? () async => throw Exception('metadata unavailable')
+            : null,
+        respond: () => AnnouncementFetchResult(
+          notModified: false,
+          items: [a('universal')],
+        ),
+      );
+      await h.controller.ensureStarted();
+      expect(h.calls.single, (null, null));
+      expect(h.controller.visible.single.id, 'universal');
+      expect(h.cache, same(stored));
+    });
+  }
+
+  test('无缓存收到 304 时补一次无条件请求并使用新响应', () async {
+    var count = 0;
+    final h = Harness(
+      respond: () => ++count == 1
+          ? const AnnouncementFetchResult(notModified: true)
+          : AnnouncementFetchResult(notModified: false, items: [a('new')]),
+    );
+    await h.controller.ensureStarted();
+    expect(h.calls, [(null, null), (null, null)]);
+    expect(h.controller.visible.single.id, 'new');
+    expect(h.cache!.matches(currentMetadata.cacheKey), isTrue);
+  });
+
+  test('无缓存连续收到 304 时停止重试，不生成成功缓存', () async {
+    final h = Harness(
+      respond: () => const AnnouncementFetchResult(notModified: true),
+    );
+    await h.controller.ensureStarted();
+    expect(h.calls, [(null, null), (null, null)]);
+    expect(h.controller.visible, isEmpty);
+    expect(h.cache, isNull);
   });
 
   group('不可关闭保护', () {

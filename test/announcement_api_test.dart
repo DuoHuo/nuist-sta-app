@@ -94,4 +94,12 @@ void main() {
     final (api, _) = build((_) => ResponseBody.fromString('', 500));
     expect(api.fetch(), throwsA(isA<DioException>()));
   });
+
+  test('关闭 API 不关闭外部注入的客户端', () async {
+    final (api, _) = build((_) => json({'items': []}));
+    api.close();
+    final result = await api.fetch();
+    expect(result.notModified, isFalse);
+    expect(result.items, isEmpty);
+  });
 }

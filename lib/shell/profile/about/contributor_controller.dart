@@ -14,11 +14,13 @@ class ContributorController extends ChangeNotifier {
     Future<List<Contributor>> Function()? fetch,
     ContributorStore? store,
     DateTime Function()? now,
-  }) : _fetch = fetch ?? ContributorApi().fetch,
+  }) : _fetch = fetch,
+       _api = fetch == null ? ContributorApi() : null,
        _store = store ?? const ContributorStore(),
        _now = now ?? DateTime.now;
 
-  final Future<List<Contributor>> Function() _fetch;
+  final Future<List<Contributor>> Function()? _fetch;
+  final ContributorApi? _api;
   final ContributorStore _store;
   final DateTime Function() _now;
 
@@ -60,7 +62,7 @@ class ContributorController extends ChangeNotifier {
       await _log.operation(
         'refresh',
         () async {
-          final items = await _fetch();
+          final items = await (_fetch ?? _api!.fetch)();
           _items = items;
           _failed = false;
           await _store.save(ContributorCache(items: items, fetchedAt: _now()));
@@ -83,6 +85,7 @@ class ContributorController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _api?.close();
     super.dispose();
   }
 }

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/colors.dart';
+import 'package:nuist_sta_app/core/network/client_metadata.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_api.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_controller.dart';
@@ -59,6 +60,60 @@ bool redDot(WidgetTester tester) =>
     tester.widget<Badge>(find.byType(Badge)).isLabelVisible;
 
 void main() {
+  for (final dark in [false, true]) {
+    testWidgets('${dark ? '深色' : '浅色'}升级离线不弹旧阻断公告，铃铛仍可打开并返回', (tester) async {
+      final c = AnnouncementController.test(
+        metadataProvider: () async => const ClientMetadata(
+          platform: 'android',
+          appPackage: 'dev.duohuo.nuist_sta_app',
+          appChannel: 'release',
+          appVersion: '0.2.9',
+          appVersionCode: 2900,
+        ),
+        readCache: () async => AnnouncementCache(
+          items: [
+            a('旧阻断公告', dismissible: false, expiresAt: DateTime.utc(2030)),
+          ],
+          cacheKey: const ClientMetadata(
+            platform: 'android',
+            appPackage: 'dev.duohuo.nuist_sta_app',
+            appChannel: 'release',
+            appVersion: '0.2.8',
+            appVersionCode: 2800,
+          ).cacheKey,
+          etag: '"old"',
+          fetchedAt: DateTime.utc(2026),
+        ),
+        fetch: ({etag, lastModified}) async => throw Exception('offline'),
+        now: () => DateTime.utc(2026, 1, 1),
+      );
+      addTearDown(c.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: dark ? appDarkTheme() : appLightTheme(),
+          home: Scaffold(
+            appBar: AppBar(actions: [AnnouncementBell(controller: c)]),
+            body: AnnouncementOverlay(
+              controller: c,
+              child: const SizedBox.expand(),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('标题旧阻断公告'), findsNothing);
+      expect(find.byType(Dialog), findsNothing);
+      expect(redDot(tester), isFalse);
+      await tester.tap(find.byTooltip('公告'));
+      await tester.pumpAndSettle();
+      expect(find.text('暂无公告'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byType(Dialog), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   for (final dark in [false, true]) {
     for (final scenario in [
       (name: '小屏', size: const Size(320, 640), scale: 1.0, keyboard: 0.0),

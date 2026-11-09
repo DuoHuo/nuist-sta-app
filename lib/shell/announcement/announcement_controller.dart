@@ -1,9 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/logging/app_log.dart';
+import '../../core/network/client_metadata.dart';
 import 'announcement_api.dart';
 import 'announcement_models.dart';
 import 'announcement_store.dart';
@@ -14,7 +14,8 @@ typedef AnnouncementFetch = Future<AnnouncementFetchResult> Function({
   String? lastModified,
 });
 
-/// 公告状态：启动时静默检查，先用缓存，再带条件头请求；任何失败都静默保留缓存。
+/// 公告状态：先确认客户端上下文，再展示匹配缓存并发起条件请求。
+/// 请求失败时只保留与当前版本、包名及渠道匹配的缓存。
 ///
 /// 只提供纯状态与已读标记，弹窗编排由 `AnnouncementOverlay` 负责。
 class AnnouncementController extends ChangeNotifier {
@@ -27,7 +28,7 @@ class AnnouncementController extends ChangeNotifier {
       _readReadIds = AnnouncementStore.readReadIds,
       _saveReadIds = AnnouncementStore.saveReadIds,
       _now = DateTime.now,
-      _appVersion = _platformVersion;
+      _metadataProvider = ClientMetadataProvider.instance.get;
 
   /// 测试用构造：所有外部依赖均可注入，未注入的存储读写为空操作。
   @visibleForTesting
@@ -38,14 +39,15 @@ class AnnouncementController extends ChangeNotifier {
     Future<Set<String>> Function()? readReadIds,
     Future<void> Function(Set<String>)? saveReadIds,
     DateTime Function()? now,
-    Future<String?> Function()? appVersion,
+    Future<ClientMetadata> Function()? metadataProvider,
   }) : _fetcher = fetch,
        _readCache = readCache ?? (() async => null),
        _saveCache = saveCache ?? ((_) async {}),
        _readReadIds = readReadIds ?? (() async => <String>{}),
        _saveReadIds = saveReadIds ?? ((_) async {}),
        _now = now ?? DateTime.now,
-       _appVersion = appVersion ?? (() async => null);
+       _metadataProvider =
+           metadataProvider ?? (() async => const ClientMetadata());
 
   /// 全局单例。
   static final AnnouncementController instance = AnnouncementController._();
@@ -56,21 +58,25 @@ class AnnouncementController extends ChangeNotifier {
   final Future<Set<String>> Function() _readReadIds;
   final Future<void> Function(Set<String>) _saveReadIds;
   final DateTime Function() _now;
-  final Future<String?> Function() _appVersion;
+  final Future<ClientMetadata> Function() _metadataProvider;
 
   Future<void>? _started;
   bool _disposed = false;
   AnnouncementCache? _cache;
   Set<String> _readIds = <String>{};
-  String? _version;
   bool _bannerShown = false;
 
-  static Future<String?> _platformVersion() async {
-    try {
-      return (await PackageInfo.fromPlatform()).version;
-    } catch (_) {
+  static String? _cacheContext(ClientMetadata metadata) {
+    final headers = metadata.headers;
+    if (!const [
+      'X-Client-Platform',
+      'X-App-Package',
+      'X-App-Channel',
+      'X-App-Version-Code',
+    ].every(headers.containsKey)) {
       return null;
     }
+    return metadata.cacheKey;
   }
 
   static bool get _inFlutterTest {
@@ -86,31 +92,42 @@ class AnnouncementController extends ChangeNotifier {
 
   Future<void> _start() async {
     if (_fetcher == null && _inFlutterTest) return;
-    final fetch = _fetcher ?? AnnouncementApi().fetch;
+    String? cacheKey;
     try {
-      _cache = await _readCache();
+      cacheKey = _cacheContext(await _metadataProvider());
+    } catch (_) {}
+    try {
+      final stored = await _readCache();
+      if (stored != null && stored.matches(cacheKey)) _cache = stored;
+    } catch (_) {}
+    // 缓存迁移不能丢掉已读状态；服务端筛选后缺少的条目也不代表已经删除。
+    try {
       _readIds = await _readReadIds();
     } catch (_) {}
     _notify();
-    try {
-      _version = await _appVersion();
-    } catch (_) {
-      _version = null;
-    }
-    _notify();
+    final api = _fetcher == null ? AnnouncementApi() : null;
+    final fetch = _fetcher ?? api!.fetch;
     try {
       await _log.operation(
         'refresh',
         () async {
           final cache = _cache;
-          final result = await fetch(
+          var result = await fetch(
             etag: cache?.etag,
             lastModified: cache?.lastModified,
           );
+          if (result.notModified && cache == null) {
+            // 不能把没有响应正文的 304 当成更新成功；最多补一次无条件请求。
+            result = await fetch();
+            if (result.notModified) {
+              throw const FormatException('没有可复用的公告缓存');
+            }
+          }
           if (result.notModified) {
             if (cache != null) {
               _cache = AnnouncementCache(
                 items: cache.items,
+                cacheKey: cacheKey,
                 etag: cache.etag,
                 lastModified: cache.lastModified,
                 fetchedAt: _now(),
@@ -124,17 +141,12 @@ class AnnouncementController extends ChangeNotifier {
                 .toList();
             _cache = AnnouncementCache(
               items: items,
+              cacheKey: cacheKey,
               etag: result.etag,
               lastModified: result.lastModified,
               fetchedAt: _now(),
             );
-            await _saveCache(_cache!);
-            final ids = items.map((a) => a.id).toSet();
-            final pruned = _readIds.where(ids.contains).toSet();
-            if (pruned.length != _readIds.length) {
-              _readIds = pruned;
-              await _saveReadIds(_readIds);
-            }
+            if (cacheKey != null) await _saveCache(_cache!);
           }
         },
         failureEvent: 'refresh.failed_using_cache',
@@ -142,16 +154,15 @@ class AnnouncementController extends ChangeNotifier {
       );
     } catch (_) {
       // 原 Trace 中已记录失败；继续使用已有缓存。
+    } finally {
+      api?.close();
     }
     _notify();
   }
 
-  /// 当前可见公告（实时按 now 过滤过期，并按版本过滤、排序）。
-  List<Announcement> get visible => visibleAnnouncements(
-    _cache?.items ?? const [],
-    now: _now(),
-    appVersion: _version,
-  );
+  /// 当前可见公告（实时按 now 过滤过期并排序，版本范围由服务端筛选）。
+  List<Announcement> get visible =>
+      visibleAnnouncements(_cache?.items ?? const [], now: _now());
 
   /// 当前时间（可注入），供 UI 计算过期定时。
   DateTime get now => _now();

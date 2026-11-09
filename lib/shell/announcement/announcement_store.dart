@@ -7,7 +7,7 @@ import '../../core/logging/app_log.dart';
 import 'announcement_models.dart';
 
 /// 公告本地存储，放在应用文档目录下的 `announcement/`：
-/// `cache.json`（列表 + 校验头）与 `read_ids.json`（已读 id）分开存。
+/// `cache.json`（列表 + 客户端上下文 + 校验头）与 `read_ids.json`（已读 id）分开存。
 /// 所有读写失败都退化成「没有存储」。
 abstract final class AnnouncementStore {
   static final _log = AppLog.logger('shell.announcement.store');

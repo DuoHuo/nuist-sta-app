@@ -84,6 +84,9 @@ class MainActivity : FlutterActivity() {
         if (!flutterEngine.plugins.has(AttachmentPdfPreviewPlugin::class.java)) {
             flutterEngine.plugins.add(AttachmentPdfPreviewPlugin())
         }
+        if (!flutterEngine.plugins.has(ClientMetadataPlugin::class.java)) {
+            flutterEngine.plugins.add(ClientMetadataPlugin())
+        }
         if (!flutterEngine.plugins.has(NotifyWidgetPlugin::class.java)) {
             flutterEngine.plugins.add(NotifyWidgetPlugin())
         }
