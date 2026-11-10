@@ -7,6 +7,8 @@ import '../../../core/app_snack_bar.dart';
 import '../../../core/app_info.dart';
 import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
+import '../../update/update_controller.dart';
+import '../../update/update_dialog.dart';
 import 'contributor_avatar.dart';
 import 'contributor_controller.dart';
 import 'contributor_models.dart';
@@ -17,7 +19,10 @@ String formatAppVersion(String version, String buildNumber) =>
 
 /// 关于页：应用图标、名称、版本号与贡献者名单。
 class AboutPage extends StatefulWidget {
-  const AboutPage({super.key});
+  const AboutPage({super.key, this.updates});
+
+  /// 默认使用应用级更新状态，测试可注入同一控制器。
+  final UpdateController? updates;
 
   @override
   State<AboutPage> createState() => _AboutPageState();
@@ -28,12 +33,15 @@ class _AboutPageState extends State<AboutPage> {
   String? _version;
   int _versionTapCount = 0;
   Timer? _versionTapReset;
+  bool _checkingUpdate = false;
+  UpdateController get _updates => widget.updates ?? UpdateController.instance;
 
   @override
   void initState() {
     super.initState();
     _controller.load();
     _loadVersion();
+    unawaited(_updates.ensureStarted());
   }
 
   Future<void> _loadVersion() async {
@@ -69,6 +77,44 @@ class _AboutPageState extends State<AboutPage> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         AppSnackBar(tone: AppSnackBarTone.success, content: Text(text)),
+      );
+  }
+
+  Future<void> _checkUpdates() async {
+    if (_checkingUpdate) return;
+    setState(() => _checkingUpdate = true);
+    await _updates.check(manual: true);
+    if (!mounted) return;
+    setState(() => _checkingUpdate = false);
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) return;
+    final release = _updates.available;
+    final failed = _updates.checkError != null;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final updates = _updates;
+    if (!failed && release != null) _updates.markPrompted(release);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        AppSnackBar(
+          tone: failed ? AppSnackBarTone.error : AppSnackBarTone.info,
+          content: Text(
+            failed
+                ? '检查更新失败'
+                : release == null
+                ? '暂无新版本'
+                : '发现新版本 v${release.versionName}',
+          ),
+          action: !failed && release != null
+              ? SnackBarAction(
+                  label: '查看',
+                  onPressed: () {
+                    if (navigator.mounted) {
+                      showUpdateDetails(navigator.context, controller: updates);
+                    }
+                  },
+                )
+              : null,
+        ),
       );
   }
 
@@ -122,6 +168,32 @@ class _AboutPageState extends State<AboutPage> {
             ),
           ),
           const SizedBox(height: 24),
+          ListenableBuilder(
+            listenable: _updates,
+            builder: (context, _) => ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              tileColor: palette.surface,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              leading: Icon(Icons.system_update_rounded, color: palette.accent),
+              title: Text(_checkingUpdate ? '正在检查更新…' : '检查更新'),
+              trailing: _checkingUpdate
+                  ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : _updates.task.hasTask || _updates.available != null
+                  ? TextButton(
+                      onPressed: () =>
+                          showUpdateDetails(context, controller: _updates),
+                      child: Text(_updates.task.hasTask ? '下载进度' : '查看更新'),
+                    )
+                  : null,
+              onTap: _checkingUpdate ? null : _checkUpdates,
+            ),
+          ),
+          const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(

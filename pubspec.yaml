@@ -55,6 +55,7 @@ dependencies:
   package_info_plus: ^10.2.2
   # 校园地图：加速度计 + 磁力计算朝向，画定位蓝点的方向箭头。
   sensors_plus: ^7.1.1
+  flutter_markdown_plus: ^1.0.12
 
 dev_dependencies:
   flutter_test:

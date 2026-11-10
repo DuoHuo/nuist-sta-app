@@ -8,12 +8,18 @@ import '../../core/pull_to_refresh.dart';
 import '../../core/refresh/silent_refresh.dart';
 import '../../mini_apps/registry.dart';
 import '../announcement/announcement_overlay.dart';
+import '../announcement/announcement_controller.dart';
+import '../update/update_controller.dart';
 import 'app_grid_item.dart';
 
 /// 首页：小程序信息卡片（[AppManifest.homeCard]）+ 启动宫格，数据源都是
 /// 全量注册表 [appRegistry]。
 class HomePage extends StatelessWidget {
-  const HomePage({super.key});
+  const HomePage({super.key, this.updates, this.announcements});
+
+  /// 测试和宿主可注入同一更新控制器；默认使用应用单例。
+  final UpdateController? updates;
+  final AnnouncementController? announcements;
 
   /// 并发刷新所有提供了 [AppManifest.onHomeRefresh] 的首页卡片。
   ///
@@ -26,12 +32,20 @@ class HomePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
+    final updateController = updates ?? UpdateController.instance;
     return Scaffold(
       appBar: AppBar(
         title: const Text(kAppName),
-        actions: const [AnnouncementBell()],
+        actions: [
+          AnnouncementBell(
+            updates: updateController,
+            controller: announcements,
+          ),
+        ],
       ),
       body: AnnouncementOverlay(
+        controller: announcements,
+        updates: updateController,
         child: PullToRefresh(
           onRefresh: _refreshAll,
           child: ListView(

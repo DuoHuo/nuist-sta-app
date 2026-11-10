@@ -17,6 +17,9 @@ import 'shell/profile/portal_bind/portal_status_page.dart';
 import 'shell/profile/profile_page.dart';
 import 'shell/profile/settings/settings_page.dart';
 import 'shell/root_page.dart';
+import 'shell/announcement/announcement_controller.dart';
+import 'shell/announcement/announcement_overlay.dart';
+import 'shell/update/update_controller.dart';
 import 'shell/study/study_page.dart';
 
 /// 全局路由的构建工厂：由 NuistApp 在初始化时创建一次，
@@ -36,12 +39,20 @@ import 'shell/study/study_page.dart';
 ///   与壳平级，可深链与分享；页面按编号自行取数，不依赖地图页是否打开。
 /// - `/about`：关于页（应用图标、版本号、贡献者名单），与壳平级。
 /// - `/settings`：App 级设置页（外观、诊断日志），与壳平级。
-GoRouter buildRouter() => GoRouter(
+GoRouter buildRouter({
+  UpdateController? updateController,
+  AnnouncementController? announcementController,
+}) => GoRouter(
   routes: [
     StatefulShellRoute.indexedStack(
       pageBuilder: (context, state, navigationShell) => MaterialPage<void>(
         key: state.pageKey,
-        child: RootPage(navigationShell: navigationShell),
+        child: Builder(
+          builder: (context) => AnnouncementRouteScope(
+            isCurrent: ModalRoute.isCurrentOf(context) ?? true,
+            child: RootPage(navigationShell: navigationShell),
+          ),
+        ),
       ),
       branches: [
         StatefulShellBranch(
@@ -50,7 +61,10 @@ GoRouter buildRouter() => GoRouter(
               path: '/',
               pageBuilder: (_, state) => MaterialPage<void>(
                 key: state.pageKey,
-                child: const HomePage(),
+                child: HomePage(
+                  updates: updateController,
+                  announcements: announcementController,
+                ),
               ),
             ),
           ],
@@ -151,8 +165,10 @@ GoRouter buildRouter() => GoRouter(
     ),
     GoRoute(
       path: '/about',
-      pageBuilder: (_, state) =>
-          MaterialPage<void>(key: state.pageKey, child: const AboutPage()),
+      pageBuilder: (_, state) => MaterialPage<void>(
+        key: state.pageKey,
+        child: AboutPage(updates: updateController),
+      ),
     ),
     GoRoute(
       path: '/settings',

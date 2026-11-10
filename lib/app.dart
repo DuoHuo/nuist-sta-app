@@ -18,9 +18,16 @@ import 'mini_apps/timetable/timetable_lifecycle.dart';
 import 'mini_apps/timetable/timetable_notify_bridge.dart';
 import 'mini_apps/timetable/timetable_week_classes.dart';
 import 'router.dart';
+import 'shell/update/update_bridge.dart';
+import 'shell/update/update_controller.dart';
+import 'shell/update/update_dialog.dart';
 
 class NuistApp extends StatefulWidget {
-  const NuistApp({super.key});
+  const NuistApp({super.key, this.updates, this.updateBridge});
+
+  /// 宿主与测试可注入更新状态及通知通道。
+  final UpdateController? updates;
+  final AppUpdateBridge? updateBridge;
 
   @override
   State<NuistApp> createState() => _NuistAppState();
@@ -28,7 +35,16 @@ class NuistApp extends StatefulWidget {
 
 class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   static final _log = AppLog.logger('app.lifecycle');
-  late final GoRouter _router = buildRouter();
+  late final _updates = widget.updates ?? UpdateController.instance;
+  late final _updateBridge = widget.updateBridge ?? AppUpdateBridge.instance;
+  late final GoRouter _router = buildRouter(updateController: _updates);
+  bool _openingUpdate = false;
+
+  bool get _listenForUpdates =>
+      widget.updateBridge != null ||
+      (!kIsWeb &&
+          Platform.isAndroid &&
+          !Platform.environment.containsKey('FLUTTER_TEST'));
 
   /// 全局 SnackBar 入口：用户主动刷新成功后在这里弹一次「已更新」。
   final _messengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -50,6 +66,21 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     bridge.takeLaunchRoute().then((r) {
       if (r != null) _openRoute(r);
     });
+    if (_listenForUpdates) {
+      _updateBridge.setOpenHandler(_openUpdate);
+      _updateBridge
+          .takeLaunchRequest()
+          .then((open) {
+            if (open) _openUpdate();
+          })
+          .catchError((Object error) {
+            _log.warning(
+              'update.route_failed',
+              errorKind: AppLog.errorKindFor(error),
+            );
+          });
+      unawaited(_updates.onLaunch());
+    }
     WidgetsBinding.instance.addObserver(this);
     SilentRefresh.updated.addListener(_onRefreshUpdated);
     if (!kIsWeb && !Platform.environment.containsKey('FLUTTER_TEST')) {
@@ -117,6 +148,32 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     _router.push(route);
   }
 
+  /// 冷启动等待任务与导航器就绪，通知和页面入口共用更新详情。
+  void _openUpdate() => unawaited(_showUpdateFromNotification());
+
+  Future<void> _showUpdateFromNotification() async {
+    if (_openingUpdate || !mounted) return;
+    _openingUpdate = true;
+    try {
+      if (_updates.initialized) {
+        await _updates.refreshTask();
+      } else {
+        await _updates.ensureStarted();
+      }
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      final navigatorContext =
+          _router.routerDelegate.navigatorKey.currentContext;
+      if (navigatorContext != null && navigatorContext.mounted) {
+        await showUpdateDetails(navigatorContext, controller: _updates);
+      }
+    } catch (error, stackTrace) {
+      _log.warning('update.open_failed', error: error, stackTrace: stackTrace);
+    } finally {
+      _openingUpdate = false;
+    }
+  }
+
   /// 用户主动刷新成功后的统一轻提示。
   ///
   /// issue #31 的口径是「不展示更新过程、不展示失败，只展示更新成功」：失败与
@@ -149,6 +206,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     _log.debug('state.changed', fields: {'state': state.name});
     if (state == AppLifecycleState.resumed) {
       unawaited(VpnGateway.instance.checkHealth());
+      unawaited(_updates.onResumed());
     }
   }
 
@@ -157,6 +215,9 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     SilentRefresh.updated.removeListener(_onRefreshUpdated);
     WidgetsBinding.instance.removeObserver(this);
     _networkSubscription?.cancel();
+    if (_listenForUpdates) {
+      _updateBridge.setOpenHandler(null);
+    }
     super.dispose();
   }
 

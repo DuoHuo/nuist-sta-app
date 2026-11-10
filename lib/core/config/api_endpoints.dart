@@ -12,3 +12,6 @@ const String kAnnouncementEndpoint = '$kApiBase/announcement';
 
 /// 课表 WakeUp 分享口令生成接口。
 const String kTimetableWakeupEndpoint = '$kApiBase/timetable/wakeup-share';
+
+/// 应用更新缓存接口，不由客户端直接访问 GitHub。
+const String kUpdateEndpoint = '$kApiBase/updates';

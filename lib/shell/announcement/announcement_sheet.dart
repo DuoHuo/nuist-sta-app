@@ -9,12 +9,21 @@ import 'announcement_web_page.dart';
 /// 弹出居中的公告对话框，铃铛与自动弹出共用。
 Future<void> showAnnouncementDialog(
   BuildContext context,
-  List<Announcement> items,
-) {
+  List<Announcement> items, {
+  Map<String, AnnouncementLocalAction> localActions = const {},
+}) {
   return showDialog<void>(
     context: context,
-    builder: (_) => AnnouncementDialog(items: items),
+    builder: (_) =>
+        AnnouncementDialog(items: items, localActions: localActions),
   );
+}
+
+/// 仅由本地代码附加的公告操作，服务端文本不能构造站内跳转。
+class AnnouncementLocalAction {
+  const AnnouncementLocalAction({required this.label, required this.onPressed});
+  final String label;
+  final VoidCallback onPressed;
 }
 
 /// 公告统一外框；不可关闭公告由调用方保留返回拦截与过期释放。
@@ -23,6 +32,7 @@ class AnnouncementDialog extends StatelessWidget {
     super.key,
     required this.items,
     this.dismissible = true,
+    this.localActions = const {},
   });
 
   /// 要展示的公告。
@@ -30,6 +40,7 @@ class AnnouncementDialog extends StatelessWidget {
 
   /// 是否显示关闭操作，并在打开详情时关闭公告。
   final bool dismissible;
+  final Map<String, AnnouncementLocalAction> localActions;
 
   @override
   Widget build(BuildContext context) {
@@ -45,7 +56,11 @@ class AnnouncementDialog extends StatelessWidget {
         side: BorderSide(color: palette.divider),
       ),
       clipBehavior: Clip.antiAlias,
-      child: AnnouncementListPanel(items: items, dismissible: dismissible),
+      child: AnnouncementListPanel(
+        items: items,
+        dismissible: dismissible,
+        localActions: localActions,
+      ),
     );
   }
 }
@@ -56,6 +71,7 @@ class AnnouncementListPanel extends StatelessWidget {
     super.key,
     required this.items,
     this.dismissible = true,
+    this.localActions = const {},
   });
 
   /// 要展示的公告。
@@ -63,6 +79,7 @@ class AnnouncementListPanel extends StatelessWidget {
 
   /// 为 false 时不显示关闭操作，打开链接时也不关闭对话框。
   final bool dismissible;
+  final Map<String, AnnouncementLocalAction> localActions;
 
   @override
   Widget build(BuildContext context) {
@@ -143,8 +160,10 @@ class AnnouncementListPanel extends StatelessWidget {
                       child: Divider(height: 1, color: palette.divider),
                     ),
                   AnnouncementCard(
+                    key: ValueKey(items[i].id),
                     item: items[i],
                     closeDialogOnOpenLink: dismissible,
+                    localAction: localActions[items[i].id],
                   ),
                 ],
               ],
@@ -228,6 +247,7 @@ class AnnouncementCard extends StatelessWidget {
     super.key,
     required this.item,
     this.closeDialogOnOpenLink = true,
+    this.localAction,
   });
 
   /// 要展示的公告。
@@ -235,6 +255,7 @@ class AnnouncementCard extends StatelessWidget {
 
   /// 打开链接前是否先关闭所在对话框。
   final bool closeDialogOnOpenLink;
+  final AnnouncementLocalAction? localAction;
 
   void _openLink(BuildContext context, AnnouncementLink link) {
     final navigator = Navigator.of(context);
@@ -308,7 +329,17 @@ class AnnouncementCard extends StatelessWidget {
             ),
           ),
         ],
-        if (link != null) ...[
+        if (localAction case final action?) ...[
+          const SizedBox(height: 4),
+          TextButton.icon(
+            onPressed: () {
+              if (closeDialogOnOpenLink) Navigator.of(context).pop();
+              action.onPressed();
+            },
+            icon: const Icon(Icons.system_update_rounded, size: 20),
+            label: Text(action.label),
+          ),
+        ] else if (link != null) ...[
           const SizedBox(height: 4),
           TextButton.icon(
             style: TextButton.styleFrom(

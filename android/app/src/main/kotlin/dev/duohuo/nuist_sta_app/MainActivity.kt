@@ -90,6 +90,9 @@ class MainActivity : FlutterActivity() {
         if (!flutterEngine.plugins.has(NotifyWidgetPlugin::class.java)) {
             flutterEngine.plugins.add(NotifyWidgetPlugin())
         }
+        if (!flutterEngine.plugins.has(AppUpdatePlugin::class.java)) {
+            flutterEngine.plugins.add(AppUpdatePlugin())
+        }
     }
 
     // 明暗切换（configChanges 含 uiMode，Activity 不重建）：桌面小组件按新配色重绘。
