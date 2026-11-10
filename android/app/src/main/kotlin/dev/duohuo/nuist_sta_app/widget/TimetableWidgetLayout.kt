@@ -24,7 +24,7 @@ internal data class CourseBlock(
     val compact: Boolean = false,
 )
 
-/** 一次布局决策。尺寸由 Glance LocalSize 给出，2×2 已换算为居中正方形。 */
+/** 通用桌面的布局预算；OriginOS 由宿主实际测量，不使用此预估方案。 */
 internal data class WidgetLayout(
     val inset: Float,
     val headerHeight: Float,
@@ -66,7 +66,7 @@ internal class WidgetTextMeasure(private val context: Context) {
         values.firstOrNull { width(it, sp) <= width } ?: values.last()
 }
 
-/** 2×2 文本栈与 4×2 课程列表共享的自适应规则。 */
+/** 在卡片内按文字实际高度分配内容，保留大字号下的防溢出处理。 */
 internal object TimetableWidgetLayout {
     fun plan(context: Context, data: WidgetSnapshot, square: Boolean, width: Float, height: Float): WidgetLayout {
         val measure = WidgetTextMeasure(context)

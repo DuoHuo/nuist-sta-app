@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 占格声明与正式课表一致，便于对照同一桌面的尺寸上报。 -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="@dimen/wg_4x2_min_width"
+    android:minHeight="@dimen/wg_min_height"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:resizeMode="none"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_measure_preview"
+    android:previewLayout="@layout/widget_measure_preview"
+    android:description="@string/wg_measure_description"
+    android:widgetCategory="home_screen"/>

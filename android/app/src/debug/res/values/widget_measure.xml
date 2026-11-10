@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wg_measure_2x2_label">尺寸测量 2×2（测试）</string>
+    <string name="wg_measure_4x2_label">尺寸测量 4×2（测试）</string>
+    <string name="wg_measure_description">无需登录。红框为渲染根边界，蓝框为指定尺寸；点击组件翻页查看上报值。</string>
+    <string name="wg_measure_preview">尺寸测量\n点击翻页查看参数</string>
+    <color name="wg_measure_root">#B3261E</color>
+    <color name="wg_measure_target">#005AC1</color>
+</resources>

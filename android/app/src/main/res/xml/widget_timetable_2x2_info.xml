@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Exact 获取宿主区域，卡片取短边正方形并居中，避免不对称留白导致偏上。 -->
+<!-- OriginOS 背景和内容填满 Exact 容器；其他桌面卡片取短边正方形。 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="@dimen/wg_2x2_min_width"
     android:minHeight="@dimen/wg_min_height"
