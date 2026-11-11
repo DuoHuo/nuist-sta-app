@@ -860,7 +860,9 @@ class _WidgetSettingsPreview extends StatelessWidget {
     }
 
     String ellipsize(String value, double size, double maxWidth) {
-      if (value.isEmpty || maxWidth <= 0 || textWidth(value, size) <= maxWidth) {
+      if (value.isEmpty ||
+          maxWidth <= 0 ||
+          textWidth(value, size) <= maxWidth) {
         return value;
       }
       const suffix = '…';
