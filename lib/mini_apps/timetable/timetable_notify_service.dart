@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:ui' show Color;
 
 import 'timetable_controller.dart';
 import 'timetable_course_color.dart';
 import 'timetable_models.dart';
 import 'timetable_notify_bridge.dart';
 import 'timetable_notify_plan.dart';
+import 'timetable_schedule_event.dart';
+import 'timetable_schedule_event_layout.dart';
+import 'timetable_theme.dart';
 
 /// 上课提醒 + 桌面小组件的编排层：从 [TimetableController] 取课，算好后交给原生。
 ///
@@ -183,6 +187,30 @@ class TimetableNotifyService {
     return out;
   }
 
+  /// 某天应显示在桌面小组件中的安排：课程、可见考试与“其他”日程。
+  ///
+  /// 与 [classesOn] 分开，避免考试和普通日程进入“即将上课”提醒。同一开始
+  /// 时刻课程排在日程前，与 App 首页的混排规则一致。
+  List<NotifyClass> widgetItemsOn(DateTime date) {
+    final indexed = <({int order, NotifyClass item})>[];
+    var order = 0;
+    for (final course in classesOn(date)) {
+      indexed.add((order: order++, item: course));
+    }
+    for (final event in _ctl.scheduleEventsOn(date)) {
+      indexed.add((order: order++, item: _widgetEvent(date, event)));
+    }
+    indexed.sort((a, b) {
+      final time = a.item.start.compareTo(b.item.start);
+      if (time != 0) return time;
+      final aGroup = a.item.kind == WidgetItemKind.course ? 0 : 1;
+      final bGroup = b.item.kind == WidgetItemKind.course ? 0 : 1;
+      final group = aGroup.compareTo(bGroup);
+      return group != 0 ? group : a.order.compareTo(b.order);
+    });
+    return [for (final entry in indexed) entry.item];
+  }
+
   NotifyClass? _notifyClass(DateTime date, TodayCourseItem item) {
     // 与首页 / 周格同一入口，保证小组件 payload 的时刻与 UI 一致。
     final time = _ctl.timeForSlot(item.course, item.slot, date: date);
@@ -203,11 +231,51 @@ class TimetableNotifyService {
     );
   }
 
-  NotifyClass? _tomorrowFirst(DateTime date) {
-    final first = _ctl.firstCourseTomorrow(now: date);
-    if (first == null) return null;
-    return _notifyClass(DateTime(date.year, date.month, date.day + 1), first);
+  NotifyClass _widgetEvent(DateTime date, ScheduleEvent event) {
+    final range = scheduleNodeRange(_ctl.periods, event.start, event.end);
+    final light = _eventColor(event);
+    final dark = event.isExam
+        ? TimetableTheme.examCellBg(light, dark: true)
+        : TimetableTheme.coursePair(
+            _ctl.otherColorIndexOf(event),
+            scheme: coursePaletteSchemeFor(_ctl),
+            dark: true,
+          ).bg;
+    return NotifyClass(
+      name: event.title,
+      location: event.location,
+      start: DateTime(
+        date.year,
+        date.month,
+        date.day,
+        event.start.hour,
+        event.start.minute,
+      ),
+      end: DateTime(
+        date.year,
+        date.month,
+        date.day,
+        event.end.hour,
+        event.end.minute,
+      ),
+      courseId: event.id,
+      startNode: range?.startNode ?? 0,
+      endNode: range?.endNode ?? 0,
+      barColor: light.toARGB32(),
+      barColorDark: dark.toARGB32(),
+      kind: event.isExam ? WidgetItemKind.exam : WidgetItemKind.schedule,
+    );
   }
+
+  Color _eventColor(ScheduleEvent event) => event.isExam
+      ? Color(_ctl.settings.examColor)
+      : TimetableTheme.coursePair(
+          _ctl.otherColorIndexOf(event),
+          scheme: coursePaletteSchemeFor(_ctl),
+        ).bg;
+
+  NotifyClass? _tomorrowFirst(DateTime date) =>
+      widgetItemsOn(DateTime(date.year, date.month, date.day + 1)).firstOrNull;
 
   static DateTime? _at(DateTime day, String? hhmm) {
     if (hhmm == null) return null;
@@ -233,20 +301,27 @@ class TimetableNotifyService {
   Map<String, Object?> currentWidgetPayload() {
     final now = _clock();
     final synced = _ctl.syncedAt;
-    final stale =
-        !_ctl.portalBound ||
-        !_ctl.hasCourses ||
-        synced == null ||
-        now.difference(synced) > const Duration(days: 7);
-    final state = stale
+    final hasVisibleEvents = _ctl.scheduleEvents.any(
+      (event) => !event.isExam || _ctl.settings.showExams,
+    );
+    final hasLocalItems = _ctl.hasCourses || hasVisibleEvents;
+    final hasJwxtData =
+        _ctl.jwxtCourses.isNotEmpty ||
+        _ctl.scheduleEvents.any((event) => event.isFromJwxt);
+    final hasCache = hasLocalItems || synced != null;
+    final staleCache =
+        synced != null && now.difference(synced) > const Duration(days: 7);
+    final needsUpdate =
+        !hasCache || staleCache || (hasJwxtData && !_ctl.portalBound);
+    final state = needsUpdate
         ? WidgetDataState.needsUpdate
         : (_lastSyncFailed ? WidgetDataState.loadFailed : WidgetDataState.ok);
     return buildWidgetPayload(
       now: now,
-      classesOn: classesOn,
+      classesOn: widgetItemsOn,
       weekOf: _ctl.actualWeek,
       state: state,
-      hasCache: _ctl.hasCourses,
+      hasCache: hasCache,
       lastSyncedAt: synced,
       prefs: widgetPrefs(),
       tomorrowFirst: _tomorrowFirst(now),

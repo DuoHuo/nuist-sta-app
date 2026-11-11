@@ -131,8 +131,8 @@ private fun HostMeasuredCard(data: WidgetSnapshot, square: Boolean, surface: Gla
             }
             courses.isEmpty() -> Column(GlanceModifier.fillMaxWidth().defaultWeight().semantics {
                 contentDescription = listOf(data.statusTitle, data.tomorrow?.let {
-                    "明天 ${widgetTime(it.start)} ${it.name}"
-                } ?: "明天没课").joinToString("，")
+                    "明天 ${widgetTime(it.start)} ${it.displayName}"
+                } ?: "明天没有安排").joinToString("，")
             }) {
                 Box(GlanceModifier.fillMaxWidth().defaultWeight(), contentAlignment = Alignment.Center) {
                     Label(data.statusTitle, 12f, R.color.wg_t3, lines = 2, align = TextAlign.Center)
@@ -145,7 +145,7 @@ private fun HostMeasuredCard(data: WidgetSnapshot, square: Boolean, surface: Gla
                     HostMeasuredCourse(tomorrow, data, square, 1, 1, tomorrow = true)
                 } else {
                     Box(GlanceModifier.fillMaxWidth().defaultWeight(), contentAlignment = Alignment.Center) {
-                        Label("明天没课", 12f, R.color.wg_t3)
+                        Label("明天没有安排", 12f, R.color.wg_t3)
                     }
                 }
             }
@@ -161,7 +161,7 @@ private fun HostMeasuredCard(data: WidgetSnapshot, square: Boolean, surface: Gla
                     Spacer(GlanceModifier.defaultWeight())
                     if (data.pending.size == 1) {
                         Spacer(GlanceModifier.height(4.dp))
-                        Label("今天最后一节", 10f, R.color.wg_t3)
+                        Label(lastItemText(courses.first()), 10f, R.color.wg_t3)
                     }
                 }
             }
@@ -190,8 +190,8 @@ private fun HostMeasuredCourse(
     val countdown = main && data.preferences.showCountdown && target - data.now in 1..3_600_000L
     val clock = if (countdown) "${TimetableWidgetUpdates.minutes(data.now, target)} 分钟" else widgetTime(target)
     val clockLabel = if (tomorrow) "明天" else if (countdown) {
-        if (ongoing) "距下课" else "距上课"
-    } else if (ongoing) "下课" else "上课"
+        "距${if (ongoing) course.endLabel else course.startLabel}"
+    } else if (ongoing) course.endLabel else course.startLabel
     val detail = listOf(course.location, course.teacher).filter { it.isNotBlank() }.joinToString(" · ")
     val time = if (square && !main) {
         listOf("${if (tomorrow) "明天" else "之后"} ${widgetTime(course.start)}", course.location)
@@ -204,7 +204,7 @@ private fun HostMeasuredCourse(
     if (!square && !compact) surface = surface.background(ImageProvider(R.drawable.wg_chip))
     Box(surface.padding(horizontal = if (square) 0.dp else 8.dp,
         vertical = if (square || compact) 0.dp else 2.dp).semantics {
-        contentDescription = listOf(course.name, course.location, course.teacher, course.nodes,
+        contentDescription = listOf(course.displayName, course.location, course.teacher, course.nodes,
             course.timeRange, clockLabel, clock).filter { it.isNotBlank() }.joinToString("，")
     }, contentAlignment = Alignment.CenterStart) {
         // 色条由原生相对布局贴齐文字容器，不用 fillMaxHeight 反向撑高自然高度行。
@@ -213,9 +213,9 @@ private fun HostMeasuredCourse(
             Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(GlanceModifier.defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
                     if (honorSquare) {
-                        AdaptiveCourseTitle(course.name, main, if (main && count == 1) 2 else 1)
+                        AdaptiveCourseTitle(course.displayName, main, if (main && count == 1) 2 else 1)
                     } else {
-                        Label(course.name, if (square) { if (main) 16f else 12f } else if (singleLine) 13f else 14f,
+                        Label(course.displayName, if (square) { if (main) 16f else 12f } else if (singleLine) 13f else 14f,
                             R.color.wg_t1, medium = true, lines = if (main && count == 1) 2 else 1)
                     }
                     if (!compactRows) {
@@ -308,8 +308,8 @@ private fun TimetableCard(data: WidgetSnapshot, square: Boolean, modifier: Glanc
         } else if (data.pending.isEmpty()) {
             Column(GlanceModifier.fillMaxWidth().defaultWeight().semantics {
                 contentDescription = listOf(data.statusTitle, data.tomorrow?.let {
-                    "明天 ${widgetTime(it.start)} ${it.name}"
-                } ?: "明天没课").joinToString("，")
+                    "明天 ${widgetTime(it.start)} ${it.displayName}"
+                } ?: "明天没有安排").joinToString("，")
             }, verticalAlignment = if (plan.showStatus) Alignment.Top else Alignment.CenterVertically) {
                 if (plan.showStatus) {
                     Box(GlanceModifier.fillMaxWidth().defaultWeight(), contentAlignment = Alignment.Center) {
@@ -324,7 +324,7 @@ private fun TimetableCard(data: WidgetSnapshot, square: Boolean, modifier: Glanc
                     Course(tomorrow, square, false, false, GlanceModifier.height(tomorrow.height.dp))
                 } else {
                     Box(GlanceModifier.fillMaxWidth().height(plan.tomorrowHeight.dp), contentAlignment = Alignment.Center) {
-                        Label("明天没课", 12f, R.color.wg_t3)
+                        Label("明天没有安排", 12f, R.color.wg_t3)
                     }
                 }
             }
@@ -341,7 +341,7 @@ private fun TimetableCard(data: WidgetSnapshot, square: Boolean, modifier: Glanc
                 if (square || blocks.size == 1) Spacer(GlanceModifier.defaultWeight())
                 if (plan.lastHeight > 0) {
                     Spacer(GlanceModifier.height(4.dp))
-                    Label("今天最后一节", 10f, R.color.wg_t3,
+                    Label(lastItemText(blocks.first().course), 10f, R.color.wg_t3,
                         modifier = GlanceModifier.padding(start = if (square) 0.dp else 8.dp))
                 }
             }
@@ -372,7 +372,7 @@ private fun Course(block: CourseBlock, square: Boolean, main: Boolean, ongoing: 
     var surface = modifier.fillMaxWidth()
     if (!square && !block.compact) surface = surface.background(ImageProvider(R.drawable.wg_chip))
     val horizontal = if (square) 0.dp else 8.dp
-    val description = listOf(block.course.name, block.course.location, block.course.teacher,
+    val description = listOf(block.course.displayName, block.course.location, block.course.teacher,
         block.course.timeRange, block.clockLabel, block.clock).filter { it.isNotBlank() }.joinToString("，")
     Box(surface.padding(horizontal = horizontal, vertical = if (square || block.compact) 0.dp else 2.dp)
         .semantics { contentDescription = description }, contentAlignment = Alignment.CenterStart) {
@@ -384,7 +384,7 @@ private fun Course(block: CourseBlock, square: Boolean, main: Boolean, ongoing: 
                 colorFilter = ColorFilter.tint(courseColor(LocalContext.current, block.course)))
             Spacer(GlanceModifier.width(8.dp))
             Column(GlanceModifier.defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
-                Label(block.course.name, block.nameSize, R.color.wg_t1, medium = true, lines = block.nameLines)
+                Label(block.course.displayName, block.nameSize, R.color.wg_t1, medium = true, lines = block.nameLines)
                 if (block.detail.isNotBlank()) {
                     Spacer(GlanceModifier.height(2.dp))
                     Label(block.detail, 11f, R.color.wg_t3)
@@ -406,6 +406,9 @@ private fun Course(block: CourseBlock, square: Boolean, main: Boolean, ongoing: 
         }
     }
 }
+
+private fun lastItemText(item: WidgetCourse): String =
+    if (item.kind == WidgetItemKind.COURSE) "今天最后一节" else "今天最后一项"
 
 @Composable
 private fun Label(

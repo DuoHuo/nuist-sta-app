@@ -7,6 +7,9 @@ library;
 
 import 'package:flutter/foundation.dart' show immutable;
 
+/// 小组件中的安排类型；课程提醒只使用 [course]，考试与日程仅进入小组件。
+enum WidgetItemKind { course, exam, schedule }
+
 /// 某天的一节（或连堂）课，已套用调课 / 单日修改 / 删除。
 class NotifyClass {
   const NotifyClass({
@@ -20,6 +23,7 @@ class NotifyClass {
     this.endNode = 0,
     this.barColor = 0xFF2196F3,
     this.barColorDark = 0xFF2196F3,
+    this.kind = WidgetItemKind.course,
   });
 
   final String name;
@@ -38,6 +42,9 @@ class NotifyClass {
   /// 竖条色（ARGB），来自 coursePairFor 底色，浅 / 深各一份。
   final int barColor;
   final int barColorDark;
+
+  /// 原生端据此显示“考试 / 日程”标识；旧 payload 缺失时按课程处理。
+  final WidgetItemKind kind;
 
   /// `第3-4节 10:10-11:50`：节次 + 时段（小组件副行，永不省略）。
   String get periodTime => [
@@ -261,6 +268,7 @@ Map<String, Object?> buildWidgetPayload({
   };
   Map<String, Object?> item(NotifyClass c, {WidgetItemStyle? style}) => {
     'name': c.name,
+    'kind': c.kind.name,
     'location': prefs.showLocation ? c.location : '',
     'teachers': prefs.showTeacher ? c.teachers : const <String>[],
     'teacherFirst': prefs.showTeacher && c.teachers.isNotEmpty
@@ -269,8 +277,14 @@ Map<String, Object?> buildWidgetPayload({
     'periodTime': prefs.showPeriod ? c.periodTime : c.timeRange,
     // 倒计时关闭时右列的两行静态文字：课前「上课 / 10:10」，上课中「下课 / 11:50」。
     'style': style?.name,
-    'staticBefore': {'label': '上课', 'time': formatHm(c.start)},
-    'staticDuring': {'label': '下课', 'time': formatHm(c.end)},
+    'staticBefore': {
+      'label': c.kind == WidgetItemKind.course ? '上课' : '开始',
+      'time': formatHm(c.start),
+    },
+    'staticDuring': {
+      'label': c.kind == WidgetItemKind.course ? '下课' : '结束',
+      'time': formatHm(c.end),
+    },
     'courseId': c.courseId,
     'startNode': c.startNode,
     'endNode': c.endNode,

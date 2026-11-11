@@ -9,6 +9,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_bridge.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_plan.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_service.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 
 NotifyClass _c(String name, DateTime s, {int minutes = 95, String loc = ''}) =>
@@ -1028,6 +1029,278 @@ void main() {
       expect(item['teachers'], isEmpty);
       expect(item['teacherFirst'], '');
       expect(p['state'], 'ok');
+    });
+
+    test('小组件按时间混排课程、考试与其他日程，并携带类型', () async {
+      await c.addScheduleEvent(
+        ScheduleEvent(
+          id: 'morning-event',
+          kind: ScheduleKind.other,
+          source: ScheduleSource.manual,
+          title: '晨会',
+          date: mon2,
+          start: const TimeOfDayMinutes(7, 30),
+          end: const TimeOfDayMinutes(7, 50),
+          location: '社团活动室',
+        ),
+      );
+      await c.addScheduleEvent(
+        ScheduleEvent(
+          id: 'exam',
+          kind: ScheduleKind.exam,
+          source: ScheduleSource.manual,
+          title: '高数考试',
+          date: mon2,
+          start: const TimeOfDayMinutes(10, 0),
+          end: const TimeOfDayMinutes(11, 30),
+          location: '教二-201',
+        ),
+      );
+
+      final payload = svc(_FakeBridge()).currentWidgetPayload();
+      final today = (payload['days'] as List).first as Map;
+      final items = (today['items'] as List).cast<Map>();
+
+      expect(items.map((e) => e['name']), ['晨会', '高数', '高数考试']);
+      expect(items.map((e) => e['kind']), ['schedule', 'course', 'exam']);
+      expect(items.first['location'], '社团活动室');
+      expect(items.first['nodes'], isEmpty);
+      expect(items.last['location'], '教二-201');
+    });
+
+    test('关闭显示考试只隐藏考试，其他日程仍进入小组件', () async {
+      await c.addScheduleEvent(
+        ScheduleEvent(
+          id: 'other',
+          kind: ScheduleKind.other,
+          source: ScheduleSource.manual,
+          title: '开组会',
+          date: mon2,
+          start: const TimeOfDayMinutes(10, 0),
+          end: const TimeOfDayMinutes(11, 0),
+        ),
+      );
+      await c.addScheduleEvent(
+        ScheduleEvent(
+          id: 'exam',
+          kind: ScheduleKind.exam,
+          source: ScheduleSource.manual,
+          title: '期中考试',
+          date: mon2,
+          start: const TimeOfDayMinutes(14, 0),
+          end: const TimeOfDayMinutes(15, 30),
+        ),
+      );
+      await c.updateSettings(c.settingsForEditing.copyWith(showExams: false));
+
+      final payload = svc(_FakeBridge()).currentWidgetPayload();
+      final today = (payload['days'] as List).first as Map;
+      final items = (today['items'] as List).cast<Map>();
+
+      expect(items.map((e) => e['name']), ['高数', '开组会']);
+      expect(items.map((e) => e['kind']), ['course', 'schedule']);
+    });
+
+    test('显示考试开关关闭时，只有隐藏考试也不会误报有缓存', () async {
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          periods: TimetableController.defaultPeriods(),
+          syncedAt: mon2,
+          settings: TimetableSettings(
+            termStartDate: termStart,
+            showExams: false,
+          ),
+        ),
+      );
+      await c.replaceJwxtExams([
+        ScheduleEvent(
+          id: 'hidden-exam',
+          kind: ScheduleKind.exam,
+          source: ScheduleSource.jwxt,
+          title: '隐藏考试',
+          date: mon2,
+          start: const TimeOfDayMinutes(14, 0),
+          end: const TimeOfDayMinutes(15, 30),
+          courseCode: 'HIDDEN',
+        ),
+      ]);
+
+      final payload = svc(_FakeBridge()).currentWidgetPayload();
+      final today = (payload['days'] as List).first as Map;
+
+      expect(payload['state'], 'ok');
+      expect(payload['hasCache'], isTrue);
+      expect(today['items'], isEmpty);
+    });
+
+    test('明天只有日程时仍注入明天首项', () async {
+      await c.addScheduleEvent(
+        ScheduleEvent(
+          id: 'tomorrow-event',
+          kind: ScheduleKind.other,
+          source: ScheduleSource.manual,
+          title: '明天开会',
+          date: DateTime(2026, 9, 8),
+          start: const TimeOfDayMinutes(9, 15),
+          end: const TimeOfDayMinutes(10, 0),
+          location: '会议室',
+        ),
+      );
+
+      final payload = svc(_FakeBridge()).currentWidgetPayload();
+      final tomorrowFirst = payload['tomorrowFirst'] as Map;
+      final today = (payload['days'] as List).first as Map;
+
+      expect(tomorrowFirst['name'], '明天开会');
+      expect(tomorrowFirst['kind'], 'schedule');
+      expect(tomorrowFirst['start'], '2026-09-08T09:15');
+      expect((today['tomorrowFirst'] as Map)['name'], '明天开会');
+    });
+
+    test('没有课程但有可见日程时小组件缓存仍可用', () async {
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          periods: TimetableController.defaultPeriods(),
+          syncedAt: mon2,
+          settings: TimetableSettings(termStartDate: termStart),
+        ),
+      );
+      await c.addScheduleEvent(
+        ScheduleEvent(
+          id: 'only-event',
+          kind: ScheduleKind.other,
+          source: ScheduleSource.manual,
+          title: '唯一日程',
+          date: mon2,
+          start: const TimeOfDayMinutes(12, 0),
+          end: const TimeOfDayMinutes(13, 0),
+        ),
+      );
+
+      final payload = svc(_FakeBridge()).currentWidgetPayload();
+      final today = (payload['days'] as List).first as Map;
+
+      expect(payload['state'], 'ok');
+      expect(payload['hasCache'], isTrue);
+      expect((today['items'] as List).single['name'], '唯一日程');
+    });
+
+    test('未绑定门户时仍显示本地手动课程与日程', () async {
+      await c.handleLogout(clearJwxt: true);
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(termStartDate: termStart),
+        ),
+      );
+      await c.addManualCourse(
+        const Course(
+          id: 'manual-only',
+          name: '本地课程',
+          slots: [CourseSlot(day: 1, startNode: 3, endNode: 4, weeks: '11')],
+        ),
+      );
+      await c.addScheduleEvent(
+        ScheduleEvent(
+          id: 'local-event',
+          kind: ScheduleKind.other,
+          source: ScheduleSource.manual,
+          title: '本地日程',
+          date: mon2,
+          start: const TimeOfDayMinutes(12, 0),
+          end: const TimeOfDayMinutes(13, 0),
+        ),
+      );
+
+      final payload = svc(_FakeBridge()).currentWidgetPayload();
+      final today = (payload['days'] as List).first as Map;
+      final items = (today['items'] as List).cast<Map>();
+
+      expect(payload['state'], 'ok');
+      expect(payload['hasCache'], isTrue);
+      expect(items.map((item) => item['name']), ['本地课程', '本地日程']);
+    });
+
+    test('成功同步后没有课程但仅有教务考试时小组件仍可用', () async {
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          periods: TimetableController.defaultPeriods(),
+          syncedAt: mon2,
+          settings: TimetableSettings(termStartDate: termStart),
+        ),
+      );
+      await c.replaceJwxtExams([
+        ScheduleEvent(
+          id: 'jwxt-exam',
+          kind: ScheduleKind.exam,
+          source: ScheduleSource.jwxt,
+          title: '教务考试',
+          date: mon2,
+          start: const TimeOfDayMinutes(14, 0),
+          end: const TimeOfDayMinutes(15, 30),
+          location: '考场101',
+          courseCode: 'EXAM001',
+        ),
+      ]);
+
+      final payload = svc(_FakeBridge()).currentWidgetPayload();
+      final today = (payload['days'] as List).first as Map;
+      final item = (today['items'] as List).single as Map;
+
+      expect(payload['state'], 'ok');
+      expect(payload['hasCache'], isTrue);
+      expect(item['name'], '教务考试');
+      expect(item['kind'], 'exam');
+    });
+
+    test('成功同步的空课表是可用缓存，不应提示需要更新', () {
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          periods: TimetableController.defaultPeriods(),
+          syncedAt: mon2,
+          settings: TimetableSettings(termStartDate: termStart),
+        ),
+      );
+
+      final payload = svc(_FakeBridge()).currentWidgetPayload();
+      final today = (payload['days'] as List).first as Map;
+
+      expect(payload['state'], 'ok');
+      expect(payload['hasCache'], isTrue);
+      expect(today['items'], isEmpty);
+    });
+
+    test('考试与其他日程不进入上课提醒计划', () async {
+      await c.updateSettings(
+        c.settingsForEditing.copyWith(reminderEnabled: true),
+      );
+      await c.addScheduleEvent(
+        ScheduleEvent(
+          id: 'event-before-class',
+          kind: ScheduleKind.other,
+          source: ScheduleSource.manual,
+          title: '课前日程',
+          date: mon2,
+          start: const TimeOfDayMinutes(7, 30),
+          end: const TimeOfDayMinutes(7, 50),
+        ),
+      );
+      await c.addScheduleEvent(
+        ScheduleEvent(
+          id: 'exam-after-class',
+          kind: ScheduleKind.exam,
+          source: ScheduleSource.manual,
+          title: '课后考试',
+          date: mon2,
+          start: const TimeOfDayMinutes(10, 0),
+          end: const TimeOfDayMinutes(11, 0),
+        ),
+      );
+
+      final plan = svc(_FakeBridge()).currentPlan();
+
+      expect(plan, hasLength(1));
+      expect(plan.single.names, ['高数']);
     });
   });
 }

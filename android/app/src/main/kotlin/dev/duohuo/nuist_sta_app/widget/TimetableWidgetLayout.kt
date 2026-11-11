@@ -98,7 +98,8 @@ internal object TimetableWidgetLayout {
         if (needed() > body) {
             hideHeader()
         }
-        val lastHeight = measure.height("今天最后一节", 10f, innerWidth) + 4f
+        // “最后一节”和非课程的“最后一项”等宽，统一预留一次文字高度。
+        val lastHeight = measure.height("今天最后一项", 10f, innerWidth) + 4f
         val tomorrow = if (data.usable && pending.isEmpty()) data.tomorrow?.let {
             var result = block(measure, it, data, square, 1, innerWidth, true, false, tomorrow = true)
             if (result.height + measure.height(data.statusTitle, 12f, innerWidth, 2) + 11f > body) {
@@ -108,7 +109,7 @@ internal object TimetableWidgetLayout {
         } else null
         var statusLines = 2
         var showStatus = true
-        val tomorrowHeight = tomorrow?.height ?: maxOf(42f, measure.height("明天没课", 12f, innerWidth))
+        val tomorrowHeight = tomorrow?.height ?: maxOf(42f, measure.height("明天没有安排", 12f, innerWidth))
         if (data.usable && pending.isEmpty()) {
             fun statusHeight() = measure.height(data.statusTitle, 12f, innerWidth, statusLines)
             if (statusHeight() + tomorrowHeight + 11f > body) statusLines = 1
@@ -147,7 +148,7 @@ internal object TimetableWidgetLayout {
             clockWidth = 0f
         }
         val textWidth = (width - padding - if (clockWidth > 0) clockWidth + 8 else 0f).coerceAtLeast(1f)
-        val nameLines = if (multiline && main && measure.width(course.name, nameSize, true) > textWidth) 2 else 1
+        val nameLines = if (multiline && main && measure.width(course.displayName, nameSize, true) > textWidth) 2 else 1
         val fullDetail = listOf(course.location, course.teacher).filter { it.isNotBlank() }.joinToString(" · ")
         val detail = if (details && !compact && (!square || main)) {
             if (measure.width(fullDetail, 11f) <= textWidth) fullDetail else course.location
@@ -162,15 +163,17 @@ internal object TimetableWidgetLayout {
             else -> measure.firstFitting(listOf(
                 listOf(course.nodes.takeIf { !square && details }.orEmpty(), course.timeRange)
                     .filter { it.isNotBlank() }.joinToString(" · "),
-                course.timeRange, "${widgetTime(target)} ${if (ongoing) "下课" else "上课"}", widgetTime(target)),
+                course.timeRange,
+                "${widgetTime(target)} ${if (ongoing) course.endLabel else course.startLabel}",
+                widgetTime(target)),
                 timeSize, textWidth)
         }
-        val textHeight = measure.height(course.name, nameSize, textWidth, nameLines, true) +
+        val textHeight = measure.height(course.displayName, nameSize, textWidth, nameLines, true) +
             (if (detail.isNotEmpty()) 2 + measure.height(detail, 11f, textWidth) else 0f) +
             (if (time.isNotEmpty()) 2 + measure.height(time, timeSize, textWidth) else 0f)
         val clockLabel = if (compact) "" else if (tomorrow) "明天" else if (countdown) {
-            if (ongoing) "距下课" else "距上课"
-        } else if (ongoing) "下课" else "上课"
+            "距${if (ongoing) course.endLabel else course.startLabel}"
+        } else if (ongoing) course.endLabel else course.startLabel
         val clockHeight = if (clockWidth == 0f) 0f else measure.height(clock, clockSize, clockWidth, medium = true) +
             (if (clockLabel.isNotEmpty()) measure.height(clockLabel, 10f, clockWidth) else 0f)
         val natural = maxOf(textHeight, clockHeight) + if (square || compact) 0 else 4
