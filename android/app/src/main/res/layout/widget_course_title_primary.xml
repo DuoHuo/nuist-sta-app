@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 由宿主在实际列宽内选择字号，超出最小字号仍放不下时省略。 -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/wg_course_title"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:textSize="15sp"
+    android:textColor="@color/wg_t1"
+    android:fontFamily="sans-serif-medium"
+    android:includeFontPadding="true"
+    android:maxLines="1"
+    android:ellipsize="end"
+    android:autoSizeTextType="uniform"
+    android:autoSizeMinTextSize="12sp"
+    android:autoSizeMaxTextSize="15sp"
+    android:autoSizeStepGranularity="1sp"/>

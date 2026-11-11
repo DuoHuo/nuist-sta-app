@@ -1,10 +1,15 @@
 package dev.duohuo.nuist_sta_app.widget
 
+import android.appwidget.AppWidgetHostView
+import android.content.ComponentName
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Build
+import android.widget.RemoteViews
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.ColorUtils
@@ -15,6 +20,7 @@ import androidx.glance.ImageProvider
 import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.clickable
+import androidx.glance.appwidget.AndroidRemoteViews
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.cornerRadius
@@ -40,13 +46,15 @@ import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import dev.duohuo.nuist_sta_app.NotifyStore
 import dev.duohuo.nuist_sta_app.R
+import dev.duohuo.nuist_sta_app.TimetableWidgetProvider
 import java.util.Calendar
 
-/** OriginOS 交给宿主测量内容；其他桌面保留原有尺寸预算和卡片边界。 */
+/** OriginOS 与荣耀由宿主实际测量内容，其他桌面保留原有尺寸预算。 */
 @Composable
 internal fun TimetableWidgetContent(data: WidgetSnapshot, square: Boolean) {
     val context = LocalContext.current
     val originOs = TimetableWidgetGeometry.isOriginOsHome(context)
+    val honorHome = TimetableWidgetGeometry.isHonorHome(context)
     val cacheWarning = if (data.state == "loadFailed" && data.usable) "更新失败，请打开课表刷新" else ""
     // 背景、圆角、点击与缓存告警统一附着在可见卡片上，保持启动动画和读屏范围一致。
     val surface = GlanceModifier.appWidgetBackground()
@@ -55,9 +63,17 @@ internal fun TimetableWidgetContent(data: WidgetSnapshot, square: Boolean) {
         .then(if (cacheWarning.isNotEmpty()) GlanceModifier.semantics {
             contentDescription = cacheWarning
         } else GlanceModifier)
-    if (originOs) {
+    if (honorHome) {
+        // 两种规格都在宿主侧测量：2×2 保持正方形，4×2 按相同网格关系折算等高。
+        val views = if (square) RemoteViews(context.packageName, R.layout.widget_square_container)
+            else wideCardViews(context)
+        val contentId = if (square) R.id.wg_square_content else R.id.wg_wide_content
+        AndroidRemoteViews(views, contentId, GlanceModifier.fillMaxSize()) {
+            HostMeasuredCard(data, square, surface)
+        }
+    } else if (originOs) {
         // 此分支不读取 LocalSize，也不执行基于上报宽高的文字测量和内容删减。
-        OriginOsCard(data, square, surface)
+        HostMeasuredCard(data, square, surface)
     } else {
         val contentSize = TimetableWidgetGeometry.contentSize(square, LocalSize.current)
         Box(GlanceModifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -69,10 +85,22 @@ internal fun TimetableWidgetContent(data: WidgetSnapshot, square: Boolean) {
     }
 }
 
+/** 按已验证的荣耀网格关系折算：（四列可见宽度－左右默认边距）/ 2。 */
+private fun wideCardViews(context: Context): RemoteViews {
+    val padding = AppWidgetHostView.getDefaultPaddingForWidget(context,
+        ComponentName(context, TimetableWidgetProvider::class.java), null)
+    return RemoteViews(context.packageName, R.layout.widget_wide_container).apply {
+        setViewPadding(R.id.wg_wide_height, padding.left, 0, padding.right, 0)
+    }
+}
+
 /** 两种占格共用自然高度与剩余空间分配，宽高由桌面的 RemoteViews 容器实际测量。 */
 @Composable
-private fun OriginOsCard(data: WidgetSnapshot, square: Boolean, surface: GlanceModifier) {
+private fun HostMeasuredCard(data: WidgetSnapshot, square: Boolean, surface: GlanceModifier) {
     val context = LocalContext.current
+    val honorSquare = square && TimetableWidgetGeometry.isHonorHome(context)
+    val largeHonorText = context.resources.configuration.fontScale > 1f &&
+        TimetableWidgetGeometry.isHonorHome(context)
     val open = actionStartActivity(NotifyStore.launchIntent(context))
     val courses = if (data.usable) data.pending.take(if (square) 2 else data.preferences.courseCount)
         else emptyList()
@@ -88,7 +116,7 @@ private fun OriginOsCard(data: WidgetSnapshot, square: Boolean, surface: GlanceM
                     horizontalAlignment = Alignment.CenterHorizontally) {
                     Label(data.statusTitle, 15f, R.color.wg_t1, medium = true, lines = 2,
                         align = TextAlign.Center)
-                    if (!square) {
+                    if (!square && !largeHonorText) {
                         Spacer(GlanceModifier.height(4.dp))
                         Label(if (data.state == "loadFailed") "网络异常，请打开课表重试" else "打开 App 登录并同步",
                             11f, R.color.wg_t3, lines = 2, align = TextAlign.Center)
@@ -114,7 +142,7 @@ private fun OriginOsCard(data: WidgetSnapshot, square: Boolean, surface: GlanceM
                 Spacer(GlanceModifier.height(5.dp))
                 val tomorrow = data.tomorrow
                 if (tomorrow != null) {
-                    OriginOsCourse(tomorrow, data, square, 1, 1, tomorrow = true)
+                    HostMeasuredCourse(tomorrow, data, square, 1, 1, tomorrow = true)
                 } else {
                     Box(GlanceModifier.fillMaxWidth().defaultWeight(), contentAlignment = Alignment.Center) {
                         Label("明天没课", 12f, R.color.wg_t3)
@@ -123,11 +151,11 @@ private fun OriginOsCard(data: WidgetSnapshot, square: Boolean, surface: GlanceM
             }
             else -> Column(GlanceModifier.fillMaxWidth().defaultWeight()) {
                 courses.forEachIndexed { index, course ->
-                    if (index > 0) Spacer(GlanceModifier.height(5.dp))
+                    if (index > 0) Spacer(GlanceModifier.height(if (honorSquare) 6.dp else 5.dp))
                     val modifier = if (!square && courses.size > 1 && index < 2) GlanceModifier.defaultWeight()
                         else GlanceModifier
-                    if (square && index > 0) Spacer(GlanceModifier.defaultWeight())
-                    OriginOsCourse(course, data, square, index, courses.size, modifier)
+                    if (square && !honorSquare && index > 0) Spacer(GlanceModifier.defaultWeight())
+                    HostMeasuredCourse(course, data, square, index, courses.size, modifier)
                 }
                 if (courses.size == 1) {
                     Spacer(GlanceModifier.defaultWeight())
@@ -143,14 +171,20 @@ private fun OriginOsCard(data: WidgetSnapshot, square: Boolean, surface: GlanceM
 
 /** 课程文字由宿主按实际列宽换行和省略，不使用预估的文字宽高锁定行框。 */
 @Composable
-private fun OriginOsCourse(
+private fun HostMeasuredCourse(
     course: WidgetCourse, data: WidgetSnapshot, square: Boolean, index: Int, count: Int,
     modifier: GlanceModifier = GlanceModifier, tomorrow: Boolean = false,
 ) {
+    val context = LocalContext.current
+    val honorSquare = square && TimetableWidgetGeometry.isHonorHome(context)
     val main = index == 0 && !tomorrow
     val compact = !square && index == 2
     val dense = !square && count >= 2
     val singleLine = !square && count >= 3
+    // 荣耀两种等高卡片放大字号时优先保留课名和时间，附属信息仍保留在读屏描述中。
+    val largeHonorText = LocalContext.current.resources.configuration.fontScale > 1f &&
+        TimetableWidgetGeometry.isHonorHome(LocalContext.current)
+    val compactRows = singleLine || (!square && largeHonorText && count > 1)
     val ongoing = main && course.start <= data.now
     val target = if (ongoing) course.end else course.start
     val countdown = main && data.preferences.showCountdown && target - data.now in 1..3_600_000L
@@ -173,32 +207,68 @@ private fun OriginOsCourse(
         contentDescription = listOf(course.name, course.location, course.teacher, course.nodes,
             course.timeRange, clockLabel, clock).filter { it.isNotBlank() }.joinToString("，")
     }, contentAlignment = Alignment.CenterStart) {
-        // 自然高度容器内不能放 fillMaxHeight 色条，否则 RemoteViews 会把课程撑到剩余高度。
-        Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Image(ImageProvider(R.drawable.wg_bar), contentDescription = null,
-                modifier = GlanceModifier.width(4.dp).height(16.dp), contentScale = ContentScale.FillBounds,
-                colorFilter = ColorFilter.tint(courseColor(LocalContext.current, course)))
-            Spacer(GlanceModifier.width(8.dp))
-            Column(GlanceModifier.defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
-                Label(course.name, if (square) { if (main) 16f else 12f } else if (singleLine) 13f else 14f,
-                    R.color.wg_t1, medium = true, lines = if (main && count == 1) 2 else 1)
-                if (!singleLine) {
-                    if (detail.isNotBlank() && !dense && (!square || main)) {
-                        Spacer(GlanceModifier.height(2.dp))
-                        Label(detail, 11f, R.color.wg_t3)
+        // 色条由原生相对布局贴齐文字容器，不用 fillMaxHeight 反向撑高自然高度行。
+        AndroidRemoteViews(courseContentViews(LocalContext.current, course), R.id.wg_course_content,
+            GlanceModifier.fillMaxWidth()) {
+            Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(GlanceModifier.defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
+                    if (honorSquare) {
+                        AdaptiveCourseTitle(course.name, main, if (main && count == 1) 2 else 1)
+                    } else {
+                        Label(course.name, if (square) { if (main) 16f else 12f } else if (singleLine) 13f else 14f,
+                            R.color.wg_t1, medium = true, lines = if (main && count == 1) 2 else 1)
                     }
-                    Spacer(GlanceModifier.height(2.dp))
-                    Label(time, if (square) 11f else 10f, R.color.wg_t3)
+                    if (!compactRows) {
+                        if (detail.isNotBlank() && !dense && !largeHonorText && (!square || main)) {
+                            Spacer(GlanceModifier.height(2.dp))
+                            Label(detail, 11f, R.color.wg_t3)
+                        }
+                        Spacer(GlanceModifier.height(2.dp))
+                        Label(time, if (square) 11f else 10f, R.color.wg_t3)
+                    }
+                }
+                if (!square) {
+                    Spacer(GlanceModifier.width(8.dp))
+                    Column(horizontalAlignment = Alignment.End, verticalAlignment = Alignment.CenterVertically) {
+                        val color = if (main) { if (ongoing) R.color.wg_acc else R.color.wg_brk_text } else R.color.wg_t1
+                        if (!compactRows) {
+                            Label(clockLabel, 10f, if (main) color else R.color.wg_t3)
+                        }
+                        Label(clock, if (singleLine) 13f else if (main) 17f else 15f, color, medium = true)
+                    }
                 }
             }
-            if (!square) {
-                Spacer(GlanceModifier.width(8.dp))
-                Column(horizontalAlignment = Alignment.End, verticalAlignment = Alignment.CenterVertically) {
-                    val color = if (main) { if (ongoing) R.color.wg_acc else R.color.wg_brk_text } else R.color.wg_t1
-                    if (!singleLine) Label(clockLabel, 10f, if (main) color else R.color.wg_t3)
-                    Label(clock, if (singleLine) 13f else if (main) 17f else 15f, color, medium = true)
-                }
-            }
+        }
+    }
+}
+
+/** 荣耀 2×2 课名按宿主实际文字区域自动选字号，不依据 LocalSize 估算。 */
+@Composable
+private fun AdaptiveCourseTitle(text: String, primary: Boolean, lines: Int) {
+    val context = LocalContext.current
+    val layout = if (primary) R.layout.widget_course_title_primary else R.layout.widget_course_title_secondary
+    val views = RemoteViews(context.packageName, layout).apply {
+        setTextViewText(R.id.wg_course_title, text)
+        setInt(R.id.wg_course_title, "setMaxLines", lines)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            setColorInt(R.id.wg_course_title, "setTextColor",
+                widgetThemeContext(context, false).getColor(R.color.wg_t1),
+                widgetThemeContext(context, true).getColor(R.color.wg_t1))
+        }
+    }
+    AndroidRemoteViews(views, GlanceModifier.fillMaxWidth())
+}
+
+/** 色条跟随宿主当前主题染色，Android 12 起由 RemoteViews 在明暗切换时选择颜色。 */
+private fun courseContentViews(context: Context, course: WidgetCourse): RemoteViews {
+    val colors = courseColor(context, course)
+    return RemoteViews(context.packageName, R.layout.widget_course_content).apply {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            setColorInt(R.id.wg_course_bar, "setColorFilter",
+                colors.getColor(widgetThemeContext(context, false)).toArgb(),
+                colors.getColor(widgetThemeContext(context, true)).toArgb())
+        } else {
+            setInt(R.id.wg_course_bar, "setColorFilter", colors.getColor(context).toArgb())
         }
     }
 }

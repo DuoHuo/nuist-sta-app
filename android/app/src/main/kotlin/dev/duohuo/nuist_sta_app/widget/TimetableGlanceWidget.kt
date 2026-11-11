@@ -25,10 +25,10 @@ import kotlinx.coroutines.withContext
 
 /**
  * 根据官方 Canonical LongTextAppWidget 的 Exact / provideContent / 数据流结构重写。
- * 布局与颜色按 NUIST++ 现有设计定制；OriginOS 两种规格的内容由宿主实际测量并铺满。
+ * 布局与颜色按 NUIST++ 现有设计定制；OriginOS 与荣耀的内容由宿主实际测量。
  */
 internal class TimetableGlanceWidget(private val square: Boolean) : GlanceAppWidget() {
-    // 保留标准宿主链路；OriginOS 内容不依赖 Exact 提供的 LocalSize 预估值。
+    // 保留标准宿主链路；OriginOS 与荣耀的内容不依赖 Exact 提供的 LocalSize 预估值。
     override val sizeMode: SizeMode = SizeMode.Exact
     override val stateDefinition = null
 

@@ -141,7 +141,8 @@ private fun measurementColor(resource: Int): androidx.glance.unit.ColorProvider 
 private fun measurementPages(context: Context, square: Boolean, local: DpSize, options: Bundle): List<MeasurementPage> {
     val target = originOsReferenceSize(square)
     val originOs = TimetableWidgetGeometry.isOriginOsHome(context)
-    val content = if (originOs) null else TimetableWidgetGeometry.contentSize(square, local)
+    val honorHome = TimetableWidgetGeometry.isHonorHome(context)
+    val content = if (originOs || honorHome) null else TimetableWidgetGeometry.contentSize(square, local)
     val metrics = context.resources.displayMetrics
     val config = context.resources.configuration
     val component = ComponentName(context,
@@ -151,8 +152,12 @@ private fun measurementPages(context: Context, square: Boolean, local: DpSize, o
     return buildList {
         add(MeasurementPage("边界对照", listOf("红：渲染根边界", "蓝：${sizeLabel(target)} dp", "实际大小请对照截图")))
         add(MeasurementPage("Glance 上报", listOf("${sizeLabel(local)} dp", "上报值，仅诊断")))
-        add(MeasurementPage("课表内容", if (content == null) listOf("填满父容器", "由桌面实际测量")
-            else listOf("布局预算", "${sizeLabel(content)} dp")))
+        add(MeasurementPage("课表内容", when {
+            honorHome && square -> listOf("按实际短边居中正方形", "内部由桌面实际测量")
+            honorHome -> listOf("按两列宽度折算等高", "宽度铺满，垂直居中")
+            content == null -> listOf("填满父容器", "由桌面实际测量")
+            else -> listOf("布局预算", "${sizeLabel(content)} dp")
+        }))
         add(MeasurementPage("桌面声明 dp", listOf(
             "宽 min / max", "${option(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)} / ${option(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH)}")))
         add(MeasurementPage("桌面声明 dp", listOf(
@@ -168,7 +173,11 @@ private fun measurementPages(context: Context, square: Boolean, local: DpSize, o
         add(MeasurementPage("资源窗口", listOf("${metrics.widthPixels} × ${metrics.heightPixels} px", "${config.screenWidthDp} × ${config.screenHeightDp} dp")))
         add(MeasurementPage("默认边距 px", listOf("左 ${padding.left} · 右 ${padding.right}", "上 ${padding.top} · 下 ${padding.bottom}", "API 默认值，非实测")))
         add(MeasurementPage("默认桌面", listOf(TimetableWidgetGeometry.homePackage(context) ?: "未识别")))
-        add(MeasurementPage("尺寸策略", listOf(if (originOs) "OriginOS 宿主测量" else "通用策略", "蓝框仅为规范尺寸参考")))
+        add(MeasurementPage("尺寸策略", listOf(when {
+            originOs -> "OriginOS 宿主测量"
+            honorHome -> "荣耀宿主测量"
+            else -> "通用策略"
+        }, "蓝框仅为规范尺寸参考")))
         add(MeasurementPage("系统", listOf("Android ${Build.VERSION.RELEASE} · API ${Build.VERSION.SDK_INT}", Build.MANUFACTURER, Build.MODEL)))
     }
 }

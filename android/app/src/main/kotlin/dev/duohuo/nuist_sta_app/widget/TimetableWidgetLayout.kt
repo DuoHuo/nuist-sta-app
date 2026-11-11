@@ -24,7 +24,7 @@ internal data class CourseBlock(
     val compact: Boolean = false,
 )
 
-/** 通用桌面的布局预算；OriginOS 由宿主实际测量，不使用此预估方案。 */
+/** 通用桌面的布局预算；OriginOS 与荣耀由宿主实际测量，不使用此预估方案。 */
 internal data class WidgetLayout(
     val inset: Float,
     val headerHeight: Float,

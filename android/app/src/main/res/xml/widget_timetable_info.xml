@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- updatePeriodMillis=0：不用系统轮询，刷新由 AlarmManager 在上下课时刻触发 -->
+<!-- 荣耀按同网格两列宽度折算可见高度，占格仍为 4×2。 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="@dimen/wg_4x2_min_width"
     android:minHeight="@dimen/wg_min_height"

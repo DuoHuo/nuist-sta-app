@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 只提供精确 2:1 比例；使用 px 避免密度换算取整改变比例。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <size android:width="2px" android:height="1px"/>
+    <solid android:color="@android:color/transparent"/>
+</shape>

@@ -3,6 +3,7 @@ package dev.duohuo.nuist_sta_app.widget
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.compose.ui.unit.DpSize
 
 /** 课表内容的布局尺寸，与桌面占格和外层背景边界分开处理。 */
@@ -23,7 +24,14 @@ internal object TimetableWidgetGeometry {
         return home == "com.bbk.launcher2" || home?.startsWith("com.vivo.launcher") == true
     }
 
-    /** 其他桌面沿用原有尺寸预算；OriginOS 不通过此函数获取布局宽高。 */
+    /** 识别荣耀新旧系统桌面；旧包名还需区分荣耀与华为设备。 */
+    fun isHonorHome(context: Context): Boolean {
+        val home = homePackage(context)
+        return home == "com.hihonor.android.launcher" ||
+            home == "com.huawei.android.launcher" && Build.BRAND.equals("HONOR", ignoreCase = true)
+    }
+
+    /** 通用桌面沿用原有尺寸预算；OriginOS 与荣耀不通过此函数限制卡片外框。 */
     fun contentSize(square: Boolean, hostSize: DpSize): DpSize {
         val side = minOf(hostSize.width, hostSize.height)
         return if (square) DpSize(side, side) else hostSize

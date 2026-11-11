@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- OriginOS 背景和内容填满 Exact 容器；其他桌面卡片取短边正方形。 -->
+<!-- OriginOS 填满容器；荣耀按宿主实际短边居中为正方形，其他桌面按上报尺寸取短边。 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="@dimen/wg_2x2_min_width"
     android:minHeight="@dimen/wg_min_height"

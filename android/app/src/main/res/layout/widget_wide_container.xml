@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 测量图扣除默认横向边距后按 2:1 求高；实际卡片保留完整宽度并垂直居中。 -->
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+    <ImageView
+        android:id="@+id/wg_wide_height"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_centerVertical="true"
+        android:adjustViewBounds="true"
+        android:src="@drawable/wg_wide_ratio"
+        android:visibility="invisible"
+        android:importantForAccessibility="no"/>
+    <FrameLayout
+        android:id="@+id/wg_wide_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_alignTop="@id/wg_wide_height"
+        android:layout_alignBottom="@id/wg_wide_height"/>
+</RelativeLayout>

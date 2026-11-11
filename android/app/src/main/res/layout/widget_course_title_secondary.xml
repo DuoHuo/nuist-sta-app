@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 下一节课保持次要层级，使用与主课相同的宿主自动字号机制。 -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/wg_course_title"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:textSize="12sp"
+    android:textColor="@color/wg_t1"
+    android:fontFamily="sans-serif-medium"
+    android:includeFontPadding="true"
+    android:maxLines="1"
+    android:ellipsize="end"
+    android:autoSizeTextType="uniform"
+    android:autoSizeMinTextSize="11sp"
+    android:autoSizeMaxTextSize="12sp"
+    android:autoSizeStepGranularity="1sp"/>
