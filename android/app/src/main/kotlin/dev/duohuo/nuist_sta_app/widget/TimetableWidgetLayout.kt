@@ -2,6 +2,7 @@ package dev.duohuo.nuist_sta_app.widget
 
 import android.content.Context
 import android.graphics.Typeface
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.View
 import android.widget.TextView
@@ -64,6 +65,17 @@ internal class WidgetTextMeasure(private val context: Context) {
 
     fun firstFitting(values: List<String>, sp: Float, width: Float): String =
         values.firstOrNull { width(it, sp) <= width } ?: values.last()
+
+    fun ellipsize(value: String, sp: Float, width: Float): String {
+        if (value.isEmpty() || width <= 0f || width(value, sp) <= width) return value
+        val view = text(value, sp, false)
+        return TextUtils.ellipsize(
+            value,
+            view.paint,
+            width * density,
+            TextUtils.TruncateAt.END,
+        ).toString()
+    }
 }
 
 /** 在卡片内按文字实际高度分配内容，保留大字号下的防溢出处理。 */
@@ -151,15 +163,44 @@ internal object TimetableWidgetLayout {
         val nameLines = if (multiline && main && measure.width(course.displayName, nameSize, true) > textWidth) 2 else 1
         val fullDetail = listOf(course.location, course.teacher).filter { it.isNotBlank() }.joinToString(" · ")
         val detail = if (details && !compact && (!square || main)) {
-            if (measure.width(fullDetail, 11f) <= textWidth) fullDetail else course.location
+            when {
+                measure.width(fullDetail, 11f) <= textWidth -> fullDetail
+                course.teacher.isBlank() -> course.location
+                course.location.isBlank() -> measure.ellipsize(course.teacher, 11f, textWidth)
+                else -> {
+                    val prefix = "${course.location} · "
+                    val teacher = measure.ellipsize(
+                        course.teacher,
+                        11f,
+                        textWidth - measure.width(prefix, 11f),
+                    )
+                    if (teacher.isEmpty()) course.location else prefix + teacher
+                }
+            }
         } else ""
         val timeSize = if (square) 11f else 10f
         val prefix = "${if (tomorrow) "明天" else "之后"} ${widgetTime(course.start)}"
         val time = when {
             compact -> ""
-            square && !main -> measure.firstFitting(listOf(
-                listOf(prefix, course.location).filter { it.isNotBlank() }.joinToString(" · "), prefix,
-                widgetTime(course.start)), timeSize, textWidth)
+            square && !main -> {
+                val full = listOf(prefix, course.location)
+                    .filter { it.isNotBlank() }.joinToString(" · ")
+                if (measure.width(full, timeSize) <= textWidth || course.location.isBlank()) {
+                    full
+                } else {
+                    val roomPrefix = "$prefix · "
+                    val location = measure.ellipsize(
+                        course.location,
+                        timeSize,
+                        textWidth - measure.width(roomPrefix, timeSize),
+                    )
+                    if (location.isNotEmpty()) roomPrefix + location else measure.firstFitting(
+                        listOf(prefix, widgetTime(course.start)),
+                        timeSize,
+                        textWidth,
+                    )
+                }
+            }
             else -> measure.firstFitting(listOf(
                 listOf(course.nodes.takeIf { !square && details }.orEmpty(), course.timeRange)
                     .filter { it.isNotBlank() }.joinToString(" · "),

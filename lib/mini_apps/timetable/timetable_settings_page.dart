@@ -859,6 +859,27 @@ class _WidgetSettingsPreview extends StatelessWidget {
       return width;
     }
 
+    String ellipsize(String value, double size, double maxWidth) {
+      if (value.isEmpty || maxWidth <= 0 || textWidth(value, size) <= maxWidth) {
+        return value;
+      }
+      const suffix = '…';
+      if (textWidth(suffix, size) > maxWidth) return '';
+      final runes = value.runes.toList();
+      var low = 0;
+      var high = runes.length;
+      while (low < high) {
+        final middle = (low + high + 1) ~/ 2;
+        final candidate = '${String.fromCharCodes(runes.take(middle))}$suffix';
+        if (textWidth(candidate, size) <= maxWidth) {
+          low = middle;
+        } else {
+          high = middle - 1;
+        }
+      }
+      return '${String.fromCharCodes(runes.take(low))}$suffix';
+    }
+
     Widget label(
       String value,
       double size, {
@@ -967,13 +988,24 @@ class _WidgetSettingsPreview extends StatelessWidget {
                     : '21:20';
                 final range = index == 0 ? '18:45–20:20' : '20:30–21:20';
                 final location = index == 0 ? '示例教室 A101' : '示例教室 C102';
-                var details = settings.widgetShowLocation ? location : '';
-                final teacher = [
-                  details,
-                  if (settings.widgetShowTeacher) '示例教师',
+                final locationText = settings.widgetShowLocation
+                    ? location
+                    : '';
+                const teacherText = '示例教师';
+                final fullDetails = [
+                  locationText,
+                  if (settings.widgetShowTeacher) teacherText,
                 ].where((s) => s.isNotEmpty).join(' · ');
-                if (!minimal && textWidth(teacher, 11) <= contentWidth) {
-                  details = teacher;
+                var details = fullDetails;
+                if (textWidth(fullDetails, 11) > contentWidth &&
+                    settings.widgetShowTeacher) {
+                  final prefix = locationText.isEmpty ? '' : '$locationText · ';
+                  final teacher = ellipsize(
+                    teacherText,
+                    11,
+                    contentWidth - textWidth(prefix, 11),
+                  );
+                  details = teacher.isEmpty ? locationText : '$prefix$teacher';
                 }
                 final fullTime = settings.widgetShowPeriod && !square
                     ? '${index == 0 ? '第9–10节' : '第11–12节'} · $range'
@@ -989,15 +1021,26 @@ class _WidgetSettingsPreview extends StatelessWidget {
                     : start;
                 if (square && index > 0) {
                   final prefix = '之后 $start';
-                  final detail = [
+                  final full = [
                     prefix,
                     if (settings.widgetShowLocation) 'C102',
                   ].join(' · ');
-                  time = textWidth(detail, 11) <= contentWidth
-                      ? detail
-                      : textWidth(prefix, 11) <= contentWidth
-                      ? prefix
-                      : start;
+                  if (textWidth(full, 11) <= contentWidth ||
+                      !settings.widgetShowLocation) {
+                    time = full;
+                  } else {
+                    final roomPrefix = '$prefix · ';
+                    final room = ellipsize(
+                      'C102',
+                      11,
+                      contentWidth - textWidth(roomPrefix, 11),
+                    );
+                    time = room.isNotEmpty
+                        ? '$roomPrefix$room'
+                        : textWidth(prefix, 11) <= contentWidth
+                        ? prefix
+                        : start;
+                  }
                 }
 
                 return IntrinsicHeight(
