@@ -99,48 +99,91 @@ void main() {
     expect(messages.single, isNot(contains('{')));
   });
 
-  test('错误堆栈保留方法与文件行号，去掉外部路径和异常正文', () {
+  test('原始堆栈在记录、快照和导出中完整保留，异常正文不入日志', () async {
+    final temp = await Directory.systemTemp.createTemp('log_stack_test_');
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await temp.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: temp);
+    final stack = [
+      '*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***',
+      'os: android arch: arm64 comp: no sim: no',
+      'isolate_dso_base: 7abc0000, vm_dso_base: 7abc0000',
+      '#00 abs 000000007abc1234 virt 0000000000001234 _kDartIsolateSnapshotInstructions+0x1234',
+      '#0 ScoreController.refresh.<anonymous closure> (package:nuist_sta_app/app.dart:24:1)',
+      '#1 List.[] (dart:core-patch/growable_array.dart:264:36)',
+      '#2 main (file:///home/synthetic-user/project/main.dart:9:2)',
+      r'#3 main (C:\workspace\project\main.dart:12:3)',
+      '<asynchronous suspension>',
+      '',
+      for (var index = 4; index < 40; index++)
+        '#$index SyntheticController.load.<anonymous closure> (package:nuist_sta_app/synthetic_controller.dart:42:7)',
+      '',
+    ].join('\n');
     Map<String, Object?>? record;
     AppLog.recordListenerForTesting = (value) => record = value;
     AppLog.logger('test.stack').error(
       'failed',
       error: StateError('token=synthetic-secret'),
-      stackTrace: StackTrace.fromString(
-        '#0 ScoreController.refresh (package:nuist_sta_app/app.dart:24:1)\n'
-        '#1 main (file:///home/private-user/project/main.dart:9:2)',
-      ),
+      stackTrace: StackTrace.fromString(stack),
     );
-    final text = jsonEncode(record);
-    expect(text, contains('ScoreController.refresh'));
-    expect(text, contains('app.dart:24:1'));
-    expect(text, contains('main.dart:9:2'));
-    expect(text, isNot(contains('private-user')));
-    expect(text, isNot(contains('synthetic-secret')));
+    expect((record!['attrs'] as Map)['stack_trace'], stack);
+    expect(jsonEncode(record), isNot(contains('synthetic-secret')));
+
+    void expectStack(String content) {
+      final saved = const LineSplitter()
+          .convert(content)
+          .map((line) => jsonDecode(line) as Map<String, dynamic>)
+          .singleWhere((value) => value['scope'] == 'test.stack');
+      expect((saved['attrs'] as Map)['stack_trace'], stack);
+      expect(content, isNot(contains('synthetic-secret')));
+    }
+
+    for (var attempt = 0; attempt < 2; attempt++) {
+      expectStack((await AppLog.snapshot()).content);
+      expectStack(
+        await File('${temp.path}/nuist_sta_app/logs/app.log').readAsString(),
+      );
+    }
+    final exported = await AppLog.createExport({});
+    expectStack(await exported.readAsString());
   });
 
-  test('WARNING 输出有限堆栈并携带同一事件序号', () {
-    final original = debugPrint;
-    final messages = <String>[];
-    debugPrint = (message, {wrapWidth}) {
-      if (message != null) messages.add(message);
-    };
-    AppLog.consoleEnabledForTesting = true;
-    try {
-      AppLog.logger('test.warning').warning(
-        'failed',
-        error: StateError('synthetic'),
-        stackTrace: StackTrace.fromString(
-          '#0 main (package:nuist_sta_app/main.dart:9:2)',
-        ),
+  for (final level in [AppLogLevel.warning, AppLogLevel.error]) {
+    test('${level.name} 控制台保留全部堆栈帧并携带同一事件序号', () {
+      final original = debugPrint;
+      final messages = <String>[];
+      final frames = [
+        '#00 abs 000000007abc1234 _kDartIsolateSnapshotInstructions+0x1234',
+        for (var index = 0; index < 12; index++)
+          '#$index main (package:nuist_sta_app/main.dart:9:2)',
+        '<asynchronous suspension>',
+        '#12 _rootRun (dart:async/zone.dart:1525:13)',
+      ];
+      debugPrint = (message, {wrapWidth}) {
+        if (message != null) messages.add(message);
+      };
+      AppLog.consoleEnabledForTesting = true;
+      try {
+        final log = AppLog.logger('test.console_stack');
+        final write = level == AppLogLevel.warning ? log.warning : log.error;
+        write(
+          'failed',
+          error: StateError('synthetic'),
+          stackTrace: StackTrace.fromString(frames.join('\n')),
+        );
+      } finally {
+        debugPrint = original;
+      }
+      expect(messages, hasLength(1));
+      expect(messages.single, startsWith(level.name.toUpperCase()));
+      expect(
+        messages.single.split('\n').skip(1),
+        frames.map((frame) => '  ↳ #1 $frame'),
       );
-    } finally {
-      debugPrint = original;
-    }
-    expect(messages, hasLength(1));
-    expect(messages.single, contains('WARNING'));
-    expect(messages.single, contains('↳ #1'));
-    expect(messages.single, contains('main.dart:9:2'));
-  });
+    });
+  }
 
   test('全局 Flutter 异常仅进入统一清洗后的出口', () {
     final previous = FlutterError.onError;
@@ -553,7 +596,7 @@ void main() {
     expect(await exported.readAsString(), contains('after_recovery'));
   });
 
-  test('旧记录和导出元信息会重新清洗，保留安全 Trace', () async {
+  test('旧记录和导出元信息会重新清洗，保留 Trace 和原始堆栈', () async {
     final temp = await Directory.systemTemp.createTemp('log_migration_test_');
     addTearDown(() async {
       await AppLog.resetForTesting();
@@ -561,6 +604,10 @@ void main() {
     });
     final logs = Directory('${temp.path}/nuist_sta_app/logs');
     await logs.create(recursive: true);
+    const stack =
+        '#00 abs 000000007abc1234 _kDartIsolateSnapshotInstructions+0x1234\n'
+        '#01 List.[] (dart:core-patch/growable_array.dart:264:36)\n'
+        '<asynchronous suspension>\n';
     await File('${logs.path}/app.log').writeAsString(
       '${jsonEncode({
         'ts': DateTime.now().toUtc().toIso8601String(),
@@ -571,12 +618,22 @@ void main() {
         'session_id': 'a' * 16,
         'trace_id': 'b' * 32,
         'span_id': 'c' * 16,
-        'attrs': {'detail': 'synthetic-private', 'reference': 202512340001, 'duration_ms': 42},
+        'attrs': {'detail': 'synthetic-private', 'reference': 202512340001, 'duration_ms': 42, 'stack_trace': stack},
         'request_body': 'synthetic-private',
       })}\n',
     );
     await AppLog.initialize(directory: temp);
+    void expectStack(String content) {
+      final record = const LineSplitter()
+          .convert(content)
+          .map((line) => jsonDecode(line) as Map<String, dynamic>)
+          .singleWhere((value) => value['scope'] == 'test.legacy');
+      expect((record['attrs'] as Map)['stack_trace'], stack);
+    }
+
+    expectStack(await File('${logs.path}/app.log').readAsString());
     final snapshot = await AppLog.snapshot();
+    expectStack(snapshot.content);
     expect(snapshot.content, contains('b' * 32));
     expect(snapshot.content, contains('duration_ms'));
     expect(snapshot.content, isNot(contains('synthetic-private')));
@@ -591,6 +648,7 @@ void main() {
       'cookie': 'synthetic-private',
     });
     final content = await file.readAsString();
+    expectStack(content);
     expect(content, isNot(contains('synthetic-private')));
     final metadata = jsonDecode(content.split('\n').first) as Map;
     expect(metadata['app_version'], '0.2.5');

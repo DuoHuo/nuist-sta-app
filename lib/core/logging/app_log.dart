@@ -358,7 +358,8 @@ class AppLog {
         'error_kind': ?errorKind,
       });
       if (stackTrace != null) {
-        attrs['stack_trace'] = _sanitizeStack(stackTrace);
+        // 原样保留堆栈，避免丢失 AOT、原生帧和完整的代码定位信息。
+        attrs['stack_trace'] = stackTrace.toString();
       }
       final record = <String, Object?>{
         'ts': now.toIso8601String(),
@@ -384,16 +385,10 @@ class AppLog {
         );
         final stack = attrs['stack_trace'] as String?;
         final frames = stack == null ? const <String>[] : stack.split('\n');
-        final preferred = frames
-            .where((line) => line.contains('package:nuist_sta_app/'))
-            .toList();
-        final visibleFrames = (preferred.isEmpty ? frames : preferred).take(
-          level.index >= AppLogLevel.error.index ? 8 : 3,
-        );
         final message = [
           summary,
           if (level.index >= AppLogLevel.warning.index)
-            for (final frame in visibleFrames) '  ↳ #${record['seq']} $frame',
+            for (final frame in frames) '  ↳ #${record['seq']} $frame',
         ].join('\n');
         _emitConsole(message, level, record, stack);
       }
@@ -946,9 +941,7 @@ class AppLog {
       originalAttrs is Map<String, dynamic> ? originalAttrs : null,
     );
     if (originalAttrs is Map && originalAttrs['stack_trace'] is String) {
-      attrs['stack_trace'] = _sanitizeStack(
-        StackTrace.fromString(originalAttrs['stack_trace'] as String),
-      );
+      attrs['stack_trace'] = originalAttrs['stack_trace'];
     }
     bool validId(Object? id, int length) =>
         id is String && RegExp('^[a-f0-9]{$length}\$').hasMatch(id);
@@ -1457,39 +1450,6 @@ class AppLog {
     );
     value = value.replaceAll(RegExp(r'[\r\n\t]+'), ' ').trim();
     return value.length <= 256 ? value : '${value.substring(0, 253)}...';
-  }
-
-  static String _sanitizeStack(StackTrace stackTrace) {
-    final lines = stackTrace.toString().split('\n').take(20);
-    final value = lines
-        .map((line) {
-          if (line.trim() == '<asynchronous suspension>') {
-            return '<asynchronous suspension>';
-          }
-          final frame = RegExp(r'^#(\d+)\s+(.+?)(?:\s+\((.+):(\d+):(\d+)\))?$')
-              .firstMatch(line.trim());
-          if (frame == null) return '[省略无法安全解析的堆栈帧]';
-          final method = frame.group(2)!;
-          if (!RegExp(r'^[A-Za-z0-9_$ .<>-]+$').hasMatch(method)) {
-            return '#${frame.group(1)} [省略无法安全解析的方法]';
-          }
-          final location = frame.group(3);
-          if (location == null) return '#${frame.group(1)} $method';
-          String? safeLocation;
-          if (RegExp(r'^(?:package:[a-z0-9_]+/|dart:)[A-Za-z0-9_./-]+\.dart$')
-              .hasMatch(location)) {
-            safeLocation = location;
-          } else {
-            final filename = location.replaceAll('\\', '/').split('/').last;
-            if (RegExp(r'^[A-Za-z0-9_-]+\.dart$').hasMatch(filename)) {
-              safeLocation = filename;
-            }
-          }
-          return '#${frame.group(1)} $method '
-              '(${safeLocation ?? '[外部代码]'}:${frame.group(4)}:${frame.group(5)})';
-        })
-        .join('\n');
-    return value.length <= 2048 ? value : value.substring(0, 2048);
   }
 
   @visibleForTesting
