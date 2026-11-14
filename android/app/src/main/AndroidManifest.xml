@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:launcher="http://schemas.android.com/apk/res/android">
     <!-- H5 小程序（WebView）联网；debug 模板自带，release 必须显式声明 -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- 校园地图 GPS 定位 -->
@@ -33,6 +34,7 @@
                 <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"/>
             </intent-filter>
         </receiver>
+        <!-- 通知、小组件和更新等显式入口始终指向 MainActivity；桌面启动入口由下面的 alias 提供。 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -50,11 +52,51 @@
               android:resource="@style/NormalTheme"
               />
             <meta-data android:name="flutter_deeplinking_enabled" android:value="false"/>
+        </activity>
+        <!-- 三种可选桌面图标。class 名固定使用 namespace，debug 包的 ComponentName 包名由原生代码从 packageName 读取。
+             launcher 与 android 指向相同的 Android 命名空间；非默认图标使用 launcher:icon，
+             避免 flutter_launcher_icons 重新生成默认图标时批量替换所有 android:icon。 -->
+        <activity-alias
+            android:name="dev.duohuo.nuist_sta_app.DefaultIcon"
+            android:targetActivity="dev.duohuo.nuist_sta_app.MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher"
+            android:label="NUIST++">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-        </activity>
+        </activity-alias>
+        <activity-alias
+            android:name="dev.duohuo.nuist_sta_app.MascotIcon"
+            android:targetActivity="dev.duohuo.nuist_sta_app.MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            launcher:icon="@mipmap/ic_launcher_mascot"
+            android:roundIcon="@mipmap/ic_launcher_mascot"
+            android:label="NUIST++">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="dev.duohuo.nuist_sta_app.MascotColorIcon"
+            android:targetActivity="dev.duohuo.nuist_sta_app.MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            launcher:icon="@mipmap/ic_launcher_mascot_color"
+            android:roundIcon="@mipmap/ic_launcher_mascot_color"
+            android:label="NUIST++">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <!-- 自定义桌面快捷方式的固定回调；只由应用自身 PendingIntent 触发。 -->
+        <receiver android:name=".AppIconShortcutReceiver" android:exported="false"/>
         <!-- 课表上课提醒 -->
         <receiver android:name=".ReminderReceiver" android:exported="false"/>
         <receiver android:name=".NotifySystemEventReceiver" android:exported="false">
@@ -103,6 +145,16 @@
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <queries>
+        <!-- 系统照片选择器和文档选择器需要可见，才能判断图片选择入口是否可用。 -->
+        <intent>
+            <action android:name="android.provider.action.PICK_IMAGES"/>
+            <data android:mimeType="image/*"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.OPEN_DOCUMENT"/>
+            <category android:name="android.intent.category.OPENABLE"/>
+            <data android:mimeType="image/*"/>
+        </intent>
         <!-- 小组件添加按当前默认桌面分流，避免第三方桌面被手机品牌限制。 -->
         <intent>
             <action android:name="android.intent.action.MAIN"/>

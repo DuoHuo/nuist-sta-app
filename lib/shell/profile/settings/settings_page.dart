@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../core/app_snack_bar.dart';
@@ -13,10 +14,14 @@ import '../../../core/logging/app_log.dart';
 import '../../../core/logging/log_export_service.dart';
 import '../../../core/logging/log_store.dart';
 import '../../../core/theme_mode.dart';
+import 'app_icon_controller.dart';
 
-/// App 级设置页：外观模式，以及本地诊断日志的导出、详细模式与清理。
+/// App 级设置页：外观模式、应用图标，以及本地诊断日志的导出、详细模式与清理。
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key});
+  const SettingsPage({super.key, this.showAppIconEntry});
+
+  /// 应用图标入口的可见性；为空时仅在 Android 显示。
+  final bool? showAppIconEntry;
 
   static const themeModeLabels = {
     ThemeMode.system: '跟随系统',
@@ -28,6 +33,9 @@ class SettingsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     final modes = themeModeLabels.entries.toList();
+    final showAppIcon =
+        showAppIconEntry ??
+        (!kIsWeb && defaultTargetPlatform == TargetPlatform.android);
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
       body: ListView(
@@ -70,6 +78,19 @@ class SettingsPage extends StatelessWidget {
               style: TextStyle(color: palette.labelText, fontSize: 12),
             ),
           ),
+          if (showAppIcon) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 20, 4, 6),
+              child: Semantics(
+                header: true,
+                child: Text(
+                  '应用图标',
+                  style: TextStyle(color: palette.labelText, fontSize: 13),
+                ),
+              ),
+            ),
+            const _AppIconEntry(),
+          ],
           ValueListenableBuilder<bool>(
             valueListenable: AppLog.diagnosticsVisible,
             builder: (context, visible, _) => visible
@@ -80,6 +101,112 @@ class SettingsPage extends StatelessWidget {
                 : const SizedBox.shrink(),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 设置页里的应用图标入口：展示当前图标，点击进入选择页。
+class _AppIconEntry extends StatefulWidget {
+  const _AppIconEntry();
+
+  @override
+  State<_AppIconEntry> createState() => _AppIconEntryState();
+}
+
+class _AppIconEntryState extends State<_AppIconEntry>
+    with WidgetsBindingObserver {
+  late final AppIconController _controller = AppIconController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_controller.ensureStarted());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_controller.refresh());
+    }
+  }
+
+  Future<void> _open() async {
+    await context.push('/settings/app-icon');
+    if (mounted) await _controller.refresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return Material(
+      color: palette.surface,
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: ListenableBuilder(
+        listenable: _controller,
+        builder: (context, _) {
+          final choice = _controller.state.choice;
+          return InkWell(
+            key: const Key('settings_app_icon'),
+            onTap: _open,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(11),
+                    child: Image.asset(
+                      choice.assetPath,
+                      width: 44,
+                      height: 44,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => Container(
+                        width: 44,
+                        height: 44,
+                        color: palette.pageBg,
+                        child: Icon(Icons.apps_rounded, color: palette.hint),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '应用图标',
+                          style: TextStyle(
+                            color: palette.titleText,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          '当前：${choice.label}',
+                          style: TextStyle(
+                            color: palette.labelText,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, color: palette.chevron),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }

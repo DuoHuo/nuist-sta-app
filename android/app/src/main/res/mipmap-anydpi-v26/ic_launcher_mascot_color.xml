@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 背景与底部黑条铺满整个图层；由桌面统一裁切圆角，避免内嵌方图露边。 -->
+    <background android:drawable="@drawable/ic_launcher_mascot_color_background" />
+    <!-- 文字独立置于安全区，圆形和大圆角遮罩下仍完整可见。 -->
+    <foreground android:drawable="@drawable/ic_launcher_mascot_color_foreground" />
+</adaptive-icon>
