@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../core/app_snack_bar.dart';
@@ -185,8 +186,9 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
         builder: (dialogContext) => AlertDialog(
           title: const Text('导出诊断日志'),
           content: const Text(
-            '日志会自动过滤账号、凭据、Cookie 和业务内容，只包含运行状态与错误类别。'
-            '请仍然确认分享对象可信。',
+            '诊断文件包含完整请求与响应内容、错误原因和调用堆栈。文本会遮蔽可识别的凭据和个人信息；'
+            '二进制附件保留原文件，无法自动检查其中的所有内容。'
+            '分享前请检查内容，并确认接收方可信。',
           ),
           actions: [
             TextButton(
@@ -262,7 +264,8 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
       await AppLog.clear();
       await _loadStats();
       if (mounted) _message('诊断日志已清除');
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning('clear.failed', error: error, stackTrace: stackTrace);
       if (mounted) _message('部分日志未能清除，请稍后重试');
     } finally {
       if (mounted) {
@@ -299,10 +302,8 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
     final until = AppLog.verboseExpiresAt.value;
     final remaining = until?.difference(DateTime.now().toUtc());
     final mode = !verbose
-        ? '标准模式 · 记录运行结果和错误'
-        : kDebugMode
-        ? '详细模式 · 调试构建默认开启'
-        : '详细模式 · 剩余 ${((remaining?.inSeconds ?? 0).clamp(0, 1800) / 60).ceil()} 分钟';
+        ? '标准模式 · 关键步骤摘要，完整详情已保存'
+        : '详细控制台 · 剩余 ${((remaining?.inSeconds ?? 0).clamp(0, 1800) / 60).ceil()} 分钟';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -335,7 +336,7 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
                       ? '部分文件不可读，其余日志仍可查看和导出'
                       : detail,
                 ),
-                trailing: verbose && !kDebugMode
+                trailing: verbose
                     ? TextButton(
                         onPressed: _working ? null : AppLog.disableVerbose,
                         child: const Text('关闭'),
@@ -415,6 +416,16 @@ List<Map<String, Object?>> _parseLogPreview(String content) {
       // 损坏的单行跳过，不影响其他诊断事件。
     }
   }
+  final times = <Map<String, Object?>, int>{
+    for (final record in records)
+      record: DateTime.tryParse('${record['ts']}')?.microsecondsSinceEpoch ?? 0,
+  };
+  records.sort((a, b) {
+    final time = times[b]!.compareTo(times[a]!);
+    return time != 0
+        ? time
+        : ((b['seq'] as int?) ?? 0).compareTo((a['seq'] as int?) ?? 0);
+  });
   return records;
 }
 
@@ -431,6 +442,8 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
   static final _log = AppLog.logger('app.logging');
   String _level = 'results';
   String? _scope;
+  String? _trace;
+  final _expanded = <String>{};
   late List<Map<String, Object?>> _records = widget.records;
   late LogStoreStats _stats = widget.stats;
   late List<String> _scopes = _collectScopes(_records);
@@ -473,7 +486,11 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
+    final relatedTraces = _trace == null
+        ? const <String>{}
+        : AppLog.relatedTraceIds(_records, _trace!);
     final matching = _records.where((r) {
+      if (_trace != null) return relatedTraces.contains(r['trace_id']);
       if (_scope != null && r['scope'] != _scope) return false;
       return switch (_level) {
         'results' => r['level'] != 'DEBUG',
@@ -483,7 +500,7 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
       };
     });
     final count = matching.length;
-    final records = matching.take(300).toList();
+    final records = (_trace == null ? matching.take(300) : matching).toList();
     return Scaffold(
       appBar: AppBar(
         title: const Text('诊断日志'),
@@ -509,6 +526,14 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
                       '匹配 $count 条 · 显示最近 ${records.length} 条',
                       style: TextStyle(color: palette.labelText),
                     ),
+                    if (_trace != null)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: InputChip(
+                          label: const Text('当前操作及关联阶段'),
+                          onDeleted: () => setState(() => _trace = null),
+                        ),
+                      ),
                     const SizedBox(height: 8),
                     Text(
                       '最新记录在前，时间已转换为本地时间',
@@ -577,10 +602,18 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
                   final time = at == null ? '' : _formatLogTime(at);
                   final attrs = record['attrs'] as Map?;
                   final stack = attrs?['stack_trace'] as String?;
+                  final identity =
+                      '${record['session_id']}:${record['seq']}:${record['ts']}';
                   return ExpansionTile(
-                    key: PageStorageKey(
-                      '${record['session_id']}:${record['seq']}:${record['ts']}',
-                    ),
+                    key: PageStorageKey(identity),
+                    initiallyExpanded: _expanded.contains(identity),
+                    onExpansionChanged: (expanded) => setState(() {
+                      if (expanded) {
+                        _expanded.add(identity);
+                      } else {
+                        _expanded.remove(identity);
+                      }
+                    }),
                     title: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -614,34 +647,30 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
                     childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                     expandedCrossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      SelectableText(
-                        AppLog.formatDetails(record),
-                        key: PageStorageKey(
-                          '${record['session_id']}:${record['seq']}:summary',
-                        ),
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 12,
-                          height: 1.5,
-                          color: palette.titleText,
-                        ),
-                      ),
-                      if (stack != null) ...[
-                        const SizedBox(height: 12),
-                        const Text('调用堆栈'),
-                        const SizedBox(height: 4),
-                        SelectableText(
-                          stack,
+                      if (_expanded.contains(identity)) ...[
+                        if (record['trace_id'] case final String trace)
+                          TextButton.icon(
+                            onPressed: () => setState(() => _trace = trace),
+                            icon: const Icon(Icons.account_tree_outlined),
+                            label: const Text('查看关联操作'),
+                          ),
+                        _LogDetailText(
+                          AppLog.formatDetails(record),
                           key: PageStorageKey(
-                            '${record['session_id']}:${record['seq']}:stack',
-                          ),
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                            height: 1.5,
-                            color: palette.titleText,
+                            '${record['session_id']}:${record['seq']}:summary',
                           ),
                         ),
+                        if (stack != null) ...[
+                          const SizedBox(height: 12),
+                          const Text('调用堆栈'),
+                          const SizedBox(height: 4),
+                          _LogDetailText(
+                            stack,
+                            key: PageStorageKey(
+                              '${record['session_id']}:${record['seq']}:stack',
+                            ),
+                          ),
+                        ],
                       ],
                     ],
                   );
@@ -658,6 +687,58 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
     return '${at.year}-${two(at.month)}-${two(at.day)} '
         '${two(at.hour)}:${two(at.minute)}:${two(at.second)}.'
         '${at.millisecond.toString().padLeft(3, '0')}';
+  }
+}
+
+/// 大正文逐步展开以控制布局开销，复制和导出始终使用完整内容。
+class _LogDetailText extends StatefulWidget {
+  const _LogDetailText(this.text, {super.key});
+  final String text;
+
+  @override
+  State<_LogDetailText> createState() => _LogDetailTextState();
+}
+
+class _LogDetailTextState extends State<_LogDetailText> {
+  int _visibleCharacters = 12000;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    final complete = widget.text.length <= _visibleCharacters;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SelectableText(
+          complete ? widget.text : widget.text.substring(0, _visibleCharacters),
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 12,
+            height: 1.5,
+            color: palette.titleText,
+          ),
+        ),
+        if (!complete) ...[
+          Text(
+            '已显示 $_visibleCharacters / ${widget.text.length} 字符，完整内容已保存',
+            style: TextStyle(color: palette.labelText),
+          ),
+          Wrap(
+            children: [
+              TextButton(
+                onPressed: () => setState(() => _visibleCharacters += 12000),
+                child: const Text('继续展开'),
+              ),
+              TextButton(
+                onPressed: () =>
+                    Clipboard.setData(ClipboardData(text: widget.text)),
+                child: const Text('复制完整内容'),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
   }
 }
 

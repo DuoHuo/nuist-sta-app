@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' show Color;
 
+import '../../core/logging/app_log.dart';
 import 'timetable_controller.dart';
 import 'timetable_course_color.dart';
 import 'timetable_models.dart';
@@ -334,7 +335,14 @@ class TimetableNotifyService {
     try {
       final plan = currentPlan();
       await _bridge.scheduleReminders([for (final a in plan) a.toJson()]);
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      AppLog.logger('timetable.notify').warning(
+        'reminders.schedule_failed',
+        fields: {'stage': 'reminder.schedule', 'outcome': 'degraded'},
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
     await refreshWidget();
   }
 
@@ -342,6 +350,13 @@ class TimetableNotifyService {
   Future<void> refreshWidget() async {
     try {
       await _bridge.updateWidget(currentWidgetPayload());
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      AppLog.logger('timetable.notify').warning(
+        'widget.refresh_failed',
+        fields: {'stage': 'widget.update', 'outcome': 'degraded'},
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 }

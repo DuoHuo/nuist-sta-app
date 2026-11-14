@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/logging/app_log.dart';
 import 'campus_map_photos.dart';
 import 'campus_map_widgets.dart';
 
@@ -25,6 +26,7 @@ class CampusPhotoGalleryPage extends StatefulWidget {
 }
 
 class _CampusPhotoGalleryPageState extends State<CampusPhotoGalleryPage> {
+  static final _log = AppLog.logger('campus_map.photos');
   MapPalette get colors => MapPalette.of(context);
 
   late List<CampusPhoto> _photos = widget.initialPhotos;
@@ -48,7 +50,11 @@ class _CampusPhotoGalleryPageState extends State<CampusPhotoGalleryPage> {
       _error = null;
     });
     try {
-      final photos = await source.loadBuildingPhotos(widget.buildingId);
+      final photos = await _log.operation(
+        'photos.load',
+        () => source.loadBuildingPhotos(widget.buildingId),
+        resultFields: (items) => {'count': items.length},
+      );
       if (!mounted) return;
       setState(() {
         _photos = photos;

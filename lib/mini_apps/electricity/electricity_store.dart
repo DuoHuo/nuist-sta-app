@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/logging/app_log.dart';
+import '../../core/refresh/silent_refresh.dart';
 import 'electricity_models.dart';
 
 /// 电费小程序的本地存储：绑定的宿舍 + 历史电量，都是普通 JSON 文件，放在应用
@@ -28,10 +29,15 @@ class ElectricityStore {
       final dir = Directory('${base.path}${Platform.pathSeparator}electricity');
       if (!await dir.exists()) await dir.create(recursive: true);
       return dir;
-    } catch (error) {
-      _log.debug(
+    } catch (error, stackTrace) {
+      _log.warning(
         'storage.unavailable',
-        fields: {'error_type': error.runtimeType.toString()},
+        error: error,
+        stackTrace: stackTrace,
+        fields: {
+          'reason_code': 'electricity_storage_unavailable',
+          'outcome': 'memory_fallback',
+        },
       );
       // widget 测试等没有平台通道的环境，退化成「没有存储」。
       return null;
@@ -45,31 +51,49 @@ class ElectricityStore {
         : File('${dir.path}${Platform.pathSeparator}$name');
   }
 
-  static Future<Map<String, dynamic>> _readJson(String name) => _log.inSpan(
-    () async {
-      final file = await _file(name);
-      if (file == null || !await file.exists()) return {};
-      try {
-        final decoded = jsonDecode(await file.readAsString());
-        return decoded is Map<String, dynamic> ? decoded : {};
-      } catch (error, stackTrace) {
-        _log.warning('cache.read_failed', error: error, stackTrace: stackTrace);
-        return {};
-      }
-    },
-  );
+  static Future<Map<String, dynamic>> _readJson(String name) =>
+      _log.inSpan(() async {
+        try {
+          final file = await _file(name);
+          if (file == null || !await file.exists()) return {};
+          final decoded = jsonDecode(await file.readAsString());
+          if (decoded is Map<String, dynamic>) return decoded;
+          _log.warning(
+            'cache.schema_invalid',
+            fields: {
+              'file_kind': name,
+              'reason_code': 'cache_root_not_object',
+              'outcome': 'cache_fallback',
+            },
+          );
+          return {};
+        } catch (error, stackTrace) {
+          _log.warning(
+            'cache.read_failed',
+            error: error,
+            stackTrace: stackTrace,
+            fields: {'file_kind': name, 'outcome': 'cache_fallback'},
+          );
+          return {};
+        }
+      });
 
   static Future<void> _writeJson(String name, Map<String, dynamic> data) =>
       _log.inSpan(() async {
         final file = await _file(name);
-        if (file == null) return;
+        if (file == null) {
+          SilentRefresh.degradeCurrent(reason: 'storage_unavailable');
+          return;
+        }
         try {
           await file.writeAsString(jsonEncode(data), flush: true);
         } catch (error, stackTrace) {
+          SilentRefresh.degradeCurrent(reason: 'cache_write_failed');
           _log.warning(
             'cache.write_failed',
             error: error,
             stackTrace: stackTrace,
+            fields: {'file_kind': name, 'outcome': 'memory_fallback'},
           );
         }
       });

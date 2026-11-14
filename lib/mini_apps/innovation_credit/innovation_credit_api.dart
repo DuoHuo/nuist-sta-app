@@ -7,6 +7,7 @@ import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/html_table.dart';
+import '../../core/logging/diagnostic_error.dart';
 import 'innovation_credit_models.dart';
 import '../../core/auth/safe_message.dart';
 
@@ -51,12 +52,28 @@ class InnovationCreditApi {
       await _login(session);
       summary = await _table(session.http, _summaryPage, _summaryTable);
       if (summary == null) {
-        throw const PortalLoginError('登录后仍打不开双创学分汇总页，请稍后再试');
+        throw const PortalLoginError(
+          '登录后仍打不开双创学分汇总页，请稍后再试',
+          code: 'session_unavailable_after_relogin',
+          stage: 'response.validate',
+          context: {
+            'endpoint': 'innovation_credit.summary',
+            'service': 'innovation',
+          },
+        );
       }
     }
     final detail = await _table(session.http, _detailPage, _detailTable);
     if (detail == null) {
-      throw const PortalLoginError('双创学分明细页未返回表格，请稍后再试');
+      throw const PortalLoginError(
+        '双创学分明细页未返回表格，请稍后再试',
+        code: 'login_page_returned',
+        stage: 'response.validate',
+        context: {
+          'endpoint': 'innovation_credit.detail',
+          'service': 'innovation',
+        },
+      );
     }
     return InnovationCredit.fromRows(
       summary: summary,
@@ -79,7 +96,25 @@ class InnovationCreditApi {
         headers: {'Accept': 'text/html,application/xhtml+xml'},
       ),
     );
-    return parseHtmlTable('${response.data}', tableId);
+    final body = '${response.data ?? ''}';
+    final rows = parseHtmlTable(body, tableId);
+    if (rows != null) return rows;
+    if (response.realUri.path.toLowerCase().contains('login') ||
+        body.contains('authserver/login') ||
+        body.contains('/AuthServer/Login')) {
+      return null;
+    }
+    throw DiagnosticException(
+      '双创学分页面缺少目标表格',
+      code: 'response_table_missing',
+      stage: 'response.parse',
+      context: {
+        'endpoint': identical(page, _summaryPage)
+            ? 'innovation_credit.summary'
+            : 'innovation_credit.detail',
+        'service': 'innovation',
+      },
+    );
   }
 
   static Future<void> _login(PortalSession session) async {
@@ -99,7 +134,15 @@ class InnovationCreditApi {
         'authentication.verification_missing',
         fields: {'service': 'innovation'},
       );
-      throw const PortalLoginError('创新创业平台登录失败，请稍后重试');
+      throw const PortalLoginError(
+        '创新创业平台登录失败，请稍后重试',
+        code: 'verification_token_missing',
+        stage: 'innovation.complete_login',
+        context: {
+          'endpoint': 'innovation_credit.landing',
+          'service': 'innovation',
+        },
+      );
     }
     final done = await http.post(
       _completeLogin,
@@ -125,6 +168,12 @@ class InnovationCreditApi {
           result?['Message'],
           fallback: '创新创业平台登录失败，请稍后重试',
         ),
+        code: 'authentication_incomplete',
+        stage: 'innovation.complete_login',
+        context: {
+          'endpoint': 'innovation_credit.complete_login',
+          'service': 'innovation',
+        },
       );
     }
     // 页面 JS 会跳到 Data.RedirectUrl（相对平台根，如 /System/User/LoginRole），
@@ -144,6 +193,13 @@ class InnovationCreditApi {
         location.isEmpty) {
       throw PortalLoginError(
         'AccessSubsystem 未跳转到学分子系统（HTTP ${hop.statusCode}）',
+        code: 'subsystem_redirect_missing',
+        stage: 'innovation.exchange_session',
+        context: {
+          'endpoint': 'innovation_credit.access_subsystem',
+          'service': 'innovation',
+          'status_code': hop.statusCode,
+        },
       );
     }
     final access = await http.get(

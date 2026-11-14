@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:pointycastle/digests/sha256.dart';
 
+import '../../core/logging/app_log.dart';
 import 'timetable_models.dart';
 import 'timetable_store.dart';
 import 'timetable_week_format.dart';
@@ -574,6 +575,7 @@ class _PairResult {
 /// 原子写；`try/catch` 失败时退化为无存储。
 class TimetableChangeLogStore {
   TimetableChangeLogStore._();
+  static final _log = AppLog.logger('timetable.change_store');
 
   static const fileName = 'sync_changes.json';
   static const schemaVersion = 1;
@@ -602,7 +604,13 @@ class TimetableChangeLogStore {
               for (final e in item.entries) '${e.key}': e.value,
             }),
       ];
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning(
+        'changes.read_failed',
+        fields: {'file_kind': fileName, 'outcome': 'cache_fallback'},
+        error: error,
+        stackTrace: stackTrace,
+      );
       try {
         var target = File('${file.path}.corrupt');
         if (await target.exists()) {
@@ -611,7 +619,14 @@ class TimetableChangeLogStore {
           );
         }
         await file.rename(target.path);
-      } catch (_) {}
+      } catch (error, stackTrace) {
+        _log.warning(
+          'changes.backup_failed',
+          fields: {'file_kind': fileName},
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
       return const [];
     }
   }
@@ -634,14 +649,29 @@ class TimetableChangeLogStore {
           } else if (decoded is Map) {
             raw = {for (final e in decoded.entries) '${e.key}': e.value};
           }
-        } catch (_) {}
+        } catch (error, stackTrace) {
+          _log.warning(
+            'changes.merge_read_failed',
+            fields: {'file_kind': fileName},
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
       }
       raw['schemaVersion'] = schemaVersion;
       raw['changes'] = [for (final c in changes) c.toJson()];
       final tmp = File('${file.path}.tmp');
       await tmp.writeAsString(jsonEncode(raw), flush: true);
       await tmp.rename(file.path);
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      AppLog.reportOutcome('degraded', reason: 'change_history_write_failed');
+      _log.warning(
+        'changes.write_failed',
+        fields: {'file_kind': fileName, 'outcome': 'degraded'},
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   /// 按 fingerprint upsert：已存在且 notified=true → 保持 notified，不进入 toNotify；
@@ -719,6 +749,13 @@ class TimetableChangeLogStore {
     if (file == null) return;
     try {
       if (await file.exists()) await file.delete();
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      _log.warning(
+        'changes.clear_failed',
+        fields: {'file_kind': fileName},
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 }

@@ -39,7 +39,7 @@ object NextDayReminder {
     )
 
     /** 原子替换所有日期文案，关闭/解绑时立即删除文案并取消闹钟。 */
-    fun update(context: Context, args: Map<*, *>): Boolean {
+    fun update(context: Context, args: Map<*, *>, diagnostics: MutableList<Map<String, Any?>> = mutableListOf()): Boolean {
         val minute = (args["minuteOfDay"] as? Number)?.toInt() ?: 1320
         val enabled = args["enabled"] == true
         val payloads = if (enabled) args["payloads"] as? Map<*, *> ?: emptyMap<Any, Any>()
@@ -50,12 +50,12 @@ object NextDayReminder {
             .putString("payloads", JSONObject(payloads).toString())
             // lastEveNotifyDate 独立保留，开关反复切换/改时间不会在当天重复推送。
             .commit()
-        if (saved) reschedule(context)
+        if (saved) reschedule(context, diagnostics)
         return saved
     }
 
     /** 只排下一次本机时间闹钟；系统广播、App 更新和每次闹钟后都会重排。 */
-    fun reschedule(context: Context) {
+    fun reschedule(context: Context, diagnostics: MutableList<Map<String, Any?>> = mutableListOf()) {
         val alarms = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val pending = alarmIntent(context)
         alarms.cancel(pending)
@@ -74,7 +74,7 @@ object NextDayReminder {
         }
         if (now.timeInMillis >= target.timeInMillis) {
             // 最晚当日 23:59:59；跨午夜只取新一天的文案，绝不补昨天。
-            notifyToday(context, now)
+            notifyToday(context, now, diagnostics)
             target.add(Calendar.DAY_OF_MONTH, 1)
         }
         try {
@@ -82,12 +82,15 @@ object NextDayReminder {
                 alarms.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, target.timeInMillis, pending)
                 return
             }
-        } catch (_: RuntimeException) {
+            diagnostics.add(mapOf("reason_code" to "exact_alarm_permission_unavailable", "stage" to "next_day.schedule"))
+        } catch (error: RuntimeException) {
+            diagnostics.add(notifyFailureDetails(error, "next_day.schedule") + ("reason_code" to "exact_alarm_failed"))
             // 权限被撤销等情况退回非精确闹钟，不要求用户跳系统设置。
         }
         try {
             alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, target.timeInMillis, pending)
-        } catch (_: RuntimeException) {
+        } catch (error: RuntimeException) {
+            diagnostics.add(notifyFailureDetails(error, "next_day.schedule") + ("reason_code" to "alarm_schedule_failed"))
             // 系统调度服务暂不可用时等待下次启动/系统广播重试。
         }
     }
@@ -101,13 +104,16 @@ object NextDayReminder {
         }
     }
 
-    private fun notifyToday(context: Context, now: Calendar) {
+    private fun notifyToday(context: Context, now: Calendar, diagnostics: MutableList<Map<String, Any?>>) {
         val stored = prefs(context)
         val day = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(now.time)
         if (stored.getString("lastEveNotifyDate", null) == day) return
         val payload = try {
             JSONObject(stored.getString("payloads", "{}") ?: "{}").optJSONObject(day)
-        } catch (_: Exception) { null } ?: return
+        } catch (error: Exception) {
+            diagnostics.add(notifyFailureDetails(error, "next_day.decode") + ("reason_code" to "reminder_cache_invalid_json"))
+            null
+        } ?: return
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -149,7 +155,8 @@ object NextDayReminder {
         if (!stored.edit().putString("lastEveNotifyDate", day).commit()) return
         try {
             manager.notify(NOTIFICATION_ID, notification)
-        } catch (_: SecurityException) {
+        } catch (error: SecurityException) {
+            diagnostics.add(notifyFailureDetails(error, "next_day.notify") + ("reason_code" to "notification_permission_revoked"))
             // 恰在发送时撤销权限：恢复标记，重新授权后当晚仍可补推。
             stored.edit().remove("lastEveNotifyDate").commit()
         }
@@ -159,6 +166,10 @@ object NextDayReminder {
 /** 闹钟、开机、校时、时区变化和升级后恢复下一次本地调度。 */
 class NextDayReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        NextDayReminder.reschedule(context)
+        val diagnostics = mutableListOf<Map<String, Any?>>()
+        try { NextDayReminder.reschedule(context, diagnostics) } catch (error: Exception) {
+            diagnostics.add(notifyFailureDetails(error, "next_day.dispatch") + ("reason_code" to "next_day_dispatch_failed"))
+        }
+        NativeBackgroundDiagnostics.enqueue(context, diagnostics)
     }
 }

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -67,6 +68,57 @@ void main() {
         });
         expect(await bridge.pinWidget(square: true), result);
       }
+    });
+
+    test('原生失败保留方法与原因，且不记录小组件正文', () async {
+      final records = <Map<String, Object?>>[];
+      AppLog.recordListenerForTesting = records.add;
+      addTearDown(() => AppLog.recordListenerForTesting = null);
+      messenger.setMockMethodCallHandler(channel, (_) async {
+        throw PlatformException(
+          code: 'widget_update_failed',
+          details: {
+            'native_type': 'java.lang.IllegalStateException',
+            'message': '合成小组件更新失败',
+            'stack': 'SyntheticWidget.update(SyntheticWidget.kt:42)',
+            'causes': [
+              {'type': 'java.io.IOException', 'message': '合成底层写入失败'},
+            ],
+          },
+        );
+      });
+      await bridge.updateWidget({'title': '合成课程隐私文本'});
+      final failed = records.singleWhere((r) => r['event'] == 'native.failed');
+      expect((failed['attrs'] as Map)['endpoint'], 'notify.updateWidget');
+      expect((failed['attrs'] as Map)['error_type'], 'PlatformException');
+      expect(jsonEncode(records), isNot(contains('合成课程隐私文本')));
+      expect(jsonEncode(records), contains('java.lang.IllegalStateException'));
+      expect(jsonEncode(records), contains('SyntheticWidget.kt:42'));
+      expect(jsonEncode(records), contains('合成底层写入失败'));
+    });
+
+    test('原生调度降级通过现有回执保留原因和异常栈', () async {
+      final records = <Map<String, Object?>>[];
+      AppLog.recordListenerForTesting = records.add;
+      addTearDown(() => AppLog.recordListenerForTesting = null);
+      messenger.setMockMethodCallHandler(
+        channel,
+        (_) async => {
+          'scheduled_count': 1,
+          'diagnostics': [
+            {
+              'reason_code': 'exact_alarm_permission_revoked',
+              'stage': 'reminder.schedule',
+              'native_type': 'java.lang.SecurityException',
+              'stack': 'SyntheticAlarm.schedule(SyntheticAlarm.kt:10)',
+            },
+          ],
+        },
+      );
+      await bridge.scheduleReminders([]);
+      final event = records.singleWhere((r) => r['event'] == 'native.degraded');
+      expect(event.toString(), contains('exact_alarm_permission_revoked'));
+      expect(event.toString(), contains('SyntheticAlarm.kt:10'));
     });
 
     test('未知结果、通道缺失或平台错误退化为通用手动指引', () async {

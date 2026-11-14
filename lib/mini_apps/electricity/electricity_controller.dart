@@ -92,7 +92,9 @@ class ElectricityController extends ChangeNotifier {
   Future<void> _start() async {
     await _ensureLocalLoaded();
     // 绑定事件自己负责刷新，首次挂载不再重复请求。
-    if (_bindingRevision == 0) await refresh();
+    if (_bindingRevision == 0) {
+      await _refresh(userInitiated: true, trigger: 'startup');
+    }
   }
 
   Future<void> _ensureLocalLoaded() => _loadingLocal ??= _loadLocal();
@@ -114,38 +116,57 @@ class ElectricityController extends ChangeNotifier {
     // 旧凭据的请求可能仍在返回；等它结束后补一次新请求，不能因 loading 丢掉。
     if (_refreshing case final refreshing?) await refreshing;
     if (revision != _bindingRevision) return;
-    await _refresh(knownBinding: bound);
+    await _refresh(knownBinding: bound, trigger: 'binding_changed');
   }
 
   /// 重读绑定状态并刷新余额；并发调用共用同一次请求。
   Future<void> refresh() => _refresh(userInitiated: true);
 
-  Future<void> _refresh({bool? knownBinding, bool userInitiated = false}) {
-    if (_refreshing case final refreshing?) return refreshing;
+  Future<void> _refresh({
+    bool? knownBinding,
+    bool userInitiated = false,
+    String? trigger,
+  }) {
+    if (_refreshing case final refreshing?) {
+      return SilentRefresh.join(refreshing);
+    }
     late final Future<void> future;
-    future =
-        _refreshCurrent(
-          knownBinding: knownBinding,
-          userInitiated: userInitiated,
-        ).whenComplete(() {
-          if (identical(_refreshing, future)) _refreshing = null;
-        });
+    future = SilentRefresh.track(
+      () =>
+          _refreshCurrent(
+            knownBinding: knownBinding,
+            userInitiated: userInitiated,
+            trigger: trigger,
+          ).whenComplete(() {
+            if (identical(_refreshing, future)) _refreshing = null;
+          }),
+    );
     _refreshing = future;
-    return future;
+    return SilentRefresh.join(future);
   }
 
   Future<void> _refreshCurrent({
     bool? knownBinding,
     bool userInitiated = false,
+    String? trigger,
   }) async {
     final revision = _bindingRevision;
     await _ensureLocalLoaded();
-    if (revision != _bindingRevision) return;
+    if (revision != _bindingRevision) {
+      SilentRefresh.skipCurrent(reason: 'binding_changed');
+      return;
+    }
     final bound = knownBinding ?? await _bindingCheck();
-    if (revision != _bindingRevision) return;
+    if (revision != _bindingRevision) {
+      SilentRefresh.skipCurrent(reason: 'binding_changed');
+      return;
+    }
     _portalBound = bound;
     final room = _room;
     if (!bound || room == null) {
+      SilentRefresh.skipCurrent(
+        reason: !bound ? 'not_bound' : 'room_not_selected',
+      );
       notifyListeners();
       return;
     }
@@ -158,24 +179,33 @@ class ElectricityController extends ChangeNotifier {
         'electricity.controller',
         action: () async {
           final kwh = await _queryBalance(room);
-          if (revision != _bindingRevision) return;
+          if (revision != _bindingRevision) {
+            SilentRefresh.skipCurrent(reason: 'binding_changed');
+            return;
+          }
           final reading = ElecReading(time: DateTime.now(), kwh: kwh);
           await _appendReading(room, reading);
           // 拉取期间用户可能换了宿舍，那这次结果就不该盖到新宿舍头上。
           if (revision == _bindingRevision && identical(_room, room)) {
             _latest = reading;
+          } else {
+            SilentRefresh.skipCurrent(reason: 'selection_changed');
           }
         },
         userInitiated: userInitiated,
+        trigger: trigger,
+        fields: {'has_cache': _latest != null},
       );
       // 手动刷新失败要给用户一个可见的错误提示，但不暴露原始异常。
       if (!succeeded && userInitiated && revision == _bindingRevision) {
         _error = '刷新失败，请稍后再试';
       }
     } on PortalCredentialError catch (e) {
+      SilentRefresh.failCurrent();
       // 凭据失效必须让用户重新绑定：这条提示不能跟着其他失败一起静默掉。
       if (revision == _bindingRevision) _error = e.message;
     } catch (_) {
+      SilentRefresh.failCurrent();
       // 其余失败（网络、登录跳转、解析）已由 SilentRefresh 重试并写日志。
     } finally {
       _loading = false;

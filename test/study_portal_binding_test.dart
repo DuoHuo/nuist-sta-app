@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
+import 'package:nuist_sta_app/core/refresh/silent_refresh.dart';
 import 'package:nuist_sta_app/mini_apps/academic/academic_controller.dart';
 import 'package:nuist_sta_app/mini_apps/academic/academic_models.dart';
 import 'package:nuist_sta_app/mini_apps/student_info/student_info_controller.dart';
@@ -153,6 +155,33 @@ void _registerCases<T>(
     });
 
     tearDown(() => controller.notifier.dispose());
+
+    test('自动刷新在批次外启动并失败，手动批量复用仍汇总失败', () async {
+      dependencies.cached = null;
+      final started = Completer<void>();
+      final response = Completer<T>();
+      dependencies.fetchOverride = () {
+        started.complete();
+        return response.future;
+      };
+      final records = <Map<String, Object?>>[];
+      AppLog.recordListenerForTesting = records.add;
+      addTearDown(() => AppLog.recordListenerForTesting = null);
+      final automatic = controller.ensureStarted();
+      await started.future;
+      final batch = SilentRefresh.runAll('test.shared_refresh', {
+        name: controller.refresh,
+      });
+      response.completeError(const PortalLoginError('合成登录失败'));
+      await automatic;
+      expect(await batch, isFalse);
+      expect(dependencies.requests, 1);
+      final completed = records.singleWhere(
+        (record) => record['event'] == 'refresh.batch_completed',
+      );
+      expect((completed['attrs'] as Map)['failure_count'], 1);
+      expect((completed['attrs'] as Map)['success_count'], 0);
+    });
 
     test('未挂载卡片时绑定也会初始化，并忽略当天缓存强制更新', () async {
       await controller.bindingChanged(true);

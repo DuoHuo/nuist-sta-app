@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../../core/auth/passkey_transfer.dart';
+import '../../../core/logging/app_log.dart';
 
 /// 扫另一台设备屏幕上的导出二维码，识别到就把文本 `pop` 回导入页。
 ///
@@ -15,6 +16,8 @@ class PortalScanPage extends StatefulWidget {
 }
 
 class _PortalScanPageState extends State<PortalScanPage> {
+  static final _log = AppLog.logger('shell.profile.portal_scan');
+  MobileScannerErrorCode? _lastCameraError;
   final _controller = MobileScannerController(
     formats: const [BarcodeFormat.qrCode],
   );
@@ -57,21 +60,34 @@ class _PortalScanPageState extends State<PortalScanPage> {
           MobileScanner(
             controller: _controller,
             onDetect: _onDetect,
-            errorBuilder: (context, error) => Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text(
-                  switch (error.errorCode) {
-                    MobileScannerErrorCode.permissionDenied =>
-                      '没有相机权限，请到系统设置里允许 NUIST++ 使用相机',
-                    _ =>
-                      '相机启动失败：${error.errorDetails?.message ?? error.errorCode.name}',
+            errorBuilder: (context, error) {
+              if (_lastCameraError != error.errorCode) {
+                _lastCameraError = error.errorCode;
+                _log.warning(
+                  'camera.failed',
+                  error: error,
+                  fields: {
+                    'stage': 'passkey.import.scan',
+                    'details': {'camera_error': error.errorCode.name},
                   },
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70, height: 1.5),
+                );
+              }
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    switch (error.errorCode) {
+                      MobileScannerErrorCode.permissionDenied =>
+                        '没有相机权限，请到系统设置里允许 NUIST++ 使用相机',
+                      _ =>
+                        '相机启动失败：${error.errorDetails?.message ?? error.errorCode.name}',
+                    },
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white70, height: 1.5),
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
           Positioned(
             left: 0,

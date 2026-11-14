@@ -7,6 +7,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
+import '../../core/logging/app_log.dart';
 import 'campus_map_canvas.dart';
 import 'campus_map_data.dart';
 import 'campus_map_heading.dart';
@@ -75,6 +76,7 @@ class CampusMapNative extends StatefulWidget {
 
 class _CampusMapNativeState extends State<CampusMapNative>
     with SingleTickerProviderStateMixin {
+  static final _log = AppLog.logger('campus_map.native');
   late final AnimationController _shuttleAnimation;
   Map<String, GeoPoint> _shuttleOrigins = {};
   bool _shuttleUpdateQueued = false;
@@ -216,8 +218,14 @@ class _CampusMapNativeState extends State<CampusMapNative>
           if (mounted && generation == _generation) _cameraPending = false;
         }
         if (mounted && _error != null) setState(() => _error = null);
-      } catch (_) {
+      } catch (error, stackTrace) {
         if (mounted && generation == _generation) {
+          _log.warning(
+            'layers.sync_failed',
+            fields: {'stage': sync ? 'layers.sync' : 'camera.update'},
+            error: error,
+            stackTrace: stackTrace,
+          );
           setState(() => _error = '地图图层加载失败，请重试');
         }
       }
@@ -1555,7 +1563,12 @@ class _CampusMapNativeState extends State<CampusMapNative>
           }
         }
       }
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning(
+        'feature.query_failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
       if (mounted) setState(() => _error = '地图信息读取失败，请重试');
     }
   }

@@ -1,9 +1,12 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/nuist_login.dart';
 import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
 import 'package:nuist_sta_app/core/auth/safe_message.dart';
+import 'package:nuist_sta_app/core/auth/portal_http.dart';
+import 'package:nuist_sta_app/core/logging/diagnostic_error.dart';
 
 const _forbidden = [
   '{',
@@ -32,6 +35,79 @@ void _expectSafe(Object? data) {
 }
 
 void main() {
+  group('认证诊断保留失败依据', () {
+    test('响应外壳错误与缺少 request 有不同原因码', () {
+      expect(
+        () => NuistLogin.parseStartAssertion([], statusCode: 200),
+        throwsA(
+          isA<PortalLoginError>()
+              .having((e) => e.code, 'code', 'assertion_response_not_object')
+              .having((e) => e.stage, 'stage', 'cas.asserting'),
+        ),
+      );
+      expect(
+        () =>
+            NuistLogin.parseStartAssertion({'success': true}, statusCode: 200),
+        throwsA(
+          isA<PortalLoginError>()
+              .having((e) => e.code, 'code', 'assertion_request_missing')
+              .having((e) => e.context['status_code'], 'status', 200),
+        ),
+      );
+    });
+
+    test('HTTP错误保留状态、Dio原因与原始栈，不误报门户登录失败', () async {
+      final dio = Dio();
+      addTearDown(() => dio.close(force: true));
+      final options = RequestOptions(path: 'https://campus.test/service');
+      final originalStack = StackTrace.fromString(
+        '#0 syntheticTransport (transport.dart:4:2)',
+      );
+      final original = DioException(
+        requestOptions: options,
+        type: DioExceptionType.badResponse,
+        response: Response<dynamic>(requestOptions: options, statusCode: 503),
+        stackTrace: originalStack,
+      );
+      try {
+        await PortalHttp(dio).send(() => Future.error(original, originalStack));
+        fail('应抛出服务响应错误');
+      } catch (error, stackTrace) {
+        expect(error, isA<DiagnosticException>());
+        final diagnostic = error as DiagnosticException;
+        expect(diagnostic.code, 'http_status_rejected');
+        expect(diagnostic.context['status_code'], 503);
+        expect(diagnostic.cause, same(original));
+        expect(diagnostic.causeStackTrace, same(originalStack));
+        expect(stackTrace.toString(), originalStack.toString());
+      }
+    });
+
+    test('Dio包裹的门户异常使用原始栈重新抛出', () async {
+      final dio = Dio();
+      addTearDown(() => dio.close(force: true));
+      const original = PortalCredentialError(
+        '合成凭据已失效',
+        code: 'credential_not_allowed',
+        stage: 'cas.signing',
+      );
+      final originalStack = StackTrace.fromString(
+        '#0 syntheticSign (signer.dart:8:2)',
+      );
+      final wrapped = DioException(
+        requestOptions: RequestOptions(path: 'https://campus.test/service'),
+        error: original,
+        stackTrace: originalStack,
+      );
+      try {
+        await PortalHttp(dio).send(() => Future.error(wrapped));
+        fail('应保留凭据错误');
+      } catch (error, stackTrace) {
+        expect(error, same(original));
+        expect(stackTrace.toString(), originalStack.toString());
+      }
+    });
+  });
   // L01
   group('L01 startAssertion 错误文案不泄漏原始响应', () {
     test('gateway_502.html', () {

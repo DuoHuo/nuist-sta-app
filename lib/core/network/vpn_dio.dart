@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 
+import '../logging/http_diagnostics.dart';
 import 'vpn_gateway.dart';
 import 'vpn_http_adapter.dart';
 
@@ -36,5 +37,6 @@ Dio vpnDio({
         HttpClient(context: securityContext)
           ..badCertificateCallback = onBadCertificate,
   );
+  installHttpDiagnostics(dio);
   return dio;
 }

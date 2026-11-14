@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/logging/app_log.dart';
+import '../../core/logging/diagnostic_error.dart';
+import '../../core/refresh/silent_refresh.dart';
 import 'timetable_colors.dart';
 import 'timetable_models.dart';
 import 'timetable_overrides.dart';
@@ -40,7 +42,10 @@ class TimetableStore {
         stackTrace: stackTrace,
         errorKind: 'storage_write',
       );
-      throw const TimetablePersistenceException();
+      throw TimetablePersistenceException(
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     } finally {
       batch.closed = true;
     }
@@ -298,7 +303,10 @@ class TimetableStore {
         stackTrace: stackTrace,
         errorKind: 'storage_write',
       );
-      throw const TimetablePersistenceException();
+      throw TimetablePersistenceException(
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     }
   }
 
@@ -375,11 +383,35 @@ class TimetableStore {
     final list = json['courses'];
     if (list is! List) return [];
     final result = <Course>[];
+    var skippedCount = 0;
+    Object? firstError;
+    StackTrace? firstStackTrace;
     for (final item in list) {
-      if (item is! Map<String, dynamic>) continue;
       try {
+        if (item is! Map<String, dynamic>) {
+          throw const FormatException('手动课程条目不是对象');
+        }
         result.add(Course.fromJson(item).copyWith(source: CourseSource.manual));
-      } catch (_) {}
+      } catch (error, stackTrace) {
+        skippedCount++;
+        firstError ??= error;
+        firstStackTrace ??= stackTrace;
+      }
+    }
+    if (skippedCount > 0) {
+      AppLog.reportOutcome('degraded', reason: 'manual_course_parse_failed');
+      SilentRefresh.degradeCurrent(reason: 'manual_course_parse_failed');
+      _log.warning(
+        'manual_courses.read_degraded',
+        fields: {
+          'file_kind': _manualFile,
+          'skipped_count': skippedCount,
+          'count': result.length,
+          'outcome': 'degraded',
+        },
+        error: firstError,
+        stackTrace: firstStackTrace,
+      );
     }
     return result;
   }
@@ -581,7 +613,10 @@ class TimetableStore {
         stackTrace: stackTrace,
         errorKind: 'storage_write',
       );
-      throw const TimetablePersistenceException();
+      throw TimetablePersistenceException(
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     } finally {
       try {
         if (tmp.existsSync()) tmp.deleteSync();
@@ -621,7 +656,10 @@ class TimetableStore {
         stackTrace: stackTrace,
         errorKind: 'storage_write',
       );
-      throw const TimetablePersistenceException();
+      throw TimetablePersistenceException(
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     }
   }
 
@@ -641,7 +679,10 @@ class TimetableStore {
         stackTrace: stackTrace,
         errorKind: 'storage_write',
       );
-      throw const TimetablePersistenceException();
+      throw TimetablePersistenceException(
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     }
   }
 }
@@ -740,7 +781,10 @@ class _TimetableWriteBatch {
         stackTrace: stackTrace,
         errorKind: 'storage_write',
       );
-      throw const TimetablePersistenceException();
+      throw TimetablePersistenceException(
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     } finally {
       for (final pending in files) {
         _cleanUp(pending.temporary);
@@ -793,8 +837,18 @@ class _PendingTimetableJson {
 }
 
 /// 用户编辑无法保存到本机时的安全错误，不包含路径或底层异常文本。
-class TimetablePersistenceException implements Exception {
-  const TimetablePersistenceException();
+class TimetablePersistenceException implements Exception, DiagnosticError {
+  const TimetablePersistenceException({this.cause, this.causeStackTrace});
+
+  @override
+  final Object? cause;
+  @override
+  final StackTrace? causeStackTrace;
+  @override
+  Map<String, Object?> get diagnosticContext => const {
+    'stage': 'storage.write',
+    'reason_code': 'timetable_persistence_failed',
+  };
 
   @override
   String toString() => '课表保存失败，请检查设备剩余空间后重试';

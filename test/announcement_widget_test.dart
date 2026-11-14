@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/colors.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/network/client_metadata.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_api.dart';
@@ -237,6 +238,9 @@ void main() {
   }
 
   testWidgets('公告网页仅在有历史时拦截返回，旧查询不能覆盖最新状态', (tester) async {
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
     final previousPlatform = WebViewPlatform.instance;
     final platform = _AnnouncementWebViewPlatform();
     WebViewPlatform.instance = platform;
@@ -264,6 +268,25 @@ void main() {
     // URL 变化包括网页自身的历史跳转，不必等整个页面加载结束。
     final controller = platform.controller;
     final delegate = platform.delegate;
+    delegate.pageStarted('https://example.com');
+    const resourceError = WebResourceError(
+      errorCode: -101,
+      description: 'net::ERR_CONNECTION_RESET: synthetic asset failed',
+      url: 'https://example.com/asset.js',
+      isForMainFrame: false,
+    );
+    delegate.resourceError(resourceError);
+    await tester.pumpAndSettle();
+    final failed = records.singleWhere(
+      (record) => record['event'] == 'page.resource_failed',
+    );
+    final attrs = failed['attrs'] as Map;
+    final cause = (attrs['error_chain'] as List).first as Map;
+    expect(cause['message'], resourceError.description);
+    expect((cause['context'] as Map)['platform_code'], -101);
+    expect((attrs['details'] as Map)['main_frame'], isFalse);
+    expect(find.text('页面加载失败'), findsNothing);
+    expect(route.popDisposition, RoutePopDisposition.pop);
     controller.hasHistory = true;
     delegate.urlChange(const UrlChange(url: 'https://example.com/detail'));
     await tester.pumpAndSettle();
@@ -586,6 +609,12 @@ class _AnnouncementWebController extends PlatformWebViewController {
   Future<void> setJavaScriptMode(JavaScriptMode mode) async {}
 
   @override
+  Future<void> addJavaScriptChannel(JavaScriptChannelParams params) async {}
+
+  @override
+  Future<void> runJavaScript(String javaScript) async {}
+
+  @override
   Future<void> setPlatformNavigationDelegate(
     PlatformNavigationDelegate handler,
   ) async {}
@@ -600,6 +629,8 @@ class _AnnouncementNavigationDelegate extends PlatformNavigationDelegate {
   late PageEventCallback pageStarted;
   late PageEventCallback pageFinished;
   late UrlChangeCallback urlChange;
+  late WebResourceErrorCallback resourceError;
+  late HttpResponseErrorCallback httpError;
 
   @override
   Future<void> setOnPageStarted(PageEventCallback callback) async =>
@@ -622,7 +653,12 @@ class _AnnouncementNavigationDelegate extends PlatformNavigationDelegate {
   Future<void> setOnProgress(ProgressCallback callback) async {}
 
   @override
-  Future<void> setOnWebResourceError(WebResourceErrorCallback callback) async {}
+  Future<void> setOnWebResourceError(WebResourceErrorCallback callback) async =>
+      resourceError = callback;
+
+  @override
+  Future<void> setOnHttpError(HttpResponseErrorCallback callback) async =>
+      httpError = callback;
 }
 
 class _AnnouncementWebWidget extends PlatformWebViewWidget {

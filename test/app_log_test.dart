@@ -18,6 +18,217 @@ import 'package:package_info_plus/package_info_plus.dart';
 void main() {
   setUp(() async => AppLog.resetForTesting());
   tearDown(() async => AppLog.resetForTesting());
+  group('完整附件与操作留存', () {
+    late Directory temp;
+    setUp(() async {
+      temp = await Directory.systemTemp.createTemp('log_attachment_test_');
+    });
+    tearDown(() async {
+      if (await temp.exists()) await temp.delete(recursive: true);
+    });
+    String record(int sequence, String trace, {int size = 0, DateTime? at}) =>
+        jsonEncode({
+          'ts': (at ?? DateTime.now().toUtc()).toIso8601String(),
+          'seq': sequence,
+          'session_id': 'a' * 16,
+          'trace_id': trace,
+          'event': 'sample.$sequence',
+          'attrs': {
+            'details': {'body': 'x' * size},
+          },
+        });
+    RotatingLogStore create({
+      int budget = 200000,
+      int fileBytes = 4096,
+      int files = 4,
+    }) => RotatingLogStore(
+      temp,
+      exportDirectory: Directory('${temp.path}/exports'),
+      maxFileBytes: fileBytes,
+      maxFiles: files,
+      maxAttachmentBytes: budget,
+      sanitizeRecord: (value) => value,
+    );
+    List<Map<String, dynamic>> decode(LogSnapshot value) => const LineSplitter()
+        .convert(value.content)
+        .map((line) => jsonDecode(line) as Map<String, dynamic>)
+        .toList();
+
+    test('大记录完整压缩存储，正常水合和导出不算损坏恢复', () async {
+      final store = create();
+      await store.initialize();
+      final line = record(1, 'b' * 32, size: 70000);
+      await store.append(line);
+      final files = await Directory('${temp.path}/records')
+          .list()
+          .where((file) => file is File)
+          .cast<File>()
+          .toList();
+      expect(files, hasLength(1));
+      expect(await files.single.length(), lessThan(70000));
+      expect(
+        utf8.decode(gzip.decode(await files.single.readAsBytes())),
+        '$line\n',
+      );
+      final snapshot = await store.snapshot();
+      expect(
+        (decode(snapshot).single['attrs']['details']['body'] as String).length,
+        70000,
+      );
+      expect(snapshot.stats.recoveredFileCount, 0);
+      final export = await store.createExport({'record_type': 'metadata'});
+      final metadata = jsonDecode(
+        const LineSplitter().convert(await export.readAsString()).first,
+      );
+      expect(metadata['recovered_files'], 0);
+    });
+
+    test('附件预算按解压长度整组淘汰，清空后新附件不继承旧占用', () async {
+      final store = create(budget: 100000);
+      await store.initialize();
+      await store.append(record(1, 'b' * 32, size: 70000));
+      await store.append(record(2, 'b' * 32));
+      await store.append(record(3, 'c' * 32, size: 70000));
+      expect(decode(await store.snapshot()).map((item) => item['seq']), [3]);
+      expect(await Directory('${temp.path}/records').list().length, 1);
+      await store.clear();
+      expect((await store.stats()).bytes, 0);
+      await store.append(record(4, 'd' * 32, size: 70000));
+      expect(decode(await store.snapshot()).map((item) => item['seq']), [4]);
+    });
+
+    test('最新单条超过预算仍保留全文和超限说明，不累积旧超限附件', () async {
+      final store = create(budget: 1024);
+      await store.initialize();
+      await store.append(record(1, 'b' * 32, size: 70000));
+      var retained = decode(await store.snapshot()).single;
+      expect(
+        retained['attrs']['details']['storage']['budget_exceeded'],
+        isTrue,
+      );
+      expect((retained['attrs']['details']['body'] as String).length, 70000);
+      await store.append(record(2, 'b' * 32));
+      final withSummary = decode(await store.snapshot());
+      expect(withSummary.map((item) => item['seq']), [1, 2]);
+      expect(
+        (withSummary.first['attrs']['details']['body'] as String).length,
+        70000,
+      );
+      await store.append(record(3, 'c' * 32, size: 71000));
+      retained = decode(await store.snapshot()).single;
+      expect(retained['seq'], 3);
+      expect(await Directory('${temp.path}/records').list().length, 1);
+    });
+
+    test('索引轮转淘汰同Trace全部旧事件，后续与重启后事件声明历史缺失', () async {
+      var store = create(fileBytes: 900, files: 2);
+      await store.initialize();
+      await store.append(record(1, 'b' * 32, size: 450));
+      await store.append(record(2, 'b' * 32, size: 450));
+      await store.append(record(3, 'c' * 32, size: 450));
+      expect(decode(await store.snapshot()).map((item) => item['seq']), [3]);
+      await store.append(record(4, 'b' * 32));
+      var retained = decode(await store.snapshot())
+          .singleWhere((item) => item['seq'] == 4);
+      expect(
+        retained['attrs']['details']['storage']['history_missing'],
+        isTrue,
+      );
+      store = create(fileBytes: 900, files: 2);
+      await store.initialize();
+      await store.append(record(5, 'b' * 32));
+      retained = decode(await store.snapshot())
+          .singleWhere((item) => item['seq'] == 5);
+      expect(
+        retained['attrs']['details']['storage']['history_missing'],
+        isTrue,
+      );
+    });
+
+    test('不可读索引不触发附件误删，恢复后才清除真正孤立文件', () async {
+      final store = create();
+      await store.initialize();
+      await store.append(record(1, 'b' * 32, size: 70000));
+      final orphan = File('${temp.path}/records/orphan.json.gz');
+      await orphan.writeAsBytes(gzip.encode(utf8.encode('orphan')));
+      final blocker = await Directory('${temp.path}/app.1.log').create();
+      await store.maintain();
+      expect(await orphan.exists(), isTrue);
+      expect(
+        (await store.snapshot()).stats.unreadableFileCount,
+        greaterThan(0),
+      );
+      expect(decode(await store.snapshot()).single['seq'], 1);
+      await blocker.delete();
+      await store.maintain();
+      expect(await orphan.exists(), isFalse);
+      expect(decode(await store.snapshot()).single['seq'], 1);
+    });
+
+    test('索引事务写入失败保留已有操作，不留下半轮转结果', () async {
+      final store = create(fileBytes: 900, files: 2);
+      await store.initialize();
+      await store.append(record(1, 'b' * 32, size: 450));
+      await store.append(record(2, 'c' * 32, size: 450));
+      final before = (await store.snapshot()).content;
+      final blocker = await Directory('${temp.path}/app.1.log.rewrite.tmp')
+          .create();
+      await expectLater(
+        store.append(record(3, 'd' * 32, size: 450)),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect((await store.snapshot()).content, before);
+      await blocker.delete();
+      await store.append(record(3, 'd' * 32, size: 450));
+      expect(decode(await store.snapshot()).map((item) => item['seq']), [2, 3]);
+    });
+
+    test('索引容量不足只清理本次新附件，不改已有数据', () async {
+      final store = create(fileBytes: 80);
+      await store.initialize();
+      await store.append('{"event":"keep"}');
+      await expectLater(
+        store.append(record(1, 'b' * 32, size: 70000)),
+        throwsFormatException,
+      );
+      expect((await store.snapshot()).content, '{"event":"keep"}\n');
+      expect(await Directory('${temp.path}/records').list().length, 0);
+    });
+
+    test('普通追加不扫描附件目录，只有到期维护才清理孤立文件', () async {
+      final store = create(budget: 1024);
+      await store.initialize();
+      await store.append(record(1, 'b' * 32, size: 70000));
+      final orphan = File('${temp.path}/records/orphan.json.gz');
+      await orphan.writeAsBytes(gzip.encode(utf8.encode('orphan')));
+      await store.append(record(2, 'c' * 32));
+      expect(await orphan.exists(), isTrue);
+      await store.maintain();
+      expect(await orphan.exists(), isFalse);
+    });
+
+    test('留存过期按操作整体清理，不保留同Trace的半条链路', () async {
+      final store = create();
+      await store.initialize();
+      await store.append(
+        record(
+          1,
+          'b' * 32,
+          at: DateTime.now().subtract(const Duration(days: 8)),
+        ),
+      );
+      await store.append(record(2, 'b' * 32));
+      await store.append(record(3, 'c' * 32));
+      expect(decode(await store.snapshot()).map((item) => item['seq']), [3]);
+      await store.append(record(4, 'b' * 32));
+      final retained = decode(await store.snapshot())
+          .singleWhere((item) => item['seq'] == 4);
+      expect(
+        retained['attrs']['details']['storage']['history_missing'],
+        isTrue,
+      );
+    });
+  });
   test('日志文本会过滤凭据、长数字标识和主机名', () {
     final sanitized = AppLog.sanitizeTextForTesting(
       'Authorization: Bearer abc\n'
@@ -43,7 +254,7 @@ void main() {
     });
     await AppLog.resetForTesting();
     await AppLog.initialize(directory: temp);
-    expect(AppLog.verboseEnabled.value, isTrue);
+    expect(AppLog.verboseEnabled.value, isFalse);
 
     final log = AppLog.logger('test.trace');
     await log.operation('outer', () async {
@@ -164,26 +375,63 @@ void main() {
       debugPrint = (message, {wrapWidth}) {
         if (message != null) messages.add(message);
       };
+      Map<String, Object?>? record;
+      AppLog.recordListenerForTesting = (value) => record = value;
       AppLog.consoleEnabledForTesting = true;
       try {
         final log = AppLog.logger('test.console_stack');
         final write = level == AppLogLevel.warning ? log.warning : log.error;
         write(
           'failed',
-          error: StateError('synthetic'),
+          fields: {
+            'details': {
+              'response': {'body': '完整控制台响应证据', 'complete': true},
+            },
+          },
+          error: StateError('synthetic token=synthetic-secret'),
           stackTrace: StackTrace.fromString(frames.join('\n')),
         );
       } finally {
+        AppLog.consoleEnabledForTesting = false;
         debugPrint = original;
       }
       expect(messages, hasLength(1));
       expect(messages.single, startsWith(level.name.toUpperCase()));
+      expect(messages.single, contains('#000001'));
+      expect(messages.single, contains(AppLog.formatDetails(record!)));
+      expect(messages.single, contains('完整控制台响应证据'));
+      expect(messages.single, isNot(contains('synthetic-secret')));
+      expect((record!['attrs'] as Map)['stack_trace'], frames.join('\n'));
+      const marker = '调用堆栈:\n';
+      final stackOffset = messages.single.lastIndexOf(marker);
+      expect(stackOffset, greaterThanOrEqualTo(0));
       expect(
-        messages.single.split('\n').skip(1),
-        frames.map((frame) => '  ↳ #1 $frame'),
+        messages.single.substring(stackOffset + marker.length),
+        frames.join('\n'),
       );
     });
   }
+
+  test('完整控制台消息直接包含原始响应，不生成裸 null 异常占位', () {
+    Map<String, Object?>? record;
+    AppLog.recordListenerForTesting = (value) => record = value;
+    const response = '{"message":"gateway unavailable","value":null}';
+    AppLog.logger('test.console_response').warning(
+      'query.failed',
+      fields: {
+        'details': {
+          'response': {'body': response, 'complete': true},
+        },
+      },
+      error: const PortalLoginError('响应缺少业务数据'),
+    );
+    final message = AppLog.formatConsoleMessage(record!);
+    expect(message, contains(response));
+    expect(message, contains('响应缺少业务数据'));
+    expect(message, contains(AppLog.formatDetails(record!)));
+    expect(message.split('\n').where((line) => line.trim() == 'null'), isEmpty);
+    expect(message, isNot(contains('调用堆栈:\nnull')));
+  });
 
   test('全局 Flutter 异常仅进入统一清洗后的出口', () {
     final previous = FlutterError.onError;
@@ -288,8 +536,8 @@ void main() {
     expect(AppLog.verboseExpiresAt.value, isNull);
   });
 
-  testWidgets('调试构建默认记录详细日志，设置仍隐藏所有诊断入口', (tester) async {
-    expect(AppLog.verboseEnabled.value, isTrue);
+  testWidgets('调试构建默认简洁控制台，设置仍隐藏所有诊断入口', (tester) async {
+    expect(AppLog.verboseEnabled.value, isFalse);
     expect(AppLog.diagnosticsVisible.value, isFalse);
     await tester.pumpWidget(
       MaterialApp(theme: appLightTheme(), home: const SettingsPage()),
@@ -365,7 +613,7 @@ void main() {
     expect(AppLog.verboseExpiresAt.value, isNull);
 
     final before = DateTime.now().toUtc();
-    await tester.tap(find.text('标准模式 · 记录运行结果和错误'));
+    await tester.tap(find.text('标准模式 · 关键步骤摘要，完整详情已保存'));
     await tester.pumpAndSettle();
 
     expect(AppLog.verboseEnabled.value, isTrue);
@@ -380,6 +628,12 @@ void main() {
       ),
     );
     expect(AppLog.diagnosticsVisible.value, isTrue);
+    expect(find.textContaining('详细控制台 · 剩余'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '关闭'));
+    await tester.pumpAndSettle();
+    expect(AppLog.verboseEnabled.value, isFalse);
+    expect(AppLog.verboseExpiresAt.value, isNull);
+    expect(find.text('标准模式 · 关键步骤摘要，完整详情已保存'), findsOneWidget);
     expect(find.textContaining('需要详细诊断时'), findsNothing);
     await tester.pumpWidget(const SizedBox());
     await AppLog.resetForTesting();
@@ -475,6 +729,7 @@ void main() {
         'response_code',
         'host',
         'service',
+        'field_validation',
       ]),
     );
     expect(attrs['service'], 'jwxt');
@@ -516,7 +771,7 @@ void main() {
     FlutterError.onError!(
       FlutterErrorDetails(
         exception: FlutterError(
-          'A RenderFlex overflowed by 8 pixels on the right. synthetic-private',
+          'A RenderFlex overflowed by 8 pixels on the right. token=synthetic-private',
         ),
         library: 'rendering library',
       ),
@@ -524,7 +779,7 @@ void main() {
     FlutterError.onError!(
       FlutterErrorDetails(
         exception: FlutterError(
-          'Incorrect use of ParentDataWidget. synthetic-private',
+          'Incorrect use of ParentDataWidget. token=synthetic-private',
         ),
         library: 'widgets library',
       ),
@@ -543,7 +798,7 @@ void main() {
     AppLog.recordListenerForTesting = records.add;
     final controller = AnnouncementController.test(
       fetch: ({etag, lastModified}) async =>
-          throw const PortalNetworkError('synthetic-private'),
+          throw const PortalNetworkError('请求失败 token=synthetic-private'),
     );
     addTearDown(controller.dispose);
     await AppLog.logger('test.user')
@@ -558,11 +813,12 @@ void main() {
         .toList();
     expect(warnings, hasLength(1));
     final failure = warnings.single;
-    expect(failure['event'], 'refresh.failed_using_cache');
+    expect(failure['event'], 'refresh.failed');
     expect(failure['trace_id'], parent['trace_id']);
     expect(failure['parent_span_id'], parent['span_id']);
     expect(failure['span_id'], isNot(parent['span_id']));
-    expect((failure['attrs'] as Map)['outcome'], 'cache_fallback');
+    expect((failure['attrs'] as Map)['outcome'], 'unavailable');
+    expect((failure['attrs'] as Map)['has_cache'], isFalse);
     expect(jsonEncode(records), isNot(contains('synthetic-private')));
   });
 

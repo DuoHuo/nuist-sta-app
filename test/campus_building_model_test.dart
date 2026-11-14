@@ -87,7 +87,7 @@ class FakeWebViewPlatform extends WebViewPlatform {
 
 class FakeController extends PlatformWebViewController {
   FakeController(super.params) : super.implementation();
-  late JavaScriptChannelParams channel;
+  final channels = <String, JavaScriptChannelParams>{};
   late FakeDelegate delegate;
   Uri? loaded;
   JavaScriptMode? mode;
@@ -96,7 +96,9 @@ class FakeController extends PlatformWebViewController {
       mode = javaScriptMode;
   @override
   Future<void> addJavaScriptChannel(JavaScriptChannelParams params) async =>
-      channel = params;
+      channels[params.name] = params;
+  @override
+  Future<void> runJavaScript(String javaScript) async {}
   @override
   Future<void> setPlatformNavigationDelegate(
     PlatformNavigationDelegate handler,
@@ -104,8 +106,8 @@ class FakeController extends PlatformWebViewController {
   @override
   Future<void> loadRequest(LoadRequestParams params) async =>
       loaded = params.uri;
-  void message(String value) =>
-      channel.onMessageReceived(JavaScriptMessage(message: value));
+  void message(String value) => channels['CampusModelViewer']!
+      .onMessageReceived(JavaScriptMessage(message: value));
 }
 
 class FakeDelegate extends PlatformNavigationDelegate {
@@ -113,6 +115,14 @@ class FakeDelegate extends PlatformNavigationDelegate {
   late NavigationRequestCallback navigation;
   late WebResourceErrorCallback resourceError;
   late HttpResponseErrorCallback httpError;
+  late PageEventCallback pageStarted;
+  late PageEventCallback pageFinished;
+  @override
+  Future<void> setOnPageStarted(PageEventCallback callback) async =>
+      pageStarted = callback;
+  @override
+  Future<void> setOnPageFinished(PageEventCallback callback) async =>
+      pageFinished = callback;
   @override
   Future<void> setOnNavigationRequest(
     NavigationRequestCallback callback,
@@ -307,7 +317,10 @@ void main() {
         await tester.pump();
         final first = platform.controllers.single;
         expect(first.mode, JavaScriptMode.unrestricted);
-        expect(first.channel.name, 'CampusModelViewer');
+        expect(
+          first.channels.keys,
+          containsAll(['CampusModelViewer', 'NuistDiagnostics']),
+        );
         expect(first.loaded!.queryParameters['floor'], '6');
         expect(find.text('正在加载三维模型…'), findsOneWidget);
         first.message('not json');

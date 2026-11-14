@@ -205,6 +205,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _log.debug('state.changed', fields: {'state': state.name});
     if (state == AppLifecycleState.resumed) {
+      unawaited(AppLog.collectNativeDiagnostics());
       unawaited(VpnGateway.instance.checkHealth());
       unawaited(_updates.onResumed());
     }

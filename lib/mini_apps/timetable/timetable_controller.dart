@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/logging/app_log.dart';
+import '../../core/refresh/silent_refresh.dart';
 import 'timetable_api.dart';
 import 'timetable_change_format.dart';
 import 'timetable_colors.dart';
@@ -141,6 +142,11 @@ class TimetableController extends ChangeNotifier {
 
   static final TimetableController instance = TimetableController._();
   static final _log = AppLog.logger('timetable.controller');
+
+  static Map<String, Object?> _savedResultFields(Object? result) => {
+    'saved': result != null,
+    'outcome': result == null ? 'rejected' : 'success',
+  };
 
   bool _started = false;
   Future<void>? _starting;
@@ -1000,18 +1006,21 @@ class TimetableController extends ChangeNotifier {
   /// 进行中再次调用返回同一个 Future（不重复请求）。
   Future<void> syncFromJwxt() {
     final inFlight = _syncInFlight;
-    if (inFlight != null) return inFlight;
-    if (_loading) return Future.value();
+    if (inFlight != null) return SilentRefresh.join(inFlight);
+    if (_loading) {
+      SilentRefresh.skipCurrent(reason: 'already_refreshing');
+      return Future.value();
+    }
     final automatic = _nextSyncAuto;
     _nextSyncAuto = false;
     late final Future<void> f;
-    f = _log.startSpan().run(() => _doSync(automatic: automatic)).whenComplete(
-      () {
+    f = SilentRefresh.track(
+      () => _doSync(automatic: automatic).whenComplete(() {
         if (identical(_syncInFlight, f)) _syncInFlight = null;
-      },
+      }),
     );
     _syncInFlight = f;
-    return f;
+    return SilentRefresh.join(f);
   }
 
   /// [syncFromJwxt] 的别名：从教务远程拉取全量课表，行为与 [syncFromJwxt] 完全等同。
@@ -1019,8 +1028,6 @@ class TimetableController extends ChangeNotifier {
 
   Future<void> _doSync({bool automatic = false}) async {
     final bindingRevision = _portalBindingRevision;
-    final watch = Stopwatch()..start();
-    _log.debug('sync.started', fields: {'automatic': automatic});
     TimetableSyncOutcome? outcome;
     _loading = true;
     _statusMessage = '正在同步教务课表…';
@@ -1028,158 +1035,207 @@ class TimetableController extends ChangeNotifier {
     _syncFailure = TimetableSyncFailure.none;
     notifyListeners();
     try {
-      final term = settings.termCode.isNotEmpty
-          ? settings.termCode
-          : '2026-2027-1';
-      final previous = settings;
-      // SW01：记下同步前是否正在看本周。
-      final wasOnCurrentWeek = isViewingCurrentWeek;
-      var snapshot = await fetchSnapshot(
-        term,
-        // 清空开学日，以便区分「本次 dqzc 推算」与「缓存/默认值」。
-        baseSettings: previous.copyWith(clearTermStart: true),
-      );
-      // 绑定已变更，旧请求不能继续套用或保存课程。
-      if (bindingRevision != _portalBindingRevision) return;
-      if (snapshot.periods.isEmpty) {
-        snapshot = snapshot.copyWith(
-          periods: _snapshot.periods.isEmpty
-              ? defaultPeriods()
-              : _snapshot.periods,
-        );
-      }
-      snapshot = snapshot.copyWith(
-        settings: _withResolvedTermStart(snapshot.settings, cached: previous),
-      );
-      snapshot = snapshot.copyWith(
-        // 快照只存教务课程；手动课程在独立文件，不受同步影响。
-        courses: [
-          for (final c in snapshot.courses)
-            if (c.source == CourseSource.jwxt) c,
-        ],
-        syncedAt: DateTime.now(),
-        clearError: true,
-      );
-      late final List<Course> previousJwxt;
-      // 与设置保存共用队列：落盘后立即发布快照，后续设置不能再写回旧课表。
-      await _serializeAppearance(() async {
-        if (bindingRevision != _portalBindingRevision) return;
-        previousJwxt = _snapshot.courses;
-        snapshot = snapshot.copyWith(
-          settings: snapshot.settings
-              .withDisplayPrefsFrom(settings)
-              .copyWith(scheduleName: settings.scheduleName),
-        );
-        // 快照与学期设置一起落盘，失败时保留原有内存和磁盘数据。
-        await TimetableStore.writeBatch(() async {
-          await TimetableStore.saveSnapshot(snapshot);
-          // 只合并学期四键，保留展示设置的原始值与未知键。
-          await TimetableStore.mergeTermSettings(snapshot.settings);
-          // 绑定变更时取消尚未提交的旧批次；外层按 revision 忽略本次同步。
+      await _log.operation<void>(
+        'sync',
+        () async {
+          final term = settings.termCode.isNotEmpty
+              ? settings.termCode
+              : '2026-2027-1';
+          final previous = settings;
+          // SW01：记下同步前是否正在看本周。
+          final wasOnCurrentWeek = isViewingCurrentWeek;
+          var snapshot = await fetchSnapshot(
+            term,
+            // 清空开学日，以便区分「本次 dqzc 推算」与「缓存/默认值」。
+            baseSettings: previous.copyWith(clearTermStart: true),
+          );
+          // 绑定已变更，旧请求不能继续套用或保存课程。
           if (bindingRevision != _portalBindingRevision) {
-            throw const TimetablePersistenceException();
+            AppLog.reportOutcome('skipped', reason: 'superseded');
+            return;
           }
-        });
-        if (bindingRevision != _portalBindingRevision) return;
-        _snapshot = snapshot;
-      });
-      if (bindingRevision != _portalBindingRevision) return;
-      // 变更日志沿用已捕获的旧教务源；I/O 等待不占设置队列，也不再次覆盖快照。
-      TimetableSyncDiffResult? syncDiff;
-      try {
-        syncDiff = await TimetableSyncDiff.applyAfterFetch(
-          previousJwxtCourses: previousJwxt,
-          newJwxtCourses: snapshot.courses,
-          xnxqdm: snapshot.settings.termCode.isNotEmpty
-              ? snapshot.settings.termCode
-              : term,
-          detectedAt: snapshot.syncedAt,
-        );
-      } catch (_) {}
-      if (bindingRevision != _portalBindingRevision) return;
-      lastSyncDiff = syncDiff;
-      // SW01（§13.10）：同步成功后停留在正在看的周（只钳到 1..totalWeeks）。
-      // 同步前就在看本周、之前周次未知（无开学日）或换了学期时才跟到新的本周。
-      if (wasOnCurrentWeek ||
-          previous.termStartDate == null ||
-          previous.termCode != _snapshot.settings.termCode) {
-        _viewingWeek = _defaultViewingWeek; // 已钳到 1..totalWeeks
-      } else {
-        _clampViewingWeek();
-      }
-      // 系统日期/本周相对上次已变时跟到本周（同周内手动翻周仍由上面 SW01 保留）。
-      followCurrentWeekIfChanged();
-      // 教务优先（jwxt §3.2）：原课被删、SKZC 与 origWeeks 不同（含缺 origWeeks
-      // 的旧记录）、或原时段星期/节次变了 → 删掉记录，显示教务数据。其余保留。
-      // 只在同步成功这里比较；解绑不删。
-      final stale = staleOverrideIds(_snapshot.courses, _overrides);
-      if (stale.isNotEmpty) {
-        _overrides = List.unmodifiable([
-          for (final o in _overrides)
-            if (!stale.contains(o.id)) o,
-        ]);
-        await TimetableStore.saveOverrides(_overrides);
-        if (bindingRevision != _portalBindingRevision) return;
-      }
-      // 编辑/删除记录同理：原课没了、SKZC 或时段变了 → 删除（解绑/失败不删）。
-      final staleEdits = staleCourseEditIds(_snapshot.courses, _courseEdits);
-      if (staleEdits.isNotEmpty) {
-        _courseEdits = Map.unmodifiable(
-          {..._courseEdits}..removeWhere((k, _) => staleEdits.contains(k)),
-        );
-        await ScheduleStore.saveCourseEdits(_courseEdits);
-        if (bindingRevision != _portalBindingRevision) return;
-      }
-      await _serializeAppearance(() async {
-        if (bindingRevision != _portalBindingRevision) return;
-        final colorsChanged = await _recomputeColors();
-        if (bindingRevision != _portalBindingRevision) return;
-        if (colorsChanged) {
-          await TimetableStore.saveManualCourses(_manualCourses);
-        }
-      });
-      if (bindingRevision != _portalBindingRevision) return;
-      // 第 11 条：课表成功后拉考试（不受 showExams 影响）。考试失败不影响本次课表
-      // 同步结果、成功时间与离线补同步逻辑，已有考试保留。
-      await _syncExams(term, bindingRevision: bindingRevision);
-      if (bindingRevision != _portalBindingRevision) return;
-      // 只有成功才重置自动同步计时。
-      final succeededAt = syncClock();
-      await ScheduleStore.saveLastSyncSuccess(succeededAt);
-      if (bindingRevision != _portalBindingRevision) return;
-      await _setPortalSessionExpired(false);
-      if (bindingRevision != _portalBindingRevision) return;
-      _lastSyncSuccessAt = succeededAt;
-      _lastFailureOffline = false;
-      _statusMessage = '已同步 ${_snapshot.courses.length} 门教务课程';
-      _syncStatus = TimetableSyncStatus.success;
-      _syncFailure = TimetableSyncFailure.none;
-      _lastAutoSyncFailed = false;
-      outcome = TimetableSyncOutcome.success(automatic: automatic);
-      _fireScheduleChanged(ScheduleChangeReason.sync);
-      _log.info(
-        'sync.completed',
-        fields: {
-          'automatic': automatic,
-          'duration_ms': watch.elapsedMilliseconds,
-          'course_count': _snapshot.courses.length,
+          if (snapshot.periods.isEmpty) {
+            snapshot = snapshot.copyWith(
+              periods: _snapshot.periods.isEmpty
+                  ? defaultPeriods()
+                  : _snapshot.periods,
+            );
+          }
+          snapshot = snapshot.copyWith(
+            settings: _withResolvedTermStart(
+              snapshot.settings,
+              cached: previous,
+            ),
+          );
+          snapshot = snapshot.copyWith(
+            // 快照只存教务课程；手动课程在独立文件，不受同步影响。
+            courses: [
+              for (final c in snapshot.courses)
+                if (c.source == CourseSource.jwxt) c,
+            ],
+            syncedAt: DateTime.now(),
+            clearError: true,
+          );
+          late final List<Course> previousJwxt;
+          // 与设置保存共用队列：落盘后立即发布快照，后续设置不能再写回旧课表。
+          await _serializeAppearance(() async {
+            if (bindingRevision != _portalBindingRevision) {
+              AppLog.reportOutcome('skipped', reason: 'superseded');
+              return;
+            }
+            previousJwxt = _snapshot.courses;
+            snapshot = snapshot.copyWith(
+              settings: snapshot.settings
+                  .withDisplayPrefsFrom(settings)
+                  .copyWith(scheduleName: settings.scheduleName),
+            );
+            // 快照与学期设置一起落盘，失败时保留原有内存和磁盘数据。
+            await TimetableStore.writeBatch(() async {
+              await TimetableStore.saveSnapshot(snapshot);
+              // 只合并学期四键，保留展示设置的原始值与未知键。
+              await TimetableStore.mergeTermSettings(snapshot.settings);
+              // 绑定变更时取消尚未提交的旧批次；外层按 revision 忽略本次同步。
+              if (bindingRevision != _portalBindingRevision) {
+                throw const TimetablePersistenceException();
+              }
+            });
+            if (bindingRevision != _portalBindingRevision) {
+              AppLog.reportOutcome('skipped', reason: 'superseded');
+              return;
+            }
+            _snapshot = snapshot;
+          });
+          if (bindingRevision != _portalBindingRevision) {
+            AppLog.reportOutcome('skipped', reason: 'superseded');
+            return;
+          }
+          // 变更日志沿用已捕获的旧教务源；I/O 等待不占设置队列，也不再次覆盖快照。
+          TimetableSyncDiffResult? syncDiff;
+          try {
+            syncDiff = await TimetableSyncDiff.applyAfterFetch(
+              previousJwxtCourses: previousJwxt,
+              newJwxtCourses: snapshot.courses,
+              xnxqdm: snapshot.settings.termCode.isNotEmpty
+                  ? snapshot.settings.termCode
+                  : term,
+              detectedAt: snapshot.syncedAt,
+            );
+          } catch (error, stackTrace) {
+            AppLog.reportOutcome(
+              'degraded',
+              reason: 'change_history_unavailable',
+            );
+            _log.warning(
+              'changes.update_failed',
+              fields: {'stage': 'sync.change_detection', 'outcome': 'degraded'},
+              error: error,
+              stackTrace: stackTrace,
+            );
+          }
+          if (bindingRevision != _portalBindingRevision) {
+            AppLog.reportOutcome('skipped', reason: 'superseded');
+            return;
+          }
+          lastSyncDiff = syncDiff;
+          // SW01（§13.10）：同步成功后停留在正在看的周（只钳到 1..totalWeeks）。
+          // 同步前就在看本周、之前周次未知（无开学日）或换了学期时才跟到新的本周。
+          if (wasOnCurrentWeek ||
+              previous.termStartDate == null ||
+              previous.termCode != _snapshot.settings.termCode) {
+            _viewingWeek = _defaultViewingWeek; // 已钳到 1..totalWeeks
+          } else {
+            _clampViewingWeek();
+          }
+          // 系统日期/本周相对上次已变时跟到本周（同周内手动翻周仍由上面 SW01 保留）。
+          followCurrentWeekIfChanged();
+          // 教务优先（jwxt §3.2）：原课被删、SKZC 与 origWeeks 不同（含缺 origWeeks
+          // 的旧记录）、或原时段星期/节次变了 → 删掉记录，显示教务数据。其余保留。
+          // 只在同步成功这里比较；解绑不删。
+          final stale = staleOverrideIds(_snapshot.courses, _overrides);
+          if (stale.isNotEmpty) {
+            _overrides = List.unmodifiable([
+              for (final o in _overrides)
+                if (!stale.contains(o.id)) o,
+            ]);
+            await TimetableStore.saveOverrides(_overrides);
+            if (bindingRevision != _portalBindingRevision) {
+              AppLog.reportOutcome('skipped', reason: 'superseded');
+              return;
+            }
+          }
+          // 编辑/删除记录同理：原课没了、SKZC 或时段变了 → 删除（解绑/失败不删）。
+          final staleEdits = staleCourseEditIds(
+            _snapshot.courses,
+            _courseEdits,
+          );
+          if (staleEdits.isNotEmpty) {
+            _courseEdits = Map.unmodifiable(
+              {..._courseEdits}..removeWhere((k, _) => staleEdits.contains(k)),
+            );
+            await ScheduleStore.saveCourseEdits(_courseEdits);
+            if (bindingRevision != _portalBindingRevision) {
+              AppLog.reportOutcome('skipped', reason: 'superseded');
+              return;
+            }
+          }
+          await _serializeAppearance(() async {
+            if (bindingRevision != _portalBindingRevision) {
+              AppLog.reportOutcome('skipped', reason: 'superseded');
+              return;
+            }
+            final colorsChanged = await _recomputeColors();
+            if (bindingRevision != _portalBindingRevision) {
+              AppLog.reportOutcome('skipped', reason: 'superseded');
+              return;
+            }
+            if (colorsChanged) {
+              await TimetableStore.saveManualCourses(_manualCourses);
+            }
+          });
+          if (bindingRevision != _portalBindingRevision) {
+            AppLog.reportOutcome('skipped', reason: 'superseded');
+            return;
+          }
+          // 第 11 条：课表成功后拉考试（不受 showExams 影响）。考试失败不影响本次课表
+          // 同步结果、成功时间与离线补同步逻辑，已有考试保留。
+          await _syncExams(term, bindingRevision: bindingRevision);
+          if (bindingRevision != _portalBindingRevision) {
+            AppLog.reportOutcome('skipped', reason: 'superseded');
+            return;
+          }
+          // 只有成功才重置自动同步计时。
+          final succeededAt = syncClock();
+          await ScheduleStore.saveLastSyncSuccess(succeededAt);
+          if (bindingRevision != _portalBindingRevision) {
+            AppLog.reportOutcome('skipped', reason: 'superseded');
+            return;
+          }
+          await _setPortalSessionExpired(false);
+          if (bindingRevision != _portalBindingRevision) {
+            AppLog.reportOutcome('skipped', reason: 'superseded');
+            return;
+          }
+          _lastSyncSuccessAt = succeededAt;
+          _lastFailureOffline = false;
+          _statusMessage = '已同步 ${_snapshot.courses.length} 门教务课程';
+          _syncStatus = TimetableSyncStatus.success;
+          _syncFailure = TimetableSyncFailure.none;
+          _lastAutoSyncFailed = false;
+          outcome = TimetableSyncOutcome.success(automatic: automatic);
+          _fireScheduleChanged(ScheduleChangeReason.sync);
+        },
+        fields: {'automatic': automatic, 'has_cache': hasCourses},
+        resultFields: (_) => {'course_count': _snapshot.courses.length},
+        errorFields: (error) => {
+          'failure_kind': classifySyncError(error).name,
+          'offline': _isOffline(error),
         },
       );
-    } catch (e, stackTrace) {
+    } catch (e) {
       if (bindingRevision != _portalBindingRevision) return;
+      SilentRefresh.failCurrent();
       _lastFailureOffline = _isOffline(e);
       _syncFailure = classifySyncError(e);
-      _log.warning(
-        'sync.failed',
-        fields: {
-          'automatic': automatic,
-          'failure_kind': _syncFailure.name,
-          'offline': _lastFailureOffline,
-          'duration_ms': watch.elapsedMilliseconds,
-        },
-        error: e,
-        stackTrace: stackTrace,
-      );
       if (automatic) _lastAutoSyncFailed = true;
       outcome = TimetableSyncOutcome.failure(
         automatic: automatic,
@@ -1198,7 +1254,7 @@ class TimetableController extends ChangeNotifier {
       if (bindingRevision != _portalBindingRevision) outcome = null;
       if (outcome != null) _lastSyncOutcome = outcome;
       notifyListeners();
-      if (outcome != null) _syncOutcomes.add(outcome);
+      if (outcome case final completed?) _syncOutcomes.add(completed);
     }
   }
 
@@ -1772,7 +1828,7 @@ class TimetableController extends ChangeNotifier {
     }
     if (touched) await _setDateEdits(next);
     return saved.forSlot(replacement);
-  }, resultFields: (course) => {'saved': course != null});
+  }, resultFields: _savedResultFields);
 
   /// 将当前单周的一次课程安排移为独立考试，连续节次仍算同一次安排。
   /// 原课程仅删除这一次；考试之后的编辑、删除不再关联原课程。
@@ -1905,7 +1961,7 @@ class TimetableController extends ChangeNotifier {
     _clampViewingWeek();
     _notifyEvents();
     return exam;
-  }, resultFields: (exam) => {'saved': exam != null});
+  }, resultFields: _savedResultFields);
 
   /// 替换一个显示时段，手动课更新本地课程，教务课保存原时段的差异覆盖。
   Future<Course?> _replaceFormSlot(
@@ -2298,8 +2354,10 @@ class TimetableController extends ChangeNotifier {
       exams = await fetchExams(term);
     } catch (error, stackTrace) {
       if (bindingRevision != _portalBindingRevision) return;
+      AppLog.reportOutcome('degraded', reason: 'exams_fetch_failed');
       _log.warning(
         'exams.fetch_failed_using_existing',
+        fields: {'stage': 'sync.exams.fetch', 'outcome': 'cache_fallback'},
         error: error,
         stackTrace: stackTrace,
       );
@@ -2310,8 +2368,10 @@ class TimetableController extends ChangeNotifier {
       await replaceJwxtExams(exams);
     } catch (error, stackTrace) {
       if (bindingRevision != _portalBindingRevision) return;
+      AppLog.reportOutcome('degraded', reason: 'exams_save_failed');
       _log.warning(
         'exams.save_failed_using_existing',
+        fields: {'stage': 'sync.exams.save', 'outcome': 'cache_fallback'},
         error: error,
         stackTrace: stackTrace,
       );

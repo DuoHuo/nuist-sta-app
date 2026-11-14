@@ -1,3 +1,4 @@
+import '../../core/logging/diagnostic_error.dart';
 import 'timetable_controller.dart';
 import 'timetable_course_color.dart';
 import 'timetable_date_edits.dart';
@@ -5,10 +6,27 @@ import 'timetable_models.dart';
 import 'timetable_schedule_event_layout.dart';
 
 /// 导出准备或网络请求失败时可直接展示的提示。
-class TimetableExportException implements Exception {
-  const TimetableExportException(this.message);
+class TimetableExportException implements Exception, DiagnosticError {
+  const TimetableExportException(
+    this.message, {
+    this.cause,
+    this.causeStackTrace,
+    this.code = 'export_invalid_data',
+  });
 
   final String message;
+  final String code;
+  @override
+  final Object? cause;
+  @override
+  final StackTrace? causeStackTrace;
+  @override
+  Map<String, Object?> get diagnosticContext => {
+    'endpoint': 'timetable.export',
+    'service': 'community',
+    'stage': 'export.generate',
+    'reason_code': code,
+  };
 
   @override
   String toString() => message;

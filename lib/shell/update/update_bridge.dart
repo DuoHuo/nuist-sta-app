@@ -1,5 +1,10 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 
+import '../../core/logging/app_log.dart';
+import '../../core/logging/diagnostic_error.dart';
 import 'update_models.dart';
 
 /// 原生服务边界；测试用实现不需要 Android 平台通道。
@@ -26,8 +31,68 @@ class AppUpdateBridge implements UpdateDownloadBridge {
   Stream<UpdateTask>? _states;
 
   @override
-  Stream<UpdateTask> get states =>
-      _states ??= _events.receiveBroadcastStream().map(UpdateTask.fromJson);
+  Stream<UpdateTask> get states => _states ??= _events
+      .receiveBroadcastStream()
+      .where((value) {
+        if (value is Map && value['type'] == 'http_diagnostic') {
+          unawaited(_recordDiagnostic(value));
+          return false;
+        }
+        return true;
+      })
+      .map(UpdateTask.fromJson);
+
+  Future<void> _recordDiagnostic(Map value) async {
+    const scope = 'shell.update.native';
+    try {
+      final exchange = Map<String, Object?>.from(value['exchange'] as Map);
+      final detail = exchange['error'];
+      final error = detail is Map
+          ? DiagnosticException(
+              detail['message'] as String? ?? '原生更新请求失败',
+              code: detail['code'] as String? ?? 'native_update_failed',
+              stage: exchange['stage'] as String?,
+              context: {'native_type': detail['type']},
+            )
+          : null;
+      final stack = detail is Map && detail['stack'] is String
+          ? StackTrace.fromString(detail['stack'] as String)
+          : null;
+      if (value['bodyFile'] case final String path) {
+        // 路径只来自受信任的原生更新通道；网页消息没有读本机文件的权限。
+        await AppLog.recordHttpFileExchange(
+          scope,
+          exchange,
+          File(path),
+          capturedBytes:
+              (exchange['response'] as Map?)?['captured_bytes'] as int?,
+          error: error,
+          stackTrace: stack,
+        );
+      } else {
+        AppLog.recordHttpExchange(
+          scope,
+          exchange,
+          error: error,
+          stackTrace: stack,
+        );
+      }
+    } catch (error, stackTrace) {
+      AppLog.logger(scope).warning(
+        'capture.native_failed',
+        error: error,
+        stackTrace: stackTrace,
+        fields: {
+          'details': {
+            'capture': {
+              'complete': false,
+              'reason': 'native_exchange_capture_failed',
+            },
+          },
+        },
+      );
+    }
+  }
 
   Future<UpdateTask> _state(String method, [Object? args]) async =>
       UpdateTask.fromJson(await _channel.invokeMethod<Object?>(method, args));

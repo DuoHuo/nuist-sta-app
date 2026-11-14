@@ -54,27 +54,61 @@ class PortalBindingActions {
 
   /// 注册、重新绑定和导入共用收尾；刷新在后台完成，不阻塞成功提示。
   /// 通知发生在凭据保存且旧会话清理之后，不依赖任何页面仍然挂载。
-  Future<void> bind(PasskeyBundle bundle) => _serialize(
-    () => _log.operation('bind', () async {
-      await _saveCredential(bundle);
-      await _clearSession(false);
-      unawaited(
-        Future<bool>.sync(() => _notifyApps(bound: true)).then<void>(
-          (_) {},
-          onError: (Object error, StackTrace stackTrace) {
-            _log.warning('reload.failed', error: error, stackTrace: stackTrace);
-          },
-        ),
-      );
-    }),
-  );
+  Future<void> bind(PasskeyBundle bundle) => _serialize(() {
+    var stage = 'binding.save';
+    return _log.operation(
+      'bind',
+      () async {
+        await _saveCredential(bundle);
+        stage = 'binding.clear_session';
+        await _clearSession(false);
+        stage = 'binding.notify';
+        unawaited(
+          Future<bool>.sync(() => _notifyApps(bound: true)).then<void>(
+            (completed) {
+              if (!completed) {
+                _log.warning(
+                  'reload.partial_failure',
+                  fields: {
+                    'reason_code': 'binding_modules_incomplete',
+                    'outcome': 'partial_failure',
+                  },
+                );
+              }
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              _log.warning(
+                'reload.failed',
+                error: error,
+                stackTrace: stackTrace,
+              );
+            },
+          ),
+        );
+      },
+      errorFields: (_) => {'stage': stage},
+      resultFields: (_) => {
+        'details': {'credential_saved': true, 'refresh_scheduled': true},
+      },
+    );
+  });
 
   /// 解绑后等待所有模块处理完成；返回 false 表示存在未完成的刷新或清理。
-  Future<bool> unbind() => _serialize(
-    () => _log.operation('unbind', () async {
-      await _deleteCredential();
-      await _clearSession(true);
-      return _notifyApps(bound: false);
-    }),
-  );
+  Future<bool> unbind() => _serialize(() {
+    var stage = 'binding.delete';
+    return _log.operation(
+      'unbind',
+      () async {
+        await _deleteCredential();
+        stage = 'binding.clear_session';
+        await _clearSession(true);
+        stage = 'binding.notify';
+        return _notifyApps(bound: false);
+      },
+      errorFields: (_) => {'stage': stage},
+      resultFields: (completed) => {
+        'outcome': completed ? 'success' : 'partial_failure',
+      },
+    );
+  });
 }

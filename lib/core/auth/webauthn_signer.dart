@@ -30,46 +30,88 @@ class Es256Key {
     final Uint8List der;
     try {
       der = base64.decode(_stripPemArmor(pem));
-    } on FormatException catch (e) {
-      throw PortalCredentialError('私钥 PEM 解码失败：${e.message}');
+    } on FormatException catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        PortalCredentialError(
+          '私钥 PEM 解码失败',
+          code: 'private_key_pem_invalid',
+          stage: 'cas.signing',
+          cause: error,
+          causeStackTrace: stackTrace,
+          context: const {'secret_context': true},
+        ),
+        stackTrace,
+      );
     }
 
     try {
       final info = ASN1Parser(der).nextObject();
       if (info is! ASN1Sequence || info.elements.length < 3) {
-        throw const PortalCredentialError('私钥不是合法的 PKCS#8 结构');
+        throw const PortalCredentialError(
+          '私钥不是合法的 PKCS#8 结构',
+          code: 'private_key_pkcs8_invalid',
+          stage: 'cas.signing',
+        );
       }
       final wrapped = info.elements[2];
       if (wrapped is! ASN1OctetString) {
-        throw const PortalCredentialError('PKCS#8 缺少 privateKey 字段');
+        throw const PortalCredentialError(
+          'PKCS#8 缺少 privateKey 字段',
+          code: 'private_key_field_missing',
+          stage: 'cas.signing',
+        );
       }
 
       final ecKey = ASN1Parser(wrapped.octets).nextObject();
       if (ecKey is! ASN1Sequence || ecKey.elements.length < 2) {
-        throw const PortalCredentialError('私钥内层不是合法的 ECPrivateKey');
+        throw const PortalCredentialError(
+          '私钥内层不是合法的 ECPrivateKey',
+          code: 'private_key_ec_invalid',
+          stage: 'cas.signing',
+        );
       }
       final scalar = ecKey.elements[1];
       if (scalar is! ASN1OctetString) {
-        throw const PortalCredentialError('ECPrivateKey 缺少私钥标量');
+        throw const PortalCredentialError(
+          'ECPrivateKey 缺少私钥标量',
+          code: 'private_key_scalar_missing',
+          stage: 'cas.signing',
+        );
       }
 
       // P-256 的标量固定 32 字节；长度对不上说明这压根不是 ES256 凭据。
       if (scalar.octets.length != 32) {
         throw PortalCredentialError(
           '私钥不是 P-256（标量长度 ${scalar.octets.length} 字节，应为 32）',
+          code: 'private_key_curve_mismatch',
+          stage: 'cas.signing',
         );
       }
 
       final d = _bytesToBigInt(scalar.octets);
       final domain = ECCurve_secp256r1();
       if (d <= BigInt.zero || d >= domain.n) {
-        throw const PortalCredentialError('私钥标量超出 P-256 有效范围');
+        throw const PortalCredentialError(
+          '私钥标量超出 P-256 有效范围',
+          code: 'private_key_scalar_invalid',
+          stage: 'cas.signing',
+        );
       }
       return Es256Key._(ECPrivateKey(d, domain));
     } on PortalException {
       rethrow;
-    } catch (e) {
-      throw PortalCredentialError('私钥解析失败：$e');
+    } catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        PortalCredentialError(
+          '私钥解析失败',
+          code: 'private_key_parse_failed',
+          stage: 'cas.signing',
+          cause: error,
+          causeStackTrace: stackTrace,
+          context: const {'secret_context': true},
+        ),
+        stackTrace,
+      );
     }
   }
 

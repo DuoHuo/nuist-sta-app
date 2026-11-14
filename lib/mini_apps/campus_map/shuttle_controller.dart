@@ -19,6 +19,8 @@ class ShuttleController extends ChangeNotifier {
   bool _busy = false;
   bool _failureNotified = false;
   bool _hasLoaded = false;
+  int _consecutiveFailures = 0;
+  DateTime? _failureSince;
   int _generation = 0;
 
   /// 最新成功响应中的完整车辆列表。
@@ -53,20 +55,44 @@ class ShuttleController extends ChangeNotifier {
     try {
       final result = await _log.operation(
         'vehicles.refresh',
-        source.load,
+        () async {
+          final items = await source.load();
+          if (!_disposed &&
+              _active &&
+              generation == _generation &&
+              _consecutiveFailures > 0) {
+            _log.info(
+              'vehicles.recovered',
+              fields: {
+                'attempts': _consecutiveFailures,
+                'duration_ms': DateTime.now()
+                    .difference(_failureSince!)
+                    .inMilliseconds,
+                'vehicle_count': items.length,
+              },
+            );
+          }
+          return items;
+        },
         resultFields: (items) => {'vehicle_count': items.length},
         successLevel: AppLogLevel.debug,
         failureEvent: 'vehicles.refresh_failed',
+        errorFields: (_) => {
+          'attempts': _consecutiveFailures + 1,
+          'has_cache': _hasLoaded,
+          'outcome': _hasLoaded ? 'cache_fallback' : 'unavailable',
+        },
         failureLevelForError: (_) =>
             !_disposed &&
                 _active &&
                 generation == _generation &&
-                !_hasLoaded &&
-                !_failureNotified
+                _consecutiveFailures == 0
             ? AppLogLevel.warning
             : AppLogLevel.debug,
       );
       if (_disposed || !_active || generation != _generation) return;
+      _consecutiveFailures = 0;
+      _failureSince = null;
       _directions = {
         for (final v in result)
           v.id: ShuttleDirection.fromHeading(v.heading, _directions[v.id]),
@@ -75,6 +101,10 @@ class ShuttleController extends ChangeNotifier {
       _vehicles = List.unmodifiable(result);
       notifyListeners();
     } catch (_) {
+      if (!_disposed && _active && generation == _generation) {
+        _consecutiveFailures++;
+        _failureSince ??= DateTime.now();
+      }
       if (!_disposed &&
           _active &&
           generation == _generation &&

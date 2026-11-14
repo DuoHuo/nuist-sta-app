@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/logging/app_log.dart';
+import '../../core/refresh/silent_refresh.dart';
 import 'bulletin_models.dart';
 
 /// 在应用文档目录中保存公告缓存和订阅状态。
@@ -83,8 +84,11 @@ class BulletinStore {
           );
           await file.writeAsString(encoded, flush: true);
         } catch (error, stackTrace) {
+          SilentRefresh.degradeCurrent(reason: 'cache_write_failed');
+          AppLog.reportOutcome('degraded', reason: 'cache_write_failed');
           _log.warning(
             'cache.write_failed',
+            fields: {'file_kind': _fileName, 'outcome': 'memory_fallback'},
             error: error,
             stackTrace: stackTrace,
           );

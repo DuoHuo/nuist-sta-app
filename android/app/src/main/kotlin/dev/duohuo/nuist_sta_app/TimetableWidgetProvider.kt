@@ -15,26 +15,43 @@ open class TimetableWidgetProvider : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = TimetableGlanceWidget(square = false)
 
     override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        when (intent.action) {
-            TimetableWidgetUpdates.ACTION_TICK -> TimetableWidgetUpdates.refresh(context)
-            TimetableWidgetUpdates.ACTION_REFRESH -> {
-                val manager = AppWidgetManager.getInstance(context)
-                val ids = manager.getAppWidgetIds(ComponentName(context, javaClass))
-                if (ids.isNotEmpty()) onUpdate(context, manager, ids)
+        try {
+            super.onReceive(context, intent)
+            when (intent.action) {
+                TimetableWidgetUpdates.ACTION_TICK -> TimetableWidgetUpdates.refresh(context)
+                TimetableWidgetUpdates.ACTION_REFRESH -> {
+                    val manager = AppWidgetManager.getInstance(context)
+                    val ids = manager.getAppWidgetIds(ComponentName(context, javaClass))
+                    if (ids.isNotEmpty()) onUpdate(context, manager, ids)
+                }
             }
+        } catch (error: Exception) {
+            recordBackgroundFailure(context, "widget.receive", error)
         }
     }
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        TimetableWidgetData.invalidate(context)
-        super.onUpdate(context, appWidgetManager, appWidgetIds)
-        TimetableWidgetUpdates.schedule(context)
+        try {
+            TimetableWidgetData.invalidate(context)
+            super.onUpdate(context, appWidgetManager, appWidgetIds)
+            TimetableWidgetUpdates.schedule(context)
+        } catch (error: Exception) {
+            recordBackgroundFailure(context, "widget.update", error)
+        }
     }
 
     override fun onDisabled(context: Context) {
-        super.onDisabled(context)
-        TimetableWidgetUpdates.schedule(context)
+        try {
+            super.onDisabled(context)
+            TimetableWidgetUpdates.schedule(context)
+        } catch (error: Exception) {
+            recordBackgroundFailure(context, "widget.disabled", error)
+        }
+    }
+
+    private fun recordBackgroundFailure(context: Context, stage: String, error: Exception) {
+        NativeBackgroundDiagnostics.enqueue(context, listOf(
+            notifyFailureDetails(error, stage) + ("reason_code" to "widget_broadcast_failed")))
     }
 
     companion object {

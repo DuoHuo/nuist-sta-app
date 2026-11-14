@@ -364,7 +364,11 @@ void main() {
     TimetableApi.debugPost = (url, form) async {
       paths.add(url.path);
       if (url.pathSegments.last == 'cxxszhxqkb.do') {
-        return {'datas': {}};
+        return {
+          'datas': {
+            'cxxszhxqkb': {'rows': <Object?>[]},
+          },
+        };
       }
       throw Exception('403');
     };

@@ -6,6 +6,7 @@ import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
+import '../../core/logging/diagnostic_error.dart';
 import 'score_models.dart';
 import '../../core/auth/safe_message.dart';
 
@@ -34,7 +35,12 @@ class ScoreApi {
       rows = await _send(force: true);
     }
     if (rows == null) {
-      throw const PortalLoginError('重新登录后教务仍未返回成绩，请稍后再试');
+      throw const PortalLoginError(
+        '重新登录后教务仍未返回成绩，请稍后再试',
+        code: 'session_unavailable_after_relogin',
+        stage: 'response.validate',
+        context: {'endpoint': 'score.query', 'service': 'jwxt'},
+      );
     }
     return ScoreReport(records: rows, fetchedAt: DateTime.now());
   }
@@ -77,8 +83,12 @@ class ScoreApi {
     try {
       final decoded = raw is String ? jsonDecode(raw) : raw;
       if (decoded is! Map<String, dynamic>) {
-        _appReady = false;
-        return null;
+        throw const DiagnosticException(
+          '教务成绩响应不是对象',
+          code: 'response_schema_mismatch',
+          stage: 'response.validate',
+          context: {'endpoint': 'score.query', 'service': 'jwxt'},
+        );
       }
       final code = '${decoded['code'] ?? ''}';
       if (code.isNotEmpty && code != '0') {
@@ -86,12 +96,19 @@ class ScoreApi {
           'response.rejected',
           fields: {'service': 'jwxt', 'response_code': code},
         );
-        throw PortalLoginError(
+        throw DiagnosticException(
           prefixedServerMessage(
             '教务成绩接口返回错误：',
             decoded['msg'],
             fallback: '教务成绩接口返回错误，请稍后重试',
           ),
+          code: 'service_rejected',
+          stage: 'response.validate',
+          context: {
+            'endpoint': 'score.query',
+            'service': 'jwxt',
+            'response_code': code,
+          },
         );
       }
       final datas = decoded['datas'];
@@ -99,14 +116,31 @@ class ScoreApi {
           ? datas['xscjcx'] ?? _findRowsSection(datas)
           : null;
       final rows = section is Map<String, dynamic> ? section['rows'] : null;
-      if (rows is! List) return const [];
+      if (rows is! List) {
+        throw const DiagnosticException(
+          '教务成绩响应缺少成绩列表',
+          code: 'response_rows_missing',
+          stage: 'response.validate',
+          context: {'endpoint': 'score.query', 'service': 'jwxt'},
+        );
+      }
       return [
         for (final row in rows)
           if (row is Map<String, dynamic>) ScoreRecord.fromRow(row),
       ];
-    } on FormatException {
-      _appReady = false;
-      return null;
+    } on FormatException catch (error, stackTrace) {
+      if (_looksLikeLoginPage(response)) {
+        _appReady = false;
+        return null;
+      }
+      throw DiagnosticException(
+        '教务成绩响应不是有效 JSON',
+        code: 'response_invalid_json',
+        stage: 'response.decode',
+        cause: error,
+        causeStackTrace: stackTrace,
+        context: {'endpoint': 'score.query', 'service': 'jwxt'},
+      );
     }
   }
 

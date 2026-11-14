@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/logging/app_log.dart';
+import '../../core/logging/diagnostic_error.dart';
 import '../../core/network/client_metadata.dart';
 import 'update_api.dart';
 import 'update_bridge.dart';
@@ -224,6 +225,30 @@ class UpdateController extends ChangeNotifier {
   void _acceptTask(UpdateTask value) {
     if (_disposed) return;
     _nativeEpoch++;
+    final previous = task;
+    if (previous.status != value.status ||
+        previous.errorCode != value.errorCode) {
+      final fields = <String, Object?>{
+        'from_state': previous.status.name,
+        'to_state': value.status.name,
+        'downloaded_bytes': value.downloadedBytes,
+        'total_bytes': value.totalBytes,
+        'install_allowed': value.installAllowed,
+      };
+      if (value.errorCode case final code?) {
+        _log.warning(
+          'download.state_changed',
+          fields: fields,
+          error: DiagnosticException(
+            updateErrorMessage(code),
+            code: code,
+            stage: 'native_download.${value.status.name}',
+          ),
+        );
+      } else {
+        _log.info('download.state_changed', fields: fields);
+      }
+    }
     task = value;
     final permissionRequest = _installPermissionRequest;
     if (permissionRequest != null &&
@@ -255,7 +280,7 @@ class UpdateController extends ChangeNotifier {
 
   /// 用户点击后复核精确修订，再启动有持续通知的原生下载任务。
   Future<void> download([UpdateRelease? selected]) =>
-      _action('download', () async {
+      _action('download.start_command', () async {
         final release = selected ?? available;
         if (release == null) throw PlatformException(code: 'not_ready');
         if (task.hasTask) throw PlatformException(code: 'task_exists');
@@ -263,11 +288,17 @@ class UpdateController extends ChangeNotifier {
         // 通知授权只影响通知展示，不影响下载任务。
         try {
           await bridge.requestNotificationPermission();
-        } catch (_) {}
+        } catch (error, stackTrace) {
+          _log.warning(
+            'notification.permission_failed',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
         _acceptTask(await bridge.start(release, _metadata.headers));
       });
 
-  Future<void> resume() => _action('download.resume', () async {
+  Future<void> resume() => _action('download.resume_command', () async {
     final release = task.release;
     if (release == null) throw PlatformException(code: 'not_ready');
     await api.validate(release);
@@ -292,7 +323,7 @@ class UpdateController extends ChangeNotifier {
       release.sameArtifact(task.release!);
 
   Future<void> _installRelease(UpdateRelease? release) =>
-      _action('install', () async {
+      _action('install.submit_command', () async {
         if (release == null) throw PlatformException(code: 'not_ready');
         if (!_isReadyRelease(release)) return;
         try {
@@ -357,7 +388,13 @@ class UpdateController extends ChangeNotifier {
       // 本机任务不能在校验失败后仍保留可点击安装的状态。
       try {
         _acceptTask(await bridge.cancel());
-      } catch (_) {}
+      } catch (error, stackTrace) {
+        _log.warning(
+          'revoked_task.cancel_failed',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
     } on PlatformException catch (error) {
       actionError = updateErrorMessage(error.code);
     } catch (_) {

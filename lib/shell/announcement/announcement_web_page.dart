@@ -4,6 +4,8 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
+import '../../core/logging/app_log.dart';
+import '../../core/network/web_diagnostics.dart';
 import 'announcement_models.dart';
 
 /// 构造公告外链页面的工厂；测试环境没有 WebView 平台实现，可替换为伪页面。
@@ -15,7 +17,7 @@ typedef AnnouncementWebPageBuilder = Widget Function(AnnouncementLink link);
 AnnouncementWebPageBuilder announcementWebPageBuilder = (link) =>
     AnnouncementWebPage(link: link);
 
-/// 公告外链的应用内浏览器：只允许 https 导航，不注入任何门户会话或调试脚本。
+/// 公告外链的应用内浏览器：只允许 https 导航，不注入门户会话。
 class AnnouncementWebPage extends StatefulWidget {
   const AnnouncementWebPage({super.key, required this.link});
 
@@ -28,6 +30,7 @@ class AnnouncementWebPage extends StatefulWidget {
 
 class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
   late final WebViewController _controller;
+  late final WebDiagnostics _diagnostics;
   int _progress = 0;
   String? _error;
   String? _pageTitle;
@@ -37,7 +40,9 @@ class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController()
+    _controller = WebViewController();
+    _diagnostics = WebDiagnostics(_controller, scope: 'shell.announcement.web');
+    _controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
@@ -50,12 +55,14 @@ class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
           onProgress: (p) {
             if (mounted) setState(() => _progress = p);
           },
-          onPageStarted: (_) {
+          onPageStarted: (url) {
+            _diagnostics.pageStarted(url);
             if (mounted) setState(() => _error = null);
             _syncBackHistory();
           },
           onUrlChange: (_) => _syncBackHistory(),
-          onPageFinished: (_) async {
+          onPageFinished: (url) async {
+            await _diagnostics.pageFinished(url);
             await _syncBackHistory();
             if (!mounted) return;
             final title = await _controller.getTitle();
@@ -64,14 +71,33 @@ class _AnnouncementWebPageState extends State<AnnouncementWebPage> {
             }
           },
           onWebResourceError: (e) {
+            _diagnostics.resourceError(e);
             // 只处理主框架错误，子资源失败不影响页面展示。
             if (e.isForMainFrame == false) return;
             if (mounted) setState(() => _error = '页面加载失败');
             _syncBackHistory();
           },
+          onHttpError: _diagnostics.httpError,
         ),
-      )
-      ..loadRequest(Uri.parse(widget.link.url));
+      );
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      await _diagnostics.attach();
+    } catch (error, stackTrace) {
+      AppLog.logger(
+        'shell.announcement.web',
+      ).warning('capture.attach_failed', error: error, stackTrace: stackTrace);
+    }
+    if (mounted) await _controller.loadRequest(Uri.parse(widget.link.url));
+  }
+
+  @override
+  void dispose() {
+    _diagnostics.dispose();
+    super.dispose();
   }
 
   void _copyLink() {

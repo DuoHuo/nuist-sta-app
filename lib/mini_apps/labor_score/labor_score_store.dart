@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/logging/app_log.dart';
+import '../../core/refresh/silent_refresh.dart';
 import 'labor_score_models.dart';
 
 /// 劳动积分的本地缓存：只存最近一次结果，放在应用文档目录下的
@@ -31,11 +32,13 @@ class LaborScoreStore {
   }
 
   static Future<LaborScore?> read() => _log.inSpan(() async {
-    final file = await _resolve();
-    if (file == null || !await file.exists()) return null;
     try {
+      final file = await _resolve();
+      if (file == null || !await file.exists()) return null;
       final decoded = jsonDecode(await file.readAsString());
-      if (decoded is! Map<String, dynamic>) return null;
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('缓存顶层不是对象');
+      }
       final fetchedAt = DateTime.tryParse(
         decoded['fetchedAt']?.toString() ?? '',
       );
@@ -49,10 +52,16 @@ class LaborScoreStore {
 
   static Future<void> save(LaborScore score) => _log.inSpan(() async {
     final file = await _resolve();
-    if (file == null) return;
+    if (file == null) {
+      SilentRefresh.degradeCurrent(reason: 'storage_unavailable');
+      AppLog.reportOutcome('degraded', reason: 'storage_unavailable');
+      return;
+    }
     try {
       await file.writeAsString(jsonEncode(score.toJson()), flush: true);
     } catch (error, stackTrace) {
+      SilentRefresh.degradeCurrent(reason: 'cache_write_failed');
+      AppLog.reportOutcome('degraded', reason: 'cache_write_failed');
       _log.warning('cache.write_failed', error: error, stackTrace: stackTrace);
     }
   });

@@ -10,6 +10,7 @@ import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/auth/passkey_store.dart';
 import '../../../core/auth/passkey_transfer.dart';
 import '../../../core/colors.dart';
+import '../../../core/logging/app_log.dart';
 import 'portal_bind_widgets.dart';
 import 'portal_binding_actions.dart';
 
@@ -23,6 +24,7 @@ class PortalImportPage extends StatefulWidget {
 }
 
 class _PortalImportPageState extends State<PortalImportPage> {
+  static final _log = AppLog.logger('shell.profile.portal_import');
   bool _busy = false;
 
   // ==================== 三种来源 ====================
@@ -34,72 +36,114 @@ class _PortalImportPageState extends State<PortalImportPage> {
       if (PasskeyTransfer.looksLikeExport(clip?.text)) {
         initial = clip!.text!.trim();
       }
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      _log.warning(
+        'clipboard.read_failed',
+        error: error,
+        stackTrace: stackTrace,
+        fields: {'stage': 'passkey.import.read'},
+      );
+    }
     if (!mounted) return;
     final text = await showDialog<String>(
       context: context,
       builder: (_) => _PasteDialog(initial: initial),
     );
-    if (text != null) await _handle(text);
+    if (text != null) await _handle(text, source: 'clipboard');
   }
 
   Future<void> _fromScan() async {
     final text = await context.push<String>('/portal-bind/import/scan');
-    if (text != null) await _handle(text);
+    if (text != null) await _handle(text, source: 'qr');
   }
 
   Future<void> _fromFile() async {
     try {
       final file = await FilePicker.pickFile(dialogTitle: '选择 .nuistkey 文件');
       if (file == null) return;
-      final bytes = await file.readAsBytes();
-      await _handle(utf8.decode(bytes, allowMalformed: true));
-    } catch (e) {
-      _message('读取文件失败：$e');
+      final bytes = await _log.operation(
+        'file.read',
+        file.readAsBytes,
+        fields: const {'stage': 'passkey.import.read'},
+      );
+      await _handle(utf8.decode(bytes, allowMalformed: true), source: 'file');
+    } catch (error, stackTrace) {
+      _log.warning(
+        'import.file_failed',
+        error: error,
+        stackTrace: stackTrace,
+        fields: {'stage': 'passkey.import.read'},
+      );
+      _message('读取文件失败，请重试');
     }
   }
 
   // ==================== 解密与落盘 ====================
 
-  Future<void> _handle(String text) async {
-    if (!mounted || _busy) return;
-    if (!PasskeyTransfer.looksLikeExport(text)) {
-      _message('这不是 NUIST++ 导出的通行密钥');
-      return;
-    }
-    final pin = await showPinDialog(
-      context,
-      title: '输入 PIN',
-      message: '输入导出时设置的六位数字 PIN。',
-      confirmText: '解密',
-    );
-    if (pin == null || !mounted) return;
+  Future<void> _handle(String text, {required String source}) =>
+      _log.startSpan().run(() async {
+        if (!mounted || _busy) return;
+        if (!PasskeyTransfer.looksLikeExport(text)) {
+          _log.warning(
+            'import.format_rejected',
+            fields: {
+              'reason_code': 'passkey_prefix_missing',
+              'details': {'source': source},
+            },
+          );
+          _message('这不是 NUIST++ 导出的通行密钥');
+          return;
+        }
+        final pin = await showPinDialog(
+          context,
+          title: '输入 PIN',
+          message: '输入导出时设置的六位数字 PIN。',
+          confirmText: '解密',
+        );
+        if (pin == null || !mounted) return;
 
-    setState(() => _busy = true);
-    final PasskeyBundle bundle;
-    try {
-      bundle = await PasskeyTransfer.decrypt(text, pin);
-    } on PasskeyTransferError catch (e) {
-      _message(e.message);
-      return;
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-    if (!mounted) return;
+        setState(() => _busy = true);
+        final PasskeyBundle bundle;
+        try {
+          bundle = await _log.operation(
+            'import.decrypt',
+            () => PasskeyTransfer.decrypt(text, pin),
+            fields: {
+              'stage': 'passkey.decrypt',
+              'details': {'source': source},
+            },
+          );
+        } on PasskeyTransferError catch (e) {
+          _message(e.message);
+          return;
+        } catch (_) {
+          _message('无法完成通行密钥解密，请重试');
+          return;
+        } finally {
+          if (mounted) setState(() => _busy = false);
+        }
+        if (!mounted) return;
 
-    final existing = await PasskeyStore.read();
-    if (!mounted) return;
-    final confirmed = await _preview(bundle, replacing: existing != null);
-    if (!confirmed) return;
+        final existing = await PasskeyStore.read();
+        if (!mounted) return;
+        final confirmed = await _preview(bundle, replacing: existing != null);
+        if (!confirmed) return;
 
-    try {
-      await PortalBindingActions.instance.bind(bundle);
-    } catch (_) {
-      if (mounted) _message('绑定未完成，请重试');
-      return;
-    }
-    if (mounted) context.pop(true);
-  }
+        try {
+          await _log.operation(
+            'import.save',
+            () => PortalBindingActions.instance.bind(bundle),
+            fields: {
+              'stage': 'passkey.import.save',
+              'details': {'source': source, 'replacing': existing != null},
+            },
+          );
+        } catch (_) {
+          if (mounted) _message('绑定未完成，请重试');
+          return;
+        }
+        if (mounted) context.pop(true);
+      });
 
   Future<bool> _preview(PasskeyBundle bundle, {required bool replacing}) async {
     final palette = AppPalette.of(context);

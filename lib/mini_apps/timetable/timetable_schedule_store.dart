@@ -69,7 +69,10 @@ class ScheduleStore {
             stackTrace: stackTrace,
             errorKind: 'storage_write',
           );
-          throw const TimetablePersistenceException();
+          throw TimetablePersistenceException(
+            cause: error,
+            causeStackTrace: stackTrace,
+          );
         }
       });
 

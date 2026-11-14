@@ -13,6 +13,7 @@ import '../auth/portal_cookie_manager.dart';
 import '../auth/portal_exceptions.dart';
 import '../auth/portal_http.dart';
 import '../config/campus_config.dart';
+import '../logging/http_diagnostics.dart';
 import 'vpn_spa.dart';
 import 'vpn_log.dart';
 
@@ -77,6 +78,7 @@ class VpnAuth {
       ..httpClientAdapter = IOHttpClientAdapter(
         createHttpClient: trust.createHttpClient,
       );
+    installHttpDiagnostics(dio);
     return _client = PortalHttp(dio, trust: trust);
   }
 
@@ -96,7 +98,11 @@ class VpnAuth {
     );
     check();
     if (bundle == null) {
-      throw const PortalCredentialError('使用校园 VPN 前请先绑定统一门户');
+      throw const PortalCredentialError(
+        '使用校园 VPN 前请先绑定统一门户',
+        code: 'vpn_credential_missing',
+        stage: 'vpn.credential',
+      );
     }
     final http = _http;
     final jar = _jar;
@@ -124,13 +130,25 @@ class VpnAuth {
     check();
     if (PortalHttp.isLoginResponse(response) ||
         (response.statusCode ?? 0) >= 400) {
-      throw const PortalLoginError('VPN 登录未完成，请稍后再试');
+      throw PortalLoginError(
+        'VPN 登录未完成，请稍后再试',
+        code: 'vpn_controller_login_incomplete',
+        stage: 'vpn.controller_callback',
+        context: {
+          'status_code': response.statusCode,
+          'login_page': PortalHttp.isLoginResponse(response),
+        },
+      );
     }
     vpnLog('authentication.cas_completed');
     final fresh = await _obtainWithSession(bundle, http, jar, check);
     check();
     if (fresh == null) {
-      throw const PortalLoginError('VPN 登录未返回有效控制器会话，请稍后再试');
+      throw const PortalLoginError(
+        'VPN 登录未返回有效控制器会话，请稍后再试',
+        code: 'vpn_controller_session_missing',
+        stage: 'vpn.controller_session',
+      );
     }
     return fresh;
   }
@@ -151,6 +169,10 @@ class VpnAuth {
     final infoCookie = cookies.where((cookie) => cookie.name == 'clientInfo');
     if (infoCookie.isEmpty ||
         !cookies.any((cookie) => cookie.name == 'ENSSESSIONID')) {
+      vpnLog(
+        'authentication.session_rejected',
+        fields: {'reason_code': 'controller_cookie_missing'},
+      );
       return null;
     }
     final Map<String, dynamic> info;
@@ -158,7 +180,13 @@ class VpnAuth {
       info = jsonDecode(
         utf8.decode(base64.decode(base64.normalize(infoCookie.first.value))),
       ) as Map<String, dynamic>;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      vpnLog(
+        'authentication.session_rejected',
+        fields: {'reason_code': 'controller_cookie_invalid'},
+        error: error,
+        stackTrace: stackTrace,
+      );
       return null;
     }
     final uid = info['userId'];
@@ -167,11 +195,19 @@ class VpnAuth {
         !RegExp(r'^[a-fA-F0-9]{32}$').hasMatch(uid) ||
         user is! String ||
         user.isEmpty) {
+      vpnLog(
+        'authentication.session_rejected',
+        fields: {'reason_code': 'controller_identity_invalid'},
+      );
       return null;
     }
     if (bundle.studentId != null &&
         info['username'] is String &&
         info['username'] != bundle.studentId) {
+      vpnLog(
+        'authentication.session_rejected',
+        fields: {'reason_code': 'controller_identity_mismatch'},
+      );
       return null;
     }
     for (var attempt = 0; attempt < 6; attempt++) {
@@ -181,7 +217,13 @@ class VpnAuth {
         Uri.parse('$controller/enlink/api/client/user/terminal/rules/$uid'),
       );
       check();
-      if (PortalHttp.isLoginResponse(response)) return null;
+      if (PortalHttp.isLoginResponse(response)) {
+        vpnLog(
+          'authentication.session_rejected',
+          fields: {'reason_code': 'controller_login_redirect'},
+        );
+        return null;
+      }
       final Map<String, dynamic> body;
       try {
         body =
@@ -189,8 +231,15 @@ class VpnAuth {
                     ? jsonDecode(response.data as String)
                     : response.data)
                 as Map<String, dynamic>;
-      } catch (_) {
-        throw const PortalLoginError('VPN 控制器返回格式不正确');
+      } catch (error, stackTrace) {
+        throw PortalLoginError(
+          'VPN 控制器返回格式不正确',
+          code: 'vpn_controller_response_invalid',
+          stage: 'vpn.rules.parse',
+          cause: error,
+          causeStackTrace: stackTrace,
+          context: {'attempt': attempt + 1, 'status_code': response.statusCode},
+        );
       }
       final data = body['data'];
       final code = '${body['code']}';
@@ -199,21 +248,36 @@ class VpnAuth {
         return null;
       }
       if ('${body['code']}' != '200') {
-        throw const PortalLoginError('VPN 控制器未正常返回隧道凭据，请稍后再试');
+        throw PortalLoginError(
+          'VPN 控制器未正常返回隧道凭据，请稍后再试',
+          code: 'vpn_controller_rules_rejected',
+          stage: 'vpn.rules.validate',
+          context: {'response_code': code, 'attempt': attempt + 1},
+        );
       }
       if ('${body['code']}' == '200' &&
           data is Map &&
           data['token'] is String &&
           (data['token'] as String).isNotEmpty) {
         final endpoints = _endpoints(data['server']);
-        if (endpoints.isEmpty) throw const PortalLoginError('VPN 控制器未返回可用网关');
+        if (endpoints.isEmpty) {
+          throw const PortalLoginError(
+            'VPN 控制器未返回可用网关',
+            code: 'vpn_gateway_missing',
+            stage: 'vpn.rules.validate',
+          );
+        }
         final endpoint = endpoints.first;
         if (data['spa_status'] == true ||
             '${data['spa_status']}' == 'true' ||
             '${data['spa_status']}' == '1') {
           final port = int.tryParse('${data['spa_port']}') ?? 62201;
           if (port < 1 || port > 65535) {
-            throw const PortalLoginError('VPN 敲门端口不合法');
+            throw const PortalLoginError(
+              'VPN 敲门端口不合法',
+              code: 'vpn_spa_port_invalid',
+              stage: 'vpn.spa',
+            );
           }
           await VpnSpa.knock(
             endpoints.length > 1 ? endpoints[1].host : endpoint.host,
@@ -235,7 +299,12 @@ class VpnAuth {
       }
       if (attempt < 5) await Future<void>.delayed(const Duration(seconds: 2));
     }
-    throw const PortalLoginError('无法取得 VPN token，账号可能正被其他会话占用');
+    throw const PortalLoginError(
+      '无法取得 VPN token，账号可能正被其他会话占用',
+      code: 'vpn_token_retry_exhausted',
+      stage: 'vpn.rules',
+      context: {'attempt': 6},
+    );
   }
 
   Future<void> _clearController() => _cas.cookies.clearHost(

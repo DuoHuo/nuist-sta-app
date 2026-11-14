@@ -13,6 +13,7 @@ class EstablishedEntry {
     required this.landing,
     required this.at,
     this.restored = false,
+    this.diagnosticRecord,
   });
 
   final String landing;
@@ -21,12 +22,16 @@ class EstablishedEntry {
   /// 是否是从磁盘恢复、本进程还没验证过的条目。
   final bool restored;
 
+  /// 原登录响应在诊断日志中的精确引用；凭据存储不重复保存响应正文。
+  final Map<String, Object?>? diagnosticRecord;
+
   bool isExpired(Duration ttl, {DateTime? now}) =>
       (now ?? DateTime.now()).difference(at) > ttl;
 
   Map<String, dynamic> toJson() => {
     'landing': landing,
     'at': at.millisecondsSinceEpoch,
+    'diagnostic_record': ?_readDiagnosticRecord(diagnosticRecord),
   };
 
   static EstablishedEntry? fromJson(Object? json) {
@@ -38,7 +43,21 @@ class EstablishedEntry {
       landing: landing,
       at: DateTime.fromMillisecondsSinceEpoch(at),
       restored: true,
+      diagnosticRecord: _readDiagnosticRecord(json['diagnostic_record']),
     );
+  }
+
+  static Map<String, Object?>? _readDiagnosticRecord(Object? value) {
+    if (value is! Map) return null;
+    final session = value['session_id'];
+    final sequence = value['seq'];
+    if (session is! String ||
+        !RegExp(r'^[a-f0-9]{16}$').hasMatch(session) ||
+        sequence is! int ||
+        sequence < 0) {
+      return null;
+    }
+    return Map.unmodifiable({'session_id': session, 'seq': sequence});
   }
 }
 
@@ -58,15 +77,44 @@ class EstablishedStore {
       final raw = await _storage.read(key: _key);
       if (raw == null || raw.isEmpty) return {};
       final decoded = jsonDecode(raw);
-      if (decoded is! Map) return {};
+      if (decoded is! Map) {
+        _log.warning(
+          'cache.schema_invalid',
+          fields: {
+            'reason_code': 'established_cache_not_object',
+            'outcome': 'cache_fallback',
+          },
+        );
+        return {};
+      }
       final entries = <String, EstablishedEntry>{};
+      var invalid = 0;
       for (final MapEntry(:key, :value) in decoded.entries) {
         final entry = EstablishedEntry.fromJson(value);
-        if (key is String && entry != null) entries[key] = entry;
+        if (key is String && entry != null) {
+          entries[key] = entry;
+        } else {
+          invalid++;
+        }
+      }
+      if (invalid > 0) {
+        _log.warning(
+          'cache.entries_discarded',
+          fields: {
+            'skipped_count': invalid,
+            'reason_code': 'established_entries_invalid',
+            'outcome': 'cache_fallback',
+          },
+        );
       }
       return entries;
     } catch (error, stackTrace) {
-      _log.warning('read_failed', error: error, stackTrace: stackTrace);
+      _log.warning(
+        'read_failed',
+        error: error,
+        stackTrace: stackTrace,
+        fields: {'stage': 'session.cache.read', 'outcome': 'cache_fallback'},
+      );
       return {};
     }
   }
@@ -85,7 +133,12 @@ class EstablishedStore {
         }),
       );
     } catch (error, stackTrace) {
-      _log.warning('write_failed', error: error, stackTrace: stackTrace);
+      _log.warning(
+        'write_failed',
+        error: error,
+        stackTrace: stackTrace,
+        fields: {'stage': 'session.cache.write', 'outcome': 'memory_fallback'},
+      );
     }
   }
 }

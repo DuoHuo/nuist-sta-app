@@ -8,6 +8,9 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/app_snack_bar.dart';
 import '../../core/app_select.dart';
+import '../../core/logging/app_log.dart';
+import '../../core/logging/diagnostic_error.dart';
+import '../../core/network/web_diagnostics.dart';
 import 'campus_building_model.dart';
 import 'campus_map_api.dart';
 import 'campus_map_widgets.dart';
@@ -32,6 +35,7 @@ class CampusBuildingModelEntry extends StatefulWidget {
 }
 
 class _CampusBuildingModelEntryState extends State<CampusBuildingModelEntry> {
+  static final _log = AppLog.logger('campus_map.building_model');
   MapPalette get colors => MapPalette.of(context);
 
   CampusBuildingModel? _model;
@@ -64,7 +68,13 @@ class _CampusBuildingModelEntryState extends State<CampusBuildingModelEntry> {
     });
     if (source == null) return;
     try {
-      final model = await source.loadBuildingModel(widget.buildingId);
+      final model = await _log.operation(
+        'model.load',
+        () => source.loadBuildingModel(widget.buildingId),
+        resultFields: (value) => {
+          'outcome': value == null ? 'unavailable' : 'success',
+        },
+      );
       if (!mounted || revision != _revision) return;
       setState(() {
         _model = model;
@@ -248,7 +258,9 @@ class _ModelWebView extends StatefulWidget {
 }
 
 class _ModelWebViewState extends State<_ModelWebView> {
+  static final _log = AppLog.logger('campus_map.model_web');
   WebViewController? _controller;
+  WebDiagnostics? _diagnostics;
   Timer? _timeout;
   String? _error;
   bool _ready = false;
@@ -267,6 +279,19 @@ class _ModelWebViewState extends State<_ModelWebView> {
     try {
       final controller = WebViewController();
       await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+      final diagnostics = _diagnostics = WebDiagnostics(
+        controller,
+        scope: 'campus_map.model_web',
+      );
+      try {
+        await diagnostics.attach();
+      } catch (error, stackTrace) {
+        _log.warning(
+          'capture.attach_failed',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
       await controller.addJavaScriptChannel(
         'CampusModelViewer',
         onMessageReceived: (message) {
@@ -276,6 +301,7 @@ class _ModelWebViewState extends State<_ModelWebView> {
             if (data is! Map) return;
             if (data['type'] == 'ready') {
               _timeout?.cancel();
+              _log.info('model.view_ready');
               setState(() => _ready = true);
             } else if (data['type'] == 'error') {
               _fail(
@@ -291,6 +317,8 @@ class _ModelWebViewState extends State<_ModelWebView> {
       );
       await controller.setNavigationDelegate(
         NavigationDelegate(
+          onPageStarted: diagnostics.pageStarted,
+          onPageFinished: diagnostics.pageFinished,
           onNavigationRequest: (request) {
             final target = Uri.tryParse(request.url);
             return target != null &&
@@ -302,9 +330,11 @@ class _ModelWebViewState extends State<_ModelWebView> {
                 : NavigationDecision.prevent;
           },
           onWebResourceError: (error) {
+            diagnostics.resourceError(error);
             if (error.isForMainFrame == true) _fail('三维查看页面加载失败，请检查网络后重试');
           },
           onHttpError: (error) {
+            diagnostics.httpError(error);
             if (error.request?.uri.toString() == widget.uri.toString()) {
               _fail('三维查看页面请求失败（HTTP ${error.response?.statusCode ?? '未知'}）');
             }
@@ -314,19 +344,31 @@ class _ModelWebViewState extends State<_ModelWebView> {
       if (!mounted) return;
       setState(() => _controller = controller);
       await controller.loadRequest(widget.uri);
-    } catch (_) {
-      _fail('无法启动三维查看页面，请重试或复制链接到浏览器打开');
+    } catch (error, stackTrace) {
+      _fail('无法启动三维查看页面，请重试或复制链接到浏览器打开', error: error, stackTrace: stackTrace);
     }
   }
 
-  void _fail(String message) {
+  void _fail(String message, {Object? error, StackTrace? stackTrace}) {
     if (!mounted) return;
+    _log.warning(
+      'model.view_failed',
+      error:
+          error ??
+          DiagnosticException(
+            message,
+            code: 'model_view_failed',
+            stage: 'webview.model',
+          ),
+      stackTrace: stackTrace,
+    );
     _timeout?.cancel();
     setState(() => _error = message);
   }
 
   @override
   void dispose() {
+    _diagnostics?.dispose();
     _timeout?.cancel();
     super.dispose();
   }

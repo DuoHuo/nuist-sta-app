@@ -6,6 +6,7 @@ import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
+import '../../core/logging/diagnostic_error.dart';
 import 'free_classroom_models.dart';
 import '../../core/auth/safe_message.dart';
 
@@ -70,7 +71,7 @@ class FreeClassroomApi {
 
   /// [date] 在校历上的学期 / 周次 / 星期，以及该学期的大节定义。
   ///
-  /// 日期不在任何学期范围内（寒暑假）时抛 [PortalLoginError] 说明原因。
+  /// 日期不在任何学期范围内（寒暑假）时抛 [DiagnosticException] 说明原因。
   static Future<TermCalendar> calendar(DateTime date) async {
     final key = dateKeyOf(date);
     final termRows = await _rows('gjrqcxdyxnxq', {'KSRQ': key, 'JSRQ': key});
@@ -78,7 +79,12 @@ class FreeClassroomApi {
         ? ''
         : (termRows.first['XQ'] ?? '').toString();
     if (termCode.isEmpty) {
-      throw const PortalLoginError('该日期不在校历范围内，可能处于假期');
+      throw const DiagnosticException(
+        '该日期不在校历范围内，可能处于假期',
+        code: 'calendar_date_outside_term',
+        stage: 'calendar.resolve',
+        context: {'endpoint': 'free_classroom.term', 'service': 'jwxt'},
+      );
     }
     // `2026-2027-1` → 学年 `2026-2027`，学期 `1`。
     final dash = termCode.lastIndexOf('-');
@@ -94,7 +100,12 @@ class FreeClassroomApi {
     final week = int.tryParse('${position['ZC']}');
     final weekday = int.tryParse('${position['XQJ']}');
     if (week == null || weekday == null) {
-      throw const PortalLoginError('教务未返回该日期的周次信息');
+      throw const DiagnosticException(
+        '教务未返回该日期的周次信息',
+        code: 'calendar_week_missing',
+        stage: 'calendar.resolve',
+        context: {'endpoint': 'free_classroom.week', 'service': 'jwxt'},
+      );
     }
     return TermCalendar(
       termCode: termCode,
@@ -144,7 +155,14 @@ class FreeClassroomApi {
   ) async {
     final datas = await _datas(name, fields);
     final rows = datas['rows'];
-    if (rows is! List) return const [];
+    if (rows is! List) {
+      throw DiagnosticException(
+        '教务响应缺少列表数据',
+        code: 'response_rows_missing',
+        stage: 'response.validate',
+        context: {'endpoint': 'free_classroom.$name', 'service': 'jwxt'},
+      );
+    }
     return [
       for (final row in rows)
         if (row is Map<String, dynamic>) row,
@@ -170,17 +188,30 @@ class FreeClassroomApi {
         'response.rejected',
         fields: {'service': 'jwxt', 'response_code': code},
       );
-      throw PortalLoginError(
+      throw DiagnosticException(
         prefixedServerMessage(
           '教务接口返回错误：',
           body['msg'],
           fallback: '教务接口返回错误，请稍后重试',
         ),
+        code: 'service_rejected',
+        stage: 'response.validate',
+        context: {
+          'endpoint': 'free_classroom.$name',
+          'service': 'jwxt',
+          'response_code': code,
+        },
       );
     }
     final datas = body['datas'];
     final section = datas is Map<String, dynamic> ? datas[name] : null;
-    return section is Map<String, dynamic> ? section : const {};
+    if (section is Map<String, dynamic>) return section;
+    throw DiagnosticException(
+      '教务响应缺少目标数据段',
+      code: 'response_section_missing',
+      stage: 'response.validate',
+      context: {'endpoint': 'free_classroom.$name', 'service': 'jwxt'},
+    );
   }
 
   static Map<String, dynamic> _firstRowOrSelf(Map<String, dynamic> datas) {
@@ -220,11 +251,26 @@ class FreeClassroomApi {
     try {
       final decoded = raw is String ? jsonDecode(raw) : raw;
       if (decoded is Map<String, dynamic>) return decoded;
-    } on FormatException {
-      // HTML 登录页，按会话失效处理。
+    } on FormatException catch (error, stackTrace) {
+      if (_looksLikeLoginPage(response)) {
+        _appReady = false;
+        return null;
+      }
+      throw DiagnosticException(
+        '教务响应不是有效 JSON',
+        code: 'response_invalid_json',
+        stage: 'response.decode',
+        cause: error,
+        causeStackTrace: stackTrace,
+        context: {'endpoint': 'free_classroom.$name', 'service': 'jwxt'},
+      );
     }
-    _appReady = false;
-    return null;
+    throw DiagnosticException(
+      '教务响应不是对象',
+      code: 'response_schema_mismatch',
+      stage: 'response.validate',
+      context: {'endpoint': 'free_classroom.$name', 'service': 'jwxt'},
+    );
   }
 
   /// 拿到已登录教务、且 kxjas 应用首页已访问过的客户端。

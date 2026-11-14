@@ -1,9 +1,10 @@
 import 'dart:convert';
 
 import '../../core/auth/portal_exceptions.dart';
-import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
+import '../../core/logging/app_log.dart';
+import '../../core/logging/diagnostic_error.dart';
 import 'electricity_models.dart';
 import '../../core/auth/safe_message.dart';
 
@@ -14,91 +15,173 @@ import '../../core/auth/safe_message.dart';
 /// 返回 JSON 的接口不适用，所以这里自己判断 token 失效并强制重登一次。
 class ElectricityApi {
   ElectricityApi._();
+  static final _log = AppLog.logger('electricity.api');
 
   static final Uri _api = Uri.parse(
     'https://${CampusHosts.icard}/charge/feeitem/getThirdData',
   );
   static const _feeItemId = '448';
 
-  static Future<List<ElecOption>> listCampuses() async {
-    final data = await _post({'type': 'select', 'level': '0'});
-    return _options(data);
-  }
+  static Future<List<ElecOption>> listCampuses() => _log.operation(
+    'campuses.query',
+    () async {
+      final data = await _post({
+        'type': 'select',
+        'level': '0',
+      }, endpoint: 'icard.campuses');
+      return _options(data);
+    },
+    resultFields: (items) => {'count': items.length},
+    successLevel: AppLogLevel.debug,
+  );
 
-  static Future<List<ElecOption>> listBuildings(ElecOption campus) async {
-    final data = await _post({
-      'type': 'select',
-      'level': '1',
-      'xiaoqu_id': campus.value,
-    });
-    return _options(data);
-  }
+  static Future<List<ElecOption>> listBuildings(ElecOption campus) =>
+      _log.operation(
+        'buildings.query',
+        () async {
+          final data = await _post({
+            'type': 'select',
+            'level': '1',
+            'xiaoqu_id': campus.value,
+          }, endpoint: 'icard.buildings');
+          return _options(data);
+        },
+        resultFields: (items) => {'count': items.length},
+        successLevel: AppLogLevel.debug,
+      );
 
   static Future<List<ElecOption>> listRooms(
     ElecOption campus,
     ElecOption building,
-  ) async {
-    final data = await _post({
-      'type': 'select',
-      'level': '2',
-      'xiaoqu_id': campus.value,
-      'loudong_id': building.value,
-    });
-    return _options(data);
-  }
+  ) => _log.operation(
+    'rooms.query',
+    () async {
+      final data = await _post({
+        'type': 'select',
+        'level': '2',
+        'xiaoqu_id': campus.value,
+        'loudong_id': building.value,
+      }, endpoint: 'icard.rooms');
+      return _options(data);
+    },
+    resultFields: (items) => {'count': items.length},
+    successLevel: AppLogLevel.debug,
+  );
 
   /// 查询剩余电量（度）。
-  static Future<double> queryBalance(ElecRoom room) async {
-    final data = await _post({
-      'type': 'IEC',
-      'level': '3',
-      'xiaoqu_id': room.campus.value,
-      'loudong_id': room.building.value,
-      'room_id': room.room.value,
-    });
-    final map = data['map'];
-    final kwh = _extractSurplus(map);
-    if (kwh == null) {
-      portalLog(
-        'response.balance_missing',
-        fields: {
-          'service': 'icard',
-          'field_count': map is Map ? map.length : 0,
+  static Future<double> queryBalance(ElecRoom room, {PortalSession? session}) =>
+      _log.operation(
+        'balance.query',
+        () async {
+          final data = await _post(
+            {
+              'type': 'IEC',
+              'level': '3',
+              'xiaoqu_id': room.campus.value,
+              'loudong_id': room.building.value,
+              'room_id': room.room.value,
+            },
+            endpoint: 'icard.balance',
+            session: session,
+          );
+          final map = data['map'];
+          final kwh = _extractSurplus(map);
+          if (kwh == null) {
+            throw DiagnosticException(
+              '电费接口未返回可识别的剩余电量，请稍后重试',
+              code: 'balance_field_unavailable',
+              stage: 'icard.balance',
+              context: {
+                'service': 'icard',
+                'endpoint': 'icard.balance',
+                'field_count': map is Map ? map.length : 0,
+                'details': {
+                  'map_present': map != null,
+                  'map_type': map.runtimeType.toString(),
+                  'data_type': map is Map
+                      ? map['data'].runtimeType.toString()
+                      : null,
+                  'show_data_type': map is Map
+                      ? map['showData'].runtimeType.toString()
+                      : null,
+                  'surplus_present':
+                      map is Map && map.containsKey('surplusCharge'),
+                },
+              },
+            );
+          }
+          return kwh;
         },
+        fields: const {'service': 'icard', 'endpoint': 'icard.balance'},
+        successLevel: AppLogLevel.debug,
       );
-      throw const PortalLoginError('电费接口未返回剩余电量，请稍后重试');
-    }
-    return kwh;
-  }
 
   // ==================== 内部实现 ====================
 
   static List<ElecOption> _options(Map<String, dynamic> data) {
     final list = (data['map'] as Map<String, dynamic>?)?['data'];
-    if (list is! List) return const [];
+    if (list is! List) {
+      _log.warning(
+        'options.unavailable',
+        fields: {
+          'service': 'icard',
+          'reason_code': 'options_list_missing',
+          'details': {'response_type': list.runtimeType.toString()},
+        },
+      );
+      return const [];
+    }
     return [
       for (final item in list)
         if (item is Map<String, dynamic>) ElecOption.fromJson(item),
     ];
   }
 
-  static Future<Map<String, dynamic>> _post(Map<String, String> fields) async {
-    var result = await _send(fields, force: false);
+  static Future<Map<String, dynamic>> _post(
+    Map<String, String> fields, {
+    required String endpoint,
+    PortalSession? session,
+  }) async {
+    var result = await _send(
+      fields,
+      force: false,
+      endpoint: endpoint,
+      session: session,
+    );
     if (_looksUnauthorized(result)) {
-      portalLog('session.expired', fields: {'service': 'icard'});
-      result = await _send(fields, force: true);
+      _log.info(
+        'session.reauth_required',
+        fields: {
+          'service': 'icard',
+          'endpoint': endpoint,
+          'attempt': 1,
+          'reason_code': 'icard_authorization_rejected',
+          'response_code': result['code'],
+        },
+      );
+      result = await _send(
+        fields,
+        force: true,
+        endpoint: endpoint,
+        session: session,
+      );
     }
     if (result['code'] != 200) {
-      portalLog(
-        'response.rejected',
-        fields: {'service': 'icard', 'response_code': result['code']},
-      );
-      throw PortalLoginError(
+      throw DiagnosticException(
         prefixedServerMessage(
           '电费接口返回错误：',
           result['msg'],
           fallback: '电费接口返回错误，请稍后重试',
         ),
+        code: _looksUnauthorized(result)
+            ? 'icard_reauthentication_exhausted'
+            : 'icard_response_rejected',
+        stage: 'icard.response',
+        context: {
+          'service': 'icard',
+          'endpoint': endpoint,
+          'response_code': result['code'],
+        },
       );
     }
     return result;
@@ -107,13 +190,16 @@ class ElectricityApi {
   static Future<Map<String, dynamic>> _send(
     Map<String, String> fields, {
     required bool force,
+    required String endpoint,
+    PortalSession? session,
   }) async {
-    final landing = await PortalSession.instance.ensureLoggedIn(
+    final portal = session ?? PortalSession.instance;
+    final login = await portal.ensureLoggedInWithEvidence(
       PortalServices.icard,
       force: force,
     );
-    final token = _tokenFromLanding(landing);
-    final http = await PortalSession.instance.clientFor(PortalServices.icard);
+    final token = _tokenFromLanding(login);
+    final http = await portal.clientFor(PortalServices.icard);
     final body = {
       'feeitemid': _feeItemId,
       ...fields,
@@ -131,20 +217,59 @@ class ElectricityApi {
     try {
       final decoded = raw is String ? jsonDecode(raw) : raw;
       if (decoded is Map<String, dynamic>) return decoded;
-    } on FormatException {
-      // 落到下面统一报错。
+    } on FormatException catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        DiagnosticException(
+          '电费接口返回了无法解析的内容',
+          code: 'icard_json_invalid',
+          stage: 'icard.decode',
+          cause: error,
+          causeStackTrace: stackTrace,
+          context: {
+            'service': 'icard',
+            'endpoint': endpoint,
+            'status_code': response.statusCode,
+          },
+        ),
+        stackTrace,
+      );
     }
-    throw const PortalLoginError('电费接口返回了无法识别的内容');
+    throw DiagnosticException(
+      '电费接口返回了无法识别的内容',
+      code: 'icard_response_not_object',
+      stage: 'icard.decode',
+      context: {
+        'service': 'icard',
+        'endpoint': endpoint,
+        'status_code': response.statusCode,
+        'response_type': raw.runtimeType.toString(),
+      },
+    );
   }
 
-  static String _tokenFromLanding(String landing) {
+  static String _tokenFromLanding(PortalLoginResult login) {
+    final landing = login.landing;
+    final details = <String, Object?>{
+      ...login.diagnosticContext,
+      'authorization_parameter': 'synjones-auth',
+      'inspection_stage': 'before_balance_request',
+    };
+    AppLog.addEvidence('icard.authorization', {
+      for (final entry in details.entries)
+        if (entry.key != 'landing_response') entry.key: entry.value,
+    });
     final token = Uri.tryParse(landing)?.queryParameters['synjones-auth'];
     if (token == null || token.isEmpty) {
-      portalLog(
-        'authentication.authorization_missing',
-        fields: {'service': 'icard'},
+      throw PortalLoginError(
+        '一卡通登录未返回授权信息，请稍后重试',
+        code: 'icard_authorization_missing',
+        stage: 'icard.authorization',
+        context: {
+          'service': 'icard',
+          'endpoint': 'icard.landing',
+          'details': {...details, 'balance_request_sent': false},
+        },
       );
-      throw const PortalLoginError('一卡通登录失败，请稍后重试');
     }
     return 'bearer $token';
   }

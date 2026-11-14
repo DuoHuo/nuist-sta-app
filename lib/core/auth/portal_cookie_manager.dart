@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 
+import '../logging/app_log.dart';
 import '../network/vpn_log.dart';
 import 'portal_exceptions.dart';
 
@@ -19,6 +20,7 @@ import 'portal_exceptions.dart';
 /// Cookie 也一起丢掉），CAS 登录因此中断。原生客户端本来就不实现 SameSite
 /// 语义，这里去掉该属性；实在无法解析的 Cookie 单独丢弃，不再拖垮整次请求。
 class PortalCookieManager extends CookieManager {
+  static final _log = AppLog.logger('core.auth.cookie_manager');
   PortalCookieManager(
     super.cookieJar, {
     this.beforeRequest,
@@ -75,7 +77,7 @@ class PortalCookieManager extends CookieManager {
           ? cookies
           : null;
       handler.next(options);
-    } catch (error) {
+    } catch (error, stackTrace) {
       log?.fail(error);
       handler.reject(
         error is DioException
@@ -83,8 +85,18 @@ class PortalCookieManager extends CookieManager {
             : DioException(
                 requestOptions: options,
                 error: error is TimeoutException
-                    ? const PortalNetworkError('校园网络准备超时，请检查网络后重试')
+                    ? PortalNetworkError(
+                        '校园网络准备超时，请检查网络后重试',
+                        code: 'request_preparation_timeout',
+                        stage: 'request.prepare',
+                        cause: error,
+                        causeStackTrace: stackTrace,
+                        context: {
+                          'timeout_ms': preparationTimeout.inMilliseconds,
+                        },
+                      )
                     : error,
+                stackTrace: stackTrace,
               ),
         true,
       );
@@ -99,10 +111,14 @@ class PortalCookieManager extends CookieManager {
   ) async {
     try {
       checkSession?.call();
-    } catch (error) {
+    } catch (error, stackTrace) {
       VpnRequestLog.of(response.requestOptions)?.fail(error);
       handler.reject(
-        DioException(requestOptions: response.requestOptions, error: error),
+        DioException(
+          requestOptions: response.requestOptions,
+          error: error,
+          stackTrace: stackTrace,
+        ),
         true,
       );
       return;
@@ -161,10 +177,28 @@ class PortalCookieManager extends CookieManager {
   static List<String> _normalizeSetCookieHeader(String header) {
     final whole = _normalizeSetCookie(header);
     if (whole != null) return [whole];
-    return [
-      for (final part in header.split(_setCookieSeparator))
-        if (part.isNotEmpty) ?_normalizeSetCookie(part),
-    ];
+    final kept = <String>[];
+    var discarded = 0;
+    for (final part in header.split(_setCookieSeparator)) {
+      if (part.isEmpty) continue;
+      final normalized = _normalizeSetCookie(part);
+      if (normalized == null) {
+        discarded++;
+      } else {
+        kept.add(normalized);
+      }
+    }
+    if (discarded > 0) {
+      _log.warning(
+        'cookie.invalid_discarded',
+        fields: {
+          'skipped_count': discarded,
+          'reason_code': 'response_cookie_invalid',
+          'stage': 'session.cookie.parse',
+        },
+      );
+    }
+    return kept;
   }
 
   /// 使用不含 Location 的响应视图保存 Cookie，原响应仍供调用方跟随跳转。

@@ -67,8 +67,12 @@ class ContributorController extends ChangeNotifier {
           _failed = false;
           await _store.save(ContributorCache(items: items, fetchedAt: _now()));
         },
-        failureEvent: 'refresh.failed_using_cache',
-        errorFields: (_) => {'has_cache': hasData, 'outcome': 'cache_fallback'},
+        failureEvent: 'refresh.failed',
+        resultFields: (_) => {'count': _items?.length ?? 0},
+        errorFields: (_) => {
+          'has_cache': hasData,
+          'outcome': hasData ? 'cache_fallback' : 'unavailable',
+        },
       );
     } catch (_) {
       if (!hasData) _failed = true;

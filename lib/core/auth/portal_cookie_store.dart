@@ -35,7 +35,11 @@ class PortalCookieStore {
   /// 检查请求是否仍属于当前账号。
   void checkGeneration(int generation) {
     if (generation != _generation) {
-      throw const PortalLoginError('登录状态已清除，请重新发起请求');
+      throw const PortalLoginError(
+        '登录状态已清除，请重新发起请求',
+        code: 'session_generation_changed',
+        stage: 'session.validate',
+      );
     }
   }
 

@@ -27,6 +27,7 @@ class SecureCookieStorage implements Storage {
     } catch (error, stackTrace) {
       _log.warning(
         'read_failed',
+        fields: {'stage': 'session.cookie.read', 'outcome': 'cache_fallback'},
         error: error,
         stackTrace: stackTrace,
         errorKind: vpnErrorKind(error),
@@ -45,6 +46,7 @@ class SecureCookieStorage implements Storage {
     } catch (error, stackTrace) {
       _log.warning(
         'write_failed_using_memory',
+        fields: {'stage': 'session.cookie.write', 'outcome': 'memory_fallback'},
         error: error,
         stackTrace: stackTrace,
         errorKind: vpnErrorKind(error),
@@ -59,6 +61,7 @@ class SecureCookieStorage implements Storage {
     } catch (error, stackTrace) {
       _log.warning(
         'delete_failed',
+        fields: {'stage': 'session.cookie.delete', 'outcome': 'failure'},
         error: error,
         stackTrace: stackTrace,
         errorKind: vpnErrorKind(error),

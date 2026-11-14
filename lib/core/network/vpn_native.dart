@@ -4,7 +4,86 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
 
+import '../logging/diagnostic_error.dart';
 import 'vpn_log.dart';
+
+/// 保留原生错误类别和发生阶段，同时兼容现有网络错误处理。
+class VpnNativeException extends SocketException implements DiagnosticError {
+  VpnNativeException(
+    super.message, {
+    required this.code,
+    required this.stage,
+    this.cause,
+    this.causeStackTrace,
+    this.context = const {},
+    super.osError,
+  });
+
+  final String code;
+  final String stage;
+  @override
+  final Object? cause;
+  @override
+  final StackTrace? causeStackTrace;
+  final Map<String, Object?> context;
+
+  @override
+  Map<String, Object?> get diagnosticContext => {
+    ...context,
+    'reason_code': code,
+    'stage':
+        context['native_stage'] is String &&
+            context['native_stage'] != 'unknown'
+        ? 'native.${context['native_stage']}'
+        : stage,
+    'error_kind':
+        const {
+          'native_platform_unsupported',
+          'native_library_load_failed',
+        }.contains(code)
+        ? 'platform_unavailable'
+        : context['native_stage'] == 'tls'
+        ? 'tls_handshake'
+        : context['native_kind'] == 'TimedOut' || code == 'native_call_timeout'
+        ? 'timeout'
+        : 'connection_error',
+  };
+
+  /// 读取新的结构化失败；旧版原生库仍可返回字符串，但明确标识信息缺失。
+  factory VpnNativeException.fromResponse(
+    Map<String, dynamic> response, {
+    required String method,
+  }) {
+    final details = response['diagnostic'];
+    final diagnostic = details is Map ? details : const {};
+    Object? cause;
+    if (diagnostic['causes'] case final List causes) {
+      for (final message in causes.reversed.whereType<String>()) {
+        cause = DiagnosticException(
+          message,
+          code: 'native_cause',
+          stage: diagnostic['stage'] as String? ?? 'native.$method',
+          cause: cause,
+        );
+      }
+    }
+    final osCode = diagnostic['os_code'];
+    return VpnNativeException(
+      response['error'] as String? ?? 'VPN 操作失败',
+      code: diagnostic['code'] as String? ?? 'native_legacy_error',
+      stage: diagnostic['stage'] as String? ?? 'native.$method',
+      cause: cause,
+      osError: osCode is int ? OSError('', osCode) : null,
+      context: {
+        'method': method,
+        'native_kind': diagnostic['native_kind'],
+        'native_stage': vpnNativeStage(diagnostic['stage']),
+        'native_diagnostics_available': details is Map,
+        'details': {'native_diagnostic': diagnostic},
+      },
+    );
+  }
+}
 
 /// Rust 控制接口。阻塞的握手、DNS 和建连在后台 isolate 中执行。
 class VpnNative {
@@ -26,30 +105,47 @@ class VpnNative {
         var expired = false;
         final work = Isolate.run(() => _call(request));
         unawaited(
-          work.then((result) async {
-            // 即使 isolate 调度迟到，过期的启动结果也不能留下孤立隧道。
-            if (expired && method == 'start' && result['id'] is int) {
-              try {
-                await call({'method': 'stop', 'id': result['id']});
-              } catch (_) {}
-            }
-            if (expired &&
-                method == 'prepareStart' &&
-                result['startId'] is int) {
-              try {
-                await call({
-                  'method': 'cancelStart',
-                  'startId': result['startId'],
-                });
-              } catch (_) {}
-            }
-          }, onError: (Object _) {}),
+          work.then(
+            (result) async {
+              // 即使 isolate 调度迟到，过期的启动结果也不能留下孤立隧道。
+              if (expired && method == 'start' && result['id'] is int) {
+                try {
+                  await call({'method': 'stop', 'id': result['id']});
+                } catch (_) {}
+              }
+              if (expired &&
+                  method == 'prepareStart' &&
+                  result['startId'] is int) {
+                try {
+                  await call({
+                    'method': 'cancelStart',
+                    'startId': result['startId'],
+                  });
+                } catch (_) {}
+              }
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              if (expired) {
+                vpnLog(
+                  'native.late_failure',
+                  fields: {'stage': stage},
+                  error: error,
+                  stackTrace: stackTrace,
+                );
+              }
+            },
+          ),
         );
         return work.timeout(
           timeout,
           onTimeout: () {
             expired = true;
-            throw SocketException('VPN 原生 $method 调用超时，请重试');
+            throw VpnNativeException(
+              'VPN 原生 $method 调用超时，请重试',
+              code: 'native_call_timeout',
+              stage: stage,
+              context: {'timeout_ms': timeout.inMilliseconds},
+            );
           },
         );
       },
@@ -73,13 +169,23 @@ class VpnNative {
             'android' || 'linux' => 'libnuist_vpn.so',
             'windows' => 'nuist_vpn.dll',
             'macos' => 'libnuist_vpn.dylib',
-            _ => throw const SocketException('当前平台尚未接入校园 VPN 原生库'),
+            _ => throw VpnNativeException(
+              '当前平台尚未接入校园 VPN 原生库',
+              code: 'native_platform_unsupported',
+              stage: 'native.load',
+            ),
           };
     final DynamicLibrary library;
     try {
       library = DynamicLibrary.open(name);
-    } catch (_) {
-      throw const SocketException('未找到校园 VPN 原生库，请使用包含 Rust 核心的构建');
+    } catch (error, stackTrace) {
+      throw VpnNativeException(
+        '未找到校园 VPN 原生库，请使用包含 Rust 核心的构建',
+        code: 'native_library_load_failed',
+        stage: 'native.load',
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     }
     final allocate = library
         .lookupFunction<
@@ -119,7 +225,10 @@ class VpnNative {
       ) as Map<String, dynamic>;
       if (response['ok'] != true) {
         // 错误回到主 isolate 的阶段日志中归类，避免丢失业务 Trace。
-        throw SocketException(response['error'] as String? ?? 'VPN 操作失败');
+        throw VpnNativeException.fromResponse(
+          response,
+          method: request['method'] as String,
+        );
       }
       return response['data'] as Map<String, dynamic>;
     } finally {

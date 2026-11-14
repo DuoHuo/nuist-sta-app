@@ -1,6 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
+import 'package:nuist_sta_app/core/refresh/silent_refresh.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
@@ -43,6 +46,40 @@ void main() {
   test('isManual flag', () {
     expect(_manual('x').isManual, isTrue);
     expect(_jwxt('j').isManual, isFalse);
+  });
+
+  test('坏手动课程只汇总一次诊断，保留正常条目且不记录课程正文', () async {
+    final file = File('${tmp.path}/manual_courses.json');
+    await file.writeAsString(
+      jsonEncode({
+        'courses': [
+          _manual('正常合成课程').toJson(),
+          {'name': '不可写入日志的合成课程', 'credit': 'invalid'},
+          'invalid-entry',
+        ],
+      }),
+    );
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
+    late List<Course> courses;
+    await SilentRefresh.run(
+      'test.manual_courses',
+      action: () async {
+        courses = await TimetableStore.readManualCourses();
+      },
+    );
+    expect(courses.map((course) => course.name), ['正常合成课程']);
+    final degraded = records.singleWhere(
+      (record) => record['event'] == 'manual_courses.read_degraded',
+    );
+    final attrs = degraded['attrs'] as Map;
+    expect(attrs['file_kind'], 'manual_courses.json');
+    expect(attrs['skipped_count'], 2);
+    expect(attrs['error_type'], isNotNull);
+    expect(attrs['stack_trace'], isNotEmpty);
+    expect((records.last['attrs'] as Map)['outcome'], 'degraded');
+    expect(jsonEncode(records), isNot(contains('不可写入日志的合成课程')));
   });
 
   test('CRUD on manual courses', () async {

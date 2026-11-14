@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../config/api_endpoints.dart';
 import '../logging/app_log.dart';
+import '../logging/http_diagnostics.dart';
 import 'client_metadata.dart';
 
 final _ownedOrigin = Uri.parse(kApiBase);
@@ -50,6 +51,7 @@ Dio createOwnedApiDio({
           request.headers.addAll(const ClientMetadata().headers);
           log.warning(
             'metadata.unavailable',
+            fields: {'secret_context': true, 'stage': 'metadata.load'},
             error: error,
             stackTrace: stackTrace,
           );
@@ -58,5 +60,6 @@ Dio createOwnedApiDio({
       },
     ),
   );
+  installHttpDiagnostics(dio);
   return dio;
 }

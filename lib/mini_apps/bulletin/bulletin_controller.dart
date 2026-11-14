@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../../core/logging/app_log.dart';
+import '../../core/refresh/silent_refresh.dart';
 import 'bulletin_api.dart';
 import 'bulletin_models.dart';
 import 'bulletin_store.dart';
@@ -124,6 +125,7 @@ class BulletinController extends ChangeNotifier {
         failureEvent: 'category.load_failed',
       );
     } catch (_) {
+      SilentRefresh.failCurrent();
       _categoryErrors[key] = '公告加载失败，请稍后重试';
     } finally {
       _loadingCategories.remove(key);
@@ -160,6 +162,7 @@ class BulletinController extends ChangeNotifier {
         failureEvent: 'category.load_more_failed',
       );
     } catch (_) {
+      SilentRefresh.failCurrent();
       _categoryErrors[key] = '加载更多失败，请稍后重试';
     } finally {
       _loadingCategories.remove(key);
@@ -194,7 +197,12 @@ class BulletinController extends ChangeNotifier {
   /// 检查最新公告，失败后最多尝试三次，持续失败时静默隐藏动态。
   Future<void> refreshFeed() async {
     await ensureStarted();
-    if (_disposed || !_subscription.enabled || _feedLoading) return;
+    if (_disposed || !_subscription.enabled || _feedLoading) {
+      SilentRefresh.skipCurrent(
+        reason: _feedLoading ? 'already_refreshing' : 'subscription_inactive',
+      );
+      return;
+    }
     final revision = _subscriptionRevision;
     _feedLoading = true;
     notifyListeners();
@@ -203,7 +211,10 @@ class BulletinController extends ChangeNotifier {
         'feed.refresh',
         () async {
           final latest = await _fetchFeedWithRetry(revision);
-          if (latest == null) return;
+          if (latest == null) {
+            SilentRefresh.skipCurrent();
+            return false;
+          }
           final newItems = _baselineReady
               ? latest.items
                     .where((item) => !_knownIds.contains(item.id))
@@ -220,11 +231,14 @@ class BulletinController extends ChangeNotifier {
           _pages[_pageKey(BulletinCategory.all.first, 1)] = latest;
           _feedUnavailable = false;
           await _save();
+          return true;
         },
         successLevel: AppLogLevel.debug,
         failureEvent: 'feed.refresh_failed',
+        outcomeForResult: (applied) => applied ? 'success' : 'skipped',
       );
     } catch (_) {
+      SilentRefresh.failCurrent();
       if (_feedRequestIsCurrent(revision)) _feedUnavailable = true;
     } finally {
       _feedLoading = false;
@@ -249,13 +263,16 @@ class BulletinController extends ChangeNotifier {
           pageNumber: 1,
         );
         return _feedRequestIsCurrent(revision) ? latest : null;
-      } catch (error) {
+      } catch (error, stackTrace) {
         _log.debug(
           'feed.retry_failed',
           fields: {
             'attempt': attempt + 1,
-            'error_type': error.runtimeType.toString(),
+            'wait_ms': attempt < 2 ? (attempt + 1) * 2000 : 0,
+            'retryable': attempt < 2,
           },
+          error: error,
+          stackTrace: stackTrace,
         );
         if (!_feedRequestIsCurrent(revision)) return null;
         if (attempt == 2) rethrow;

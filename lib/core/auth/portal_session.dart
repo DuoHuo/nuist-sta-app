@@ -9,6 +9,8 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../config/campus_config.dart';
 import '../logging/app_log.dart';
+import '../logging/diagnostic_redactor.dart';
+import '../logging/http_diagnostics.dart';
 import '../network/vpn_dio.dart';
 import '../network/vpn_gateway.dart';
 import '../network/vpn_log.dart';
@@ -47,6 +49,17 @@ abstract final class PortalServices {
   /// 该页「统一认证」按钮经 `/UnifiedAuth/CASLogin` 再 302 到 CAS，service 即此。
   /// 主机名统一小写后已实测 CAS 校验通过。
   static final labor = 'https://${CampusHosts.labor}/UnifiedAuth/CASLogin';
+}
+
+/// 本次取得的真实落地地址及其诊断依据；诊断副本已脱敏，业务地址保持原样。
+class PortalLoginResult {
+  const PortalLoginResult({
+    required this.landing,
+    required this.diagnosticContext,
+  });
+
+  final String landing;
+  final Map<String, Object?> diagnosticContext;
 }
 
 /// 统一门户的全局会话，是壳和所有小程序取用登录态的唯一入口。
@@ -134,7 +147,9 @@ class PortalSession {
   late final Future<void> _restored;
 
   /// 同一个 service 的并发请求合并成一次登录。
-  final Map<String, Future<String>> _pending = {};
+  final Map<String, Future<PortalLoginResult>> _pending = {};
+  final Map<String, int> _pendingIds = {};
+  static int _loginSequence = 0;
 
   /// 业务登录串行化队列；CAS 认证由 [_cas] 与 VPN 共同协调。
   Future<void> _queue = Future.value();
@@ -154,6 +169,34 @@ class PortalSession {
     bool force = false,
     bool trustRestored = true,
     void Function(String stage)? onStage,
+  }) async => (await _ensureLoggedIn(
+    service,
+    force: force,
+    trustRestored: trustRestored,
+    onStage: onStage,
+    loadCachedResponse: false,
+  )).landing;
+
+  /// 取得落地地址，并为当前操作补入其来源和原登录响应；旧缓存缺证据时明确说明。
+  Future<PortalLoginResult> ensureLoggedInWithEvidence(
+    String service, {
+    bool force = false,
+    bool trustRestored = true,
+    void Function(String stage)? onStage,
+  }) => _ensureLoggedIn(
+    service,
+    force: force,
+    trustRestored: trustRestored,
+    onStage: onStage,
+    loadCachedResponse: true,
+  );
+
+  Future<PortalLoginResult> _ensureLoggedIn(
+    String service, {
+    required bool force,
+    required bool trustRestored,
+    required bool loadCachedResponse,
+    void Function(String stage)? onStage,
   }) async {
     _ensureReady();
     if (_clearing case final clearing?) await clearing;
@@ -162,37 +205,85 @@ class PortalSession {
     await _restored;
     _cas.cookies.checkGeneration(generation);
     final pending = _pending[service];
-    if (pending != null) return pending;
+    if (pending != null) {
+      _log.debug(
+        'service.login_joined',
+        fields: {
+          'service': AppLog.serviceForHost(Uri.parse(service).host),
+          'shared_login_id': _pendingIds[service],
+        },
+      );
+      final shared = await pending;
+      _cas.cookies.checkGeneration(generation);
+      final details = Map<String, Object?>.from(shared.diagnosticContext)
+        ..['shared_login'] = true
+        ..['http_performed_for_this_lookup'] = false
+        ..['lookup_note'] = '本次复用正在进行的登录，响应来自同一个共享登录任务';
+      AppLog.addEvidence('portal.landing', details);
+      return PortalLoginResult(
+        landing: shared.landing,
+        diagnosticContext: Map.unmodifiable(details),
+      );
+    }
     if (!force) {
       final cached = _lookup(service, trustRestored: trustRestored);
-      if (cached != null) return cached;
+      if (cached != null) {
+        final result = await _landingResult(
+          service,
+          cached,
+          source: cached.restored ? 'restored' : 'memory',
+          loadCachedResponse: loadCachedResponse,
+        );
+        // 读取诊断文件期间可能解绑；新增的 await 不能让旧凭据继续出网。
+        _cas.cookies.checkGeneration(generation);
+        return result;
+      }
     }
     // 下面到登记 _pending 之间不能有 await，否则并发调用会漏过合流各登一次。
     if (force && _established.remove(service) != null) {
       unawaited(_persist());
     }
-    late final Future<String> future;
+    late final Future<PortalLoginResult> future;
     final cancelToken = CancelToken();
-    future =
-        _serialize(
-          () => _log.operation(
-            'service.login',
-            () => _performLogin(service, generation, onStage, cancelToken),
-            fields: {
-              'service': AppLog.serviceForHost(
-                Uri.tryParse(service)?.host ?? '',
-              ),
-              'force': force,
+    final loginId = ++_loginSequence;
+    final queued = Stopwatch()..start();
+    var phase = 'service.queue';
+    final fields = <String, Object?>{
+      'service': AppLog.serviceForHost(Uri.parse(service).host),
+      'force': force,
+      'login_id': loginId,
+    };
+    future = _log
+        .operation(
+          'service.login',
+          () => _serialize(
+            () {
+              phase = 'service.login';
+              _log.debug(
+                'service.login_dequeued',
+                fields: {...fields, 'queued_ms': queued.elapsedMilliseconds},
+              );
+              return _performLogin(service, generation, onStage, cancelToken);
             },
-            successLevel: AppLogLevel.debug,
-            failureLevel: AppLogLevel.debug,
+            onTimeout: () => cancelToken.cancel('业务登录整体超时'),
+            stage: () => phase,
+            context: fields,
           ),
-          onTimeout: () => cancelToken.cancel('业务登录整体超时'),
-        ).whenComplete(() {
-          if (identical(_pending[service], future)) _pending.remove(service);
+          fields: fields,
+          successLevel: AppLogLevel.debug,
+          failureLevel: AppLogLevel.warning,
+        )
+        .whenComplete(() {
+          if (identical(_pending[service], future)) {
+            _pending.remove(service);
+            _pendingIds.remove(service);
+          }
         });
+    _pendingIds[service] = loginId;
     _pending[service] = future;
-    return future;
+    final result = await future;
+    AppLog.addEvidence('portal.landing', result.diagnosticContext);
+    return result;
   }
 
   /// 拿到一个已登录 [service] 的 [PortalHttp]，其 dio 已带好会话 Cookie。
@@ -230,12 +321,28 @@ class PortalSession {
       if (!_looksLikeLoginPage(response)) return response;
 
       // 被门户弹回了登录页，说明落盘的会话已经过期，重登一次再放行。
-      portalLog('session.expired', fields: {'host': Uri.parse(service).host});
+      _log.info(
+        'session.reauth_required',
+        fields: {
+          'host': Uri.parse(service).host,
+          'attempt': 1,
+          'reason_code': 'response_returned_to_login',
+        },
+      );
       http = await clientFor(service, force: true);
       response = await http.followRedirects(await send(http));
       _cas.cookies.checkGeneration(generation);
       if (_looksLikeLoginPage(response)) {
-        throw const PortalLoginError('重新登录后仍被门户拦回登录页，请稍后再试');
+        throw PortalLoginError(
+          '重新登录后仍被门户拦回登录页，请稍后再试',
+          code: 'reauthentication_exhausted',
+          stage: 'service.request',
+          context: {
+            'attempt': 2,
+            'status_code': response.statusCode,
+            'service': AppLog.serviceForHost(Uri.parse(service).host),
+          },
+        );
       }
       return response;
     },
@@ -244,7 +351,7 @@ class PortalSession {
     },
     resultFields: (response) => {'status_code': response.statusCode},
     successLevel: AppLogLevel.debug,
-    failureLevel: AppLogLevel.debug,
+    failureLevel: AppLogLevel.warning,
   );
 
   /// 把 [urls] 各自所需的会话 Cookie 灌进 WebView，让 H5 页面打开即登录态。
@@ -297,6 +404,7 @@ class PortalSession {
     _clientGeneration = null;
     _established.clear();
     _pending.clear();
+    _pendingIds.clear();
     _queue = Future.value();
     credentialError.value = null;
     late final Future<void> clearing;
@@ -313,7 +421,17 @@ class PortalSession {
                 await _serializeWebView(() async {
                   await WebViewCookieManager().clearCookies();
                 });
-              } catch (_) {}
+              } catch (error, stackTrace) {
+                _log.warning(
+                  'webview.clear_failed',
+                  error: error,
+                  stackTrace: stackTrace,
+                  fields: {
+                    'stage': 'session.clear_webview',
+                    'reason_code': 'webview_cookie_clear_failed',
+                  },
+                );
+              }
             }
           }
         }().whenComplete(() {
@@ -420,22 +538,167 @@ class PortalSession {
   }
 
   /// 取 [service] 的缓存落地 URL；过期或不采信时返回 null。
-  String? _lookup(String service, {required bool trustRestored}) {
+  EstablishedEntry? _lookup(String service, {required bool trustRestored}) {
     final entry = _established[service];
-    if (entry == null) return null;
+    if (entry == null) {
+      portalLog(
+        'session.cache_miss',
+        fields: {'host': Uri.parse(service).host},
+      );
+      return null;
+    }
     if (entry.isExpired(establishedTtl)) {
       portalLog(
         'session.cache_expired',
-        fields: {'host': Uri.parse(service).host},
+        fields: {
+          'host': Uri.parse(service).host,
+          'details': {
+            'age_ms': DateTime.now().difference(entry.at).inMilliseconds,
+            'ttl_ms': establishedTtl.inMilliseconds,
+            'restored': entry.restored,
+          },
+        },
       );
       _established.remove(service);
       return null;
     }
-    if (entry.restored && !trustRestored) return null;
-    return entry.landing;
+    if (entry.restored && !trustRestored) {
+      portalLog(
+        'session.cache_not_trusted',
+        fields: {'host': Uri.parse(service).host},
+      );
+      return null;
+    }
+    portalLog(
+      'session.cache_hit',
+      fields: {
+        'host': Uri.parse(service).host,
+        'cache_source': entry.restored ? 'restored' : 'memory',
+      },
+    );
+    return entry;
   }
 
-  Future<String> _performLogin(
+  Future<PortalLoginResult> _landingResult(
+    String service,
+    EstablishedEntry entry, {
+    required String source,
+    bool loadCachedResponse = true,
+    bool publishEvidence = true,
+    Map<String, Object?>? currentEvidence,
+  }) async {
+    Map<String, Object?>? responseEvidence = currentEvidence;
+    String? unavailableReason;
+    final reference = entry.diagnosticRecord;
+    if (responseEvidence == null) {
+      if (reference == null) {
+        unavailableReason = entry.restored
+            ? 'restored_landing_only'
+            : 'landing_response_not_recorded';
+      } else if (!loadCachedResponse) {
+        unavailableReason = 'not_loaded_for_plain_lookup';
+      } else {
+        try {
+          final record = await AppLog.readRecord(reference);
+          final attrs = record?['attrs'];
+          final exchange = attrs is Map ? attrs['details'] : null;
+          final event = record?['event'];
+          final response = exchange is Map ? exchange['response'] : null;
+          final status = response is Map
+              ? response['status'] ?? response['status_code']
+              : null;
+          if (const {'http.exchange', 'http.exchange_failed'}.contains(event) &&
+              response is Map &&
+              status is int &&
+              status >= 100 &&
+              status <= 599 &&
+              (response.containsKey('body') ||
+                  response.containsKey('body_base64'))) {
+            responseEvidence = {
+              'record_ref': reference,
+              'exchange': Map<String, Object?>.from(exchange as Map),
+            };
+          } else {
+            final missing = exchange is Map
+                ? exchange['incomplete_reason']
+                : null;
+            final responseMissing = response is Map
+                ? response['incomplete_reason']
+                : null;
+            unavailableReason = record == null
+                ? 'diagnostic_record_expired_removed_or_unavailable'
+                : !const {
+                    'http.exchange',
+                    'http.exchange_failed',
+                  }.contains(event)
+                ? 'diagnostic_record_not_http_exchange'
+                : missing is String
+                ? missing
+                : responseMissing is String
+                ? responseMissing
+                : 'diagnostic_response_body_unavailable';
+          }
+        } catch (error, stackTrace) {
+          unavailableReason = 'diagnostic_record_read_failed';
+          _log.warning(
+            'diagnostics.record_read_failed',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
+      }
+    }
+    final uri = Uri.tryParse(entry.landing);
+    final queryNames = <String>[];
+    var authorizationParameterPresent = false;
+    var authorizationPresent = false;
+    var queryDecoded = uri != null;
+    if (uri != null) {
+      try {
+        queryNames.addAll(uri.queryParametersAll.keys);
+        authorizationParameterPresent = queryNames.contains('synjones-auth');
+        authorizationPresent =
+            uri.queryParameters['synjones-auth']?.isNotEmpty == true;
+      } on FormatException {
+        queryDecoded = false;
+      }
+    }
+    final details = Map<String, Object?>.from(
+      DiagnosticRedactor.value({
+        'service': AppLog.serviceForHost(Uri.parse(service).host),
+        'landing_url': entry.landing,
+        'source': source,
+        'shared_login': false,
+        'http_performed_for_this_lookup': source == 'fresh',
+        'lookup_note': source == 'fresh'
+            ? '落地地址来自本次登录的实际HTTP响应'
+            : '本次直接使用会话缓存，没有发起HTTP请求',
+        'cached_at': entry.at.toUtc().toIso8601String(),
+        'cache_age_ms': DateTime.now().difference(entry.at).inMilliseconds,
+        'query_parameter_names': queryNames,
+        'query_decoded': queryDecoded,
+        'authorization_parameter_present': authorizationParameterPresent,
+        'authorization_present': authorizationPresent,
+        'fragment_present': uri?.hasFragment ?? false,
+        'original_response_available': responseEvidence != null,
+        'original_response_unavailable_reason': ?unavailableReason,
+        'record_ref': ?reference,
+        'landing_response': ?responseEvidence,
+      }) as Map,
+    );
+    if (publishEvidence) {
+      AppLog.addEvidence(
+        loadCachedResponse ? 'portal.landing' : 'portal.landing_reference',
+        details,
+      );
+    }
+    return PortalLoginResult(
+      landing: entry.landing,
+      diagnosticContext: Map.unmodifiable(details),
+    );
+  }
+
+  Future<PortalLoginResult> _performLogin(
     String service,
     int generation,
     void Function(String stage)? onStage,
@@ -444,7 +707,11 @@ class PortalSession {
     void check() {
       _cas.cookies.checkGeneration(generation);
       if (cancelToken.isCancelled) {
-        throw const PortalNetworkError('业务登录已超时，请重试');
+        throw const PortalNetworkError(
+          '业务登录已超时，请重试',
+          code: 'service_login_cancelled',
+          stage: 'service.login',
+        );
       }
     }
 
@@ -472,28 +739,89 @@ class PortalSession {
         cancelToken: cancelToken,
       );
       check();
+      final responseEvidence =
+          httpDiagnosticEvidence(response.requestOptions) ??
+          {
+            'exchange': DiagnosticRedactor.value({
+              'capture_source': 'portal_response_object',
+              'request': {
+                'url': response.requestOptions.uri.toString(),
+                'headers': response.requestOptions.headers,
+              },
+              'response': {
+                'url': response.realUri.toString(),
+                'status': response.statusCode,
+                'headers': response.headers.map,
+                'body': response.data,
+              },
+            }),
+          };
       if (_looksLikeLoginPage(response) || (response.statusCode ?? 0) >= 400) {
-        throw const PortalLoginError('业务登录未完成，请稍后再试');
+        AppLog.addEvidence('portal.landing_response', responseEvidence);
+        throw PortalLoginError(
+          '业务登录未完成，请稍后再试',
+          code: _looksLikeLoginPage(response)
+              ? 'service_returned_to_login'
+              : 'service_status_rejected',
+          stage: 'service.landing',
+          context: {
+            'service': AppLog.serviceForHost(host),
+            'status_code': response.statusCode,
+          },
+        );
       }
       final landing = response.realUri.toString();
       check();
       portalLog('session.restored', fields: {'host': host});
-      _established[service] = EstablishedEntry(
+      final responseReference = responseEvidence['record_ref'];
+      final entry = EstablishedEntry(
         landing: landing,
         at: DateTime.now(),
+        diagnosticRecord: responseReference is Map
+            ? Map<String, Object?>.from(responseReference)
+            : null,
       );
+      _established[service] = entry;
       await _persist();
       check();
-      return landing;
+      return await _landingResult(
+        service,
+        entry,
+        source: 'fresh',
+        currentEvidence: responseEvidence,
+        publishEvidence: false,
+      );
     } on PortalCredentialError catch (e) {
       // 凭据被服务端拒绝，记下来让绑定状态页显示「已失效」。
       check();
       credentialError.value = e;
       rethrow;
-    } on SocketException {
-      throw const PortalNetworkError('无法建立校园网络连接，请检查网络后重试');
-    } on TimeoutException {
-      throw const PortalNetworkError('校园网络准备超时，请检查网络后重试');
+    } on SocketException catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        PortalNetworkError(
+          '无法建立校园网络连接，请检查网络后重试',
+          code: 'service_socket_failed',
+          stage: 'service.login',
+          cause: error,
+          causeStackTrace: stackTrace,
+        ),
+        stackTrace,
+      );
+    } on TimeoutException catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        PortalNetworkError(
+          '校园网络准备超时，请检查网络后重试',
+          code: 'service_prepare_timeout',
+          stage: 'service.login',
+          cause: error,
+          causeStackTrace: stackTrace,
+        ),
+        stackTrace,
+      );
+    } catch (_) {
+      // 清会话会关闭旧客户端；由代次判断区分取消与真实业务故障。
+      check();
+      rethrow;
     }
   }
 
@@ -514,6 +842,8 @@ class PortalSession {
   Future<T> _serialize<T>(
     Future<T> Function() task, {
     void Function()? onTimeout,
+    String Function()? stage,
+    Map<String, Object?> context = const {},
   }) {
     final result = _queue
         .then((_) => task())
@@ -522,7 +852,12 @@ class PortalSession {
           onTimeout: () {
             onTimeout?.call();
             vpnLog('session.login_timeout');
-            throw const PortalNetworkError('业务登录超时，请检查网络后重试');
+            throw PortalNetworkError(
+              '业务登录超时，请检查网络后重试',
+              code: 'service_login_timeout',
+              stage: stage?.call() ?? 'service.login',
+              context: {...context, 'timeout_ms': _loginTimeout.inMilliseconds},
+            );
           },
         );
     _queue = result.then((_) {}, onError: (_) {});

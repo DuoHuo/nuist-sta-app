@@ -41,13 +41,23 @@ class TimetableExportApi {
         }
       }
       throw const TimetableExportException('生成口令失败，服务器返回了无效数据');
-    } on DioException catch (error) {
+    } on DioException catch (error, stackTrace) {
       if (CancelToken.isCancel(error)) rethrow;
       final body = error.response?.data;
       if (body is Map && body['message'] is String) {
-        throw TimetableExportException(body['message'] as String);
+        throw TimetableExportException(
+          body['message'] as String,
+          code: 'export_request_failed',
+          cause: error,
+          causeStackTrace: stackTrace,
+        );
       }
-      throw const TimetableExportException('无法生成口令，请检查网络或稍后重试');
+      throw TimetableExportException(
+        '无法生成口令，请检查网络或稍后重试',
+        code: 'export_request_failed',
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     }
   }
 

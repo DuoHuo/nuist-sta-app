@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/logging/app_log.dart';
+import '../../core/refresh/silent_refresh.dart';
 import 'free_classroom_models.dart';
 
 /// 空教室小程序的本地存储：上次选的教学楼 + 教学楼列表缓存，放在应用文档目录
@@ -34,12 +35,17 @@ class FreeClassroomStore {
   }
 
   static Future<Object?> _readJson(String name) => _log.inSpan(() async {
-    final file = await _file(name);
-    if (file == null || !await file.exists()) return null;
     try {
+      final file = await _file(name);
+      if (file == null || !await file.exists()) return null;
       return jsonDecode(await file.readAsString());
     } catch (error, stackTrace) {
-      _log.warning('cache.read_failed', error: error, stackTrace: stackTrace);
+      _log.warning(
+        'cache.read_failed',
+        fields: {'file_kind': name, 'outcome': 'cache_fallback'},
+        error: error,
+        stackTrace: stackTrace,
+      );
       return null;
     }
   });
@@ -51,8 +57,11 @@ class FreeClassroomStore {
         try {
           await file.writeAsString(jsonEncode(data), flush: true);
         } catch (error, stackTrace) {
+          SilentRefresh.degradeCurrent(reason: 'cache_write_failed');
+          AppLog.reportOutcome('degraded', reason: 'cache_write_failed');
           _log.warning(
             'cache.write_failed',
+            fields: {'file_kind': name, 'outcome': 'memory_fallback'},
             error: error,
             stackTrace: stackTrace,
           );

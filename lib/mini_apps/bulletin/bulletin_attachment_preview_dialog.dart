@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/colors.dart';
+import '../../core/logging/app_log.dart';
 import 'bulletin_api.dart';
 import 'bulletin_attachment_preview.dart';
 import 'bulletin_models.dart';
@@ -50,7 +51,12 @@ class _BulletinAttachmentPreviewDialogState
     _load();
   }
 
-  Future<void> _load() async {
+  static final _log = AppLog.logger('bulletin.attachment');
+
+  Future<void> _load() => _log.startSpan().run(_loadInSpan);
+
+  Future<void> _loadInSpan() async {
+    var stage = 'attachment.download';
     setState(() {
       _loading = true;
       _error = null;
@@ -59,18 +65,22 @@ class _BulletinAttachmentPreviewDialogState
       final file = await widget.api.downloadAttachment(widget.attachment);
       if (!mounted) return;
       _file = file;
+      stage = 'attachment.detect_type';
       final kind = await detectBulletinPreview(file);
       if (!mounted) return;
       switch (kind) {
         case BulletinPreviewKind.pdf:
+          stage = 'attachment.open_pdf';
           final pdf = await BulletinPdfDocument.open(file);
           if (!mounted) {
             await pdf.close();
             return;
           }
           _pdf = pdf;
+          stage = 'attachment.render_pdf';
           _pageImage = await pdf.renderPage(0);
         case BulletinPreviewKind.text:
+          stage = 'attachment.read_text';
           _text = await readBulletinPreviewText(file);
         case BulletinPreviewKind.image:
           break;
@@ -83,7 +93,16 @@ class _BulletinAttachmentPreviewDialogState
         _kind = kind;
         _loading = false;
       });
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning(
+        'preview.failed',
+        fields: {
+          'stage': stage,
+          'outcome': _file == null ? 'failure' : 'degraded',
+        },
+        error: error,
+        stackTrace: stackTrace,
+      );
       if (!mounted) return;
       if (_file != null) {
         await _fallback();
@@ -121,7 +140,13 @@ class _BulletinAttachmentPreviewDialogState
     });
     try {
       await widget.onDownload(file);
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning(
+        'share.failed',
+        fields: {'stage': 'attachment.share'},
+        error: error,
+        stackTrace: stackTrace,
+      );
       if (mounted) setState(() => _error = '无法打开保存面板，请重试');
     } finally {
       if (mounted) setState(() => _sharing = false);
@@ -144,7 +169,13 @@ class _BulletinAttachmentPreviewDialogState
         _pageImage = image;
         _pageLoading = false;
       });
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning(
+        'pdf.render_failed',
+        fields: {'stage': 'attachment.render_pdf', 'outcome': 'degraded'},
+        error: error,
+        stackTrace: stackTrace,
+      );
       await _fallback();
     }
   }

@@ -52,9 +52,12 @@ class NuistLogin {
     final loginUrl = _loginUrl(resolvedBase, service);
 
     onStage?.call('opening');
-    final (execution, landing) = await _openLoginPage(
-      loginUrl,
-      followServiceRedirects: followServiceRedirects,
+    final (execution, landing) = await _stage(
+      'cas.opening',
+      () => _openLoginPage(
+        loginUrl,
+        followServiceRedirects: followServiceRedirects,
+      ),
     );
     if (execution == null) {
       // SSO 票根还在，服务端直接把我们送到了目标服务，不必再签一次断言。
@@ -63,45 +66,121 @@ class NuistLogin {
     }
 
     onStage?.call('asserting');
-    final request = await _startAssertion(resolvedBase, loginUrl);
-    final credential = _makeAssertion(request);
+    final request = await _stage(
+      'cas.asserting',
+      () => _startAssertion(resolvedBase, loginUrl),
+    );
+    final credential = await _stage(
+      'cas.signing',
+      () async => _makeAssertion(request),
+    );
 
     onStage?.call('submitting');
-    final response = await _submitLogin(
-      resolvedBase,
-      loginUrl,
-      request,
-      credential,
-      execution,
+    final response = await _stage(
+      'cas.submitting',
+      () =>
+          _submitLogin(resolvedBase, loginUrl, request, credential, execution),
     );
     if (!PortalHttp.isRedirect(response.statusCode)) {
       if (response.statusCode != 401) {
-        throw const PortalLoginError('门户暂时无法完成认证，请稍后再试');
+        throw PortalLoginError(
+          '门户暂时无法完成认证，请稍后再试',
+          code: 'assertion_submit_not_redirected',
+          stage: 'cas.submitting',
+          context: {'status_code': response.statusCode},
+        );
       }
       throw PortalCredentialError(
         '登录未返回重定向（HTTP ${response.statusCode}），'
         '门户上的通行密钥可能已被删除或吊销',
+        code: 'assertion_rejected',
+        stage: 'cas.submitting',
+        context: {'status_code': response.statusCode},
       );
     }
 
     final location = response.headers.value('location');
     if (location == null || location.isEmpty) {
-      throw const PortalLoginError('登录返回重定向但缺少 Location');
+      throw const PortalLoginError(
+        '登录返回重定向但缺少 Location',
+        code: 'redirect_location_missing',
+        stage: 'cas.submitting',
+      );
     }
 
-    final (_, landedUrl) = await _followLoginRedirects(
-      response,
-      loginUrl,
-      followServiceRedirects: followServiceRedirects,
+    final (_, landedUrl) = await _stage(
+      'cas.redirect',
+      () => _followLoginRedirects(
+        response,
+        loginUrl,
+        followServiceRedirects: followServiceRedirects,
+      ),
     );
     if (landedUrl.contains(loginPath)) {
-      throw PortalLoginError('登录后又跳回认证页，service 可能不正确：$service');
+      throw const PortalLoginError(
+        '登录后又跳回认证页，请稍后重试',
+        code: 'returned_to_login',
+        stage: 'cas.redirect',
+      );
     }
     onStage?.call('done');
     return landedUrl;
   }
 
   // ==================== CAS 流程 ====================
+
+  Future<T> _stage<T>(String stage, Future<T> Function() action) async {
+    final watch = Stopwatch()..start();
+    portalLog('authentication.stage_started', fields: {'stage': stage});
+    try {
+      final result = await action();
+      portalLog(
+        'authentication.stage_completed',
+        fields: {'stage': stage, 'duration_ms': watch.elapsedMilliseconds},
+      );
+      return result;
+    } catch (error, stackTrace) {
+      final PortalException failure;
+      if (error is PortalException) {
+        if (error.stage != null) rethrow;
+        failure = switch (error) {
+          PortalCredentialError() => PortalCredentialError(
+            error.message,
+            code: error.code,
+            stage: stage,
+            cause: error,
+            causeStackTrace: stackTrace,
+            context: error.context,
+          ),
+          PortalNetworkError() => PortalNetworkError(
+            error.message,
+            code: error.code,
+            stage: stage,
+            cause: error,
+            causeStackTrace: stackTrace,
+            context: error.context,
+          ),
+          PortalLoginError() => PortalLoginError(
+            error.message,
+            code: error.code,
+            stage: stage,
+            cause: error,
+            causeStackTrace: stackTrace,
+            context: error.context,
+          ),
+        };
+      } else {
+        failure = PortalLoginError(
+          '门户认证未完成，请稍后重试',
+          code: 'authentication_stage_failed',
+          stage: stage,
+          cause: error,
+          causeStackTrace: stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(failure, stackTrace);
+    }
+  }
 
   /// 访问登录页，取得会话 Cookie 和 execution 令牌。
   ///
@@ -127,7 +206,17 @@ class NuistLogin {
       caseSensitive: false,
     ).firstMatch(_unescapeHtml('${response.data}'));
     if (response.statusCode != 200 || match == null) {
-      throw const PortalLoginError('门户未返回正常登录页面，请稍后再试');
+      throw PortalLoginError(
+        '门户未返回正常登录页面，请稍后再试',
+        code: match == null
+            ? 'login_form_missing'
+            : 'login_page_status_rejected',
+        stage: 'cas.opening',
+        context: {
+          'status_code': response.statusCode,
+          'details': {'execution_present': match != null},
+        },
+      );
     }
     return (match.group(1), landed);
   }
@@ -145,7 +234,15 @@ class NuistLogin {
       }
       final location = current.headers.value('location');
       if (location == null || location.isEmpty) {
-        throw const PortalLoginError('登录跳转缺少 Location');
+        throw PortalLoginError(
+          '登录跳转缺少 Location',
+          code: 'redirect_location_missing',
+          stage: 'cas.redirect',
+          context: {
+            'status_code': current.statusCode,
+            'details': {'hop': hop},
+          },
+        );
       }
       final target = current.realUri.resolve(location);
       if (!followServiceRedirects &&
@@ -155,7 +252,14 @@ class NuistLogin {
       }
       current = await http.get(target);
     }
-    throw const PortalLoginError('登录重定向次数过多，请稍后再试');
+    throw const PortalLoginError(
+      '登录重定向次数过多，请稍后再试',
+      code: 'redirect_limit_exceeded',
+      stage: 'cas.redirect',
+      context: {
+        'details': {'max_hops': PortalHttp.maxRedirects},
+      },
+    );
   }
 
   /// 请求 WebAuthn 断言参数（challenge 等）。
@@ -194,14 +298,27 @@ class NuistLogin {
         'assertion.response_malformed',
         fields: {'status_code': statusCode},
       );
-      throw const PortalLoginError(kLoginFailedText);
+      throw PortalLoginError(
+        kLoginFailedText,
+        code: 'assertion_response_not_object',
+        stage: 'cas.asserting',
+        context: {
+          'status_code': statusCode,
+          'response_type': data.runtimeType.toString(),
+        },
+      );
     }
     portalLog(
       'assertion.response_received',
       fields: {'status_code': statusCode},
     );
     if (statusCode != null && statusCode != 200 && statusCode != 401) {
-      throw const PortalLoginError(kLoginFailedText);
+      throw PortalLoginError(
+        kLoginFailedText,
+        code: 'assertion_status_rejected',
+        stage: 'cas.asserting',
+        context: {'status_code': statusCode},
+      );
     }
     final message = body['message'];
     // 只有认证接口的明确拒绝或已实测的设备不存在响应才表示凭据失效。
@@ -211,9 +328,19 @@ class NuistLogin {
         (message is String && message.contains('未查询到设备信息'));
     if (body['success'] == false) {
       if (credentialRejected) {
-        throw PortalCredentialError(safeServerMessage(message));
+        throw PortalCredentialError(
+          safeServerMessage(message),
+          code: 'assertion_credential_rejected',
+          stage: 'cas.asserting',
+          context: {'status_code': statusCode},
+        );
       }
-      throw PortalLoginError(safeServerMessage(message));
+      throw PortalLoginError(
+        safeServerMessage(message),
+        code: 'assertion_server_rejected',
+        stage: 'cas.asserting',
+        context: {'status_code': statusCode},
+      );
     }
 
     // 响应结构在不同版本里出现过 result 和 datas 两种外壳，都试一遍。
@@ -230,11 +357,28 @@ class NuistLogin {
           message,
           maxLength: kMaxUserMessageLength - suffix.length,
         )) {
-          throw PortalCredentialError('${message.trim()}$suffix');
+          throw PortalCredentialError(
+            '${message.trim()}$suffix',
+            code: 'credential_not_registered',
+            stage: 'cas.asserting',
+            context: {'status_code': statusCode},
+          );
         }
-        throw const PortalCredentialError(kLoginFailedText);
+        throw PortalCredentialError(
+          kLoginFailedText,
+          code: 'credential_not_registered',
+          stage: 'cas.asserting',
+          context: {'status_code': statusCode},
+        );
       }
-      throw PortalLoginError(safeServerMessage(message));
+      throw PortalLoginError(
+        safeServerMessage(message),
+        code: request == null
+            ? 'assertion_request_missing'
+            : 'assertion_request_id_missing',
+        stage: 'cas.asserting',
+        context: {'status_code': statusCode},
+      );
     }
     return request;
   }
@@ -245,7 +389,17 @@ class NuistLogin {
     final challenge = options['challenge'] as String?;
     final rpId = (options['rpId'] as String?) ?? bundle.rpId;
     if (challenge == null || challenge.isEmpty || rpId.isEmpty) {
-      throw const PortalLoginError('startAssertion 缺少 challenge/rpId');
+      throw PortalLoginError(
+        'startAssertion 缺少 challenge/rpId',
+        code: 'assertion_options_incomplete',
+        stage: 'cas.signing',
+        context: {
+          'details': {
+            'challenge_present': challenge != null && challenge.isNotEmpty,
+            'rp_id_present': rpId.isNotEmpty,
+          },
+        },
+      );
     }
 
     // 服务端列出了可用凭据却没有我们这张，说明它在门户侧已被删除。
@@ -253,7 +407,11 @@ class NuistLogin {
     if (allowed != null && allowed.isNotEmpty) {
       final ids = allowed.whereType<Map>().map((e) => e['id']).toSet();
       if (!ids.contains(bundle.credentialId)) {
-        throw const PortalCredentialError('本机凭据不在服务端的可用列表中，该通行密钥已被吊销');
+        throw const PortalCredentialError(
+          '本机凭据不在服务端的可用列表中，该通行密钥已被吊销',
+          code: 'credential_not_allowed',
+          stage: 'cas.signing',
+        );
       }
     }
 

@@ -4,6 +4,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
+import '../../core/logging/app_log.dart';
 import 'bulletin_api.dart';
 import 'bulletin_attachment_preview_dialog.dart';
 import 'bulletin_models.dart';
@@ -21,6 +22,7 @@ class BulletinDetailPage extends StatefulWidget {
 }
 
 class _BulletinDetailPageState extends State<BulletinDetailPage> {
+  static final _log = AppLog.logger('bulletin.detail');
   late final BulletinApi _api;
   late final Future<BulletinDetailDocument?> _detailFuture;
   final _bodyRows = <(BulletinDetailBlock, int?)>[];
@@ -39,9 +41,22 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
     });
   }
 
-  Future<BulletinDetailDocument?> _loadDetail() async {
+  Future<BulletinDetailDocument?> _loadDetail() =>
+      _log.startSpan().run(_loadDetailInSpan);
+
+  Future<BulletinDetailDocument?> _loadDetailInSpan() async {
     try {
       final detail = await _api.fetchDetail(widget.bulletin);
+      if (detail == null) {
+        _log.warning(
+          'detail.fallback',
+          fields: {
+            'stage': 'response.parse',
+            'reason_code': 'document_unrecognized',
+            'outcome': 'degraded',
+          },
+        );
+      }
       // 只展开行索引，不提前创建或布局正文组件；长名单与表格也按可见行渲染。
       for (final block in detail?.blocks ?? const <BulletinDetailBlock>[]) {
         switch (block.kind) {
@@ -57,7 +72,13 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
         }
       }
       return detail;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning(
+        'detail.fallback',
+        fields: {'stage': 'detail.load', 'outcome': 'degraded'},
+        error: error,
+        stackTrace: stackTrace,
+      );
       return null;
     }
   }
@@ -73,6 +94,15 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
           },
           onWebResourceError: (error) {
             if (error.isForMainFrame == true && mounted) {
+              _log.warning(
+                'webview.load_failed',
+                fields: {
+                  'stage': 'webview.load',
+                  'error_code': error.errorCode,
+                  'reason_code': error.errorType?.name,
+                  'outcome': 'failure',
+                },
+              );
               setState(() => _failed = true);
             }
           },
@@ -108,7 +138,13 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
           },
         ),
       );
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning(
+        'attachment.open_failed',
+        fields: {'stage': 'attachment.open'},
+        error: error,
+        stackTrace: stackTrace,
+      );
       if (mounted) _message('附件下载失败，可能需要连接校园网或 VPN');
     } finally {
       _attachmentPreviewOpen = false;

@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 
+import '../logging/http_diagnostics.dart';
+import '../logging/diagnostic_error.dart';
 import '../network/vpn_http_adapter.dart';
 import '../network/vpn_log.dart';
 import 'aia_trust.dart';
@@ -30,7 +32,9 @@ void portalLog(String event, {Map<String, Object?>? fields}) {
 /// 登录流程和登录之后的业务请求都要用它，核心原因是重定向必须由我们自己跟
 /// 随（见 [followRedirects]）。
 class PortalHttp {
-  const PortalHttp(this.dio, {this.trust});
+  PortalHttp(this.dio, {this.trust}) {
+    installHttpDiagnostics(dio);
+  }
 
   final Dio dio;
 
@@ -120,7 +124,7 @@ class PortalHttp {
     ),
   );
 
-  /// 把 dio 的传输异常归类成 [PortalNetworkError]，其余归到 [PortalLoginError]。
+  /// 把传输异常归为 [PortalNetworkError]，HTTP 状态与转换错误保留为诊断异常。
   ///
   /// 这个区分是「Passkey 吊销要显式提醒」的前提：连不上服务器不能拿来推断
   /// 凭据失效，否则用户在地铁里打开 APP 就会被告知需要重新绑定。
@@ -143,8 +147,10 @@ class PortalHttp {
         );
       }
       return response;
-    } on DioException catch (e) {
-      if (e.error case final PortalException error) throw error;
+    } on DioException catch (e, stackTrace) {
+      if (e.error case final PortalException error) {
+        Error.throwWithStackTrace(error, e.stackTrace);
+      }
       if (VpnRequestLog.of(e.requestOptions) == null) {
         portalLog(
           'http.failed',
@@ -159,26 +165,80 @@ class PortalHttp {
       }
       if (await _repairedChain(e)) return send(request);
       // 自定义连接工厂的 TLS 异常可能被 Dio 归为 unknown，仍属于网络错误。
-      if (e.error is HandshakeException) {
-        throw const PortalNetworkError('门户证书或 TLS 握手失败，请检查网络环境');
-      }
-      if (e.error is SocketException) {
-        throw const PortalNetworkError('无法连接校园网络，请检查网络后重试');
-      }
-      throw switch (e.type) {
-        DioExceptionType.connectionTimeout ||
-        DioExceptionType.sendTimeout ||
-        DioExceptionType.receiveTimeout => const PortalNetworkError(
-          '连接门户超时，请检查网络后重试',
-        ),
-        DioExceptionType.connectionError => PortalNetworkError(
-          '无法连接门户，请检查网络后重试',
-        ),
-        DioExceptionType.badCertificate => const PortalNetworkError(
-          '门户证书校验失败，请检查网络环境',
-        ),
-        _ => const PortalLoginError(kLoginFailedText),
+      final context = <String, Object?>{
+        'endpoint': 'portal.http',
+        'method': e.requestOptions.method,
+        'host': e.requestOptions.uri.host,
+        'dio_type': e.type.name,
+        'status_code': ?e.response?.statusCode,
       };
+      final String code;
+      final String message;
+      if (e.error is HandshakeException) {
+        code = 'tls_handshake_failed';
+        message = '门户证书或 TLS 握手失败，请检查网络环境';
+      } else if (e.error is SocketException) {
+        code = 'socket_connection_failed';
+        message = '无法连接校园网络，请检查网络后重试';
+      } else {
+        (code, message) = switch (e.type) {
+          DioExceptionType.connectionTimeout ||
+          DioExceptionType.sendTimeout ||
+          DioExceptionType.receiveTimeout => (
+            'http_${e.type.name}',
+            '连接门户超时，请检查网络后重试',
+          ),
+          DioExceptionType.connectionError => (
+            'http_connection_failed',
+            '无法连接门户，请检查网络后重试',
+          ),
+          DioExceptionType.badCertificate => (
+            'certificate_rejected',
+            '门户证书校验失败，请检查网络环境',
+          ),
+          DioExceptionType.cancel => ('request_cancelled', '请求已取消，请重试'),
+          DioExceptionType.badResponse => (
+            'http_status_rejected',
+            '服务暂时不可用，请稍后重试',
+          ),
+          DioExceptionType.transformTimeout => (
+            'http_transform_timeout',
+            '服务响应处理超时，请稍后重试',
+          ),
+          DioExceptionType.unknown => (
+            'http_unexpected_failure',
+            kLoginFailedText,
+          ),
+        };
+      }
+      final network =
+          e.error is HandshakeException ||
+          e.error is SocketException ||
+          const {
+            DioExceptionType.connectionTimeout,
+            DioExceptionType.sendTimeout,
+            DioExceptionType.receiveTimeout,
+            DioExceptionType.connectionError,
+            DioExceptionType.badCertificate,
+          }.contains(e.type);
+      final Object failure = network
+          ? PortalNetworkError(
+              message,
+              code: code,
+              stage: 'http.request',
+              cause: e,
+              causeStackTrace: stackTrace,
+              context: context,
+            )
+          : DiagnosticException(
+              message,
+              code: code,
+              stage: 'http.request',
+              cause: e,
+              causeStackTrace: stackTrace,
+              context: context,
+            );
+      Error.throwWithStackTrace(failure, stackTrace);
     }
   }
 
@@ -188,7 +248,7 @@ class PortalHttp {
     final trust = this.trust;
     if (trust == null || !AiaTrust.isHandshakeFailure(e.error)) return false;
     final host = e.requestOptions.uri.host;
-    final adapter = dio.httpClientAdapter;
+    final adapter = unwrapHttpDiagnostics(dio.httpClientAdapter);
     if (!await trust.tryRepair(
       host,
       createFetchClient: adapter is VpnHttpClientAdapter
@@ -208,6 +268,7 @@ class PortalHttp {
         createHttpClient: trust.createHttpClient,
       );
     }
+    installHttpDiagnostics(dio);
     portalLog('certificate.repaired_retry', fields: {'host': host});
     return true;
   }
@@ -227,13 +288,28 @@ class PortalHttp {
       if (!isRedirect(current.statusCode)) return current;
       final location = current.headers.value('location');
       if (location == null || location.isEmpty) {
-        throw PortalLoginError('HTTP ${current.statusCode} 重定向缺少 Location');
+        throw PortalLoginError(
+          'HTTP ${current.statusCode} 重定向缺少 Location',
+          code: 'redirect_location_missing',
+          stage: 'http.redirect',
+          context: {
+            'status_code': current.statusCode,
+            'details': {'hop': hop},
+          },
+        );
       }
       current = await get(
         current.realUri.resolve(location),
         cancelToken: cancelToken,
       );
     }
-    throw const PortalLoginError('重定向次数过多，疑似陷入跳转循环');
+    throw const PortalLoginError(
+      '重定向次数过多，疑似陷入跳转循环',
+      code: 'redirect_limit_exceeded',
+      stage: 'http.redirect',
+      context: {
+        'details': {'max_hops': maxRedirects},
+      },
+    );
   }
 }

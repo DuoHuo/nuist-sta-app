@@ -11,11 +11,53 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+/// 业务错误与诊断上下文分离，调用方无需解析中文错误消息。
+struct NativeFailure {
+    message: String,
+    diagnostic: Value,
+}
+
+impl NativeFailure {
+    fn io(error: std::io::Error, code: &str, stage: &str) -> Self {
+        let mut causes = Vec::new();
+        let mut source = std::error::Error::source(&error);
+        while let Some(cause) = source {
+            causes.push(cause.to_string());
+            source = cause.source();
+        }
+        Self {
+            message: error.to_string(),
+            diagnostic: json!({
+                "code": code,
+                "stage": stage,
+                "native_kind": format!("{:?}", error.kind()),
+                "os_code": error.raw_os_error(),
+                "causes": causes,
+            }),
+        }
+    }
+}
+
+impl From<&str> for NativeFailure {
+    fn from(message: &str) -> Self {
+        Self {
+            message: message.to_owned(),
+            diagnostic: json!({"code": "native_control_failed", "stage": "native.control"}),
+        }
+    }
+}
+
+impl From<String> for NativeFailure {
+    fn from(message: String) -> Self {
+        Self::from(message.as_str())
+    }
+}
+
 static ENGINES: OnceLock<Mutex<HashMap<u64, engine::Handle>>> = OnceLock::new();
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static STARTS: OnceLock<Mutex<HashMap<u64, Arc<engine::StartControl>>>> = OnceLock::new();
 
-fn dispatch(request: Value) -> Result<Value, String> {
+fn dispatch(request: Value) -> Result<Value, NativeFailure> {
     let engines = ENGINES.get_or_init(|| Mutex::new(HashMap::new()));
     let method = request["method"].as_str().ok_or("缺少操作名称")?;
     let starts = STARTS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -76,12 +118,9 @@ fn dispatch(request: Value) -> Result<Value, String> {
                 registry.remove(&id);
             }
             let (handle, info) = outcome.map_err(|e| {
-                format!(
-                    "{}（阶段={}，类别={:?}）",
-                    e,
-                    control.status()["stage"],
-                    e.kind()
-                )
+                let status = control.status();
+                let stage = status["stage"].as_str().unwrap_or("unknown");
+                NativeFailure::io(e, "native_start_failed", stage)
             })?;
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             let mut registry = engines.lock().map_err(|_| "VPN 注册表不可用")?;
@@ -120,7 +159,7 @@ fn dispatch(request: Value) -> Result<Value, String> {
                 .ok_or("目标端口不合法")? as u16;
             let bridge = handle
                 .open(host.to_owned(), port)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| NativeFailure::io(e, "native_open_failed", "native.open"))?;
             Ok(json!({"port": bridge.port, "secret": bridge.secret}))
         }
         _ => Err("未知 VPN 操作".into()),
@@ -158,21 +197,56 @@ pub unsafe extern "C" fn nuist_vpn_free(pointer: *mut u8, length: usize) {
 pub unsafe extern "C" fn nuist_vpn_call(pointer: *const u8, length: usize) -> *mut c_char {
     let result = catch_unwind(AssertUnwindSafe(|| {
         if pointer.is_null() || length == 0 || length > 1024 * 1024 {
-            return Err("VPN 控制消息长度不合法".to_string());
+            return Err(NativeFailure::from("VPN 控制消息长度不合法"));
         }
         let input = std::slice::from_raw_parts(pointer, length);
-        let request: Value =
-            serde_json::from_slice(input).map_err(|_| "VPN 控制消息格式不合法".to_string())?;
+        let request: Value = serde_json::from_slice(input).map_err(|error| NativeFailure {
+            message: "VPN 控制消息格式不合法".to_owned(),
+            diagnostic: json!({
+                "code": "native_request_invalid", "stage": "native.decode",
+                "causes": [error.to_string()], "line": error.line(), "column": error.column()
+            }),
+        })?;
         dispatch(request)
     }));
     let response = match result {
         Ok(Ok(value)) => json!({"ok": true, "data": value}),
-        Ok(Err(error)) => json!({"ok": false, "error": error}),
-        Err(_) => json!({"ok": false, "error": "VPN 内部错误"}),
+        Ok(Err(error)) => {
+            json!({"ok": false, "error": error.message, "diagnostic": error.diagnostic})
+        }
+        Err(payload) => {
+            let cause = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("原生 panic 未提供可读取的错误描述");
+            json!({"ok": false, "error": "VPN 内部错误", "diagnostic": {
+                "code": "native_panic", "stage": "native.dispatch", "causes": [cause],
+                "stack_unavailable_reason": "panic_already_unwound"
+            }})
+        }
     };
     CString::new(response.to_string())
         .expect("JSON 不包含裸零字节")
         .into_raw()
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn native_io_failure_keeps_kind_stage_and_original_message() {
+        let failure = NativeFailure::io(
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "合成连接超时"),
+            "native_start_failed",
+            "TLS",
+        );
+        assert_eq!(failure.message, "合成连接超时");
+        assert_eq!(failure.diagnostic["stage"], "TLS");
+        assert_eq!(failure.diagnostic["native_kind"], "TimedOut");
+        assert_eq!(failure.diagnostic["code"], "native_start_failed");
+    }
 }
 
 /// 释放 nuist_vpn_call 返回的结果。

@@ -4,6 +4,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../core/config/campus_config.dart';
+import '../../core/logging/app_log.dart';
+import '../../core/logging/diagnostic_error.dart';
+import '../../core/logging/http_diagnostics.dart';
 import '../../core/network/vpn_dio.dart';
 import '../../core/network/vpn_gateway.dart';
 import '../../core/network/vpn_log.dart';
@@ -23,12 +26,30 @@ final String _defaultBaseUrl = _runtimeBaseUrl.isEmpty
 /// 服务器样式取不到时用它。服务器样式改了要同步更新这个文件。
 const String kCampusBundledStyle = 'assets/map/campus_style.json';
 
-class CampusMapApiException implements Exception {
-  const CampusMapApiException(this.message, {this.code, this.statusCode});
+class CampusMapApiException implements Exception, DiagnosticError {
+  const CampusMapApiException(
+    this.message, {
+    this.code,
+    this.statusCode,
+    this.stage,
+    this.cause,
+    this.causeStackTrace,
+  });
 
   final String message;
   final String? code;
   final int? statusCode;
+  final String? stage;
+  @override
+  final Object? cause;
+  @override
+  final StackTrace? causeStackTrace;
+  @override
+  Map<String, Object?> get diagnosticContext => {
+    'code': code,
+    'status_code': statusCode,
+    'stage': stage,
+  };
 
   @override
   String toString() => message;
@@ -53,7 +74,10 @@ class CampusMapApi
            (vpnDio(
              options: BaseOptions(connectTimeout: const Duration(seconds: 10)),
            )..interceptors.add(_CampusVpnPreparation())),
-       _ownsDio = dio == null;
+       _ownsDio = dio == null {
+    installHttpDiagnostics(_dio);
+  }
+  static final _log = AppLog.logger('campus_map.api');
 
   final String _baseUrl;
   final Future<String> Function() _bundledStyle;
@@ -104,8 +128,14 @@ class CampusMapApi
     } on CampusMapApiException catch (error) {
       if (error.statusCode == 404) return null;
       rethrow;
-    } on FormatException catch (error) {
-      throw CampusMapApiException(error.message);
+    } on FormatException catch (error, stackTrace) {
+      throw CampusMapApiException(
+        error.message,
+        code: 'model_format_invalid',
+        stage: 'building_model.parse',
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     }
   }
 
@@ -120,8 +150,14 @@ class CampusMapApi
     }
     try {
       return parsePhotos(_serverRoot, raw);
-    } on CampusPhotoException catch (error) {
-      throw CampusMapApiException(error.message);
+    } on CampusPhotoException catch (error, stackTrace) {
+      throw CampusMapApiException(
+        error.message,
+        code: 'photos_format_invalid',
+        stage: 'building_photos.parse',
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     }
   }
 
@@ -156,20 +192,26 @@ class CampusMapApi
           _text(body['message']) ?? '地图服务请求失败',
           code: code,
           statusCode: response.statusCode,
+          stage: 'response.business_status',
         );
       }
       if (response.statusCode != null && response.statusCode! >= 400) {
         throw CampusMapApiException(
           _text(body['message']) ?? '地图服务请求失败',
           statusCode: response.statusCode,
+          stage: 'response.http_status',
         );
       }
       if (raw && code == null) return body;
       if (code != 'ok') {
-        throw const CampusMapApiException('地图服务返回的数据格式不正确');
+        throw const CampusMapApiException(
+          '地图服务返回的数据格式不正确',
+          code: 'response_envelope_invalid',
+          stage: 'response.parse',
+        );
       }
       return _object(body['data']);
-    } on DioException catch (error) {
+    } on DioException catch (error, stackTrace) {
       Map<String, dynamic>? body;
       try {
         body = _object(error.response?.data);
@@ -190,6 +232,9 @@ class CampusMapApi
             },
         code: _text(body?['code']),
         statusCode: error.response?.statusCode,
+        stage: 'request.transport',
+        cause: error,
+        causeStackTrace: stackTrace,
       );
     }
   }
@@ -219,7 +264,13 @@ class CampusMapApi
     if (styleUrl != null) {
       try {
         preparedStyle = await _resources.prepare(styleUrl, bounds: bounds);
-      } catch (_) {
+      } catch (error, stackTrace) {
+        _log.warning(
+          'style.remote_failed',
+          fields: {'outcome': 'bundled_fallback'},
+          error: error,
+          stackTrace: stackTrace,
+        );
         // 落到下面的内置样式
       }
     }
@@ -231,7 +282,13 @@ class CampusMapApi
           await _bundledStyleFor(config),
           bounds: bounds,
         );
-      } catch (_) {
+      } catch (error, stackTrace) {
+        _log.warning(
+          'style.bundled_failed',
+          fields: {'outcome': 'partial_success', 'stage': 'style.prepare'},
+          error: error,
+          stackTrace: stackTrace,
+        );
         warning = '底图资源加载失败，地点和路线仍可使用，请刷新重试';
       }
     }

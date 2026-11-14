@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:asn1lib/asn1lib.dart';
 import 'package:pointycastle/digests/sha256.dart';
 
+import '../logging/app_log.dart';
 import 'portal_http.dart';
 
 /// 自动补全服务器漏发的中间证书（AIA chasing）。
@@ -21,6 +23,7 @@ import 'portal_http.dart';
 /// 拉到的中间证书会落盘到 [resolveCacheDir] 给的目录，下次冷启动 [preload] 直接预热，省掉
 /// 首次握手失败 + 一次网络往返。缓存文件出于同样的理由不需要防篡改。
 class AiaTrust {
+  static final _log = AppLog.logger('core.auth.certificate');
   AiaTrust({bool withTrustedRoots = true, this.resolveCacheDir})
     : context = SecurityContext(withTrustedRoots: withTrustedRoots);
 
@@ -31,8 +34,19 @@ class AiaTrust {
   final Future<Directory?> Function()? resolveCacheDir;
   Future<Directory?>? _cacheDir;
 
-  Future<Directory?> _dir() => _cacheDir ??=
-      (resolveCacheDir?.call() ?? Future.value(null)).catchError((_) => null);
+  Future<Directory?> _dir() =>
+      _cacheDir ??= (resolveCacheDir?.call() ?? Future.value(null)).catchError((
+        Object error,
+        StackTrace stackTrace,
+      ) {
+        _log.warning(
+          'cache.directory_failed',
+          error: error,
+          stackTrace: stackTrace,
+          fields: {'outcome': 'memory_fallback', 'stage': 'certificate.cache'},
+        );
+        return null;
+      });
 
   /// 最近一次握手失败时各主机收到的叶子证书。
   final Map<String, Uint8List> _badLeaf = {};
@@ -48,7 +62,14 @@ class AiaTrust {
   Future<void> preload() => _preloading ??= _preload().timeout(
     const Duration(seconds: 5),
     onTimeout: () {
-      portalLog('certificate.preload_timeout');
+      _log.warning(
+        'certificate.preload_timeout',
+        fields: {
+          'stage': 'certificate.preload',
+          'timeout_ms': 5000,
+          'outcome': 'cache_fallback',
+        },
+      );
     },
   );
   Future<void>? _preloading;
@@ -69,14 +90,25 @@ class AiaTrust {
         try {
           context.setTrustedCertificatesBytes(_toPem(der));
           portalLog('certificate.cache_loaded');
-        } catch (_) {
+        } catch (error, stackTrace) {
+          _log.warning(
+            'cache.certificate_invalid',
+            error: error,
+            stackTrace: stackTrace,
+            fields: {
+              'stage': 'certificate.preload',
+              'outcome': 'cache_fallback',
+            },
+          );
           await entry.delete();
         }
       }
-    } catch (e) {
-      portalLog(
+    } catch (error, stackTrace) {
+      _log.warning(
         'certificate.cache_read_failed',
-        fields: {'error_type': e.runtimeType.toString()},
+        error: error,
+        stackTrace: stackTrace,
+        fields: {'outcome': 'cache_fallback'},
       );
     }
   }
@@ -89,10 +121,12 @@ class AiaTrust {
       final name = _fingerprint(der);
       await File('${dir.path}${Platform.pathSeparator}$name.der')
           .writeAsBytes(der, flush: true);
-    } catch (e) {
-      portalLog(
+    } catch (error, stackTrace) {
+      _log.warning(
         'certificate.cache_write_failed',
-        fields: {'error_type': e.runtimeType.toString()},
+        error: error,
+        stackTrace: stackTrace,
+        fields: {'outcome': 'memory_fallback'},
       );
     }
   }
@@ -116,9 +150,24 @@ class AiaTrust {
     String host, {
     HttpClient Function()? createFetchClient,
   }) async {
-    if (!_attempted.add(host)) return false;
+    if (!_attempted.add(host)) {
+      _log.debug(
+        'repair.skipped',
+        fields: {
+          'host': host,
+          'reason_code': 'certificate_repair_already_attempted',
+        },
+      );
+      return false;
+    }
     final leaf = _badLeaf.remove(host);
-    if (leaf == null) return false;
+    if (leaf == null) {
+      _log.debug(
+        'repair.skipped',
+        fields: {'host': host, 'reason_code': 'certificate_leaf_unavailable'},
+      );
+      return false;
+    }
 
     var added = 0;
     var current = leaf;
@@ -128,10 +177,16 @@ class AiaTrust {
       final Uint8List issuer;
       try {
         issuer = await _fetch(url, createFetchClient: createFetchClient);
-      } catch (e) {
-        portalLog(
+      } catch (error, stackTrace) {
+        _log.warning(
           'certificate.fetch_failed',
-          fields: {'error_type': e.runtimeType.toString()},
+          error: error,
+          stackTrace: stackTrace,
+          fields: {
+            'host': host,
+            'stage': 'certificate.fetch',
+            'details': {'depth': depth},
+          },
         );
         break;
       }
@@ -143,10 +198,16 @@ class AiaTrust {
         context.setTrustedCertificatesBytes(_toPem(issuer));
         added++;
         portalLog('certificate.chain_extended');
-      } catch (e) {
-        portalLog(
+      } catch (error, stackTrace) {
+        _log.warning(
           'certificate.trust_failed',
-          fields: {'error_type': e.runtimeType.toString()},
+          error: error,
+          stackTrace: stackTrace,
+          fields: {
+            'host': host,
+            'stage': 'certificate.trust',
+            'details': {'depth': depth},
+          },
         );
         break;
       }
@@ -283,21 +344,94 @@ class AiaTrust {
     final client = (createFetchClient?.call() ?? HttpClient())
       ..connectionTimeout = _fetchTimeout
       ..maxConnectionsPerHost = 2;
+    final watch = Stopwatch()..start();
+    final requestHeaders = <String, Object?>{};
+    final responseHeaders = <String, Object?>{};
+    HttpClientResponse? response;
+    Uint8List? bytes;
+    final builder = BytesBuilder(copy: false);
+    Object? failure;
+    StackTrace? failureStack;
     try {
       final request = await client.getUrl(Uri.parse(url));
       request.followRedirects = true;
-      final response = await request.close().timeout(_fetchTimeout);
-      if (response.statusCode != 200) {
-        throw HttpException('HTTP ${response.statusCode}', uri: Uri.parse(url));
+      request.headers.forEach((name, values) => requestHeaders[name] = values);
+      response = await request.close().timeout(_fetchTimeout);
+      response.headers.forEach(
+        (name, values) => responseHeaders[name] = values,
+      );
+      final httpFailure = response.statusCode == 200
+          ? null
+          : HttpException('HTTP ${response.statusCode}', uri: Uri.parse(url));
+      try {
+        final remaining = _fetchTimeout - watch.elapsed;
+        if (remaining <= Duration.zero) {
+          throw TimeoutException('证书响应读取超过请求时限', _fetchTimeout);
+        }
+        await response.forEach(builder.add).timeout(remaining);
+        bytes = builder.takeBytes();
+      } catch (error, stackTrace) {
+        if (httpFailure == null) rethrow;
+        _log.warning(
+          'certificate.error_body_incomplete',
+          error: error,
+          stackTrace: stackTrace,
+          fields: {
+            'status_code': response.statusCode,
+            'stage': 'certificate.fetch_body',
+            'timeout_ms': _fetchTimeout.inMilliseconds,
+          },
+        );
+        throw httpFailure;
       }
-      final builder = BytesBuilder(copy: false);
-      await for (final chunk in response.timeout(_fetchTimeout)) {
-        builder.add(chunk);
-      }
-      return _toDer(builder.takeBytes());
+      if (httpFailure != null) throw httpFailure;
+    } catch (error, stackTrace) {
+      failure = error;
+      failureStack = stackTrace;
+      rethrow;
     } finally {
+      final captured = bytes ?? builder.takeBytes();
+      AppLog.recordHttpExchange(
+        'core.auth.certificate',
+        {
+          'method': 'GET',
+          'service': AppLog.serviceForHost(Uri.tryParse(url)?.host ?? ''),
+          'status_code': response?.statusCode,
+          'duration_ms': watch.elapsedMilliseconds,
+          'capture_source': 'dart_http_client',
+          'request': {
+            'url': url,
+            'headers': requestHeaders,
+            'body': '',
+            'complete': true,
+          },
+          'response': {
+            'status': response?.statusCode,
+            'headers': responseHeaders,
+            'body_base64': base64Encode(captured),
+            'encoding': 'base64',
+            'captured_bytes': captured.length,
+            'complete': bytes != null,
+            if (bytes == null)
+              'incomplete_reason': response == null
+                  ? 'response_unavailable'
+                  : 'response_not_fully_consumed',
+            'redirects': [
+              for (final redirect in response?.redirects ?? <RedirectInfo>[])
+                {
+                  'status': redirect.statusCode,
+                  'method': redirect.method,
+                  'url': redirect.location.toString(),
+                },
+            ],
+          },
+        },
+        error: failure,
+        stackTrace: failureStack,
+      );
       client.close(force: true);
     }
+    return _toDer(bytes);
   }
 
   static Uint8List _toDer(Uint8List bytes) {

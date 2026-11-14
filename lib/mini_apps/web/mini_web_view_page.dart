@@ -7,6 +7,7 @@ import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/colors.dart';
 import '../../core/logging/app_log.dart';
+import '../../core/network/web_diagnostics.dart';
 
 /// H5 小程序的通用承载页：顶栏显示小程序名，正文加载 [manifest.url]。
 ///
@@ -26,6 +27,7 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
   static final _log = AppLog.logger('web_mini_app.page');
 
   late final WebViewController _controller;
+  late final WebDiagnostics _diagnostics;
 
   // 页面加载进度，>0 且 <1 时在顶栏下方显示细进度条。
   int _progress = 0;
@@ -37,15 +39,34 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController()
+    _controller = WebViewController();
+    _diagnostics = WebDiagnostics(_controller, scope: 'web_mini_app.page');
+    _controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
-        NavigationDelegate(onProgress: (p) => setState(() => _progress = p)),
+        NavigationDelegate(
+          onProgress: (p) {
+            if (mounted) setState(() => _progress = p);
+          },
+          onPageStarted: _diagnostics.pageStarted,
+          onPageFinished: _diagnostics.pageFinished,
+          onWebResourceError: _diagnostics.resourceError,
+          onHttpError: _diagnostics.httpError,
+        ),
       );
     _start();
   }
 
   Future<void> _start() async {
+    try {
+      await _diagnostics.attach();
+    } catch (error, stackTrace) {
+      _log.warning(
+        'capture.attach_failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
     final url = widget.manifest.url!;
     if (widget.manifest.requiresPortal) {
       setState(() {
@@ -83,7 +104,6 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
     if (!mounted) return;
     try {
       await _controller.loadRequest(Uri.parse(url));
-      _log.info('page.load_started', fields: {'app_id': widget.manifest.id});
     } catch (error, stackTrace) {
       _log.warning(
         'page.load_failed',
@@ -93,6 +113,12 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
       );
       rethrow;
     }
+  }
+
+  @override
+  void dispose() {
+    _diagnostics.dispose();
+    super.dispose();
   }
 
   @override

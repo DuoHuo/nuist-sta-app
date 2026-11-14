@@ -222,6 +222,15 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
           details: [e.message],
         );
       });
+    } catch (_) {
+      if (!mounted) return;
+      setState(
+        () => _testResult = _TestResult(
+          ok: false,
+          title: '测试登录未完成',
+          details: const ['服务或响应处理异常，请稍后重试'],
+        ),
+      );
     } finally {
       if (mounted) {
         setState(() {

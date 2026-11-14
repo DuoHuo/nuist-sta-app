@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/logging/diagnostic_error.dart';
 import 'package:nuist_sta_app/core/auth/portal_http.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
@@ -137,6 +138,43 @@ void main() {
   }
 
   group('classification via debugPost', () {
+    test('缺少 rows 属于响应结构错误，不能成功返回空课表', () async {
+      TimetableApi.debugPost = (u, f) async => {
+        'code': '0',
+        'datas': {'cxxszhxqkb': <String, Object?>{}},
+      };
+      await expectLater(
+        TimetableApi.fetchSemesterCourses('2026-2027-1'),
+        throwsA(
+          isA<DiagnosticException>().having(
+            (e) => e.code,
+            'code',
+            'response_rows_missing',
+          ),
+        ),
+      );
+      await expectLater(
+        TimetableApi.fetchTermSnapshot('2026-2027-1'),
+        throwsA(
+          isA<DiagnosticException>().having(
+            (e) => e.code,
+            'code',
+            'response_rows_missing',
+          ),
+        ),
+      );
+    });
+
+    test('真正的空 rows 仍是合法空课表', () async {
+      TimetableApi.debugPost = (u, f) async => {
+        'code': '0',
+        'datas': {
+          'cxxszhxqkb': {'rows': <Object?>[]},
+        },
+      };
+      expect(await TimetableApi.fetchSemesterCourses('2026-2027-1'), isEmpty);
+    });
+
     test('timeout → network', () async {
       TimetableApi.debugPost = (u, f) async => throw TimeoutException('t');
       await expectFailure(TimetableSyncFailure.network);

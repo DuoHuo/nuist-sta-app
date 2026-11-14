@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/config/campus_config.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_page.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/shuttle_api.dart';
@@ -37,6 +38,38 @@ class FakeShuttleSource implements ShuttleSource {
 }
 
 void main() {
+  testWidgets('曾成功后的停更仍有警告，连续失败降噪且恢复可追踪', (tester) async {
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    final source = FakeShuttleSource();
+    final controller = ShuttleController(source);
+    try {
+      controller.setActive(true);
+      source.pending.last.complete([]);
+      await tester.pump();
+      for (var attempt = 0; attempt < 2; attempt++) {
+        await tester.pump(const Duration(seconds: 3));
+        source.pending.last.completeError(StateError('合成公交断线'));
+        await tester.pump();
+      }
+      await tester.pump(const Duration(seconds: 3));
+      source.pending.last.complete([]);
+      await tester.pump();
+      final failures = records
+          .where((event) => event['event'] == 'vehicles.refresh_failed')
+          .toList();
+      expect(failures, hasLength(2));
+      expect(failures.first['level'], 'WARNING');
+      expect(failures.last['level'], 'DEBUG');
+      expect(
+        records.where((event) => event['event'] == 'vehicles.recovered'),
+        hasLength(1),
+      );
+    } finally {
+      controller.dispose();
+      AppLog.recordListenerForTesting = null;
+    }
+  });
   test('坐标逆变换匹配校准工具，在线状态只看 ol', () {
     final v = ShuttleVehicle.parse(row('bus-a'))!;
     expect(v.point.longitude, closeTo(118.71900271346217, 1e-9));

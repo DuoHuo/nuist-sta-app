@@ -18,6 +18,8 @@ import 'package:nuist_sta_app/core/auth/portal_session.dart';
 import 'package:nuist_sta_app/core/config/campus_config.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/network/vpn_auth.dart';
+import 'package:nuist_sta_app/mini_apps/electricity/electricity_api.dart';
+import 'package:nuist_sta_app/mini_apps/electricity/electricity_models.dart';
 // 与现有 WebView 测试一致，仅使用已安装插件的平台接口模拟 Cookie 写入。
 // ignore: depend_on_referenced_packages
 import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
@@ -305,7 +307,289 @@ class _Campus {
 }
 
 void main() {
-  test('业务登录和请求记录服务类别与最终状态，不输出主机或凭据', () async {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  const evidenceRoom = ElecRoom(
+    campus: ElecOption(name: '测试校区', value: 'campus'),
+    building: ElecOption(name: '测试楼栋', value: 'building'),
+    room: ElecOption(name: '测试房间', value: 'room'),
+  );
+
+  Future<Map<String, Object?>> missingAuthorization(
+    PortalSession portal,
+  ) async {
+    try {
+      await ElectricityApi.queryBalance(evidenceRoom, session: portal);
+      fail('此合成落地地址没有一卡通授权，应在余额HTTP请求前失败');
+    } on PortalLoginError catch (error) {
+      expect(error.code, 'icard_authorization_missing');
+      return Map<String, Object?>.from(error.context['details'] as Map);
+    }
+  }
+
+  test('恢复缓存缺授权时展示实际落地地址和零HTTP事实', () async {
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
+    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+    var requests = 0;
+    final portal = PortalSession.forTesting(
+      cas: campus.cas,
+      createHttp: (jar) => _http(jar, (_) {
+        requests++;
+        return ResponseBody.fromString('不应发起请求', 200);
+      }),
+      readEstablished: () async => {
+        PortalServices.icard: EstablishedEntry(
+          landing: 'https://icard.test/landing?flow=old-cache&ticket=synthetic-secret',
+          at: DateTime.now(),
+          restored: true,
+        ),
+      },
+    );
+    final details = await missingAuthorization(portal);
+    expect(requests, 0);
+    expect(campus.authRequests, 0);
+    expect(details['source'], 'restored');
+    expect(details['landing_url'], contains('/landing?flow=old-cache'));
+    expect(
+      details['landing_url'].toString().contains('synthetic-secret'),
+      isFalse,
+    );
+    expect(details['query_parameter_names'], ['flow', 'ticket']);
+    expect(details['authorization_present'], isFalse);
+    expect(details['http_performed_for_this_lookup'], isFalse);
+    expect(details['balance_request_sent'], isFalse);
+    expect(details['original_response_available'], isFalse);
+    expect(
+      details['original_response_unavailable_reason'],
+      'restored_landing_only',
+    );
+    final failure = records.singleWhere(
+      (record) => record['event'] == 'balance.query.failed',
+    );
+    final displayed = AppLog.formatDetails(failure);
+    expect(displayed, contains('/landing?flow=old-cache'));
+    expect(displayed, contains('restored_landing_only'));
+    expect(displayed, contains('没有发起HTTP请求'));
+    expect(displayed.contains('synthetic-secret'), isFalse);
+    expect(displayed.contains('不应发起请求'), isFalse);
+  });
+
+  test('缺授权失败可查看新登录原响应，内存和序列化缓存仅按日志引用复用', () async {
+    await AppLog.resetForTesting();
+    final temp = await Directory.systemTemp.createTemp(
+      'portal_landing_evidence_',
+    );
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await temp.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: temp);
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+    final stored = <String, EstablishedEntry>{};
+    var requests = 0;
+    final portal = PortalSession.forTesting(
+      cas: campus.cas,
+      createHttp: (jar) => _http(jar, (_) {
+        requests++;
+        return ResponseBody.fromString(
+          '<html>synthetic-landing-evidence<input name="token" value="synthetic-body-secret"></html>',
+          200,
+          headers: {
+            Headers.contentTypeHeader: ['text/html'],
+          },
+        );
+      }),
+      writeEstablished: (entries) async {
+        stored
+          ..clear()
+          ..addAll(entries);
+      },
+    );
+    final fresh = await missingAuthorization(portal);
+    expect(fresh['source'], 'fresh');
+    expect(fresh['http_performed_for_this_lookup'], isTrue);
+    expect(fresh['original_response_available'], isTrue);
+    expect(jsonEncode(fresh), contains('synthetic-landing-evidence'));
+    expect(jsonEncode(fresh).contains('synthetic-body-secret'), isFalse);
+    expect(requests, 1);
+    expect(
+      AppLog.formatDetails(
+        records.lastWhere(
+          (record) => record['event'] == 'balance.query.failed',
+        ),
+      ),
+      contains('synthetic-landing-evidence'),
+    );
+    final serialized = stored[PortalServices.icard]!.toJson();
+    expect(serialized['diagnostic_record'], isA<Map>());
+    expect(
+      jsonEncode(serialized).contains('synthetic-landing-evidence'),
+      isFalse,
+    );
+    expect(
+      (serialized['diagnostic_record'] as Map).keys,
+      unorderedEquals(['session_id', 'seq']),
+    );
+
+    final memory = await missingAuthorization(portal);
+    expect(memory['source'], 'memory');
+    expect(memory['http_performed_for_this_lookup'], isFalse);
+    expect(memory['original_response_available'], isTrue);
+    expect(jsonEncode(memory), contains('synthetic-landing-evidence'));
+    expect(
+      AppLog.formatDetails(
+        records.lastWhere(
+          (record) => record['event'] == 'balance.query.failed',
+        ),
+      ),
+      contains('synthetic-landing-evidence'),
+    );
+    expect(requests, 1);
+
+    final restored = PortalSession.forTesting(
+      cas: campus.cas,
+      createHttp: (jar) => _http(jar, (_) {
+        requests++;
+        return ResponseBody.fromString('不应发起请求', 200);
+      }),
+      readEstablished: () async => {
+        PortalServices.icard: EstablishedEntry.fromJson(serialized)!,
+      },
+    );
+    final restoredDetails = await missingAuthorization(restored);
+    expect(restoredDetails['source'], 'restored');
+    expect(restoredDetails['original_response_available'], isTrue);
+    expect(jsonEncode(restoredDetails), contains('synthetic-landing-evidence'));
+    expect(requests, 1);
+    await AppLog.clear();
+    final removed = await missingAuthorization(restored);
+    expect(removed['original_response_available'], isFalse);
+    expect(
+      removed['original_response_unavailable_reason'],
+      'diagnostic_record_expired_removed_or_unavailable',
+    );
+    expect(requests, 1);
+  });
+
+  for (final unavailable in ['attachment_missing', 'not_http']) {
+    test('历史登录证据 $unavailable 时不宣称有原始响应', () async {
+      await AppLog.resetForTesting();
+      final temp = await Directory.systemTemp.createTemp(
+        'portal_missing_evidence_',
+      );
+      addTearDown(() async {
+        await AppLog.resetForTesting();
+        await temp.delete(recursive: true);
+      });
+      await AppLog.initialize(directory: temp);
+      Map<String, Object?> reference;
+      if (unavailable == 'attachment_missing') {
+        final evidence = AppLog.recordHttpExchange('test.portal_response', {
+          'request': {'url': 'https://icard.test/landing'},
+          'response': {'status': 200, 'body': 'x' * 70000, 'complete': true},
+        })!;
+        reference = Map<String, Object?>.from(evidence['record_ref'] as Map);
+        await AppLog.snapshot();
+        final attachments = Directory(
+          '${temp.path}/nuist_sta_app/logs/records',
+        );
+        final attachment = await attachments
+            .list()
+            .where((entry) => entry is File)
+            .cast<File>()
+            .single;
+        await attachment.delete();
+      } else {
+        Map<String, Object?>? unrelated;
+        AppLog.recordListenerForTesting = (record) => unrelated = record;
+        AppLog.logger('test.unrelated').info(
+          'not_http',
+          fields: {
+            'details': {
+              'response': {
+                'status': 200,
+                'body': 'unrelated-response-shaped-value',
+              },
+            },
+          },
+        );
+        reference = {
+          'session_id': unrelated!['session_id'],
+          'seq': unrelated!['seq'],
+        };
+      }
+      final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+      var requests = 0;
+      final portal = PortalSession.forTesting(
+        cas: campus.cas,
+        createHttp: (jar) => _http(jar, (_) {
+          requests++;
+          return ResponseBody.fromString('不应请求', 200);
+        }),
+        readEstablished: () async => {
+          PortalServices.icard: EstablishedEntry(
+            landing: 'https://icard.test/landing?flow=cached',
+            at: DateTime.now(),
+            restored: true,
+            diagnosticRecord: reference,
+          ),
+        },
+      );
+      final details = await missingAuthorization(portal);
+      expect(requests, 0);
+      expect(details['original_response_available'], isFalse);
+      expect(details.containsKey('landing_response'), isFalse);
+      expect(details['record_ref'], reference);
+      expect(
+        details['original_response_unavailable_reason'],
+        unavailable == 'attachment_missing'
+            ? 'diagnostic_attachment_unavailable'
+            : 'diagnostic_record_not_http_exchange',
+      );
+    });
+  }
+
+  test('并发登录记录共享任务编号与排队耗时', () async {
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
+    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    campus.callbackGate = () async {
+      entered.complete();
+      await release.future;
+    };
+    final portal = campus.portal();
+    final first = portal.ensureLoggedIn('https://jwxt.test/callback');
+    await entered.future;
+    final second = portal.ensureLoggedIn('https://jwxt.test/callback');
+    await pumpEventQueue();
+    release.complete();
+    expect(await second, await first);
+    final joined = records.singleWhere(
+      (r) => r['event'] == 'service.login_joined',
+    );
+    final dequeued = records.singleWhere(
+      (r) => r['event'] == 'service.login_dequeued',
+    );
+    final completed = records.singleWhere(
+      (r) => r['event'] == 'service.login.completed',
+    );
+    expect(
+      (joined['attrs'] as Map)['shared_login_id'],
+      (completed['attrs'] as Map)['login_id'],
+    );
+    expect((dequeued['attrs'] as Map)['queued_ms'], isNonNegative);
+    expect(dequeued['trace_id'], completed['trace_id']);
+    expect(campus.assertions, 1);
+  });
+
+  test('业务摘要匿名化，完整请求保留路径但隐藏凭据', () async {
     final records = <Map<String, Object?>>[];
     AppLog.recordListenerForTesting = records.add;
     addTearDown(() => AppLog.recordListenerForTesting = null);
@@ -321,10 +605,24 @@ void main() {
     expect((response['attrs'] as Map)['service'], 'jwxt');
     expect((response['attrs'] as Map)['status_code'], 200);
     expect(login['trace_id'], response['trace_id']);
+    final summaries = records
+        .map(
+          (record) => {
+            ...record,
+            'attrs': Map<String, Object?>.from(record['attrs'] as Map)
+              ..remove('details'),
+          },
+        )
+        .toList();
     final text = jsonEncode(records);
-    expect(text, isNot(contains(CampusHosts.jwxt)));
-    expect(text, isNot(contains('synthetic-ticket')));
-    expect(text, isNot(contains('synthetic-credential')));
+    expect(
+      jsonEncode(summaries).contains(CampusHosts.jwxt),
+      isFalse,
+      reason: '摘要中主机必须匿名化',
+    );
+    expect(text, contains('/data'));
+    expect(text.contains('synthetic-ticket'), isFalse, reason: 'ticket必须脱敏');
+    expect(text.contains('synthetic-credential'), isFalse, reason: '凭据ID必须脱敏');
   });
 
   test('冷启动恢复 VPN 和业务会话，CAS 过期也不触发认证', () async {

@@ -65,15 +65,20 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         AppUpdateStore.listeners.remove(listener)
         (app as Application).unregisterActivityLifecycleCallbacks(this)
         sink = null
+        AppUpdateDiagnostics.listener = null
         worker.shutdownNow()
         if (instance?.get() === this) instance = null
     }
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
         sink = events
+        AppUpdateDiagnostics.listener = { event -> if (attached) sink?.success(event) }
         events.success(AppUpdateStore.snapshot())
     }
-    override fun onCancel(arguments: Any?) { sink = null }
+    override fun onCancel(arguments: Any?) {
+        sink = null
+        AppUpdateDiagnostics.listener = null
+    }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         try {

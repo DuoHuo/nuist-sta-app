@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:nuist_sta_app/app.dart';
 import 'package:nuist_sta_app/core/network/client_metadata.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/router.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_api.dart';
@@ -200,6 +201,56 @@ Future<void> backGesture(
 }
 
 void main() {
+  test('原生下载失败记录真实状态和原因，进度变化不重复记录终态', () async {
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    final bridge = FakeBridge();
+    final controller = UpdateController(
+      api: FakeApi(),
+      bridge: bridge,
+      metadataProvider: () async => current,
+    );
+    try {
+      await controller.ensureStarted();
+      await controller.check(manual: true);
+      await controller.download();
+      bridge.events.add(
+        UpdateTask(
+          status: UpdateTaskStatus.downloading,
+          release: release(),
+          downloadedBytes: 20,
+          totalBytes: 100,
+        ),
+      );
+      bridge.events.add(
+        UpdateTask(
+          status: UpdateTaskStatus.failed,
+          release: release(),
+          errorCode: 'hash_mismatch',
+        ),
+      );
+      final states = records
+          .where((event) => event['event'] == 'download.state_changed')
+          .toList();
+      expect(states, hasLength(2));
+      expect(states.last['level'], 'WARNING');
+      expect(states.last.toString(), contains('hash_mismatch'));
+      expect(
+        records.any((event) => event['event'] == 'download.completed'),
+        isFalse,
+      );
+      expect(
+        records.any(
+          (event) => event['event'] == 'download.start_command.completed',
+        ),
+        isTrue,
+      );
+    } finally {
+      controller.dispose();
+      await bridge.events.close();
+      AppLog.recordListenerForTesting = null;
+    }
+  });
   TestWidgetsFlutterBinding.ensureInitialized();
   late FakeApi api;
   late FakeBridge bridge;

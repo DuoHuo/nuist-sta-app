@@ -108,14 +108,18 @@ class ScoreController extends ChangeNotifier {
   Future<void> _runRefresh({
     bool checkBinding = true,
     bool userInitiated = false,
-  }) => _refreshing ??=
-      _refresh(
-        _bindingGeneration,
-        checkBinding: checkBinding,
-        userInitiated: userInitiated,
-      ).whenComplete(() {
-        _refreshing = null;
-      });
+  }) => SilentRefresh.join(
+    _refreshing ??= SilentRefresh.track(
+      () =>
+          _refresh(
+            _bindingGeneration,
+            checkBinding: checkBinding,
+            userInitiated: userInitiated,
+          ).whenComplete(() {
+            _refreshing = null;
+          }),
+    ),
+  );
 
   Future<void> _refresh(
     int generation, {
@@ -129,29 +133,44 @@ class ScoreController extends ChangeNotifier {
     try {
       if (checkBinding) {
         final bound = await _bindingCheck();
-        if (generation != _bindingGeneration) return;
+        if (generation != _bindingGeneration) {
+          SilentRefresh.skipCurrent();
+          return;
+        }
         _portalBound = bound;
       }
-      if (!_portalBound) return;
+      if (!_portalBound) {
+        SilentRefresh.skipCurrent(reason: 'not_bound');
+        return;
+      }
       final succeeded = await SilentRefresh.run(
         'score.controller',
         action: () async {
           final report = await _fetch();
-          if (generation != _bindingGeneration) return;
+          if (generation != _bindingGeneration) {
+            SilentRefresh.skipCurrent();
+            return;
+          }
           await _saveCache(report);
-          if (generation != _bindingGeneration) return;
+          if (generation != _bindingGeneration) {
+            SilentRefresh.skipCurrent();
+            return;
+          }
           _report = report;
         },
         userInitiated: userInitiated,
+        fields: {'has_cache': _report != null},
       );
       // 手动刷新失败要给用户一个可见的错误提示，但不暴露原始异常。
       if (!succeeded && userInitiated && generation == _bindingGeneration) {
         _error = '刷新失败，请稍后再试';
       }
     } on PortalCredentialError catch (e) {
+      SilentRefresh.failCurrent();
       // 凭据失效必须让用户重新绑定：这条提示不能跟着其他失败一起静默掉。
       if (generation == _bindingGeneration) _error = e.message;
     } catch (_) {
+      SilentRefresh.failCurrent();
       // 其余失败（网络、登录跳转、解析）已由 SilentRefresh 重试并写日志，
       // 界面上不再展示失败文案（issue #31）。
     } finally {

@@ -444,7 +444,12 @@ class _CampusMapPageState extends State<CampusMapPage>
     if (remote == null || query.isEmpty) return;
     _searchTimer = Timer(const Duration(milliseconds: 300), () async {
       try {
-        final results = await remote.searchPlaces(query);
+        final results = await _log.operation(
+          'places.search',
+          () => remote.searchPlaces(query),
+          successLevel: AppLogLevel.debug,
+          resultFields: (items) => {'count': items.length},
+        );
         if (!mounted || revision != _searchRevision) return;
         setState(() {
           _searchResults = results;
@@ -544,7 +549,18 @@ class _CampusMapPageState extends State<CampusMapPage>
       );
     }
     try {
-      final data = await widget.source.loadCampus();
+      final data = await _log.operation(
+        'campus.load',
+        widget.source.loadCampus,
+        fields: {'force': resample},
+        resultFields: (value) => {'count': value.places.length},
+        errorFields: (_) => {
+          'has_cache': _campus.places.isNotEmpty,
+          'outcome': _campus.places.isNotEmpty
+              ? 'cache_fallback'
+              : 'unavailable',
+        },
+      );
       if (!mounted || revision != _campusRevision) return;
       _applyCampus(data, resample: resample);
       unawaited(_cache.write('default', data));
@@ -585,7 +601,10 @@ class _CampusMapPageState extends State<CampusMapPage>
     _expandSheet(.43);
     if (remote == null) return;
     try {
-      final detail = await remote.loadPlace(place);
+      final detail = await _log.operation(
+        'place.load',
+        () => remote.loadPlace(place),
+      );
       if (!mounted || revision != _placeRevision) return;
       setState(() {
         _place = detail;
@@ -635,7 +654,10 @@ class _CampusMapPageState extends State<CampusMapPage>
     });
     final buildingId = place.buildingId ?? place.id;
     try {
-      final data = await widget.source.loadFloor(buildingId, floor.id);
+      final data = await _log.operation(
+        'floor.load',
+        () => widget.source.loadFloor(buildingId, floor.id),
+      );
       if (!mounted || revision != _floorRevision) return;
       setState(() {
         _floorData = data;
@@ -767,7 +789,10 @@ class _CampusMapPageState extends State<CampusMapPage>
       return;
     }
     try {
-      final point = await widget.location.current();
+      final point = await _log.operation(
+        'location.current',
+        widget.location.current,
+      );
       if (!mounted) return;
       setState(() {
         _userPoint = point;
@@ -790,7 +815,7 @@ class _CampusMapPageState extends State<CampusMapPage>
         _applyFix(last, focus: true);
         centered = true;
       }
-      final fix = await live.currentFix();
+      final fix = await _log.operation('location.current', live.currentFix);
       if (!mounted) return;
       final moved = _userPoint == null
           ? double.infinity
@@ -843,7 +868,13 @@ class _CampusMapPageState extends State<CampusMapPage>
     final revision = ++_routeRevision;
     setState(() => _routing = true);
     try {
-      final result = await widget.source.planRoute(routeRequest);
+      final result = await _log.operation(
+        'route.plan',
+        () => widget.source.planRoute(routeRequest),
+        resultFields: (value) => {
+          'outcome': value == null ? 'unavailable' : 'success',
+        },
+      );
       if (!mounted || revision != _routeRevision) return;
       setState(() {
         _routing = false;
@@ -1453,7 +1484,14 @@ class _CampusMapPageState extends State<CampusMapPage>
       accessible: request.accessible,
     );
     try {
-      final result = await widget.source.planRoute(next);
+      final result = await _log.operation(
+        'route.replan',
+        () => widget.source.planRoute(next),
+        resultFields: (value) => {
+          'outcome': value == null ? 'unavailable' : 'success',
+        },
+        errorFields: (_) => {'outcome': 'previous_route_retained'},
+      );
       if (!mounted || revision != _routeRevision) return;
       setState(() {
         _rerouting = false;

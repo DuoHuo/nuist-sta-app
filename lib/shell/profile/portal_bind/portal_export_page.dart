@@ -79,7 +79,11 @@ class _PortalExportPageState extends State<PortalExportPage> {
     final text = _text;
     if (text == null) return;
     try {
-      await Clipboard.setData(ClipboardData(text: text));
+      await _log.operation(
+        'clipboard.write',
+        () => Clipboard.setData(ClipboardData(text: text)),
+        fields: const {'stage': 'passkey.export.copy'},
+      );
       _message('已复制，传完记得清空剪贴板');
     } catch (_) {
       _message('复制失败');
@@ -90,24 +94,28 @@ class _PortalExportPageState extends State<PortalExportPage> {
     final text = _text;
     final bundle = _bundle;
     if (text == null || bundle == null) return;
+    var stage = 'passkey.export.file';
     try {
-      final dir = await getTemporaryDirectory();
-      final now = DateTime.now();
-      String two(int n) => n.toString().padLeft(2, '0');
-      final stamp = '${now.year}${two(now.month)}${two(now.day)}';
-      final file = File(
-        '${dir.path}${Platform.pathSeparator}'
-        'nuist-passkey-${bundle.studentId ?? 'unknown'}-$stamp.nuistkey',
-      );
-      await file.writeAsString(text, flush: true);
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [XFile(file.path, mimeType: 'text/plain')],
-          subject: 'NUIST++ 通行密钥',
-        ),
-      );
-    } catch (e) {
-      _message('分享失败：$e');
+      await _log.operation('file.share', () async {
+        final dir = await getTemporaryDirectory();
+        final now = DateTime.now();
+        String two(int n) => n.toString().padLeft(2, '0');
+        final stamp = '${now.year}${two(now.month)}${two(now.day)}';
+        final file = File(
+          '${dir.path}${Platform.pathSeparator}'
+          'nuist-passkey-${bundle.studentId ?? 'unknown'}-$stamp.nuistkey',
+        );
+        await file.writeAsString(text, flush: true);
+        stage = 'passkey.export.share';
+        await SharePlus.instance.share(
+          ShareParams(
+            files: [XFile(file.path, mimeType: 'text/plain')],
+            subject: 'NUIST++ 通行密钥',
+          ),
+        );
+      }, errorFields: (_) => {'stage': stage});
+    } catch (_) {
+      _message('分享失败，请重试');
     }
   }
 

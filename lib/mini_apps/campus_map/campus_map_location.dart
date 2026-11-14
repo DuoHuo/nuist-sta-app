@@ -2,11 +2,28 @@ import 'dart:async';
 
 import 'package:geolocator/geolocator.dart';
 
+import '../../core/logging/app_log.dart';
+import '../../core/logging/diagnostic_error.dart';
 import 'campus_map_data.dart';
 
-class CampusLocationException implements Exception {
-  const CampusLocationException(this.message);
+class CampusLocationException implements Exception, DiagnosticError {
+  const CampusLocationException(
+    this.message, {
+    this.code = 'location_unavailable',
+    this.cause,
+    this.causeStackTrace,
+  });
   final String message;
+  final String code;
+  @override
+  final Object? cause;
+  @override
+  final StackTrace? causeStackTrace;
+  @override
+  Map<String, Object?> get diagnosticContext => {
+    'reason_code': code,
+    'stage': 'location',
+  };
   @override
   String toString() => message;
 }
@@ -40,13 +57,17 @@ abstract interface class LiveUserLocationSource implements UserLocationSource {
 
 class DeviceUserLocation implements LiveUserLocationSource {
   const DeviceUserLocation();
+  static final _log = AppLog.logger('campus_map.location');
 
   /// 最近位置超过这个时长就不拿来当「当前位置」兜底。
   static const _staleAfter = Duration(minutes: 10);
 
   Future<void> _ensurePermission() async {
     if (!await Geolocator.isLocationServiceEnabled()) {
-      throw const CampusLocationException('定位服务未开启，请在系统设置中打开位置信息');
+      throw const CampusLocationException(
+        '定位服务未开启，请在系统设置中打开位置信息',
+        code: 'location_service_disabled',
+      );
     }
     var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
@@ -55,9 +76,15 @@ class DeviceUserLocation implements LiveUserLocationSource {
     switch (permission) {
       case LocationPermission.denied:
       case LocationPermission.unableToDetermine:
-        throw const CampusLocationException('未获得定位权限，无法显示你的位置');
+        throw const CampusLocationException(
+          '未获得定位权限，无法显示你的位置',
+          code: 'location_permission_denied',
+        );
       case LocationPermission.deniedForever:
-        throw const CampusLocationException('定位权限已被拒绝，请在系统设置中允许');
+        throw const CampusLocationException(
+          '定位权限已被拒绝，请在系统设置中允许',
+          code: 'location_permission_denied_forever',
+        );
       case LocationPermission.whileInUse:
       case LocationPermission.always:
         break;
@@ -104,7 +131,16 @@ class DeviceUserLocation implements LiveUserLocationSource {
           ),
         ),
       );
-    } on TimeoutException {
+    } on TimeoutException catch (error, stackTrace) {
+      _log.debug(
+        'fix.attempt_timed_out',
+        fields: {
+          'stage': 'location.${accuracy.name}',
+          'timeout_ms': limit.inMilliseconds,
+        },
+        error: error,
+        stackTrace: stackTrace,
+      );
       return null;
     }
   }
@@ -122,6 +158,7 @@ class DeviceUserLocation implements LiveUserLocationSource {
     if (last != null &&
         fallback != null &&
         DateTime.now().difference(last.timestamp) < _staleAfter) {
+      _log.info('fix.cached_fallback', fields: {'outcome': 'cache_fallback'});
       return fallback;
     }
     throw const CampusLocationException('暂时没定位到，请到窗边或室外再试');

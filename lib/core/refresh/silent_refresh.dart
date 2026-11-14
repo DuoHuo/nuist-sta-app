@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../auth/portal_exceptions.dart';
 import '../logging/app_log.dart';
+import '../logging/diagnostic_error.dart';
 
 /// 静默刷新的统一口径（issue #31「数据更新无感化、失败自动处理」）。
 ///
@@ -17,6 +18,65 @@ import '../logging/app_log.dart';
 ///   静默处理会让用户永远不知道该重新绑。
 class SilentRefresh {
   const SilentRefresh._();
+
+  static final Object _executionKey = Object();
+  static final Expando<_RefreshExecution> _trackedResults = Expando();
+
+  /// 将真实刷新结果绑定到共享 Future，不依赖发起者是否位于批次 Zone。
+  static Future<T> track<T>(Future<T> Function() action) {
+    final execution = _RefreshExecution();
+    final future = runZoned(() async {
+      try {
+        return await AppLog.captureOutcome<T>(
+          action,
+          onOutcome: (outcome, reason) =>
+              execution.include(outcome, reason: reason),
+        );
+      } catch (_) {
+        execution.include('failure');
+        rethrow;
+      }
+    }, zoneValues: {_executionKey: execution});
+    _trackedResults[future] = execution;
+    return future;
+  }
+
+  /// 将在途任务最终结果回传给当前等待者，原样返回 Future 以保持刷新合流。
+  static Future<T> join<T>(Future<T> future) {
+    final parent = Zone.current[_executionKey] as _RefreshExecution?;
+    final execution = _trackedResults[future];
+    if (parent != null && execution != null && !identical(parent, execution)) {
+      // 先登记结果回传，再由调用者 await；不会吞掉原 Future 的异常。
+      unawaited(
+        future.then<void>(
+          (_) => parent.include(execution.outcome, reason: execution.reason),
+          onError: (Object _, StackTrace _) => parent.include('failure'),
+        ),
+      );
+    }
+    return future;
+  }
+
+  /// 当前刷新已失效或不再需要执行；正常返回也不能再被记录为成功。
+  static void skipCurrent({String reason = 'superseded'}) {
+    final execution = Zone.current[_executionKey] as _RefreshExecution?;
+    execution?.outcome = 'skipped';
+    execution?.reason = reason;
+  }
+
+  /// 数据仍可使用，但缓存或可选步骤未完成。
+  static void degradeCurrent({String reason = 'cache_write_failed'}) {
+    final execution = Zone.current[_executionKey] as _RefreshExecution?;
+    execution?.outcome = 'degraded';
+    execution?.reason = reason;
+  }
+
+  /// 控制器已处理失败时，把真实结果回传给外层批量刷新。
+  static void failCurrent({String reason = 'child_operation_failed'}) {
+    final execution = Zone.current[_executionKey] as _RefreshExecution?;
+    execution?.outcome = 'failure';
+    execution?.reason = reason;
+  }
 
   /// 每次重试前的等待时间，长度即最多重试次数（1s、3s 指数退避）。
   static const List<Duration> retryDelays = [
@@ -38,7 +98,13 @@ class SilentRefresh {
   /// 只看错误类型不看文案；[DioException] 会带上 inner error，逐层判断（最多 3 层）。
   static bool isNetworkFailure(Object error, [int depth = 0]) {
     if (error is PortalNetworkError) return true;
+    if (error is PortalCredentialError || error is PortalLoginError) {
+      return false;
+    }
     if (error is TimeoutException || error is SocketException) return true;
+    if (error is DiagnosticError && depth < 3 && error.cause != null) {
+      return isNetworkFailure(error.cause!, depth + 1);
+    }
     if (error is DioException) {
       switch (error.type) {
         case DioExceptionType.connectionTimeout:
@@ -70,24 +136,50 @@ class SilentRefresh {
     bool userInitiated = false,
     bool rethrowNonNetwork = true,
     List<Duration> delays = retryDelays,
-  }) async {
+    String? trigger,
+  }) => AppLog.logger(scope).startSpan().run(() async {
     final log = AppLog.logger(scope);
+    final parent = Zone.current[_executionKey] as _RefreshExecution?;
+    final totalWatch = Stopwatch()..start();
+    final common = <String, Object?>{
+      ...fields,
+      'trigger': trigger ?? (userInitiated ? 'manual' : 'automatic'),
+    };
+    log.debug('refresh.started', fields: common);
     for (var attempt = 1; ; attempt++) {
       final watch = Stopwatch()..start();
+      final execution = _RefreshExecution();
       try {
-        await action();
-        watch.stop();
-        log.info(
-          'refresh.completed',
-          fields: {
-            ...fields,
-            'attempt': attempt,
-            'duration_ms': watch.elapsedMilliseconds,
-          },
+        await log.startSpan().run(
+          () => runZoned(action, zoneValues: {_executionKey: execution}),
         );
+        watch.stop();
+        final outcome = execution.outcome;
+        AppLog.reportOutcome(outcome, reason: execution.reason);
+        parent?.include(outcome);
+        final resultFields = {
+          ...common,
+          'attempt': attempt,
+          'retry_count': attempt - 1,
+          'duration_ms': totalWatch.elapsedMilliseconds,
+          'attempt_duration_ms': watch.elapsedMilliseconds,
+          'outcome': outcome,
+          if (execution.reason != null) 'reason': execution.reason,
+        };
+        if (outcome == 'failure' || outcome == 'degraded') {
+          log.warning(
+            outcome == 'failure' ? 'refresh.failed' : 'refresh.completed',
+            fields: resultFields,
+          );
+        } else if (outcome == 'skipped') {
+          log.debug('refresh.skipped', fields: resultFields);
+        } else {
+          log.info('refresh.completed', fields: resultFields);
+        }
         // 成功必须让用户看到（issue #31：不展示过程、不展示失败，只展示成功）。
-        if (userInitiated) notifyUpdated();
-        return true;
+        final succeeded = outcome == 'success' || outcome == 'degraded';
+        if (userInitiated && succeeded) notifyUpdated();
+        return succeeded;
       } catch (error, stackTrace) {
         watch.stop();
         final network = isNetworkFailure(error);
@@ -96,21 +188,31 @@ class SilentRefresh {
           log.debug(
             'refresh.retrying',
             fields: {
-              ...fields,
+              ...common,
               'attempt': attempt,
               'wait_ms': wait.inMilliseconds,
+              'attempt_duration_ms': watch.elapsedMilliseconds,
+              'duration_ms': totalWatch.elapsedMilliseconds,
+              'retryable': true,
             },
+            error: error,
+            stackTrace: stackTrace,
           );
           await Future<void>.delayed(wait);
           continue;
         }
+        parent?.include('failure');
+        AppLog.reportOutcome('failure');
         log.warning(
           'refresh.failed',
           fields: {
-            ...fields,
+            ...common,
             'attempt': attempt,
-            'duration_ms': watch.elapsedMilliseconds,
+            'retry_count': attempt - 1,
+            'duration_ms': totalWatch.elapsedMilliseconds,
+            'attempt_duration_ms': watch.elapsedMilliseconds,
             'retryable': network,
+            'outcome': 'failure',
           },
           error: error,
           stackTrace: stackTrace,
@@ -119,7 +221,7 @@ class SilentRefresh {
         rethrow;
       }
     }
-  }
+  });
 
   /// 并发跑一批刷新任务，各自静默、互不影响，返回是否有任一模块成功。
   ///
@@ -129,19 +231,113 @@ class SilentRefresh {
   static Future<bool> runAll(
     String scope,
     Map<String, Future<void> Function()> tasks,
-  ) async {
+  ) => AppLog.logger(scope).startSpan().run(() async {
+    final log = AppLog.logger(scope);
+    final watch = Stopwatch()..start();
     final results = await Future.wait([
       for (final entry in tasks.entries)
-        run(
-          scope,
-          action: entry.value,
-          fields: {'app_id': entry.key},
-          // 壳层不承担业务失败：任何模块抛错都只记日志，不能拖垮其他卡片。
-          rethrowNonNetwork: false,
-        ),
+        log.startSpan().run(() async {
+          final execution = _RefreshExecution();
+          for (var attempt = 1; ; attempt++) {
+            try {
+              await runZoned(
+                () => AppLog.captureOutcome<void>(
+                  entry.value,
+                  onOutcome: (outcome, reason) =>
+                      execution.include(outcome, reason: reason),
+                ),
+                zoneValues: {_executionKey: execution},
+              );
+              break;
+            } catch (error, stackTrace) {
+              // 未使用模块刷新包装的回调仍保留原有网络重试。
+              if (isNetworkFailure(error) && attempt <= retryDelays.length) {
+                final wait = retryDelays[attempt - 1];
+                log.debug(
+                  'refresh.dispatch_retrying',
+                  fields: {
+                    'app_id': entry.key,
+                    'attempt': attempt,
+                    'wait_ms': wait.inMilliseconds,
+                    'retryable': true,
+                  },
+                  error: error,
+                  stackTrace: stackTrace,
+                );
+                await Future<void>.delayed(wait);
+                execution.outcome = 'success';
+                execution.reason = null;
+                continue;
+              }
+              // 内层刷新已经记录根因时，壳仅汇总，避免重复异常。
+              if (execution.outcome != 'failure') {
+                log.warning(
+                  'refresh.dispatch_failed',
+                  fields: {
+                    'app_id': entry.key,
+                    'attempt': attempt,
+                    'outcome': 'failure',
+                  },
+                  error: error,
+                  stackTrace: stackTrace,
+                );
+              }
+              execution.outcome = 'failure';
+              break;
+            }
+          }
+          return execution.outcome;
+        }),
     ]);
+    final successCount = results.where((value) => value == 'success').length;
+    final degradedCount = results.where((value) => value == 'degraded').length;
+    final failureCount = results.where((value) => value == 'failure').length;
+    final fields = {
+      'count': tasks.length,
+      'success_count': successCount,
+      'failure_count': failureCount,
+      'partial_failure_count': degradedCount,
+      'skipped_count': results.where((value) => value == 'skipped').length,
+      'duration_ms': watch.elapsedMilliseconds,
+      'outcome': failureCount == tasks.length && failureCount > 0
+          ? 'failure'
+          : failureCount > 0 || degradedCount > 0
+          ? 'partial'
+          : successCount == 0
+          ? 'skipped'
+          : 'success',
+    };
+    if (failureCount > 0 || degradedCount > 0) {
+      log.warning('refresh.batch_completed', fields: fields);
+    } else {
+      log.info('refresh.batch_completed', fields: fields);
+    }
     // 成功提示由 [run] 在每次真正成功时发出：批量并发时「有任一成功」不代表
     // 其他模块也成功，这里不能再统一提示，否则会把失败的刷新也报成「已更新」。
-    return results.contains(true);
+    return successCount + degradedCount > 0;
+  });
+}
+
+class _RefreshExecution {
+  String outcome = 'success';
+  String? reason;
+
+  void include(String child, {String? reason}) {
+    child = switch (child) {
+      'failed' || 'error' || 'rejected' => 'failure',
+      'partial' => 'degraded',
+      'cancelled' || 'stale' => 'skipped',
+      _ => child,
+    };
+    if (child == 'failure' || outcome == 'failure') {
+      outcome = 'failure';
+      this.reason = reason ?? 'child_operation_failed';
+    } else if (child == 'degraded' || outcome == 'degraded') {
+      outcome = 'degraded';
+      this.reason = reason ?? this.reason;
+    } else if (child == 'skipped') {
+      outcome = 'skipped';
+      this.reason = reason ?? this.reason;
+    }
   }
 }

@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
+import 'package:nuist_sta_app/core/refresh/silent_refresh.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -65,6 +67,57 @@ void main() {
     expect((completed['attrs'] as Map)['duration_ms'], isNonNegative);
     expect(completed['trace_id'], started['trace_id']);
     expect(completed['span_id'], started['span_id']);
+  });
+
+  test('可选元数据失败时课表仍成功，诊断最终结果明确为降级', () async {
+    await c.ensureStarted();
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() {
+      AppLog.recordListenerForTesting = null;
+      TimetableApi.debugPost = null;
+    });
+    TimetableController.fetchSnapshot = (term, {baseSettings}) =>
+        TimetableApi.fetchTermSnapshot(term, baseSettings: baseSettings);
+    final started = Completer<void>();
+    final response = Completer<void>();
+    TimetableApi.debugPost = (uri, form) async {
+      if (uri.pathSegments.last == 'cxxszhxqkb.do') {
+        started.complete();
+        await response.future;
+        return {
+          'datas': {
+            'cxxszhxqkb': {'rows': <Object?>[]},
+          },
+        };
+      }
+      throw TimeoutException('合成可选接口超时');
+    };
+    final automatic = c.syncFromJwxt();
+    await started.future;
+    final batch = SilentRefresh.runAll('test.timetable_batch', {
+      'timetable': c.syncFromJwxt,
+    });
+    response.complete();
+    await automatic;
+    expect(await batch, isTrue);
+    expect(c.syncStatus, TimetableSyncStatus.success);
+    final completed = records.singleWhere(
+      (r) => r['event'] == 'sync.completed',
+    );
+    expect(completed['level'], 'WARNING');
+    expect((completed['attrs'] as Map)['outcome'], 'degraded');
+    final optional = records.firstWhere(
+      (r) => r['event'] == 'optional.request_failed',
+    );
+    expect((optional['attrs'] as Map)['endpoint'], startsWith('timetable.'));
+    expect((optional['attrs'] as Map)['error_type'], 'TimeoutException');
+    expect(optional['trace_id'], completed['trace_id']);
+    final batchCompleted = records.singleWhere(
+      (r) => r['event'] == 'refresh.batch_completed',
+    );
+    expect((batchCompleted['attrs'] as Map)['success_count'], 0);
+    expect((batchCompleted['attrs'] as Map)['partial_failure_count'], 1);
   });
 
   test('syncStatus: failure', () async {

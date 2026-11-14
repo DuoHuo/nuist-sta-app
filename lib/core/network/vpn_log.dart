@@ -1,9 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:dio/dio.dart';
 
 import '../logging/app_log.dart';
+import '../logging/diagnostic_error.dart';
+import '../logging/http_diagnostics.dart';
 
 final _log = AppLog.logger('core.network.vpn');
 
@@ -66,7 +67,7 @@ Future<T> vpnStage<T>(
       'stage.failed',
       fields: {
         ...?fields,
-        ..._nativeErrorFields(error),
+        if (error is DiagnosticError) ...error.diagnosticContext,
         'stage_id': sequence,
         'stage': name,
         'duration_ms': watch.elapsedMilliseconds,
@@ -84,12 +85,12 @@ Future<T> vpnStage<T>(
 /// 单次 HTTP 请求的日志，贯穿 Cookie 准备、选路与响应，避免重复输出。
 class VpnRequestLog {
   VpnRequestLog._(RequestOptions options)
-    : requestId = ++_sequence,
+    : requestId = httpDiagnosticRequestId(options),
+      _span = httpDiagnosticSpan(options),
       method = options.method,
       host = options.uri.host,
       port = options.uri.port;
 
-  static int _sequence = 0;
   static final _requests = Expando<VpnRequestLog>();
 
   /// 请求身份只保存在本地，不放入请求头、URL 或 Dio extra。
@@ -117,7 +118,7 @@ class VpnRequestLog {
   final String method;
   final String host;
   final int port;
-  final AppLogSpan _span = _log.startSpan();
+  final AppLogSpan _span;
 
   /// 请求准备、选路与响应回调使用同一个请求 Span。
   T run<T>(T Function() body) => _span.run(body);
@@ -163,7 +164,7 @@ class VpnRequestLog {
     );
   }
 
-  /// 失败也沿用请求编号；不展开 Dio 的多行异常说明或业务数据。
+  /// 失败沿用请求编号，原始异常及原因链由统一日志出口清洗并保留。
   void fail(Object error, {int? status}) {
     if (_finished) return;
     _finished = true;
@@ -228,7 +229,7 @@ class VpnConnectionLog {
       );
 }
 
-/// 只记录错误类别，不展开可能包含 URL、响应体或凭据的异常消息。
+/// 摘要使用稳定错误类别，完整原因保留在统一日志详情中。
 String vpnErrorKind(Object error) => AppLog.errorKindFor(error);
 
 /// 原生阶段只接受固定枚举，原始响应文本不会写入日志。
@@ -256,20 +257,4 @@ Map<String, Object?> vpnNativeTimings(Object? timings) {
     }
   }
   return fields;
-}
-
-Map<String, Object?> _nativeErrorFields(Object error) {
-  if (error is! SocketException) return {};
-  // 只匹配预定义阶段，禁止将异常正文传给日志出口。
-  final stage = RegExp(r'阶段="?(配置|DNS|TCP|TLS|协议鉴权)"?')
-      .firstMatch(error.message)
-      ?.group(1);
-  for (final phase in [?stage, 'DNS', 'TCP', '回环鉴权']) {
-    if (phase == stage ||
-        error.message.contains('VPN 目标 $phase') ||
-        error.message.contains('VPN $phase超时')) {
-      return {'native_stage': vpnNativeStage(phase)};
-    }
-  }
-  return {};
 }

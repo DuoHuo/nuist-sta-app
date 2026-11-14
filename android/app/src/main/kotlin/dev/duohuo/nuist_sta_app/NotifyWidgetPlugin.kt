@@ -22,6 +22,19 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 
+/** 只经现有平台回执交给 Dart 脱敏，不在原生侧打印或保存异常正文。 */
+internal fun notifyFailureDetails(error: Throwable, stage: String): Map<String, Any?> {
+    val causes = mutableListOf<Map<String, Any?>>()
+    val seen = mutableSetOf<Throwable>(error)
+    var cause = error.cause
+    while (cause != null && seen.add(cause)) {
+        causes.add(mapOf("type" to cause.javaClass.name, "message" to cause.message, "stack" to cause.stackTraceToString()))
+        cause = cause.cause
+    }
+    return mapOf("stage" to stage, "native_type" to error.javaClass.name,
+        "message" to error.message, "stack" to error.stackTraceToString(), "causes" to causes)
+}
+
 /** 课表提醒 / 桌面小组件桥接，通道 `dev.duohuo.nuist_sta_app/notify_widget`。 */
 class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware,
     PluginRegistry.RequestPermissionsResultListener, PluginRegistry.NewIntentListener {
@@ -38,7 +51,10 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
      */
     private val configReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            TimetableWidgetProvider.refreshIfNightChanged(context)
+            try { TimetableWidgetProvider.refreshIfNightChanged(context) } catch (error: Exception) {
+                NativeBackgroundDiagnostics.enqueue(context, listOf(
+                    notifyFailureDetails(error, "widget.configuration") + ("reason_code" to "widget_configuration_refresh_failed")))
+            }
         }
     }
 
@@ -64,12 +80,10 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
         try {
             when (call.method) {
                 "scheduleReminders" -> {
-                    ReminderScheduler.replace(app, call.argument<String>("alarms") ?: "[]")
-                    result.success(null)
+                    result.success(ReminderScheduler.replace(app, call.argument<String>("alarms") ?: "[]"))
                 }
                 "cancelReminders" -> {
-                    ReminderScheduler.cancelAll(app)
-                    result.success(null)
+                    result.success(ReminderScheduler.cancelAll(app))
                 }
                 "updateWidget" -> {
                     TimetableWidgetProvider.savePayload(app, call.argument<String>("payload") ?: "")
@@ -90,8 +104,8 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
                 }
                 else -> result.notImplemented()
             }
-        } catch (_: Exception) {
-            result.error("notify_failed", "操作失败", null)
+        } catch (error: Exception) {
+            result.error("notify_failed", "操作失败", notifyFailureDetails(error, "notify.${call.method}"))
         }
     }
 

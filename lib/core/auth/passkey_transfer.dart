@@ -10,6 +10,7 @@ import 'package:pointycastle/ecc/api.dart';
 import 'package:pointycastle/ecc/curves/secp256r1.dart';
 
 import '../config/campus_config.dart';
+import '../logging/diagnostic_error.dart';
 import 'passkey_bundle.dart';
 import 'webauthn_signer.dart';
 
@@ -59,8 +60,17 @@ class PasskeyTransfer {
     // 解得出来不代表能用，顺手过一遍签名器的 PKCS#8 解析。
     try {
       Es256Key.fromPkcs8Pem(bundle.privateKeyPkcs8Pem);
-    } on Exception catch (e) {
-      throw PasskeyTransferError('导入的私钥无法解析：$e');
+    } on Exception catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        PasskeyTransferError(
+          '导入的私钥无法解析',
+          code: 'import_private_key_invalid',
+          stage: 'passkey.validate',
+          cause: error,
+          causeStackTrace: stackTrace,
+        ),
+        stackTrace,
+      );
     }
     return bundle;
   }
@@ -94,8 +104,17 @@ class PasskeyTransfer {
     final Uint8List blob;
     try {
       blob = _base45Decode(trimmed.substring(prefix.length));
-    } on FormatException {
-      throw const PasskeyTransferError('数据不完整或被改动过');
+    } on FormatException catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        PasskeyTransferError(
+          '数据不完整或被改动过',
+          code: 'transfer_encoding_invalid',
+          stage: 'passkey.decode',
+          cause: error,
+          causeStackTrace: stackTrace,
+        ),
+        stackTrace,
+      );
     }
     if (blob.isEmpty) {
       throw const PasskeyTransferError('数据不完整或被改动过');
@@ -105,8 +124,17 @@ class PasskeyTransfer {
 
     try {
       return _Payload.decode(plain, ECCurve_secp256r1());
-    } catch (_) {
-      throw const PasskeyTransferError('PIN 错误或数据已损坏');
+    } catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        PasskeyTransferError(
+          'PIN 错误或数据已损坏',
+          code: 'transfer_decryption_invalid',
+          stage: 'passkey.decrypt',
+          cause: error,
+          causeStackTrace: stackTrace,
+        ),
+        stackTrace,
+      );
     }
   }
 
@@ -434,10 +462,29 @@ Uint8List _base45Decode(String text) {
 }
 
 /// 导出 / 导入过程中面向用户的错误，[message] 可直接展示。
-class PasskeyTransferError implements Exception {
-  const PasskeyTransferError(this.message);
+class PasskeyTransferError implements Exception, DiagnosticError {
+  const PasskeyTransferError(
+    this.message, {
+    this.code = 'passkey_transfer_invalid',
+    this.stage = 'passkey.transfer',
+    this.cause,
+    this.causeStackTrace,
+  });
 
   final String message;
+  final String code;
+  final String stage;
+  @override
+  final Object? cause;
+  @override
+  final StackTrace? causeStackTrace;
+
+  @override
+  Map<String, Object?> get diagnosticContext => {
+    'reason_code': code,
+    'stage': stage,
+    'secret_context': true,
+  };
 
   @override
   String toString() => 'PasskeyTransferError: $message';

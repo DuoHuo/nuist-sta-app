@@ -283,6 +283,41 @@ internal object AppUpdateStore {
 }
 
 /** 更新网络只连接现有社团 HTTPS 原点，禁止重定向和门户请求头。 */
+/** 原生请求经过现有事件通道交回统一日志器；不在原生侧保存未脱敏正文。 */
+internal object AppUpdateDiagnostics {
+    private val main = Handler(Looper.getMainLooper())
+    private var missing = 0
+    var listener: ((Map<String, Any?>) -> Unit)? = null
+        set(value) {
+            field = value
+            if (value != null && missing > 0) {
+                value(mapOf("type" to "http_diagnostic", "exchange" to mapOf(
+                    "source" to "android_update",
+                    "capture" to mapOf("complete" to false, "reason" to "flutter_engine_unavailable", "missing_exchanges" to missing)
+                )))
+                missing = 0
+            }
+        }
+
+    fun publish(exchange: Map<String, Any?>, bodyFile: File? = null) {
+        main.post {
+            val receiver = listener
+            if (receiver == null) missing++ else receiver(mapOf(
+                "type" to "http_diagnostic", "exchange" to exchange,
+                "bodyFile" to bodyFile?.absolutePath,
+            ))
+        }
+    }
+
+    fun response(status: Int?, headers: Map<String, List<String>>?, body: String?, complete: Boolean): Map<String, Any?> = mapOf(
+        "status_code" to status,
+        "headers" to headers,
+        "body" to body,
+        "encoding" to "utf8",
+        "complete" to complete,
+    )
+}
+
 internal object AppUpdateHttp {
     /** 校验续传响应；200 必须重写，206 必须精确匹配偏移、长度和强 ETag。 */
     fun downloadOffset(code: Int, offset: Long, size: Long, contentRange: String?,
@@ -325,14 +360,22 @@ internal object AppUpdateHttp {
 
     fun check(item: AppUpdateRelease, headers: Map<String, String>) {
         val connection = connect(item.statusUrl, headers)
+        val requestHeaders = connection.requestProperties.toMap()
+        val started = android.os.SystemClock.elapsedRealtime()
+        val output = java.io.ByteArrayOutputStream()
+        var complete = false
+        var failure: Exception? = null
+        var status: Int? = null
+        var responseHeaders: Map<String, List<String>>? = null
         try {
-            when (connection.responseCode) {
+            status = connection.responseCode
+            responseHeaders = connection.headerFields.entries.filter { it.key != null }.associate { it.key!! to it.value }
+            when (status) {
                 410 -> throw AppUpdateFailure("revoked")
                 200 -> Unit
                 429, in 500..599 -> throw AppUpdateFailure("network")
                 else -> throw AppUpdateFailure("invalid_response")
             }
-            val output = java.io.ByteArrayOutputStream()
             connection.inputStream.use { input ->
                 val buffer = ByteArray(8192)
                 while (true) {
@@ -342,10 +385,32 @@ internal object AppUpdateHttp {
                     output.write(buffer, 0, count)
                 }
             }
+            complete = true
             val response = JSONObject(output.toString("UTF-8"))
             if (!response.optBoolean("available", false)) throw AppUpdateFailure("revoked")
             val current = AppUpdateRelease.parse(response.getJSONObject("release"))
             if (!current.sameArtifact(item)) throw AppUpdateFailure("revoked")
-        } finally { connection.disconnect() }
+        } catch (error: Exception) {
+            failure = error
+            // 非成功状态的错误体只能从 errorStream 取得，不能重新发送请求。
+            if (output.size() == 0 && status != null) {
+                try {
+                    connection.errorStream?.use { input -> input.copyTo(output) }
+                    complete = connection.errorStream != null
+                } catch (_: Exception) { complete = false }
+            }
+            throw error
+        } finally {
+            AppUpdateDiagnostics.publish(mapOf(
+                "source" to "android_update", "stage" to "update.validate",
+                "request" to mapOf("url" to item.statusUrl, "method" to "GET", "headers" to requestHeaders),
+                "response" to AppUpdateDiagnostics.response(status, responseHeaders, output.toString("UTF-8"), complete),
+                "capture" to mapOf("complete" to complete, "reason" to if (complete) "complete" else "response_incomplete"),
+                "duration_ms" to android.os.SystemClock.elapsedRealtime() - started,
+                "error" to failure?.let { mapOf("type" to it.javaClass.simpleName, "message" to it.message,
+                    "stack" to it.stackTraceToString(), "code" to (it as? AppUpdateFailure)?.code) },
+            ))
+            connection.disconnect()
+        }
     }
 }

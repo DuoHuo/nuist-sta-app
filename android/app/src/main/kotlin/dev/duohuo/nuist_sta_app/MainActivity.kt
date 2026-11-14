@@ -31,7 +31,20 @@ class MainActivity : FlutterActivity() {
         // 只接收 Dart 日志层已清洗的摘要，保留 logcat 原生严重程度。
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "nuist/diagnostic_logging")
             .setMethodCallHandler { call, result ->
-                if (call.method != "write") {
+                if (call.method in setOf("readNativeDiagnostics", "acknowledgeNativeDiagnostics", "clearNativeDiagnostics")) {
+                    try {
+                        when (call.method) {
+                            "readNativeDiagnostics" -> result.success(NativeBackgroundDiagnostics.read(this))
+                            "acknowledgeNativeDiagnostics" -> {
+                                NativeBackgroundDiagnostics.acknowledge(this, call.argument<List<String>>("ids")?.toSet() ?: emptySet())
+                                result.success(null)
+                            }
+                            "clearNativeDiagnostics" -> { NativeBackgroundDiagnostics.clear(this); result.success(null) }
+                        }
+                    } catch (error: Exception) {
+                        result.error("native_diagnostics_unavailable", "原生诊断队列暂不可用", notifyFailureDetails(error, "diagnostics.${call.method}"))
+                    }
+                } else if (call.method != "write") {
                     result.notImplemented()
                 } else {
                     val args = call.arguments as? Map<*, *>
@@ -64,16 +77,19 @@ class MainActivity : FlutterActivity() {
                             result.error("arguments", "缺少明日提醒配置", null)
                         } else {
                             try {
-                                if (NextDayReminder.update(this, args)) {
-                                    result.success(null)
+                                val diagnostics = mutableListOf<Map<String, Any?>>()
+                                if (NextDayReminder.update(this, args, diagnostics)) {
                                     // 默认开：首次有可用缓存时申请一次，不在每次启动重复询问。
                                     val prefs = getSharedPreferences("timetable_next_day", MODE_PRIVATE)
                                     if (args["enabled"] == true && !prefs.getBoolean("permissionAsked", false)) {
-                                        requestReminderPermission(null)
+                                        try { requestReminderPermission(null) } catch (error: RuntimeException) {
+                                            diagnostics.add(notifyFailureDetails(error, "next_day.permission") + ("reason_code" to "notification_permission_request_failed"))
+                                        }
                                     }
+                                    result.success(mapOf("diagnostics" to diagnostics))
                                 } else result.error("storage", "明日提醒配置保存失败", null)
-                            } catch (_: RuntimeException) {
-                                result.error("schedule", "明日提醒暂不可用", null)
+                            } catch (error: RuntimeException) {
+                                result.error("schedule", "明日提醒暂不可用", notifyFailureDetails(error, "next_day.update"))
                             }
                         }
                     }

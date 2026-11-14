@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/logging/app_log.dart';
 import 'campus_building_model.dart';
 import 'campus_building_model_page.dart';
 import 'campus_map_api.dart';
@@ -33,6 +34,7 @@ class CampusPlaceDetailPage extends StatefulWidget {
 }
 
 class _CampusPlaceDetailPageState extends State<CampusPlaceDetailPage> {
+  static final _log = AppLog.logger('campus_map.place_detail');
   MapPalette get colors => MapPalette.of(context);
 
   CampusMapApi? _owned;
@@ -75,8 +77,9 @@ class _CampusPlaceDetailPageState extends State<CampusPlaceDetailPage> {
       _error = null;
     });
     try {
-      final place = await remote.loadPlace(
-        CampusPlace(id: widget.placeId, name: ''),
+      final place = await _log.operation(
+        'place.load',
+        () => remote.loadPlace(CampusPlace(id: widget.placeId, name: '')),
       );
       if (!mounted) return;
       setState(() {

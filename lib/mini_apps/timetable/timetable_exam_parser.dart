@@ -1,3 +1,4 @@
+import '../../core/logging/diagnostic_error.dart';
 import 'timetable_schedule_event.dart';
 
 /// 教务「我的考试安排」（studentWdksapApp / cxxsksap）响应解析（第 11 条，
@@ -16,16 +17,22 @@ class ExamParser {
     Object? decoded,
   ) {
     if (decoded is! Map) {
-      throw const ExamResponseError('教务考试接口未返回 JSON');
+      throw const ExamResponseError(
+        '教务考试接口未返回 JSON',
+        code: 'response_invalid_json',
+      );
     }
     if ('${decoded['code'] ?? ''}' != '0') {
-      throw const ExamResponseError('教务考试接口返回错误');
+      throw const ExamResponseError('教务考试接口返回错误', code: 'service_rejected');
     }
     final datas = decoded['datas'];
     final section = datas is Map ? datas['cxxsksap'] : null;
     final rows = section is Map ? section['rows'] : null;
     if (rows is! List) {
-      throw const ExamResponseError('教务考试接口缺少 rows');
+      throw const ExamResponseError(
+        '教务考试接口缺少 rows',
+        code: 'response_rows_missing',
+      );
     }
     return parseRows(rows);
   }
@@ -184,9 +191,21 @@ class ExamRowMalformed extends ExamRowResult {
 }
 
 /// 考试接口响应不可用（code≠0、非 JSON、结构不对）：整批视为失败，已有考试不动。
-class ExamResponseError implements Exception {
-  const ExamResponseError(this.message);
+class ExamResponseError implements Exception, DiagnosticError {
+  const ExamResponseError(this.message, {this.code = 'exam_response_invalid'});
   final String message;
+  final String code;
+  @override
+  Object? get cause => null;
+  @override
+  StackTrace? get causeStackTrace => null;
+  @override
+  Map<String, Object?> get diagnosticContext => {
+    'endpoint': 'timetable.exams',
+    'service': 'jwxt',
+    'stage': 'response.validate',
+    'reason_code': code,
+  };
   @override
   String toString() => message;
 }

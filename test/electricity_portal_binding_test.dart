@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
+import 'package:nuist_sta_app/core/refresh/silent_refresh.dart';
 import 'package:nuist_sta_app/mini_apps/electricity/electricity_controller.dart';
 import 'package:nuist_sta_app/mini_apps/electricity/electricity_models.dart';
 
@@ -44,6 +46,33 @@ class _Harness {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('自动刷新在批次外失败，手动下拉复用不会记为成功', () async {
+    final h = _Harness(storedRoom: _room, cached: _cached)..bound = true;
+    final started = Completer<void>();
+    final response = Completer<double>();
+    h.query = () {
+      started.complete();
+      return response.future;
+    };
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
+    final automatic = h.controller.ensureStarted();
+    await started.future;
+    final batch = SilentRefresh.runAll('test.shared_refresh', {
+      'electricity': h.controller.refresh,
+    });
+    response.completeError(const PortalLoginError('合成登录失败'));
+    await automatic;
+    expect(await batch, isFalse);
+    expect(h.queries, 1);
+    final completed = records.singleWhere(
+      (record) => record['event'] == 'refresh.batch_completed',
+    );
+    expect((completed['attrs'] as Map)['failure_count'], 1);
+    expect((completed['attrs'] as Map)['success_count'], 0);
+  });
 
   test('未绑定宿舍时绑定和解绑都立即更新门户状态，不查询余额', () async {
     final h = _Harness();

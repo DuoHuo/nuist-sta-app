@@ -95,15 +95,30 @@ class AnnouncementController extends ChangeNotifier {
     String? cacheKey;
     try {
       cacheKey = _cacheContext(await _metadataProvider());
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      _log.warning(
+        'metadata.read_failed',
+        fields: {'secret_context': true, 'stage': 'metadata.load'},
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
     try {
       final stored = await _readCache();
       if (stored != null && stored.matches(cacheKey)) _cache = stored;
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      _log.warning('cache.read_failed', error: error, stackTrace: stackTrace);
+    }
     // 缓存迁移不能丢掉已读状态；服务端筛选后缺少的条目也不代表已经删除。
     try {
       _readIds = await _readReadIds();
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      _log.warning(
+        'read_state.load_failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
     _notify();
     final api = _fetcher == null ? AnnouncementApi() : null;
     final fetch = _fetcher ?? api!.fetch;
@@ -149,8 +164,12 @@ class AnnouncementController extends ChangeNotifier {
             if (cacheKey != null) await _saveCache(_cache!);
           }
         },
-        failureEvent: 'refresh.failed_using_cache',
-        errorFields: (_) => {'outcome': 'cache_fallback'},
+        failureEvent: 'refresh.failed',
+        resultFields: (_) => {'count': _cache?.items.length ?? 0},
+        errorFields: (_) => {
+          'has_cache': _cache != null,
+          'outcome': _cache == null ? 'unavailable' : 'cache_fallback',
+        },
       );
     } catch (_) {
       // 原 Trace 中已记录失败；继续使用已有缓存。

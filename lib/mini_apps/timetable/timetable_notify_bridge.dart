@@ -4,6 +4,8 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/logging/app_log.dart';
+
 /// 提醒相关权限状态（Android；其他平台全部视为不支持）。
 @immutable
 class NotifyPermissionStatus {
@@ -57,6 +59,7 @@ enum WidgetPinResult {
 ///
 /// 所有方法在非 Android 或通道缺失时安静降级，不抛异常。
 class TimetableNotifyBridge {
+  static final _log = AppLog.logger('timetable.notify_bridge');
   TimetableNotifyBridge({MethodChannel? channel})
     : _channel =
           channel ??
@@ -80,21 +83,68 @@ class TimetableNotifyBridge {
 
   Future<T?> _call<T>(String method, [Object? args]) async {
     if (!_android) return null;
+    final watch = Stopwatch()..start();
     try {
-      return await _channel.invokeMethod<T>(method, args);
-    } on MissingPluginException {
+      final result = await _channel.invokeMethod<T>(method, args);
+      if (result is Map && result['diagnostics'] is List) {
+        for (final item in result['diagnostics'] as List) {
+          if (item is! Map) continue;
+          AppLog.reportOutcome(
+            'degraded',
+            reason: '${item['reason_code'] ?? 'native_degraded'}',
+          );
+          _log.warning(
+            'native.degraded',
+            fields: {
+              'endpoint': 'notify.$method',
+              'outcome': 'degraded',
+              'details': Map<String, Object?>.from(item),
+            },
+          );
+        }
+      }
+      _log.debug(
+        'native.completed',
+        fields: {
+          'endpoint': 'notify.$method',
+          'duration_ms': watch.elapsedMilliseconds,
+        },
+      );
+      return result;
+    } on MissingPluginException catch (error, stackTrace) {
+      AppLog.reportOutcome('degraded', reason: 'platform_unavailable');
+      _log.debug(
+        'native.unavailable',
+        fields: {'endpoint': 'notify.$method'},
+        error: error,
+        stackTrace: stackTrace,
+      );
       return null;
-    } on PlatformException {
+    } on PlatformException catch (error, stackTrace) {
+      AppLog.reportOutcome('degraded', reason: 'native_call_failed');
+      _log.warning(
+        'native.failed',
+        fields: {
+          'endpoint': 'notify.$method',
+          'duration_ms': watch.elapsedMilliseconds,
+          'outcome': 'degraded',
+        },
+        error: error,
+        stackTrace: stackTrace,
+      );
       return null;
     }
   }
 
   /// 用新列表替换全部已排提醒（空列表 = 全部取消）。
-  Future<void> scheduleReminders(List<Map<String, Object?>> alarms) =>
-      _call<void>('scheduleReminders', {'alarms': jsonEncode(alarms)});
+  Future<void> scheduleReminders(List<Map<String, Object?>> alarms) async {
+    await _call<Object?>('scheduleReminders', {'alarms': jsonEncode(alarms)});
+  }
 
   /// 取消全部提醒。
-  Future<void> cancelReminders() => _call<void>('cancelReminders');
+  Future<void> cancelReminders() async {
+    await _call<Object?>('cancelReminders');
+  }
 
   /// 写入小组件数据并立即刷新所有小组件实例。
   Future<void> updateWidget(Map<String, Object?> payload) =>

@@ -3,6 +3,9 @@ import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/html_table.dart';
+import '../../core/logging/app_log.dart';
+import '../../core/logging/diagnostic_error.dart';
+import '../../core/refresh/silent_refresh.dart';
 import 'labor_score_models.dart';
 
 /// 劳动教育平台：四个 HTML 页面，没有 JSON 接口。
@@ -16,6 +19,7 @@ import 'labor_score_models.dart';
 /// 登录、各自触发一次强制重登。
 class LaborScoreApi {
   LaborScoreApi._();
+  static final _log = AppLog.logger('labor_score.api');
 
   static final _base = 'https://${CampusHosts.labor}';
   static final Uri _resultPage = Uri.parse('$_base/ResultManage/StudentResult');
@@ -42,13 +46,18 @@ class LaborScoreApi {
       http = await session.clientFor(PortalServices.labor, force: true);
       result = await _table(http, _resultPage, _resultTable);
       if (result == null) {
-        throw const PortalLoginError('登录后仍打不开劳动积分页面，请稍后再试');
+        throw const PortalLoginError(
+          '登录后仍打不开劳动积分页面，请稍后再试',
+          code: 'session_unavailable_after_relogin',
+          stage: 'response.validate',
+          context: {'endpoint': 'labor_score.summary', 'service': 'labor'},
+        );
       }
     }
     final pages = await Future.wait([
-      _table(http, _lifePage, _jifenTable),
-      _table(http, _servicePage, _jifenTable),
-      _table(http, _majorPage, _majorTable),
+      _optionalTable(http, _lifePage, _jifenTable),
+      _optionalTable(http, _servicePage, _jifenTable),
+      _optionalTable(http, _majorPage, _majorTable),
     ]);
     return LaborScore.fromRows(
       result: result,
@@ -71,6 +80,49 @@ class LaborScoreApi {
         headers: {'Accept': 'text/html,application/xhtml+xml'},
       ),
     );
-    return parseHtmlTable('${response.data}', tableId);
+    final body = '${response.data ?? ''}';
+    final rows = parseHtmlTable(body, tableId);
+    if (rows != null) return rows;
+    if (response.realUri.path.toLowerCase().contains('login') ||
+        body.contains('authserver/login') ||
+        body.contains('/AuthServer/Login')) {
+      return null;
+    }
+    throw DiagnosticException(
+      '劳动积分页面缺少目标表格',
+      code: 'response_table_missing',
+      stage: 'response.parse',
+      context: {'endpoint': _endpoint(page), 'service': 'labor'},
+    );
+  }
+
+  static String _endpoint(Uri page) => identical(page, _resultPage)
+      ? 'labor_score.summary'
+      : identical(page, _lifePage)
+      ? 'labor_score.life'
+      : identical(page, _servicePage)
+      ? 'labor_score.service'
+      : 'labor_score.major';
+
+  static Future<List<Map<String, String>>?> _optionalTable(
+    PortalHttp http,
+    Uri page,
+    String tableId,
+  ) async {
+    final rows = await _table(http, page, tableId);
+    if (rows == null) {
+      SilentRefresh.degradeCurrent(reason: 'optional_section_unavailable');
+      _log.warning(
+        'section.unavailable',
+        fields: {'endpoint': _endpoint(page), 'outcome': 'degraded'},
+        error: PortalLoginError(
+          '劳动积分分项需要重新登录',
+          code: 'login_page_returned',
+          stage: 'response.validate',
+          context: {'endpoint': _endpoint(page), 'service': 'labor'},
+        ),
+      );
+    }
+    return rows;
   }
 }

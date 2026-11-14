@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/config/campus_config.dart';
+import '../../core/logging/app_log.dart';
+import '../../core/logging/diagnostic_error.dart';
 import '../../core/network/vpn_dio.dart';
 import 'bulletin_detail_parser.dart';
 import 'bulletin_models.dart';
@@ -15,6 +17,8 @@ final bulletinHomeUri = 'https://${CampusHosts.bulletin}/';
 
 /// 从学校官网读取公告列表。
 class BulletinApi {
+  static final _log = AppLog.logger('bulletin.api');
+
   /// 创建公告接口客户端，可注入 Dio 实例。
   BulletinApi({Dio? dio})
     : _dio =
@@ -39,11 +43,28 @@ class BulletinApi {
     if (html == null || html.isEmpty) {
       throw const FormatException('公告栏没有返回列表内容');
     }
-    return compute(_parsePage, (
+    final page = await compute(_parsePage, (
       html: html,
       uri: uri,
       pageNumber: pageNumber,
     ), debugLabel: 'bulletin.parse_page');
+    if (page.items.isEmpty && (page.totalCount ?? 0) > 0) {
+      throw const DiagnosticException(
+        '公告列表存在但未解析出任何记录',
+        code: 'response_list_unrecognized',
+        stage: 'response.parse',
+        context: {'endpoint': 'bulletin.list', 'service': 'bulletin'},
+      );
+    }
+    _log.debug(
+      'list.parsed',
+      fields: {
+        'endpoint': 'bulletin.list',
+        'count': page.items.length,
+        'has_next_page': page.nextUrl != null,
+      },
+    );
+    return page;
   }
 
   /// 请求并解析单条公告正文；无法识别正文时返回 null 交给 WebView 兜底。

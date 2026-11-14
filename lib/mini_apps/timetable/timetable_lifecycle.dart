@@ -5,6 +5,8 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
+import '../../core/logging/app_log.dart';
+
 import 'timetable_controller.dart';
 import 'timetable_notify_service.dart';
 
@@ -95,6 +97,7 @@ class TimetableLifecycleScope extends StatefulWidget {
 
 class _TimetableLifecycleScopeState extends State<TimetableLifecycleScope>
     with WidgetsBindingObserver {
+  static final _log = AppLog.logger('timetable.lifecycle');
   final _detector = NetworkRestoreDetector();
   StreamSubscription<bool>? _sub;
 
@@ -104,8 +107,19 @@ class _TimetableLifecycleScopeState extends State<TimetableLifecycleScope>
   /// 同步触发失败（如平台通道不可用）不应冒泡成未处理异常。
   static void _fire(Future<bool> Function() call) {
     try {
-      unawaited(call().catchError((Object _) => false));
-    } catch (_) {}
+      unawaited(
+        call().catchError((Object error, StackTrace stackTrace) {
+          _log.warning(
+            'sync.trigger_failed',
+            error: error,
+            stackTrace: stackTrace,
+          );
+          return false;
+        }),
+      );
+    } catch (error, stackTrace) {
+      _log.warning('sync.trigger_failed', error: error, stackTrace: stackTrace);
+    }
   }
 
   @override
@@ -117,15 +131,38 @@ class _TimetableLifecycleScopeState extends State<TimetableLifecycleScope>
     final reach = widget.reachability ?? _defaultReachability();
     if (reach == null) return;
     try {
-      _sub = reach.onlineChanges.listen((online) {
-        if (_detector.update(online)) {
-          _fire(widget.onNetworkRestored ?? _ctl.onNetworkRestored);
-        }
-      }, onError: (Object _) {});
-      unawaited(
-        reach.isOnline().then(_detector.seed).catchError((Object _) {}),
+      _sub = reach.onlineChanges.listen(
+        (online) {
+          if (_detector.update(online)) {
+            _fire(widget.onNetworkRestored ?? _ctl.onNetworkRestored);
+          }
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          _log.warning(
+            'connectivity.watch_failed',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        },
       );
-    } catch (_) {
+      unawaited(
+        reach.isOnline().then(_detector.seed).catchError((
+          Object error,
+          StackTrace stackTrace,
+        ) {
+          _log.warning(
+            'connectivity.read_failed',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }),
+      );
+    } catch (error, stackTrace) {
+      _log.warning(
+        'connectivity.unavailable',
+        error: error,
+        stackTrace: stackTrace,
+      );
       // 平台不支持连接监听：只是少了网络恢复补同步。
     }
   }
@@ -135,8 +172,23 @@ class _TimetableLifecycleScopeState extends State<TimetableLifecycleScope>
     if (!kIsWeb && Platform.environment.containsKey('FLUTTER_TEST')) return;
     if (widget.controller != null) return;
     try {
-      unawaited(f(TimetableNotifyService.instance).catchError((Object _) {}));
-    } catch (_) {}
+      unawaited(
+        f(TimetableNotifyService.instance)
+            .catchError((Object error, StackTrace stackTrace) {
+              _log.warning(
+                'notifications.trigger_failed',
+                error: error,
+                stackTrace: stackTrace,
+              );
+            }),
+      );
+    } catch (error, stackTrace) {
+      _log.warning(
+        'notifications.trigger_failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   static NetworkReachability? _defaultReachability() {

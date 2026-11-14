@@ -3,9 +3,160 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/refresh/silent_refresh.dart';
 
 void main() {
+  group('刷新诊断保留真实结果', () {
+    late List<Map<String, Object?>> records;
+    setUp(() {
+      records = [];
+      AppLog.recordListenerForTesting = records.add;
+    });
+    tearDown(() => AppLog.recordListenerForTesting = null);
+
+    test('共享刷新重试恢复后不会保留早期子阶段的失败结果', () async {
+      var attempt = 0;
+      final shared = SilentRefresh.track(() async {
+        await SilentRefresh.run(
+          'test.recovered',
+          action: () async {
+            if (++attempt == 1) {
+              await AppLog.logger('test.stage')
+                  .operation<void>('request', () async {
+                    throw TimeoutException('合成第一次超时');
+                  });
+            }
+          },
+          delays: const [Duration.zero],
+        );
+      });
+      final succeeded = await SilentRefresh.runAll('test.batch', {
+        'shared': () => SilentRefresh.join(shared),
+      });
+      expect(succeeded, isTrue);
+      final completed = records.singleWhere(
+        (record) => record['event'] == 'refresh.batch_completed',
+      );
+      expect((completed['attrs'] as Map)['success_count'], 1);
+      expect((completed['attrs'] as Map)['failure_count'], 0);
+    });
+
+    for (final outcome in ['skipped', 'degraded']) {
+      test('共享 operation 的 $outcome 结果可跨 Zone 回传到批次', () async {
+        final started = Completer<void>();
+        final gate = Completer<void>();
+        final shared = SilentRefresh.track(
+          () => AppLog.logger('test.shared').operation<void>('load', () async {
+            started.complete();
+            await gate.future;
+            AppLog.reportOutcome(outcome, reason: 'synthetic_outcome');
+          }),
+        );
+        await started.future;
+        final batch = SilentRefresh.runAll('test.batch', {
+          'shared': () => SilentRefresh.join(shared),
+        });
+        gate.complete();
+        expect(await batch, outcome == 'degraded');
+        final completed = records.singleWhere(
+          (record) => record['event'] == 'refresh.batch_completed',
+        );
+        expect(
+          (completed['attrs'] as Map)[outcome == 'skipped'
+              ? 'skipped_count'
+              : 'partial_failure_count'],
+          1,
+        );
+        expect((completed['attrs'] as Map)['success_count'], 0);
+      });
+    }
+
+    test('重试共享业务 Trace，最终耗时包含退避并保留重试原因', () async {
+      var calls = 0;
+      final spans = <String?>[];
+      final succeeded = await SilentRefresh.run(
+        'test.retry_diagnostics',
+        action: () async {
+          spans.add(AppLog.currentSpanId);
+          calls++;
+          if (calls == 1) throw TimeoutException('合成超时');
+        },
+        delays: const [Duration(milliseconds: 20)],
+      );
+      expect(succeeded, isTrue);
+      final retry = records.singleWhere(
+        (r) => r['event'] == 'refresh.retrying',
+      );
+      final completed = records.singleWhere(
+        (r) => r['event'] == 'refresh.completed',
+      );
+      final retryAttrs = retry['attrs'] as Map;
+      final completedAttrs = completed['attrs'] as Map;
+      expect(retry['trace_id'], isNotNull);
+      expect(completed['trace_id'], retry['trace_id']);
+      expect(spans.toSet(), hasLength(2));
+      expect(spans, everyElement(isNotNull));
+      expect(retryAttrs['wait_ms'], 20);
+      expect(retryAttrs['retryable'], isTrue);
+      expect(retryAttrs['error_type'], 'TimeoutException');
+      expect(completedAttrs['retry_count'], 1);
+      expect(completedAttrs['duration_ms'], greaterThanOrEqualTo(20));
+    });
+
+    test('模块吞掉已记录的失败时，批次仍汇总为失败', () async {
+      final succeeded = await SilentRefresh.runAll('test.batch', {
+        'scores': () async {
+          await SilentRefresh.run(
+            'test.module',
+            action: () async => throw const PortalNetworkError('合成断网'),
+            delays: const [],
+          );
+        },
+      });
+      expect(succeeded, isFalse);
+      final batch = records.singleWhere(
+        (r) => r['event'] == 'refresh.batch_completed',
+      );
+      expect((batch['attrs'] as Map)['failure_count'], 1);
+      expect((batch['attrs'] as Map)['outcome'], 'failure');
+      expect(
+        records.where(
+          (r) =>
+              r['scope'] == 'test.batch' && r['event'] == 'refresh.completed',
+        ),
+        isEmpty,
+      );
+    });
+
+    test('失效结果不记成功，不发已更新提示', () async {
+      final before = SilentRefresh.updated.value;
+      final succeeded = await SilentRefresh.run(
+        'test.stale',
+        action: () async {
+          SilentRefresh.skipCurrent();
+        },
+        userInitiated: true,
+      );
+      expect(succeeded, isFalse);
+      expect(SilentRefresh.updated.value, before);
+      expect(records.where((r) => r['event'] == 'refresh.completed'), isEmpty);
+      expect(records.last['event'], 'refresh.skipped');
+    });
+
+    test('缓存保存降级仍可用，但完成事件明确标注降级', () async {
+      final succeeded = await SilentRefresh.run(
+        'test.degraded',
+        action: () async {
+          SilentRefresh.degradeCurrent();
+        },
+      );
+      expect(succeeded, isTrue);
+      expect(records.last['level'], 'WARNING');
+      expect((records.last['attrs'] as Map)['outcome'], 'degraded');
+    });
+  });
+
   group('网络失败判定', () {
     test('门户网络错误与超时可重试，业务异常不可重试', () {
       expect(
@@ -17,6 +168,13 @@ void main() {
       expect(
         SilentRefresh.isNetworkFailure(const PortalCredentialError('凭据失效')),
         isFalse,
+      );
+      expect(
+        SilentRefresh.isNetworkFailure(
+          PortalCredentialError('凭据失效', cause: TimeoutException('合成底层错误')),
+        ),
+        isFalse,
+        reason: '明确的凭据判定优先，不能因保留了底层错误而自动重试',
       );
     });
 

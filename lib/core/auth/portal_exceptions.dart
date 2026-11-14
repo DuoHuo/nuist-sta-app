@@ -1,11 +1,34 @@
+import '../logging/diagnostic_error.dart';
+
 /// 统一门户登录的异常分层。
 ///
 /// 分三类是为了让 UI 能说人话：网络不通让用户重试，凭据失效让用户重新绑定，
 /// 两者的处置方式完全不同，混成一个 Exception 就只能提示「登录失败」。
-sealed class PortalException implements Exception {
-  const PortalException(this.message);
+sealed class PortalException implements Exception, DiagnosticError {
+  const PortalException(
+    this.message, {
+    required this.code,
+    this.stage,
+    this.cause,
+    this.causeStackTrace,
+    this.context = const {},
+  });
 
   final String message;
+  final String code;
+  final String? stage;
+  @override
+  final Object? cause;
+  @override
+  final StackTrace? causeStackTrace;
+  final Map<String, Object?> context;
+
+  @override
+  Map<String, Object?> get diagnosticContext => {
+    ...context,
+    'reason_code': code,
+    'stage': ?stage,
+  };
 
   @override
   String toString() => message;
@@ -15,7 +38,14 @@ sealed class PortalException implements Exception {
 ///
 /// 这类失败**不能**推断 Passkey 已吊销，重试即可。
 class PortalNetworkError extends PortalException {
-  const PortalNetworkError(super.message);
+  const PortalNetworkError(
+    super.message, {
+    super.code = 'portal_network_failed',
+    super.stage,
+    super.cause,
+    super.causeStackTrace,
+    super.context,
+  });
 }
 
 /// 凭据不可用：bundle 缺字段、私钥解析失败，或服务端拒绝了本次断言。
@@ -23,10 +53,24 @@ class PortalNetworkError extends PortalException {
 /// 对应 Python 版的 CredentialError。落到这里基本等于「门户那边的通行密钥
 /// 已被吊销或删除」，UI 应当显式提示用户重新绑定，而不是让他反复重试。
 class PortalCredentialError extends PortalException {
-  const PortalCredentialError(super.message);
+  const PortalCredentialError(
+    super.message, {
+    super.code = 'portal_credential_failed',
+    super.stage,
+    super.cause,
+    super.causeStackTrace,
+    super.context,
+  });
 }
 
 /// 其他登录失败：响应结构对不上、service 不正确、跳回认证页等。
 class PortalLoginError extends PortalException {
-  const PortalLoginError(super.message);
+  const PortalLoginError(
+    super.message, {
+    super.code = 'portal_login_failed',
+    super.stage,
+    super.cause,
+    super.causeStackTrace,
+    super.context,
+  });
 }

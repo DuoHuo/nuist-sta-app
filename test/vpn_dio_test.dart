@@ -11,6 +11,8 @@ import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
 import 'package:nuist_sta_app/core/auth/portal_cookie_manager.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
+import 'package:nuist_sta_app/core/logging/diagnostic_error.dart';
+import 'package:nuist_sta_app/core/logging/http_diagnostics.dart';
 import 'package:nuist_sta_app/core/network/vpn_dio.dart';
 import 'package:nuist_sta_app/core/network/vpn_auth.dart';
 import 'package:nuist_sta_app/core/network/vpn_gateway.dart';
@@ -118,6 +120,27 @@ List<int> pem(String label, List<int> bytes) => utf8.encode(
 );
 
 void main() {
+  test('原生错误保留阶段、系统类别和底层原因且兼容 SocketException', () {
+    final error = VpnNativeException.fromResponse({
+      'ok': false,
+      'error': '合成握手失败',
+      'diagnostic': {
+        'code': 'native_start_failed',
+        'stage': 'TLS',
+        'native_kind': 'InvalidData',
+        'causes': ['合成证书验证失败'],
+      },
+    }, method: 'start');
+    expect(error, isA<SocketException>());
+    expect(error.message, '合成握手失败');
+    expect(error.diagnosticContext['native_stage'], 'tls');
+    expect(error.diagnosticContext['native_kind'], 'InvalidData');
+    expect(error.cause.toString(), '合成证书验证失败');
+    final legacy = VpnNativeException.fromResponse({
+      'error': '旧版错误',
+    }, method: 'open');
+    expect(legacy.diagnosticContext['native_diagnostics_available'], isFalse);
+  });
   late HttpServer server;
   late LocalConnector connector;
   late Dio client;
@@ -181,7 +204,7 @@ void main() {
     expect(connector.connections, greaterThan(0));
   });
 
-  test('VPN 日志能独立输出且不泄露 URL 路径、参数和请求体', () async {
+  test('VPN 日志与完整HTTP原文关联且凭据被脱敏', () async {
     final messages = <String>[];
     await client.postUri(
       url.replace(path: '/private-student', query: 'ticket=secret-ticket'),
@@ -198,8 +221,14 @@ void main() {
     expect(attrs['route'], 'VPN');
     expect(attrs['status_code'], 200);
     expect(attrs['request_id'], (requests.first['attrs'] as Map)['request_id']);
+    final exchange = logRecords.singleWhere(
+      (record) => record['event'] == 'http.exchange',
+    );
+    expect(exchange['trace_id'], completed['trace_id']);
+    expect((exchange['attrs'] as Map)['request_id'], attrs['request_id']);
     final logs = jsonEncode(logRecords);
-    for (final secret in ['private-student', 'secret-ticket', 'secret-token']) {
+    expect(logs, contains('private-student'));
+    for (final secret in ['secret-ticket', 'secret-token']) {
       expect(logs, isNot(contains(secret)));
     }
     messages.clear();
@@ -212,7 +241,7 @@ void main() {
       );
       final portalLogs = messages.join('\n');
       expect(portalLogs, isEmpty);
-      expect(jsonEncode(logRecords), isNot(contains('private-student')));
+      expect(jsonEncode(logRecords), contains('private-student'));
       expect(jsonEncode(logRecords), isNot(contains('secret-ticket')));
     } finally {
       portalLogger = previousLogger;
@@ -235,6 +264,7 @@ void main() {
     expect(ids, hasLength(2));
     for (final id in ids) {
       final lines = logRecords
+          .where((record) => record['scope'] == 'core.network.vpn')
           .where((record) => (record['attrs'] as Map?)?['request_id'] == id)
           .toList();
       expect(lines, hasLength(2));
@@ -277,7 +307,13 @@ void main() {
       responseStatus = 500;
       await expectLater(
         PortalHttp(client).get(url),
-        throwsA(isA<PortalLoginError>()),
+        throwsA(
+          isA<DiagnosticException>().having(
+            (error) => error.code,
+            'code',
+            'http_status_rejected',
+          ),
+        ),
       );
       expect(
         logRecords.where(
@@ -290,12 +326,14 @@ void main() {
       messages.clear();
       logRecords.clear();
       connector.fail = true;
-      (client.httpClientAdapter as VpnHttpClientAdapter).resetClients();
+      (unwrapHttpDiagnostics(client.httpClientAdapter) as VpnHttpClientAdapter)
+          .resetClients();
       await expectLater(
         PortalHttp(client).get(url),
         throwsA(isA<PortalNetworkError>()),
       );
       final requestLines = logRecords
+          .where((record) => record['scope'] == 'core.network.vpn')
           .where((record) => '${record['event']}'.startsWith('http.'))
           .toList();
       expect(requestLines, hasLength(2));
@@ -353,7 +391,8 @@ void main() {
     expect(forced.data!['forceVpn'], isNull);
     await client.getUri(url);
     expect(connector.connections, 1);
-    (client.httpClientAdapter as VpnHttpClientAdapter).resetClients();
+    (unwrapHttpDiagnostics(client.httpClientAdapter) as VpnHttpClientAdapter)
+        .resetClients();
     await client.getUri(url, options: Options(extra: {forceVpnKey: true}));
     expect(connector.connections, 2);
   });

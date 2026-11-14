@@ -83,7 +83,11 @@ class CasSession {
               checkSession: () {
                 cookies.checkGeneration(generation);
                 if (epoch != _authenticationGeneration) {
-                  throw const PortalNetworkError('门户认证已取消，请重试');
+                  throw const PortalNetworkError(
+                    '门户认证已取消，请重试',
+                    code: 'authentication_superseded',
+                    stage: 'cas.request',
+                  );
                 }
               },
             ),
@@ -98,22 +102,35 @@ class CasSession {
   }) {
     final generation = cookies.generation;
     final epoch = _authenticationGeneration;
+    final queued = Stopwatch()..start();
+    var stage = 'cas.queue';
+    portalLog('authentication.queued', fields: {'stage': stage});
     void check() {
       cookies.checkGeneration(generation);
       if (epoch != _authenticationGeneration) {
-        throw const PortalNetworkError('门户认证已取消，请重试');
+        throw PortalNetworkError(
+          '门户认证已取消，请重试',
+          code: 'authentication_superseded',
+          stage: stage,
+        );
       }
     }
 
     final result = _queue
         .then((_) async {
           check();
+          stage = 'cas.preload';
+          portalLog(
+            'authentication.dequeued',
+            fields: {'queued_ms': queued.elapsedMilliseconds},
+          );
           if (credentialError.value case final error?) throw error;
           final http = _http(generation);
           await vpnStage('cas.preload', () async {
             await _trust?.preload();
           }, timeout: authenticationTimeout);
           check();
+          stage = 'cas.credential';
           final bundle = await vpnStage(
             'cas.credential',
             _readCredential,
@@ -121,15 +138,23 @@ class CasSession {
           );
           check();
           if (bundle == null) {
-            throw const PortalCredentialError('尚未绑定统一门户，请先完成绑定');
+            throw const PortalCredentialError(
+              '尚未绑定统一门户，请先完成绑定',
+              code: 'credential_unavailable',
+              stage: 'cas.credential',
+            );
           }
           try {
+            stage = 'cas.login';
             final target = await vpnStage(
               'cas.login',
               () => NuistLogin(
                 http: http,
                 bundle: bundle,
-                onStage: onStage,
+                onStage: (value) {
+                  stage = 'cas.$value';
+                  onStage?.call(value);
+                },
               ).login(service, followServiceRedirects: false),
               timeout: authenticationTimeout,
             );
@@ -153,7 +178,12 @@ class CasSession {
               'cas.authentication_timeout',
               fields: {'timeout_ms': authenticationTimeout.inMilliseconds},
             );
-            throw const PortalNetworkError('门户认证超时，请检查网络后重试');
+            throw PortalNetworkError(
+              '门户认证超时，请检查网络后重试',
+              code: 'authentication_timeout',
+              stage: stage,
+              context: {'timeout_ms': authenticationTimeout.inMilliseconds},
+            );
           },
         );
     _queue = result.then((_) {}, onError: (_) {});

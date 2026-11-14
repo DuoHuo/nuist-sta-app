@@ -7,6 +7,8 @@ import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_http.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
+import '../../core/logging/app_log.dart';
+import '../../core/logging/diagnostic_error.dart';
 import 'timetable_models.dart';
 import '../../core/auth/safe_message.dart';
 import 'timetable_exam_parser.dart';
@@ -21,6 +23,7 @@ import 'timetable_schedule_event.dart';
 ///   （注意前缀是 **jshkcb**，不是 xskcb）
 class TimetableApi {
   TimetableApi._();
+  static final _log = AppLog.logger('timetable.api');
 
   static final _base = 'https://${CampusHosts.jwxt}';
   static const _app = 'wdkb';
@@ -159,7 +162,22 @@ class TimetableApi {
     // 必需：课表 + 未排课
     final weekRaw = await _post(_weekKbUrl, {'XNXQDM': termCode});
     if (weekRaw == null) {
-      throw const PortalLoginError('教务课表接口未返回 JSON，请重新登录后再试');
+      throw const DiagnosticException(
+        '教务课表接口未返回数据',
+        code: 'response_empty',
+        stage: 'response.validate',
+        context: {'endpoint': 'timetable.cxxszhxqkb', 'service': 'jwxt'},
+      );
+    }
+    final weekDatas = weekRaw['datas'];
+    final weekSection = weekDatas is Map ? weekDatas['cxxszhxqkb'] : null;
+    if (weekSection is! Map || weekSection['rows'] is! List) {
+      throw const DiagnosticException(
+        '教务课表响应缺少课程列表',
+        code: 'response_rows_missing',
+        stage: 'response.validate',
+        context: {'endpoint': 'timetable.cxxszhxqkb', 'service': 'jwxt'},
+      );
     }
     merge(weekRaw);
     merge(
@@ -206,20 +224,32 @@ class TimetableApi {
     try {
       final r = await call();
       if (r == null) {
-        portalLog(
+        AppLog.reportOutcome(
+          'degraded',
+          reason: 'optional_section_unavailable',
+        );
+        _log.warning(
           'optional.response_malformed',
-          fields: {'service': 'jwxt', 'outcome': 'skipped'},
+          fields: {
+            'service': 'jwxt',
+            'endpoint': 'timetable.$name',
+            'outcome': 'degraded',
+            'reason_code': 'response_invalid_json',
+          },
         );
       }
       return r;
-    } catch (e) {
-      portalLog(
+    } catch (e, stackTrace) {
+      AppLog.reportOutcome('degraded', reason: 'optional_section_unavailable');
+      _log.warning(
         'optional.request_failed',
         fields: {
           'service': 'jwxt',
-          'outcome': 'skipped',
-          'error_type': e.runtimeType.toString(),
+          'endpoint': 'timetable.$name',
+          'outcome': 'degraded',
         },
+        error: e,
+        stackTrace: stackTrace,
       );
       return null;
     }
@@ -329,13 +359,32 @@ class TimetableApi {
   }) async {
     final decoded = await _post(url, form);
     if (decoded == null) {
-      throw const PortalLoginError('教务课表接口未返回 JSON，请重新登录后再试');
+      throw DiagnosticException(
+        '教务课表接口未返回数据',
+        code: 'response_empty',
+        stage: 'response.validate',
+        context: {'endpoint': 'timetable.$sectionKey', 'service': 'jwxt'},
+      );
     }
     final datas = decoded['datas'];
-    if (datas is! Map<String, dynamic>) return const [];
+    if (datas is! Map<String, dynamic>) {
+      throw DiagnosticException(
+        '教务响应缺少数据段',
+        code: 'response_section_missing',
+        stage: 'response.validate',
+        context: {'endpoint': 'timetable.$sectionKey', 'service': 'jwxt'},
+      );
+    }
     final section = datas[sectionKey] ?? _findRowsSection(datas);
     final rows = section is Map ? section['rows'] : null;
-    if (rows is! List) return const [];
+    if (rows is! List) {
+      throw DiagnosticException(
+        '教务响应缺少列表',
+        code: 'response_rows_missing',
+        stage: 'response.validate',
+        context: {'endpoint': 'timetable.$sectionKey', 'service': 'jwxt'},
+      );
+    }
     return rows;
   }
 
@@ -428,17 +477,34 @@ class TimetableApi {
           'response.rejected',
           fields: {'service': 'jwxt', 'response_code': code},
         );
-        throw PortalLoginError(
+        throw DiagnosticException(
           prefixedServerMessage(
             '教务课表接口返回错误：',
             decoded['msg'],
             fallback: '教务课表接口返回错误，请稍后重试',
           ),
+          code: 'service_rejected',
+          stage: 'response.validate',
+          context: {
+            'endpoint': 'timetable.${url.path.split('/').last}',
+            'service': 'jwxt',
+            'response_code': code,
+          },
         );
       }
       return _Ok(decoded);
-    } on FormatException {
-      return const _Ok(null);
+    } on FormatException catch (error, stackTrace) {
+      throw DiagnosticException(
+        '教务响应不是有效 JSON',
+        code: 'response_invalid_json',
+        stage: 'response.decode',
+        cause: error,
+        causeStackTrace: stackTrace,
+        context: {
+          'endpoint': 'timetable.${url.path.split('/').last}',
+          'service': 'jwxt',
+        },
+      );
     }
   }
 
@@ -559,10 +625,22 @@ class TimetableApi {
 }
 
 /// 教务接口返回 200 HTML 但不是登录页（如 WebVPN 维护页），归为未知错误。
-class JwxtUnexpectedHtmlError implements Exception {
+class JwxtUnexpectedHtmlError implements Exception, DiagnosticError {
   const JwxtUnexpectedHtmlError(this.endpoint);
 
   final String endpoint;
+
+  @override
+  Object? get cause => null;
+  @override
+  StackTrace? get causeStackTrace => null;
+  @override
+  Map<String, Object?> get diagnosticContext => {
+    'endpoint': 'timetable.$endpoint',
+    'service': 'jwxt',
+    'stage': 'response.validate',
+    'reason_code': 'unexpected_html',
+  };
 
   @override
   String toString() => '教务接口 $endpoint 返回了非预期的 HTML 页面';
@@ -574,10 +652,22 @@ class JwxtSessionExpiredError extends PortalLoginError {
 }
 
 /// 教务接口非 2xx（且不是会话失效）。
-class JwxtHttpError implements Exception {
+class JwxtHttpError implements Exception, DiagnosticError {
   const JwxtHttpError(this.endpoint, this.status);
   final String endpoint;
   final int status;
+  @override
+  Object? get cause => null;
+  @override
+  StackTrace? get causeStackTrace => null;
+  @override
+  Map<String, Object?> get diagnosticContext => {
+    'endpoint': 'timetable.$endpoint',
+    'service': 'jwxt',
+    'status_code': status,
+    'stage': 'request.complete',
+    'reason_code': 'http_status_rejected',
+  };
   @override
   String toString() => '教务 $endpoint 返回 HTTP $status';
 }

@@ -22,19 +22,21 @@ object ReminderScheduler {
     /** 闹钟迟到超过这么久就不补发（不补发已错过的提醒）。 */
     private const val LATE_TOLERANCE_MS = 10 * 60 * 1000L
 
-    fun replace(ctx: Context, alarmsJson: String) {
+    fun replace(ctx: Context, alarmsJson: String): Map<String, Any?> {
         NotifyStore.prefs(ctx).edit().putString(NotifyStore.KEY_ALARMS, alarmsJson).apply()
-        reschedule(ctx)
+        return reschedule(ctx)
     }
 
-    fun cancelAll(ctx: Context) {
+    fun cancelAll(ctx: Context): Map<String, Any?> {
         NotifyStore.prefs(ctx).edit().putString(NotifyStore.KEY_ALARMS, "[]").apply()
-        reschedule(ctx)
+        return reschedule(ctx)
     }
 
     /** 按已存列表重排（开机 / 改时间 / 改时区 / 权限变化也走这里）。 */
-    fun reschedule(ctx: Context) {
-        val am = ctx.getSystemService(AlarmManager::class.java) ?: return
+    fun reschedule(ctx: Context): Map<String, Any?> {
+        val diagnostics = mutableListOf<Map<String, Any?>>()
+        val am = ctx.getSystemService(AlarmManager::class.java) ?: return mapOf(
+            "diagnostics" to listOf(mapOf("reason_code" to "alarm_service_unavailable", "stage" to "reminder.schedule")))
         val prefs = NotifyStore.prefs(ctx)
         val old = prefs.getInt(NotifyStore.KEY_ALARM_COUNT, 0)
         for (i in 0 until old) {
@@ -45,11 +47,13 @@ object ReminderScheduler {
         }
         val arr = try {
             JSONArray(prefs.getString(NotifyStore.KEY_ALARMS, "[]"))
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            diagnostics.add(notifyFailureDetails(error, "reminder.decode") + ("reason_code" to "alarm_cache_invalid_json"))
             JSONArray()
         }
         val now = System.currentTimeMillis()
         val exact = NotifyStore.canExact(ctx)
+        if (!exact && arr.length() > 0) diagnostics.add(mapOf("reason_code" to "exact_alarm_permission_unavailable", "stage" to "reminder.schedule"))
         var n = 0
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
@@ -71,12 +75,14 @@ object ReminderScheduler {
                     am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, pi)
                 }
                 n++
-            } catch (_: SecurityException) {
+            } catch (error: SecurityException) {
+                diagnostics.add(notifyFailureDetails(error, "reminder.schedule") + ("reason_code" to "exact_alarm_permission_revoked"))
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, pi)
                 n++
             }
         }
         prefs.edit().putInt(NotifyStore.KEY_ALARM_COUNT, n).apply()
+        return mapOf("scheduled_count" to n, "exact" to exact, "diagnostics" to diagnostics)
     }
 
     private fun pending(ctx: Context, index: Int, intent: Intent?, flag: Int): PendingIntent? {
@@ -97,7 +103,7 @@ object ReminderScheduler {
         )
     }
 
-    fun show(ctx: Context, intent: Intent) {
+    fun show(ctx: Context, intent: Intent, diagnostics: MutableList<Map<String, Any?>> = mutableListOf()) {
         val now = System.currentTimeMillis()
         val fireAt = intent.getLongExtra("fireAt", 0L)
         val start = intent.getLongExtra("classStart", 0L)
@@ -128,7 +134,8 @@ object ReminderScheduler {
         try {
             ctx.getSystemService(NotificationManager::class.java)
                 ?.notify((start / 60000L).toInt(), n)
-        } catch (_: SecurityException) {
+        } catch (error: SecurityException) {
+            diagnostics.add(notifyFailureDetails(error, "reminder.notify") + ("reason_code" to "notification_permission_denied"))
             // 未授予通知权限。
         }
     }
@@ -137,14 +144,27 @@ object ReminderScheduler {
 /** 提醒闹钟到点。 */
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        ReminderScheduler.show(context, intent)
+        val diagnostics = mutableListOf<Map<String, Any?>>()
+        try { ReminderScheduler.show(context, intent, diagnostics) } catch (error: Exception) {
+            diagnostics.add(notifyFailureDetails(error, "reminder.dispatch") + ("reason_code" to "reminder_dispatch_failed"))
+        }
+        NativeBackgroundDiagnostics.enqueue(context, diagnostics)
     }
 }
 
 /** 开机 / 升级 / 改时间 / 改时区 / 精确闹钟权限变化：重排提醒并刷新小组件。 */
 class NotifySystemEventReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        ReminderScheduler.reschedule(context)
-        TimetableWidgetProvider.refreshAll(context)
+        val diagnostics = mutableListOf<Map<String, Any?>>()
+        try {
+            @Suppress("UNCHECKED_CAST")
+            diagnostics.addAll(ReminderScheduler.reschedule(context)["diagnostics"] as? List<Map<String, Any?>> ?: emptyList())
+        } catch (error: Exception) {
+            diagnostics.add(notifyFailureDetails(error, "reminder.system_reschedule") + ("reason_code" to "reminder_reschedule_failed"))
+        }
+        try { TimetableWidgetProvider.refreshAll(context) } catch (error: Exception) {
+            diagnostics.add(notifyFailureDetails(error, "widget.system_refresh") + ("reason_code" to "widget_refresh_failed"))
+        }
+        NativeBackgroundDiagnostics.enqueue(context, diagnostics)
     }
 }

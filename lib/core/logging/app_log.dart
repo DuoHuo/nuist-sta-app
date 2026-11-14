@@ -3,39 +3,91 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../config/campus_config.dart';
 import '../config/api_endpoints.dart';
 import 'log_store.dart';
+import 'diagnostic_error.dart';
+import 'diagnostic_redactor.dart';
 
-/// 应用日志级别。生产版默认只落盘 [info] 及以上级别。
+/// 应用日志级别。所有级别均本地留存，控制台默认显示关键结果。
 enum AppLogLevel { debug, info, warning, error, fatal }
 
 /// 统一日志入口。业务代码应通过 [logger] 获取带作用域的 [AppLogger]。
 class AppLog {
   AppLog._();
 
-  static const formatVersion = 1;
+  static const formatVersion = 2;
   static final String _sessionId = _randomHex(8);
 
   /// 本次运行是否已通过版本号五连击显示日志入口，不影响日志记录级别。
   static final ValueNotifier<bool> diagnosticsVisible = ValueNotifier(false);
-  static final ValueNotifier<bool> verboseEnabled = ValueNotifier(kDebugMode);
+  static final ValueNotifier<bool> verboseEnabled = ValueNotifier(false);
   static final ValueNotifier<DateTime?> verboseExpiresAt = ValueNotifier(null);
   static final ValueNotifier<bool> storageAvailable = ValueNotifier(false);
   static final Object _contextKey = Object();
+  static final Object _outcomeKey = Object();
+
+  /// 显式报告当前操作的降级、跳过或取消，不把正常返回误记为完全成功。
+  static void reportOutcome(String outcome, {String? reason}) {
+    final result = Zone.current[_outcomeKey] as _OperationOutcome?;
+    if (result == null) return;
+    result.outcome = outcome;
+    result.reason = reason;
+  }
+
+  /// 收集一项业务任务的最终结果，供共享 Future 的每位等待者复用。
+  ///
+  /// 只收集此作用域的直接操作；内部步骤失败是否影响整体由其业务操作决定。
+  static Future<T> captureOutcome<T>(
+    Future<T> Function() body, {
+    required void Function(String outcome, String? reason) onOutcome,
+  }) {
+    final result = _OperationOutcome(capture: true);
+    return runZoned(() async {
+      try {
+        return await body();
+      } catch (_) {
+        result.outcome = 'failed';
+        rethrow;
+      } finally {
+        try {
+          onOutcome(result.outcome, result.reason);
+        } catch (error, stackTrace) {
+          logger('app.logging').warning(
+            'outcome.observer_failed',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
+      }
+    }, zoneValues: {_outcomeKey: result});
+  }
+
+  /// 当前业务操作的本地关联标识，不发送到任何服务器。
+  static String? get currentTraceId =>
+      (Zone.current[_contextKey] as _LogContext?)?.traceId;
+
+  /// 当前诊断阶段的本地关联标识。
+  static String? get currentSpanId =>
+      (Zone.current[_contextKey] as _LogContext?)?.spanId;
 
   static RotatingLogStore? _store;
   static DateTime? _verboseUntil;
   static Timer? _verboseTimer;
   static Timer? _maintenanceTimer;
   static Future<void>? _initialization;
+  static Future<void>? _nativeCollection;
+  static bool _clearingLogs = false;
   static int _sequence = 0;
+  static int _evidenceSequence = 0;
   static int _hostSequence = 0;
   static final Map<String, String> _hostAliases = {};
   static bool _initialized = false;
@@ -76,7 +128,7 @@ class AppLog {
       _store = store;
       storageAvailable.value = true;
       if (kDebugMode) {
-        verboseEnabled.value = true;
+        verboseEnabled.value = false;
         await store.writeVerboseUntil(null);
       } else {
         final until = await store.readVerboseUntil();
@@ -92,9 +144,34 @@ class AppLog {
           unawaited(store.maintain().catchError(_handleWriteError));
         });
       }
-      logger(
-        'app',
-      ).info('session.started', fields: {'log_format_version': formatVersion});
+      final environment = <String, Object?>{
+        'platform': Platform.operatingSystem,
+        'platform_version': Platform.operatingSystemVersion,
+        'build_mode': kReleaseMode
+            ? 'release'
+            : kProfileMode
+            ? 'profile'
+            : 'debug',
+      };
+      if (!_inFlutterTest) {
+        try {
+          final info = await PackageInfo.fromPlatform();
+          environment.addAll({
+            'app_version': info.version,
+            'build_number': info.buildNumber,
+          });
+        } catch (error) {
+          environment['version_unavailable'] = error.runtimeType.toString();
+        }
+      }
+      logger('app').info(
+        'session.started',
+        fields: {
+          'log_format_version': formatVersion,
+          'details': {'environment': environment},
+        },
+      );
+      await collectNativeDiagnostics();
     } catch (error) {
       storageAvailable.value = false;
       _consoleFallback('日志初始化失败', error);
@@ -197,6 +274,28 @@ class AppLog {
       _errorFields(error)['error_kind']! as String;
 
   static Map<String, Object?> _errorFields(Object error, [int depth = 0]) {
+    final socketCode = error is SocketException
+        ? error.osError?.errorCode
+        : null;
+    if (error is DiagnosticError) {
+      final cause = error.cause;
+      return {
+        'error_kind': switch (error) {
+          SocketException() => 'connection_error',
+          _ => switch (error.runtimeType.toString()) {
+            'PortalCredentialError' => 'portal_credential',
+            'PortalNetworkError' => 'portal_network',
+            'PortalLoginError' => 'portal_login',
+            'TimetablePersistenceException' => 'storage_write',
+            _ => 'unexpected',
+          },
+        },
+        if (cause != null && !identical(cause, error) && depth < 16)
+          ..._errorFields(cause, depth + 1),
+        ...error.diagnosticContext,
+        'os_code': ?socketCode,
+      };
+    }
     if (error is DioException) {
       final cause = error.error;
       return {
@@ -228,10 +327,204 @@ class AppLog {
         'os_code': error.osError!.errorCode,
       if (error is FileSystemException && error.osError?.errorCode != null)
         'os_code': error.osError!.errorCode,
+      if (error is PlatformException) 'reason_code': error.code,
     };
   }
 
-  /// 临时开启生产版 DEBUG 日志，默认三十分钟后自动关闭；debug 构建始终开启。
+  static List<Map<String, Object?>> _errorChain(
+    Object error,
+    StackTrace? stackTrace, {
+    bool secretContext = false,
+  }) {
+    final chain = <Map<String, Object?>>[];
+    final seen = Set<Object>.identity();
+    Object? current = error;
+    var stack = stackTrace;
+    while (current != null && seen.add(current)) {
+      if (current is DioException && stack == null) stack = current.stackTrace;
+      if (current is DiagnosticError &&
+          current.diagnosticContext['secret_context'] == true) {
+        secretContext = true;
+      }
+      String message;
+      try {
+        // Dio 的 toString 会自行展开内层异常；逐层记录可避免重复并保留关联。
+        message = switch (current) {
+          DioException() => current.message ?? current.type.name,
+          FormatException() => current.message,
+          _ => current.toString(),
+        };
+        if (secretContext &&
+            current is! DiagnosticError &&
+            current is! FormatException) {
+          message = '[REDACTED_SECRET_CONTEXT]';
+        }
+      } catch (_) {
+        message = '异常对象无法生成描述';
+      }
+      chain.add({
+        'type': current.runtimeType.toString(),
+        'message': DiagnosticRedactor.text(message),
+        if (current is FormatException) 'offset': current.offset,
+        if (stack != null) 'stack_trace': stack.toString(),
+        if (current is DiagnosticError)
+          'context': DiagnosticRedactor.value(current.diagnosticContext),
+        if (current is PlatformException) ...{
+          'code': current.code,
+          'details': DiagnosticRedactor.value(current.details),
+          if (current.stacktrace != null) 'native_stack': current.stacktrace,
+        },
+        if (current is SocketException && current.osError != null)
+          'os_error': {
+            'code': current.osError!.errorCode,
+            'message': DiagnosticRedactor.text(current.osError!.message),
+          },
+      });
+      if (current is DiagnosticError) {
+        stack = current.causeStackTrace;
+        current = current.cause;
+      } else if (current is DioException) {
+        stack = current.stackTrace;
+        current = current.error;
+      } else {
+        current = null;
+      }
+    }
+    if (current != null) chain.add({'message': '异常原因链包含循环引用'});
+    return chain;
+  }
+
+  /// 保存网络交流的完整脱敏内容；解码前采集器、WebView 与原生桥共用。
+  static Map<String, Object?>? recordHttpExchange(
+    String scope,
+    Map<String, Object?> exchange, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    Map<String, Object?>? evidence;
+    _write(
+      scope,
+      error == null ? AppLogLevel.info : AppLogLevel.warning,
+      error == null ? 'http.exchange' : 'http.exchange_failed',
+      fields: {
+        for (final key in [
+          'request_id',
+          'method',
+          'service',
+          'status_code',
+          'duration_ms',
+        ])
+          if (exchange[key] != null) key: exchange[key],
+        'details': exchange,
+      },
+      error: error,
+      stackTrace: stackTrace,
+      onRecord: (record) {
+        final reference = <String, Object?>{
+          'session_id': record['session_id'],
+          'seq': record['seq'],
+        };
+        final details =
+            (record['attrs'] as Map)['details'] as Map<String, Object?>;
+        evidence = {'record_ref': reference, 'exchange': details};
+        addEvidence('http.exchange', {'record_ref': reference, ...details});
+      },
+    );
+    return evidence;
+  }
+
+  /// 将实际输入或缓存/网络证据挂到当前操作，保留不可变的脱敏快照。
+  static void addEvidence(String label, Map<String, Object?> details) {
+    final context = Zone.current[_contextKey] as _LogContext?;
+    final collection = context?.evidence;
+    if (context == null || collection == null) return;
+    final sanitized = DiagnosticRedactor.value(details) as Map<String, Object?>;
+    final reference = sanitized['record_ref'];
+    final responseEntity =
+        label == 'http.exchange' ||
+        sanitized.keys.every((key) => key == 'record_ref' || key == 'exchange');
+    final identity =
+        reference is Map &&
+            reference['session_id'] != null &&
+            reference['seq'] != null
+        ? '${reference['session_id']}:${reference['seq']}${responseEntity ? '' : ':${_sanitizeName(label)}:${context.spanId}'}'
+        : '$_sessionId:e${++_evidenceSequence}';
+    collection.add(identity, context, {
+      'id': identity,
+      'label': _sanitizeName(label),
+      'details': sanitized,
+    });
+  }
+
+  /// 只按确切记录引用恢复历史证据，不用“最近一次响应”猜测缓存来源。
+  static Future<Map<String, Object?>?> readRecord(
+    Map<String, Object?> reference,
+  ) async {
+    final session = reference['session_id'];
+    final sequence = reference['seq'];
+    if (session is! String ||
+        !RegExp(r'^[a-f0-9]{16}$').hasMatch(session) ||
+        sequence is! int ||
+        sequence < 0) {
+      return null;
+    }
+    return _store
+        ?.findRecord(session, sequence)
+        .timeout(const Duration(seconds: 2));
+  }
+
+  /// 从可信原生下载结果保留文件快照；网页消息不能触发本机文件读取。
+  static Future<void> recordHttpFileExchange(
+    String scope,
+    Map<String, Object?> exchange,
+    File file, {
+    int? capturedBytes,
+    bool complete = true,
+    Object? error,
+    StackTrace? stackTrace,
+  }) async {
+    try {
+      final length = await file.length();
+      final expected = capturedBytes ?? length;
+      final bytes = BytesBuilder(copy: false);
+      await for (final chunk in file.openRead(0, min(expected, length))) {
+        bytes.add(chunk);
+      }
+      recordHttpExchange(
+        scope,
+        {
+          ...exchange,
+          'response': {
+            ...?(exchange['response'] as Map?),
+            'body_base64': base64Encode(bytes.takeBytes()),
+            'encoding': 'base64',
+            'captured_bytes': min(expected, length),
+            'complete': complete && expected == length,
+            if (expected != length)
+              'incomplete_reason': 'source_file_size_changed',
+          },
+        },
+        error: error,
+        stackTrace: stackTrace,
+      );
+    } catch (captureError, captureStack) {
+      recordHttpExchange(
+        scope,
+        {
+          ...exchange,
+          'response': {
+            ...?(exchange['response'] as Map?),
+            'complete': false,
+            'incomplete_reason': 'source_file_unavailable',
+          },
+        },
+        error: error ?? captureError,
+        stackTrace: stackTrace ?? captureStack,
+      );
+    }
+  }
+
+  /// 临时开启详细控制台，默认三十分钟后关闭；不影响完整诊断的本地留存。
   static Future<void> enableVerbose({
     Duration duration = const Duration(minutes: 30),
   }) async {
@@ -250,7 +543,7 @@ class AppLog {
     _verboseTimer = null;
     _verboseUntil = null;
     verboseExpiresAt.value = null;
-    verboseEnabled.value = kDebugMode;
+    verboseEnabled.value = false;
     await _store?.writeVerboseUntil(null);
   }
 
@@ -271,19 +564,122 @@ class AppLog {
       (await _store?.stats()) ?? const LogStoreStats(bytes: 0, fileCount: 0);
 
   /// 生成一致的日志快照。
-  static Future<LogSnapshot> snapshot() async =>
-      await _store?.snapshot() ??
-      const LogSnapshot(
-        content: '',
-        stats: LogStoreStats(bytes: 0, fileCount: 0),
-      );
+  static Future<LogSnapshot> snapshot() async {
+    await collectNativeDiagnostics();
+    return await _store?.snapshot() ??
+        const LogSnapshot(
+          content: '',
+          stats: LogStoreStats(bytes: 0, fileCount: 0),
+        );
+  }
 
   /// 清除本地日志。
-  static Future<void> clear() async => _store?.clear();
+  static Future<void> clear() async {
+    _clearingLogs = true;
+    try {
+      await _nativeCollection;
+      Object? failure;
+      StackTrace? failureStack;
+      if (Platform.isAndroid && !_inFlutterTest) {
+        try {
+          await _consoleChannel.invokeMethod<void>('clearNativeDiagnostics');
+        } catch (error, stackTrace) {
+          failure = error;
+          failureStack = stackTrace;
+        }
+      }
+      try {
+        await _store?.clear();
+      } catch (error, stackTrace) {
+        failure ??= error;
+        failureStack ??= stackTrace;
+      }
+      if (failure != null) Error.throwWithStackTrace(failure, failureStack!);
+    } finally {
+      _clearingLogs = false;
+    }
+  }
+
+  /// 将系统广播期间暂存的原生诊断导入本机日志，写入成功后再确认删除。
+  static Future<void> collectNativeDiagnostics() {
+    if (!Platform.isAndroid ||
+        _inFlutterTest ||
+        _store == null ||
+        _clearingLogs) {
+      return Future.value();
+    }
+    return _nativeCollection ??= _collectNativeDiagnostics().whenComplete(() {
+      _nativeCollection = null;
+    });
+  }
+
+  @visibleForTesting
+  static Future<void> collectNativeDiagnosticsForTesting() =>
+      _collectNativeDiagnostics();
+
+  static Future<void> _collectNativeDiagnostics() async {
+    if (_store == null) return;
+    try {
+      final entries = await _consoleChannel.invokeListMethod<Object?>(
+        'readNativeDiagnostics',
+      );
+      final acknowledged = <String>[];
+      for (final entry in entries ?? const []) {
+        if (entry is! Map || entry['id'] is! String || entry['ts'] is! int) {
+          continue;
+        }
+        final id = entry['id'] as String;
+        final at = DateTime.fromMillisecondsSinceEpoch(
+          entry['ts'] as int,
+          isUtc: true,
+        );
+        if (at.isBefore(
+          DateTime.now().toUtc().subtract(const Duration(days: 7)),
+        )) {
+          acknowledged.add(id);
+          continue;
+        }
+        final native = entry['details'] is Map
+            ? Map<String, Object?>.from(entry['details'] as Map)
+            : <String, Object?>{};
+        final persisted = Completer<bool>();
+        logger('timetable.native_background').startSpan().run(
+          () => _write(
+            'timetable.native_background',
+            entry['event'] == 'background.failed'
+                ? AppLogLevel.error
+                : AppLogLevel.warning,
+            entry['event'] == 'background.failed'
+                ? 'background.failed'
+                : 'background.degraded',
+            fields: {
+              'stage': native['stage'],
+              'reason_code': native['reason_code'],
+              'details': {'native_event_id': id, ...native},
+            },
+            recordedAt: at,
+            persistence: persisted,
+          ),
+        );
+        if (await persisted.future) acknowledged.add(id);
+      }
+      if (acknowledged.isNotEmpty) {
+        await _consoleChannel.invokeMethod<void>(
+          'acknowledgeNativeDiagnostics',
+          {'ids': acknowledged},
+        );
+      }
+    } catch (error, stackTrace) {
+      logger(
+        'app.logging',
+      ).warning('native.import_failed', error: error, stackTrace: stackTrace);
+    }
+  }
 
   /// 将安全元信息与日志快照写入受限的导出缓存。
   static Future<File> createExport(Map<String, Object?> metadata) async {
     await initialize();
+    await collectNativeDiagnostics();
     final store = _store;
     if (store == null) throw StateError('诊断日志存储暂不可用');
     return store.createExport(_sanitizeMetadata(metadata));
@@ -330,12 +726,8 @@ class AppLog {
   }
 
   static bool _isEnabled(AppLogLevel level) {
-    if (!kReleaseMode) return true;
-    if (level.index >= AppLogLevel.info.index) return true;
-    final until = _verboseUntil;
-    return verboseEnabled.value &&
-        until != null &&
-        until.isAfter(DateTime.now().toUtc());
+    // 完整诊断始终本地留存，详细模式只控制控制台过程信息。
+    return true;
   }
 
   static void _write(
@@ -346,20 +738,54 @@ class AppLog {
     Object? error,
     StackTrace? stackTrace,
     String? errorKind,
+    DateTime? recordedAt,
+    Completer<bool>? persistence,
+    void Function(Map<String, Object?> record)? onRecord,
   }) {
     if (!_isEnabled(level)) return;
     try {
-      final now = DateTime.now().toUtc();
+      stackTrace ??= switch (error) {
+        DioException() => error.stackTrace,
+        DiagnosticError() => error.causeStackTrace,
+        _ => null,
+      };
+      final now = recordedAt?.toUtc() ?? DateTime.now().toUtc();
       final context = Zone.current[_contextKey] as _LogContext?;
+      final diagnosticFields = error == null
+          ? const <String, Object?>{}
+          : _errorFields(error);
       final attrs = _sanitizeFields({
         ...?fields,
-        if (error != null) ..._errorFields(error),
+        for (final entry in diagnosticFields.entries)
+          if (entry.value != null) entry.key: entry.value,
+        // 故障上下文已在原因链中完整保留，不能覆盖同一条记录的请求/响应原文。
+        if (fields?['details'] != null) 'details': fields!['details'],
         if (error != null) 'error_type': error.runtimeType.toString(),
+        if (error != null)
+          'error_chain': _errorChain(
+            error,
+            stackTrace,
+            secretContext: fields?['secret_context'] == true,
+          ),
         'error_kind': ?errorKind,
       });
+      if (level.index >= AppLogLevel.warning.index &&
+          !event.startsWith('http.exchange')) {
+        final evidence =
+            context?.evidence?.forContext(context) ??
+            const <Map<String, Object?>>[];
+        if (evidence.isNotEmpty) {
+          final details = attrs['details'];
+          attrs['details'] = {
+            if (details is Map) ...details,
+            if (details != null && details is! Map) 'original_details': details,
+            'evidence': evidence,
+          };
+        }
+      }
       if (stackTrace != null) {
         // 原样保留堆栈，避免丢失 AOT、原生帧和完整的代码定位信息。
-        attrs['stack_trace'] = stackTrace.toString();
+        attrs['stack_trace'] = DiagnosticRedactor.text(stackTrace.toString());
       }
       final record = <String, Object?>{
         'ts': now.toIso8601String(),
@@ -375,39 +801,40 @@ class AppLog {
         if (attrs.isNotEmpty) 'attrs': attrs,
       };
       recordListenerForTesting?.call(Map.unmodifiable(record));
+      onRecord?.call(record);
       final line = jsonEncode(record);
       if ((!kReleaseMode || verboseEnabled.value) &&
+          (level != AppLogLevel.debug || verboseEnabled.value) &&
           (!_inFlutterTest || consoleEnabledForTesting)) {
         final summary = formatSummary(
           record,
           includeScope: true,
           includeLevel: true,
         );
-        final stack = attrs['stack_trace'] as String?;
-        final frames = stack == null ? const <String>[] : stack.split('\n');
-        final message = [
-          summary,
-          if (level.index >= AppLogLevel.warning.index)
-            for (final frame in frames) '  ↳ #${record['seq']} $frame',
-        ].join('\n');
-        _emitConsole(message, level, record, stack);
+        _emitConsole(summary, level, record);
       }
-      final shouldPersist =
-          level.index >= AppLogLevel.info.index ||
-          kDebugMode ||
-          verboseEnabled.value;
+      const shouldPersist = true;
       if (shouldPersist) {
+        if (_store == null) {
+          persistence?.complete(false);
+          return;
+        }
         unawaited(
           _store
                   ?.append(line)
                   .then((_) {
                     storageAvailable.value = true;
+                    persistence?.complete(true);
                   })
-                  .catchError(_handleWriteError) ??
+                  .catchError((Object error) {
+                    _handleWriteError(error);
+                    persistence?.complete(false);
+                  }) ??
               Future.value(),
         );
       }
     } catch (writeError) {
+      if (persistence?.isCompleted == false) persistence!.complete(false);
       _consoleFallback('日志编码失败', writeError);
     }
   }
@@ -421,11 +848,10 @@ class AppLog {
     String message,
     AppLogLevel level,
     Map<String, Object?> record,
-    String? stack,
   ) {
     if ((!_inFlutterTest || consoleEnabledForTesting) && !kReleaseMode) {
       developer.log(
-        formatSummary(record),
+        formatConsoleMessage(record),
         name: record['scope']! as String,
         level: switch (level) {
           AppLogLevel.debug => 500,
@@ -435,15 +861,13 @@ class AppLog {
           AppLogLevel.fatal => 1200,
         },
         sequenceNumber: record['seq']! as int,
-        // DevTools 支持将安全文本作为详情数据；缺少数据时会展示整条 VM 协议 JSON。
-        error: [
-          '事件：${record['event']} · 记录 #${'${record['seq']}'.padLeft(6, '0')}',
-          if (record['trace_id'] case final String trace)
-            '关联操作：${trace.substring(0, min(8, trace.length))}',
-          if ((record['attrs'] as Map?)?['error_type'] case final String type)
-            '异常类型：$type',
-        ].join('\n'),
-        stackTrace: stack == null ? null : StackTrace.fromString(stack),
+      );
+    }
+    if (level.index >= AppLogLevel.warning.index) {
+      message = formatConsoleMessage(
+        record,
+        includeScope: true,
+        includeLevel: true,
       );
     }
     if (Platform.isAndroid && !_inFlutterTest && _nativeConsoleAvailable) {
@@ -472,10 +896,17 @@ class AppLog {
     }
     _writingFallback = true;
     try {
+      String cause;
+      try {
+        cause = DiagnosticRedactor.text(error.toString());
+      } catch (_) {
+        cause = '异常描述不可读取（${error.runtimeType}）';
+      }
       debugPrint(
         'ERROR [app.logging] internal.failure | '
         'message=${jsonEncode(_sanitizeText(message))} '
-        'error_type=${error.runtimeType}',
+        'error_type=${error.runtimeType} '
+        'cause=${jsonEncode(cause)}',
         wrapWidth: 1024,
       );
     } finally {
@@ -495,11 +926,13 @@ class AppLog {
     for (final entry in const {
       'request_id': 'R',
       'connection_id': 'C',
-      'attempt': 'S',
+      'attempt': '第',
       'stage_id': 'P',
     }.entries) {
       if (attrs[entry.key] case final value?) {
-        request.add('${entry.value}$value');
+        request.add(
+          entry.key == 'attempt' ? '尝试 $value' : '${entry.value}$value',
+        );
       }
     }
     if (attrs['method'] case final String method
@@ -523,6 +956,10 @@ class AppLog {
       'route': '出口',
       'file_kind': '文件',
       'reason': '原因',
+      'reason_code': '原因码',
+      'endpoint': '接口',
+      'stage': '步骤',
+      'trigger': '触发',
       'os_code': '系统码',
       'course_count': '课程数',
       'exam_count': '考试数',
@@ -668,8 +1105,15 @@ class AppLog {
         : error ?? (failure == 'none' ? null : failure);
     final type = attrs['error_type'];
     if (kind == null) return type == null ? null : '异常类型 $type';
+    final chain = attrs['error_chain'];
+    final cause = chain is List && chain.isNotEmpty ? chain.last : null;
+    final message = cause is Map ? cause['message'] : null;
+    final description = message is String
+        ? message.replaceAll(RegExp(r'[\r\n]+'), ' ').trim()
+        : '';
     return '${_label(kind)}'
-        '${type != null && const {'unexpected', 'flutter_framework', 'uncaught_async', 'unknown'}.contains(kind) ? '（$type）' : ''}';
+        '${type != null && const {'unexpected', 'flutter_framework', 'uncaught_async', 'unknown'}.contains(kind) ? '（$type）' : ''}'
+        '${description.isEmpty ? '' : '：${description.length > 180 ? '${description.substring(0, 180)}…' : description}'}';
   }
 
   static String _label(Object? value) =>
@@ -678,6 +1122,10 @@ class AppLog {
   // 只翻译固定事件和安全枚举；原始事件、字段及标识仍保留在详情和 JSON 中。
   static const _labels = {
     'http': 'HTTP 请求',
+    'background.failed': '后台提醒失败',
+    'background.degraded': '后台提醒已降级',
+    'http.exchange': 'HTTP 诊断详情',
+    'http.exchange_failed': 'HTTP 请求失败',
     'service.login': '业务登录',
     'service.request': '业务请求',
     'refresh': '刷新数据',
@@ -841,6 +1289,12 @@ class AppLog {
     'ethernet': '有线网络',
     'none': '无网络',
     'unknown': '未知原因',
+    'degraded': '部分降级',
+    'partial': '部分成功',
+    'rejected': '操作被拒绝',
+    'stale': '过期结果已丢弃',
+    'manual': '手动操作',
+    'automatic': '自动操作',
   };
 
   /// 应用内展开内容保留原始事件、全部安全字段及完整 Trace／Span。
@@ -851,7 +1305,7 @@ class AppLog {
     return [
       for (final key in ['ts', 'level', 'scope', 'event'])
         if (record[key] case final value?) '$key: $value',
-      for (final key in keys) '$key: ${_formatConsoleValue(attrs[key])}',
+      for (final key in keys) ..._detailLines(key, attrs[key]),
       for (final key in [
         'seq',
         'session_id',
@@ -863,11 +1317,94 @@ class AppLog {
     ].join('\n');
   }
 
+  /// DevTools 只使用单一文本载荷，避免将普通详情塞入 VM 的异常/堆栈对象字段。
+  static String formatConsoleMessage(
+    Map<String, Object?> record, {
+    bool includeScope = false,
+    bool includeLevel = false,
+  }) {
+    final attrs = record['attrs'];
+    final stack = attrs is Map ? attrs['stack_trace'] : null;
+    return [
+      formatSummary(
+        record,
+        includeScope: includeScope,
+        includeLevel: includeLevel,
+      ),
+      '',
+      formatDetails(record),
+      if (stack is String && stack.isNotEmpty) '调用堆栈:\n$stack',
+    ].join('\n');
+  }
+
+  /// 追溯共享登录的生产者，使等待者的失败能找到另一条 Trace 中的认证原文。
+  static Set<String> relatedTraceIds(
+    Iterable<Map<String, Object?>> records,
+    String trace,
+  ) {
+    final byTrace = <String, List<Map<String, Object?>>>{};
+    final loginOwners = <String, Set<String>>{};
+    for (final record in records) {
+      final id = record['trace_id'];
+      if (id is! String) continue;
+      byTrace.putIfAbsent(id, () => []).add(record);
+      final attrs = record['attrs'];
+      final login = attrs is Map ? attrs['login_id'] : null;
+      if (login != null) {
+        loginOwners
+            .putIfAbsent('${record['session_id']}:$login', () => {})
+            .add(id);
+      }
+    }
+    final related = <String>{trace};
+    final pending = <String>[trace];
+    while (pending.isNotEmpty) {
+      for (final record
+          in byTrace[pending.removeLast()] ?? const <Map<String, Object?>>[]) {
+        final attrs = record['attrs'];
+        final shared = attrs is Map ? attrs['shared_login_id'] : null;
+        if (shared == null) continue;
+        for (final owner
+            in loginOwners['${record['session_id']}:$shared'] ??
+                const <String>{}) {
+          if (related.add(owner)) pending.add(owner);
+        }
+      }
+    }
+    return related;
+  }
+
   static String _formatDuration(Object value) {
     if (value is! num) return '$value';
     if (value < 1000) return '${value.toInt()}ms';
     if (value < 60000) return '${(value / 1000).toStringAsFixed(2)}s';
     return '${value ~/ 60000}m${((value % 60000) / 1000).toStringAsFixed(1)}s';
+  }
+
+  static Iterable<String> _detailLines(
+    String key,
+    Object? value, [
+    String indent = '',
+  ]) sync* {
+    if (value is Map) {
+      yield '$indent$key:';
+      for (final entry in value.entries) {
+        yield* _detailLines('${entry.key}', entry.value, '$indent  ');
+      }
+    } else if (value is Iterable) {
+      yield '$indent$key:';
+      var index = 0;
+      for (final item in value) {
+        yield* _detailLines('[${index++}]', item, '$indent  ');
+      }
+    } else if (value is String && value.contains('\n')) {
+      yield '$indent$key:';
+      for (final line in value.split('\n')) {
+        yield '$indent  $line';
+      }
+    } else {
+      yield '$indent$key: ${value ?? '未提供'}';
+    }
   }
 
   static String _formatConsoleValue(Object? value) => switch (value) {
@@ -897,11 +1434,14 @@ class AppLog {
   static Map<String, Object?> _sanitizeFields(Map<String, Object?>? fields) {
     if (fields == null || fields.isEmpty) return <String, Object?>{};
     final result = <String, Object?>{};
-    for (final entry in fields.entries.take(64)) {
+    final discarded = <String>[];
+    for (final entry in fields.entries) {
       final key = _sanitizeName(entry.key);
       final value = _sanitizeField(key, entry.value);
       if (value != null) result[key] = value;
-      if (result.length == 32) break;
+      if (value == null && entry.value != null) {
+        discarded.add(key.replaceAll(RegExp(r'\d{6,20}'), 'id'));
+      }
     }
     for (final entry in const {
       'host': 'service',
@@ -914,6 +1454,12 @@ class AppLog {
           !RegExp(r'^host_(?:\d{1,3}|other)$').hasMatch(host)) {
         result[entry.value] = serviceForHost(host);
       }
+    }
+    if (discarded.isNotEmpty) {
+      result['field_validation'] = {
+        'discarded_fields': discarded,
+        'reason': 'unknown_field_or_invalid_type',
+      };
     }
     return result;
   }
@@ -941,7 +1487,9 @@ class AppLog {
       originalAttrs is Map<String, dynamic> ? originalAttrs : null,
     );
     if (originalAttrs is Map && originalAttrs['stack_trace'] is String) {
-      attrs['stack_trace'] = originalAttrs['stack_trace'];
+      attrs['stack_trace'] = DiagnosticRedactor.text(
+        originalAttrs['stack_trace'] as String,
+      );
     }
     bool validId(Object? id, int length) =>
         id is String && RegExp('^[a-f0-9]{$length}\$').hasMatch(id);
@@ -951,6 +1499,12 @@ class AppLog {
       'level': level,
       'scope': _sanitizeName(scope).replaceAll(RegExp(r'\d{6,20}'), 'id'),
       'event': _sanitizeName(event).replaceAll(RegExp(r'\d{6,20}'), 'id'),
+      if (record['record_attachment'] case final String attachment
+          when RegExp(r'^[a-f0-9-]+\.json\.gz$').hasMatch(attachment))
+        'record_attachment': attachment,
+      if (record['record_attachment_bytes'] case final int bytes
+          when bytes >= 0)
+        'record_attachment_bytes': bytes,
       if (validId(record['session_id'], 16)) 'session_id': record['session_id'],
       if (validId(record['trace_id'], 32)) 'trace_id': record['trace_id'],
       if (validId(record['span_id'], 16)) 'span_id': record['span_id'],
@@ -962,6 +1516,11 @@ class AppLog {
 
   // 白名单同时限定字段语义、类型和范围，未知业务字段不进入日志。
   static const _booleanFields = {
+    'secret_context',
+    'retryable',
+    'cache_saved',
+    'complete',
+    'applied',
     'automatic',
     'force',
     'force_refresh',
@@ -976,6 +1535,11 @@ class AppLog {
     'silent',
   };
   static const _countFields = {
+    'retry_count',
+    'partial_failure_count',
+    'failed_count',
+    'success_count',
+    'failure_count',
     'count',
     'course_count',
     'exam_count',
@@ -994,6 +1558,8 @@ class AppLog {
     'unreadable_files',
   };
   static const _idFields = {
+    'login_id',
+    'shared_login_id',
     'request_id',
     'connection_id',
     'stage_id',
@@ -1002,6 +1568,9 @@ class AppLog {
     'vpn_session_id',
   };
   static const _durationFields = {
+    'wait_ms',
+    'queued_ms',
+    'attempt_duration_ms',
     'duration_ms',
     'preparation_ms',
     'timeout_ms',
@@ -1080,6 +1649,7 @@ class AppLog {
       'connectionTimeout',
       'sendTimeout',
       'receiveTimeout',
+      'transformTimeout',
       'badCertificate',
       'badResponse',
       'cancel',
@@ -1304,6 +1874,33 @@ class AppLog {
 
   static Object? _sanitizeField(String key, Object? value) {
     if (value == null) return null;
+    if (const {'details', 'error_chain', 'field_validation'}.contains(key)) {
+      return DiagnosticRedactor.value(value);
+    }
+    if (const {
+      'reason_code',
+      'endpoint',
+      'trigger',
+      'cache_source',
+      'stage',
+      'outcome',
+    }.contains(key)) {
+      final name = value is Enum ? value.name : value;
+      return name is String &&
+              RegExp(r'^[a-zA-Z][a-zA-Z0-9_.-]{0,95}$').hasMatch(name)
+          ? name
+          : null;
+    }
+    if (key == 'route' && value is String) {
+      return const {'VPN', '直连', '请求准备', 'VPN（强制）', '选路中'}.contains(value)
+          ? value
+          : null;
+    }
+    if (key == 'reason' &&
+        value is String &&
+        RegExp(r'^[A-Za-z][A-Za-z0-9_.-]{0,95}$').hasMatch(value)) {
+      return value;
+    }
     if (_booleanFields.contains(key)) return value is bool ? value : null;
     if (key == 'connection_types' && value is Iterable) {
       return value
@@ -1327,7 +1924,9 @@ class AppLog {
         ? 65535
         : key == 'status_code'
         ? 599
-        : {'response_code', 'os_code'}.contains(key)
+        : key == 'os_code'
+        ? 0x7fffffff
+        : key == 'response_code'
         ? 99999
         : null;
     if (limit != null) {
@@ -1339,7 +1938,11 @@ class AppLog {
           number != number.truncateToDouble()) {
         return null;
       }
-      final minimum = key == 'os_code' || key == 'response_code' ? -99999 : 0;
+      final minimum = key == 'os_code'
+          ? -0x80000000
+          : key == 'response_code'
+          ? -99999
+          : 0;
       if (number < minimum || number > limit) {
         return null;
       }
@@ -1380,6 +1983,8 @@ class AppLog {
     if (key == 'file_kind') {
       return const {
             'summary.json',
+            'room.json',
+            'history.json',
             'profile.json',
             'report.json',
             'credit.json',
@@ -1466,13 +2071,15 @@ class AppLog {
     verboseExpiresAt.value = null;
     storageAvailable.value = false;
     diagnosticsVisible.value = false;
-    verboseEnabled.value = kDebugMode;
+    verboseEnabled.value = false;
     _store = null;
     _sequence = 0;
     _hostSequence = 0;
     _hostAliases.clear();
     _initialized = false;
     _initialization = null;
+    _nativeCollection = null;
+    _clearingLogs = false;
     _nativeConsoleAvailable = true;
     recordListenerForTesting = null;
     consoleEnabledForTesting = false;
@@ -1486,13 +2093,19 @@ class AppLogger {
   final String scope;
 
   /// 创建可跨异步回调绑定的本机 Span，不写入任何请求头。
-  AppLogSpan startSpan() {
+  AppLogSpan startSpan({bool collectEvidence = false}) {
     final parent = Zone.current[AppLog._contextKey] as _LogContext?;
     return AppLogSpan._(
       _LogContext(
         traceId: parent?.traceId ?? AppLog._randomHex(16),
         spanId: AppLog._randomHex(8),
         parentSpanId: parent?.spanId,
+        parent: parent,
+        evidence:
+            parent?.evidence ??
+            (collectEvidence || Zone.current[AppLog._outcomeKey] != null
+                ? _TraceEvidence()
+                : null),
       ),
     );
   }
@@ -1503,8 +2116,21 @@ class AppLogger {
     return startSpan().run(body);
   }
 
-  void debug(String event, {Map<String, Object?>? fields}) =>
-      AppLog._write(scope, AppLogLevel.debug, event, fields: fields);
+  void debug(
+    String event, {
+    Map<String, Object?>? fields,
+    Object? error,
+    StackTrace? stackTrace,
+    String? errorKind,
+  }) => AppLog._write(
+    scope,
+    AppLogLevel.debug,
+    event,
+    fields: fields,
+    error: error,
+    stackTrace: stackTrace,
+    errorKind: errorKind,
+  );
 
   void info(String event, {Map<String, Object?>? fields}) =>
       AppLog._write(scope, AppLogLevel.info, event, fields: fields);
@@ -1563,67 +2189,128 @@ class AppLogger {
     Future<T> Function() body, {
     Map<String, Object?>? fields,
     Map<String, Object?> Function(T result)? resultFields,
+    String Function(T result)? outcomeForResult,
     Map<String, Object?> Function(Object error)? errorFields,
     String? failureEvent,
     AppLogLevel successLevel = AppLogLevel.info,
     AppLogLevel failureLevel = AppLogLevel.warning,
     AppLogLevel Function(Object error)? failureLevelForError,
   }) {
-    return startSpan().run(() async {
-      final watch = Stopwatch()..start();
-      debug('$event.started', fields: fields);
-      try {
-        final result = await body();
-        watch.stop();
-        final completed = <String, Object?>{
-          ...?fields,
-          'duration_ms': watch.elapsedMilliseconds,
-        };
-        if (resultFields != null) {
-          try {
-            completed.addAll(resultFields(result));
-          } catch (_) {
-            // 结果字段只用于诊断，不能影响业务返回值。
-          }
-        }
-        AppLog._write(
-          scope,
-          successLevel,
-          '$event.completed',
-          fields: completed,
-        );
-        return result;
-      } catch (error, stackTrace) {
-        watch.stop();
-        final failed = <String, Object?>{
-          ...?fields,
-          'duration_ms': watch.elapsedMilliseconds,
-        };
-        var level = failureLevel;
+    final operationOutcome = _OperationOutcome();
+    final parentOutcome =
+        Zone.current[AppLog._outcomeKey] as _OperationOutcome?;
+    return startSpan(collectEvidence: true).run(
+      () => runZoned(() async {
+        final watch = Stopwatch()..start();
+        debug('$event.started', fields: fields);
         try {
-          failed.addAll(errorFields?.call(error) ?? const {});
-          level = failureLevelForError?.call(error) ?? failureLevel;
-        } catch (_) {
-          // 日志补充字段或级别选择不能改变原始业务异常。
+          final result = await body();
+          watch.stop();
+          final completed = <String, Object?>{
+            ...?fields,
+            'duration_ms': watch.elapsedMilliseconds,
+            'outcome': operationOutcome.outcome,
+            if (operationOutcome.reason != null)
+              'reason': operationOutcome.reason,
+          };
+          if (outcomeForResult != null) {
+            try {
+              completed['outcome'] = outcomeForResult(result);
+            } catch (error, stackTrace) {
+              warning(
+                'diagnostic.outcome_failed',
+                error: error,
+                stackTrace: stackTrace,
+              );
+            }
+          }
+          if (resultFields != null) {
+            try {
+              completed.addAll(resultFields(result));
+            } catch (_) {
+              // 结果字段只用于诊断，不能影响业务返回值。
+            }
+          }
+          final outcome = completed['outcome'];
+          if (parentOutcome?.capture == true) {
+            parentOutcome!.outcome = outcome is String ? outcome : 'unknown';
+            parentOutcome.reason = completed['reason'] is String
+                ? completed['reason'] as String
+                : null;
+          }
+          final suffix = switch (outcome) {
+            'failure' || 'failed' || 'error' || 'rejected' => 'failed',
+            'cancelled' => 'cancelled',
+            'skipped' || 'stale' => 'skipped',
+            _ => 'completed',
+          };
+          AppLog._write(
+            scope,
+            const {
+                  'failure',
+                  'failed',
+                  'error',
+                  'rejected',
+                  'degraded',
+                  'partial',
+                }.contains(outcome)
+                ? failureLevel
+                : successLevel,
+            '$event.$suffix',
+            fields: completed,
+          );
+          return result;
+        } catch (error, stackTrace) {
+          watch.stop();
+          final failed = <String, Object?>{
+            ...?fields,
+            'duration_ms': watch.elapsedMilliseconds,
+          };
+          var level = failureLevel;
+          try {
+            failed.addAll(errorFields?.call(error) ?? const {});
+            level = failureLevelForError?.call(error) ?? failureLevel;
+          } catch (_) {
+            // 日志补充字段或级别选择不能改变原始业务异常。
+          }
+          AppLog._write(
+            scope,
+            level,
+            failureEvent ?? '$event.failed',
+            fields: failed,
+            error: error,
+            stackTrace: stackTrace,
+          );
+          if (parentOutcome?.capture == true) {
+            parentOutcome!.outcome = 'failed';
+            parentOutcome.reason = failed['reason'] is String
+                ? failed['reason'] as String
+                : null;
+          }
+          rethrow;
         }
-        AppLog._write(
-          scope,
-          level,
-          failureEvent ?? '$event.failed',
-          fields: failed,
-          error: error,
-          stackTrace: stackTrace,
-        );
-        rethrow;
-      }
-    });
+      }, zoneValues: {AppLog._outcomeKey: operationOutcome}),
+    );
   }
+}
+
+class _OperationOutcome {
+  _OperationOutcome({this.capture = false});
+  final bool capture;
+  String outcome = 'success';
+  String? reason;
 }
 
 /// 保留本机追踪上下文的 Span，供网络回调、队列与重试复用。
 class AppLogSpan {
   const AppLogSpan._(this._context);
   final _LogContext _context;
+
+  /// 该阶段所属业务操作。
+  String get traceId => _context.traceId;
+
+  /// 该阶段标识，用于关联合流任务和跨平台回调。
+  String get spanId => _context.spanId;
 
   /// 在该 Span 内执行同步或异步回调。
   T run<T>(T Function() body) =>
@@ -1635,9 +2322,43 @@ class _LogContext {
     required this.traceId,
     required this.spanId,
     this.parentSpanId,
+    this.parent,
+    this.evidence,
   });
 
   final String traceId;
   final String spanId;
   final String? parentSpanId;
+  final _LogContext? parent;
+  final _TraceEvidence? evidence;
+
+  bool isWithin(_LogContext ancestor) {
+    for (_LogContext? cursor = this; cursor != null; cursor = cursor.parent) {
+      if (identical(cursor, ancestor)) return true;
+    }
+    return false;
+  }
+}
+
+class _TraceEvidence {
+  final _items =
+      <String, ({Set<_LogContext> owners, Map<String, Object?> value})>{};
+
+  void add(String id, _LogContext owner, Map<String, Object?> value) {
+    _items
+        .putIfAbsent(
+          id,
+          () => (owners: Set<_LogContext>.identity(), value: value),
+        )
+        .owners
+        .add(owner);
+  }
+
+  List<Map<String, Object?>> forContext(_LogContext context) => [
+    for (final item in _items.values)
+      if (item.owners.any(
+        (owner) => owner.isWithin(context) || context.isWithin(owner),
+      ))
+        item.value,
+  ];
 }

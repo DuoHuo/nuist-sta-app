@@ -12,6 +12,8 @@ import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/config/campus_config.dart';
 import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
+import '../../../core/logging/diagnostic_error.dart';
+import '../../../core/network/web_diagnostics.dart';
 import 'portal_binding_actions.dart';
 
 /// 「绑定统一门户」页：内嵌门户登录，登录后自动跳到「账户安全-通行密钥」，
@@ -43,6 +45,8 @@ class _PortalBindPageState extends State<PortalBindPage> {
       '(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
   late final WebViewController _controller;
+  late final WebDiagnostics _diagnostics;
+  late final AppLogSpan _bindingFlow;
   int _progress = 0;
   bool _finished = false;
 
@@ -53,12 +57,13 @@ class _PortalBindPageState extends State<PortalBindPage> {
   @override
   void initState() {
     super.initState();
+    _bindingFlow = _log.startSpan();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setUserAgent(_desktopUserAgent)
       ..addJavaScriptChannel(
         _channelName,
-        onMessageReceived: (m) => _onMessage(m.message),
+        onMessageReceived: (m) => _bindingFlow.run(() => _onMessage(m.message)),
       )
       ..setNavigationDelegate(
         NavigationDelegate(
@@ -70,17 +75,21 @@ class _PortalBindPageState extends State<PortalBindPage> {
             return NavigationDecision.prevent;
           },
           onWebResourceError: (error) {
+            _diagnostics.resourceError(error);
             // 服务端 302 到 http 时 shouldOverrideUrlLoading 可能拦不到，兜底改写。
             final url = error.url;
             if (error.isForMainFrame == false || url == null) return;
             final https = _rewriteToHttps(url);
             if (https != null) _controller.loadRequest(Uri.parse(https));
           },
+          onHttpError: (error) => _diagnostics.httpError(error),
+          onPageStarted: (url) => _diagnostics.pageStarted(url),
           // 登录后落到个人中心（URL 含 personCenter）就注入；跳到通行密钥页、
           // polyfill、等按钮都由脚本自己完成。URL 变化时也注入一次，尽量赶在
           // SPA 组件挂载前把 polyfill 装上；脚本自身幂等。
           onUrlChange: (change) => _injectIfPersonCenter(change.url),
           onPageFinished: (url) {
+            _diagnostics.pageFinished(url);
             // 先装 vConsole 再跑注册脚本：让我们的 XHR/fetch 钩子留在最外层，
             // 拦截不被 vConsole 的网络面板挡在里面。
             _injectVConsole();
@@ -88,6 +97,10 @@ class _PortalBindPageState extends State<PortalBindPage> {
           },
         ),
       );
+    _diagnostics = WebDiagnostics(
+      _controller,
+      scope: 'shell.profile.portal_bind',
+    );
     _start();
   }
 
@@ -104,20 +117,51 @@ class _PortalBindPageState extends State<PortalBindPage> {
     // 遍密码和验证码。残留的万一不是本人账号，顶部有「换个账号」可以退出，
     // 且注册通行密钥本身要过一次身份验证、绑完状态页还会把学号摆出来，绑错
     // 了看得见。
-    await _controller.loadRequest(Uri.parse(PortalBindPage.portalUrl));
+    await _bindingFlow.run(
+      () => _log.operation('registration.open', () async {
+        try {
+          await _diagnostics.attach();
+        } catch (error, stackTrace) {
+          _log.warning(
+            'diagnostics.attach_failed',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
+        await _controller.loadRequest(Uri.parse(PortalBindPage.portalUrl));
+      }),
+    );
+  }
+
+  @override
+  void dispose() {
+    _diagnostics.dispose();
+    super.dispose();
   }
 
   /// 退出门户登录态，从头登一个别的账号。
   Future<void> _switchAccount() async {
     try {
       await WebViewCookieManager().clearCookies();
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      _log.warning(
+        'account.clear_failed',
+        error: error,
+        stackTrace: stackTrace,
+        fields: {'stage': 'registration.switch_account'},
+      );
+    }
     if (!mounted) return;
     setState(() {
       _error = null;
       _hint = '已退出登录，请用要绑定的账号重新登录';
     });
-    await _controller.loadRequest(Uri.parse(PortalBindPage.portalUrl));
+    await _bindingFlow.run(
+      () => _log.operation(
+        'registration.switch_account',
+        () => _controller.loadRequest(Uri.parse(PortalBindPage.portalUrl)),
+      ),
+    );
   }
 
   void _injectIfPersonCenter(String? url) {
@@ -168,15 +212,23 @@ class _PortalBindPageState extends State<PortalBindPage> {
 
   Future<void> _inject() async {
     if (_finished) return;
-    final script = (await rootBundle.loadString(_scriptAsset))
-        .replaceFirst('__DEVICE_NAME__', jsonEncode(_deviceName))
-        // 门户 origin 来自 campus_config，脚本里不写明文域名。
-        .replaceFirst(
-          '__PORTAL_ALLOWED_ORIGIN__',
-          jsonEncode('https://${CampusHosts.authserver}'),
-        );
-    if (!mounted || _finished) return;
-    await _controller.runJavaScript(script);
+    try {
+      await _bindingFlow.run(
+        () => _log.operation('registration.inject', () async {
+          final script = (await rootBundle.loadString(_scriptAsset))
+              .replaceFirst('__DEVICE_NAME__', jsonEncode(_deviceName))
+              // 门户 origin 来自 campus_config，脚本里不写明文域名。
+              .replaceFirst(
+                '__PORTAL_ALLOWED_ORIGIN__',
+                jsonEncode('https://${CampusHosts.authserver}'),
+              );
+          if (!mounted || _finished) return;
+          await _controller.runJavaScript(script);
+        }, successLevel: AppLogLevel.debug),
+      );
+    } catch (_) {
+      if (mounted) setState(() => _error = '注册脚本未能加载，请重新打开绑定页面');
+    }
   }
 
   void _onMessage(String raw) {
@@ -184,7 +236,17 @@ class _PortalBindPageState extends State<PortalBindPage> {
     final Map<String, dynamic> msg;
     try {
       msg = jsonDecode(raw) as Map<String, dynamic>;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _log.warning(
+        'registration.message_invalid',
+        error: error,
+        stackTrace: stackTrace,
+        fields: {
+          'stage': 'registration.bridge',
+          'reason_code': 'script_message_invalid',
+          'secret_context': true,
+        },
+      );
       return;
     }
     switch (msg['type']) {
@@ -201,32 +263,57 @@ class _PortalBindPageState extends State<PortalBindPage> {
           };
         });
       case 'error':
+        _log.warning(
+          'registration.script_failed',
+          error: DiagnosticException(
+            msg['message'] as String? ?? '注册脚本失败',
+            code: 'registration_script_failed',
+            stage: 'registration.script',
+          ),
+        );
         setState(() => _error = msg['message'] as String? ?? '未知错误');
       case 'success':
         _onSuccess(msg['bundle']);
       case 'log':
-        // 原始脚本消息可能包含地址，只提取固定事件和短返回码。
+        // 脚本原文交给统一日志出口脱敏，固定事件用于筛选。
         final message = msg['message'];
         final fields = AppLog.scriptEventFields(
           message is String ? message : '',
         );
-        _log.debug('passkey.script.${fields['script_event']}', fields: fields);
+        _log.debug(
+          'passkey.script.${fields['script_event']}',
+          fields: {
+            ...fields,
+            'details': {'message': message},
+          },
+        );
     }
   }
 
   Future<void> _onSuccess(Object? raw) async {
     if (raw is! Map) {
+      _log.warning(
+        'registration.result_invalid',
+        fields: {
+          'reason_code': 'registration_bundle_not_object',
+          'stage': 'registration.save',
+        },
+      );
       setState(() => _error = '注册结果格式异常');
       return;
     }
     _finished = true;
-    final bundle = PasskeyBundle.fromJson({
-      ...raw.cast<String, dynamic>(),
-      'deviceName': _deviceName,
-      'createdAt': DateTime.now().toIso8601String(),
-    });
+    final PasskeyBundle bundle;
     try {
-      await PortalBindingActions.instance.bind(bundle);
+      bundle = await _log.operation('registration.save', () async {
+        final value = PasskeyBundle.fromJson({
+          ...raw.cast<String, dynamic>(),
+          'deviceName': _deviceName,
+          'createdAt': DateTime.now().toIso8601String(),
+        });
+        await PortalBindingActions.instance.bind(value);
+        return value;
+      }, fields: const {'stage': 'registration.save', 'secret_context': true});
     } catch (_) {
       _finished = false;
       if (mounted) setState(() => _error = '绑定未完成，请重试');

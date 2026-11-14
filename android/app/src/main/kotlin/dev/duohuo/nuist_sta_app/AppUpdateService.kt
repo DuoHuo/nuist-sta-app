@@ -66,6 +66,7 @@ class AppUpdateService : Service() {
             try {
                 download(token)
             } catch (failure: AppUpdateFailure) {
+                recordDownloadFailure(failure)
                 if (failure.code == "revoked") {
                     try { AppUpdateStore.cancel(token, revoked = true) } catch (_: Exception) { }
                 } else if (failure.code != "cancelled" && active(token)) {
@@ -77,9 +78,11 @@ class AppUpdateService : Service() {
                         AppUpdateStore.update(token, if (keep) "paused" else "failed", error = failure.code)
                     } catch (_: Exception) { }
                 }
-            } catch (_: IOException) {
+            } catch (error: IOException) {
+                recordDownloadFailure(error)
                 failSafely(token, "network")
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                recordDownloadFailure(error)
                 failSafely(token, "download_failed")
             } finally {
                 connection?.disconnect()
@@ -102,6 +105,8 @@ class AppUpdateService : Service() {
     private fun active(token: Long) = !stopping && AppUpdateStore.active(token) && !Thread.currentThread().isInterrupted
 
     private fun download(token: Long) {
+        diagnosticResponse = null
+        diagnosticRequest = null
         val item = AppUpdateStore.release ?: throw AppUpdateFailure("cancelled")
         val headers = AppUpdateStore.headers
         AppUpdateHttp.check(item, headers)
@@ -124,7 +129,11 @@ class AppUpdateService : Service() {
                     request.setRequestProperty("Range", "bytes=$offset-")
                     request.setRequestProperty("If-Range", AppUpdateStore.etag)
                 }
-                offset = AppUpdateHttp.downloadOffset(request.responseCode, offset, item.size,
+                diagnosticRequest = mapOf("url" to item.downloadUrl, "method" to "GET", "headers" to request.requestProperties.toMap())
+                val status = request.responseCode
+                diagnosticResponse = AppUpdateDiagnostics.response(status,
+                    request.headerFields.entries.filter { it.key != null }.associate { it.key!! to it.value }, null, false)
+                offset = AppUpdateHttp.downloadOffset(status, offset, item.size,
                     request.getHeaderField("Content-Range"), AppUpdateStore.etag, request.getHeaderField("ETag"))
                 val encoding = request.getHeaderField("Content-Encoding")
                 if (!encoding.isNullOrEmpty() && !encoding.equals("identity", true)) throw AppUpdateFailure("invalid_response")
@@ -186,6 +195,36 @@ class AppUpdateService : Service() {
             if (!complete.exists() && !part.renameTo(complete)) throw AppUpdateFailure("storage")
         }
         AppUpdateStore.update(token, "ready", item.size)
+        AppUpdateDiagnostics.publish(mapOf(
+            "source" to "android_update", "stage" to "update.download",
+            "request" to (diagnosticRequest ?: mapOf("url" to item.downloadUrl, "method" to "GET")),
+            "response" to diagnosticResponse.orEmpty().plus(mapOf("content_type" to "application/vnd.android.package-archive",
+                "captured_bytes" to complete.length(), "representation" to "assembled_download_file"),
+            ),
+            "capture" to mapOf("complete" to true, "reason" to "complete"),
+        ), complete)
+    }
+
+    private var diagnosticResponse: Map<String, Any?>? = null
+    private var diagnosticRequest: Map<String, Any?>? = null
+
+    private fun recordDownloadFailure(error: Exception) {
+        val current = connection
+        var body: String? = null
+        var captured = false
+        if (current != null && diagnosticResponse != null) {
+            try {
+                current.errorStream?.bufferedReader()?.use { body = it.readText(); captured = true }
+            } catch (_: Exception) { }
+        }
+        AppUpdateDiagnostics.publish(mapOf(
+            "source" to "android_update", "stage" to "update.download",
+            "request" to (diagnosticRequest ?: mapOf("url" to AppUpdateStore.release?.downloadUrl, "method" to "GET")),
+            "response" to diagnosticResponse?.plus(mapOf("body" to body, "encoding" to "utf8", "complete" to captured)),
+            "capture" to mapOf("complete" to captured, "reason" to if (captured) "error_response" else "download_body_incomplete"),
+            "error" to mapOf("type" to error.javaClass.simpleName, "message" to error.message,
+                "stack" to error.stackTraceToString(), "code" to (error as? AppUpdateFailure)?.code),
+        ))
     }
 
     private fun updateNotification(text: String) {
