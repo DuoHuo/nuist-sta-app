@@ -58,8 +58,8 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
         try {
             AppIconStore.recoverCustomIconFiles(app)
             AppIconStore.reconcileBuiltinState(app)
-        } catch (_: Exception) {
-            // 恢复失败时仍允许打开设置页，后续切换会重新写入实际状态。
+        } catch (error: Exception) {
+            AppIconStore.recordDegradation(error, "app_icon.startup", "icon_recovery_failed")
         }
         (app as Application).registerActivityLifecycleCallbacks(this)
     }
@@ -82,7 +82,7 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            "getState" -> runInBackground(result, "icon_failed", "无法读取应用图标状态") {
+            "getState" -> runInBackground(result, "icon_failed", "无法读取应用图标状态", "app_icon.get_state") {
                 AppIconStore.state(app)
             }
             "setBuiltin" -> {
@@ -91,7 +91,7 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
                     result.error("icon_failed", "未知的内置图标", null)
                     return
                 }
-                runInBackground(result, "icon_failed", "应用图标切换失败，已尝试恢复原图标") {
+                runInBackground(result, "icon_failed", "应用图标切换失败，已尝试恢复原图标", "app_icon.set_builtin") {
                     AppIconStore.setBuiltin(app, id)
                     AppIconStore.state(app)
                 }
@@ -113,7 +113,12 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
             result.error("pick_failed", "正在读取上一张图片", null)
             return
         }
-        val intent = imagePickerIntent(activity)
+        val intent = try {
+            imagePickerIntent(activity)
+        } catch (error: Exception) {
+            result.error("pick_failed", "系统相册不可用", appIconFailureDetails(error, "app_icon.pick_image") + ("diagnostics" to AppIconStore.takeDiagnostics()))
+            return
+        }
         if (intent == null) {
             result.error("pick_failed", "系统相册不可用", null)
             return
@@ -122,10 +127,10 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
         pickResult = result
         try {
             activity.startActivityForResult(intent, REQUEST_PICK_IMAGE)
-        } catch (_: Exception) {
+        } catch (error: Exception) {
             pickInFlight = false
             pickResult = null
-            result.error("pick_failed", "系统相册不可用", null)
+            result.error("pick_failed", "系统相册不可用", appIconFailureDetails(error, "app_icon.pick_image") + ("diagnostics" to AppIconStore.takeDiagnostics()))
         }
     }
 
@@ -160,8 +165,8 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
                 main.post { finishPick(result, bytes, null) }
             } catch (failure: AppIconFailure) {
                 main.post { finishPick(result, null, failure) }
-            } catch (_: Exception) {
-                main.post { finishPick(result, null, AppIconFailure("pick_failed", "无法读取这张图片")) }
+            } catch (error: Exception) {
+                main.post { finishPick(result, null, AppIconFailure("pick_failed", "无法读取这张图片", error)) }
             }
         }
         return true
@@ -171,8 +176,12 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
         if (pickResult !== result) return
         pickResult = null
         pickInFlight = false
-        if (error == null) result.success(bytes)
-        else result.error(normalizeCode(error.code), error.message, null)
+        if (error == null) {
+            result.success(bytes?.let { mapOf("bytes" to it, "diagnostics" to AppIconStore.takeDiagnostics()) })
+        } else {
+            result.error(normalizeCode(error.code), error.message,
+                appIconFailureDetails(error, "app_icon.pick_image") + ("diagnostics" to AppIconStore.takeDiagnostics()))
+        }
     }
 
     private fun setCustomIcon(call: MethodCall, result: MethodChannel.Result) {
@@ -201,8 +210,8 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
                 main.post { finishCustom(result, state, null) }
             } catch (failure: AppIconFailure) {
                 main.post { finishCustom(result, null, failure) }
-            } catch (_: Exception) {
-                main.post { finishCustom(result, null, AppIconFailure("shortcut_failed", "自定义图标保存失败")) }
+            } catch (error: Exception) {
+                main.post { finishCustom(result, null, AppIconFailure("shortcut_failed", "自定义图标保存失败", error)) }
             }
         }
     }
@@ -213,7 +222,10 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
         customInFlight = false
         if (!attached) return
         if (error == null && state != null) result.success(state)
-        else result.error(normalizeCode(error?.code), error?.message ?: "自定义图标保存失败", null)
+        else {
+            val failure = error ?: AppIconFailure("shortcut_failed", "自定义图标保存失败")
+            result.error(normalizeCode(failure.code), failure.message, appIconFailureDetails(failure, "app_icon.custom_icon") + ("diagnostics" to AppIconStore.takeDiagnostics()))
+        }
     }
 
     private fun pinCustomIcon(result: MethodChannel.Result) {
@@ -229,8 +241,8 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
                 main.post { finishCustom(result, state, null) }
             } catch (failure: AppIconFailure) {
                 main.post { finishCustom(result, null, failure) }
-            } catch (_: Exception) {
-                main.post { finishCustom(result, null, AppIconFailure("shortcut_failed", "无法添加到桌面")) }
+            } catch (error: Exception) {
+                main.post { finishCustom(result, null, AppIconFailure("shortcut_failed", "无法添加到桌面", error)) }
             }
         }
     }
@@ -239,6 +251,7 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
         result: MethodChannel.Result,
         code: String,
         message: String,
+        stage: String,
         block: () -> Map<String, Any?>,
     ) {
         worker.execute {
@@ -247,9 +260,9 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
                 main.post {
                     if (attached) result.success(value)
                 }
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 main.post {
-                    if (attached) result.error(code, message, null)
+                    if (attached) result.error(code, message, appIconFailureDetails(error, stage) + ("diagnostics" to AppIconStore.takeDiagnostics()))
                 }
             }
         }
@@ -286,7 +299,8 @@ class AppIconPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHand
         if (binding?.activity === activity) {
             try {
                 AppIconStore.refreshPinConfirmation(app)
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                AppIconStore.recordDegradation(error, "app_icon.pin_confirmation", "pin_confirmation_refresh_failed")
             }
         }
     }
@@ -313,8 +327,12 @@ class AppIconShortcutReceiver : BroadcastReceiver() {
         if (!AppIconStore.isCustomShortcut(shortcutId)) return
         try {
             AppIconStore.markPinConfirmed(context, shortcutId)
-        } catch (_: Exception) {
-            // 存储失败不能让系统桌面回调进程崩溃；下次 getState 仍以实际 pinned 列表为准。
+            NativeBackgroundDiagnostics.enqueue(context, AppIconStore.takeDiagnostics(), scope = "app_icon.native_background")
+        } catch (error: Exception) {
+            // 广播无 Flutter 回执，沿用本机原生诊断队列；下次 getState 仍以实际 pinned 列表为准。
+            NativeBackgroundDiagnostics.enqueue(context, listOf(
+                appIconFailureDetails(error, "app_icon.pin_confirmation") + ("reason_code" to "pin_confirmation_save_failed")) + AppIconStore.takeDiagnostics(),
+                scope = "app_icon.native_background")
         }
     }
 }
@@ -337,6 +355,30 @@ internal object AppIconStore {
     private const val MAX_SOURCE_BYTES = 20 * 1024 * 1024
     private const val MAX_PICKED_EDGE = 2048
     private const val CUSTOM_ICON_EDGE = 512
+    private const val MAX_DIAGNOSTICS = 64
+    private val diagnostics = mutableListOf<Map<String, Any?>>()
+    private var diagnosticsDropped = 0
+
+    /** 同步操作的降级依据随下次平台回执返回，由 Dart 统一脱敏及留存。 */
+    @Synchronized
+    fun recordDegradation(error: Throwable, stage: String, reason: String) {
+        if (diagnostics.size >= MAX_DIAGNOSTICS) {
+            diagnostics.removeAt(0)
+            diagnosticsDropped++
+        }
+        diagnostics.add(appIconFailureDetails(error, stage) + mapOf("reason_code" to reason, "degraded" to true))
+    }
+
+    @Synchronized
+    fun takeDiagnostics(): List<Map<String, Any?>> {
+        val result = diagnostics.toMutableList()
+        if (diagnosticsDropped > 0 && result.isNotEmpty()) {
+            result[result.lastIndex] = result.last() + ("diagnostics_dropped_before" to diagnosticsDropped)
+        }
+        diagnostics.clear()
+        diagnosticsDropped = 0
+        return result
+    }
 
     private val aliases = linkedMapOf(
         "default" to "DefaultIcon",
@@ -359,7 +401,8 @@ internal object AppIconStore {
         if (pending && prefs.getLong(KEY_SHORTCUT_REQUESTED_AT, 0L) + PIN_PENDING_TIMEOUT_MS <
             System.currentTimeMillis()
         ) {
-            clearShortcutPending(context)
+            // 系统没有取消 pin 请求的接口；超时仅结束界面提示，保留可迁移的动态 ID。
+            clearShortcutPending(context, keepId = true)
             pending = false
         }
         return linkedMapOf(
@@ -370,6 +413,7 @@ internal object AppIconStore {
             "confirmed" to pinned,
             "pending" to pending,
             "customIcon" to readCustomIcon(context),
+            "diagnostics" to takeDiagnostics(),
         )
     }
 
@@ -389,13 +433,19 @@ internal object AppIconStore {
         if (pending != null || enabled.size != 1 || enabled.firstOrNull() != desired) {
             try {
                 applyBuiltin(context, desired, repairPinnedBeforeDisable = true)
-                prefs.edit().putString(KEY_BUILTIN, desired).remove(KEY_PENDING_BUILTIN).commit()
-            } catch (_: Exception) {
+                if (!prefs.edit().putString(KEY_BUILTIN, desired).remove(KEY_PENDING_BUILTIN).commit()) {
+                    throw AppIconFailure("storage", "无法保存恢复后的内置图标状态")
+                }
+            } catch (error: Exception) {
+                recordDegradation(error, "app_icon.builtin_reconcile", "builtin_reconcile_failed")
                 if (enabled.isEmpty()) {
                     try {
                         applyBuiltin(context, "default", repairPinnedBeforeDisable = true)
-                        prefs.edit().putString(KEY_BUILTIN, "default").remove(KEY_PENDING_BUILTIN).commit()
-                    } catch (_: Exception) {
+                        if (!prefs.edit().putString(KEY_BUILTIN, "default").remove(KEY_PENDING_BUILTIN).commit()) {
+                            throw AppIconFailure("storage", "无法保存默认图标恢复状态")
+                        }
+                    } catch (fallbackError: Exception) {
+                        recordDegradation(fallbackError, "app_icon.builtin_reconcile", "default_icon_recovery_failed")
                     }
                 }
             }
@@ -417,16 +467,19 @@ internal object AppIconStore {
         try {
             applyBuiltin(context, id, repairPinnedBeforeDisable = true)
             if (currentBuiltin(context) != id) throw IllegalStateException("alias 状态未生效")
-            prefs.edit().putString(KEY_BUILTIN, id).remove(KEY_PENDING_BUILTIN).commit()
+            if (!prefs.edit().putString(KEY_BUILTIN, id).remove(KEY_PENDING_BUILTIN).commit()) {
+                throw AppIconFailure("storage", "无法保存切换后的内置图标状态")
+            }
         } catch (error: Exception) {
             val restored = try {
                 applyBuiltin(context, previous, repairPinnedBeforeDisable = true)
                 currentBuiltin(context) == previous
-            } catch (_: Exception) {
+            } catch (rollbackError: Exception) {
+                error.addSuppressed(rollbackError)
                 false
             }
-            if (restored) {
-                prefs.edit().putString(KEY_BUILTIN, previous).remove(KEY_PENDING_BUILTIN).commit()
+            if (restored && !prefs.edit().putString(KEY_BUILTIN, previous).remove(KEY_PENDING_BUILTIN).commit()) {
+                error.addSuppressed(AppIconFailure("storage", "无法保存内置图标回滚状态"))
             }
             throw error
         }
@@ -500,13 +553,14 @@ internal object AppIconStore {
 
     private fun isPinned(context: Context): Boolean = try {
         shortcutManager(context)?.pinnedShortcuts?.any { isCustomShortcut(it.id) } == true
-    } catch (_: Exception) {
+    } catch (error: Exception) {
+        recordDegradation(error, "app_icon.pinned_query", "pinned_query_failed")
         false
     }
 
     /**
-     * 更新全部自定义快捷方式的 activity 关联，不重建其图标和启动 Intent。
-     * 新建快捷方式失败时不额外抛错；切换 alias 时若无法修复，则让调用方恢复原 alias。
+     * 更新已固定及待确认的动态快捷方式关联，保留其图标与启动 Intent。
+     * pin 接受时 Android 会按 ID 查询当前记录，所以不能只迁移 pinned，也不能在界面超时后删动态记录。
      */
     @Synchronized
     private fun repairPinnedShortcutActivity(context: Context, builtinId: String, required: Boolean = false) {
@@ -518,24 +572,40 @@ internal object AppIconStore {
         }
         try {
             val target = aliasComponent(context, builtinId)
-            // 纯读取状态时不重复写快捷方式，避免无意义刷新和系统限流。
-            val updates = manager.pinnedShortcuts
+            val known = (manager.pinnedShortcuts + manager.dynamicShortcuts).distinctBy { it.id }
+            // 覆盖安装前已发出的请求可能尚无动态记录；用保存的 PNG 补登记同一 ID，兼容晚确认。
+            val pendingId = prefs(context).getString(KEY_PENDING_SHORTCUT_ID, null)?.takeIf(::isCustomShortcut)
+            if (pendingId != null && known.none { it.id == pendingId }) {
+                val bytes = readCustomIcon(context)
+                    ?: throw AppIconFailure("shortcut_failed", "待确认快捷方式的图片不可用")
+                val bitmap = decodeSampled(bytes, CUSTOM_ICON_EDGE)
+                try {
+                    if (!manager.addDynamicShortcuts(listOf(buildShortcut(context, bitmap, pendingId, builtinId)))) {
+                        throw AppIconFailure("shortcut_failed", "无法登记待确认快捷方式")
+                    }
+                } finally {
+                    bitmap.recycle()
+                }
+            }
+            val updates = known
                 .filter { isCustomShortcut(it.id) && it.activity != target }
                 .map { ShortcutInfo.Builder(context, it.id).setActivity(target).build() }
-            if (updates.isEmpty()) return
-            if (!manager.updateShortcuts(updates) && required) {
+            if (updates.isNotEmpty() && !manager.updateShortcuts(updates)) {
                 throw AppIconFailure("shortcut_failed", "无法更新快捷方式的桌面图标入口")
             }
-        } catch (error: AppIconFailure) {
-            throw error
-        } catch (_: Exception) {
-            if (required) throw AppIconFailure("shortcut_failed", "无法更新快捷方式的桌面图标入口")
+        } catch (error: Exception) {
+            if (required) {
+                if (error is AppIconFailure) throw error
+                throw AppIconFailure("shortcut_failed", "无法更新快捷方式的桌面图标入口", error)
+            }
+            recordDegradation(error, "app_icon.shortcut_activity", "shortcut_activity_repair_failed")
         }
     }
 
     private fun requestPinSupported(context: Context): Boolean = try {
         shortcutManager(context)?.isRequestPinShortcutSupported == true
-    } catch (_: Exception) {
+    } catch (error: Exception) {
+        recordDegradation(error, "app_icon.pin_capability", "pin_capability_query_failed")
         false
     }
 
@@ -545,25 +615,33 @@ internal object AppIconStore {
 
     @Synchronized
     fun refreshPinConfirmation(context: Context) {
-        val prefs = prefs(context)
-        if (!prefs.getBoolean(KEY_SHORTCUT_PENDING, false)) return
-        val pendingId = prefs.getString(KEY_PENDING_SHORTCUT_ID, SHORTCUT_ID)
-        val confirmed = shortcutManager(context)?.pinnedShortcuts?.any { it.id == pendingId } == true
-        if (confirmed) clearShortcutPending(context)
+        val manager = shortcutManager(context) ?: return
+        val pinned = manager.pinnedShortcuts.filter { isCustomShortcut(it.id) }
+        // 确认后只移除动态发布，已 pinned 的记录仍由系统保留；晚确认不依赖界面 pending 标志。
+        val dynamicPinnedIds = pinned.filter { it.isDynamic }.map { it.id }
+        if (dynamicPinnedIds.isNotEmpty()) {
+            try {
+                manager.removeDynamicShortcuts(dynamicPinnedIds)
+            } catch (error: Exception) {
+                recordDegradation(error, "app_icon.pin_confirmation", "confirmed_dynamic_cleanup_failed")
+            }
+        }
+        val pendingId = prefs(context).getString(KEY_PENDING_SHORTCUT_ID, null)
+        if (pinned.any { it.id == pendingId }) clearShortcutPending(context)
     }
 
     @Synchronized
     fun markPinConfirmed(context: Context, shortcutId: String) {
-        // 旧请求的回调不能清除后来一次添加请求的等待状态。
-        if (prefs(context).getString(KEY_PENDING_SHORTCUT_ID, SHORTCUT_ID) == shortcutId) {
-            clearShortcutPending(context)
-        }
+        if (!isCustomShortcut(shortcutId)) return
+        // 旧请求回调也清理其已固定动态记录，但不能清除后来请求的等待状态。
+        refreshPinConfirmation(context)
     }
 
-    private fun clearShortcutPending(context: Context) {
+    private fun clearShortcutPending(context: Context, keepId: Boolean = false) {
         val editor = prefs(context).edit().putBoolean(KEY_SHORTCUT_PENDING, false)
-            .remove(KEY_PENDING_SHORTCUT_ID)
-        editor.remove(KEY_SHORTCUT_REQUESTED_AT).apply()
+            .remove(KEY_SHORTCUT_REQUESTED_AT)
+        if (!keepId) editor.remove(KEY_PENDING_SHORTCUT_ID)
+        if (!editor.commit()) throw AppIconFailure("storage", "无法保存快捷方式确认状态")
     }
 
     fun readPickedImage(context: Context, uri: Uri): ByteArray {
@@ -624,7 +702,8 @@ internal object AppIconStore {
                 ExifInterface.TAG_ORIENTATION,
                 ExifInterface.ORIENTATION_NORMAL,
             )
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            recordDegradation(error, "app_icon.image_orientation", "image_orientation_unavailable")
             ExifInterface.ORIENTATION_NORMAL
         }
         val matrix = Matrix()
@@ -647,6 +726,7 @@ internal object AppIconStore {
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
+    @Synchronized
     fun installCustomIcon(context: Context, bytes: ByteArray): Map<String, Any?> {
         // 旧快捷方式若不关联当前 alias，切换图标后可能随入口被禁用；先修复关联再写入新图。
         repairPinnedShortcutActivity(context, currentBuiltin(context) ?: "default", required = true)
@@ -686,22 +766,29 @@ internal object AppIconStore {
                 throw AppIconFailure("shortcut_unsupported", "当前桌面不支持添加自定义图标")
             }
             // 先构建 ShortcutInfo，避免无效 PNG 已落盘后才因快捷方式校验失败。
-            val shortcuts = pinned.map { buildShortcut(context, iconBitmap, it.id) }
+            val shortcuts = if (pinned.isNotEmpty()) {
+                (pinned + manager.dynamicShortcuts)
+                    .filter { isCustomShortcut(it.id) }
+                    .distinctBy { it.id }
+                    .map { buildShortcut(context, iconBitmap, it.id) }
+            } else emptyList()
+            val previousIcon = readCustomIcon(context)
             val transaction = IconFileTransaction(context)
             transaction.write(png)
             transaction.commit()
             try {
-                if (shortcuts.isNotEmpty()) {
-                    if (!manager.updateShortcuts(shortcuts)) {
-                        throw AppIconFailure("shortcut_failed", "桌面自定义图标更新失败")
-                    }
-                } else {
-                    requestNewShortcut(context, manager, iconBitmap)
+                if (shortcuts.isNotEmpty() && !manager.updateShortcuts(shortcuts)) {
+                    throw AppIconFailure("shortcut_failed", "桌面自定义图标更新失败")
                 }
+                if (pinned.isEmpty()) requestNewShortcut(context, manager, iconBitmap, previousIcon)
                 transaction.finish()
             } catch (error: Exception) {
                 // 新图已经落盘但快捷方式未成功时，恢复旧的 PNG，避免界面与新快捷方式不一致。
-                transaction.rollback()
+                try {
+                    transaction.rollback()
+                } catch (rollbackError: Exception) {
+                    error.addSuppressed(rollbackError)
+                }
                 throw error
             }
             return state(context)
@@ -711,6 +798,7 @@ internal object AppIconStore {
     }
 
     /** 使用已保存图片请求一个独立桌面入口；取消后可再次调用，不依赖已有入口是否存在。 */
+    @Synchronized
     fun pinSavedCustomIcon(context: Context): Map<String, Any?> {
         val manager = shortcutManager(context)
             ?: throw AppIconFailure("shortcut_unsupported", "当前系统不支持自定义快捷方式")
@@ -730,50 +818,85 @@ internal object AppIconStore {
     }
 
     @Synchronized
-    private fun requestNewShortcut(context: Context, manager: ShortcutManager, bitmap: Bitmap) {
-        // 相同 ID 会更新已有快捷方式；每次主动添加使用独立 ID，允许保留多个桌面入口。
-        val shortcutId = SHORTCUT_PREFIX + UUID.randomUUID().toString()
-        val shortcut = buildShortcut(context, bitmap, shortcutId)
+    private fun requestNewShortcut(
+        context: Context,
+        manager: ShortcutManager,
+        bitmap: Bitmap,
+        previousIconBytes: ByteArray? = readCustomIcon(context),
+    ) {
+        refreshPinConfirmation(context)
         val prefs = prefs(context)
+        val pinnedIds = manager.pinnedShortcuts.filter { isCustomShortcut(it.id) }.map { it.id }.toSet()
+        val existingDynamic = manager.dynamicShortcuts.filter { isCustomShortcut(it.id) && it.id !in pinnedIds }
         val previousPending = prefs.getBoolean(KEY_SHORTCUT_PENDING, false)
-        val previousId = prefs.getString(KEY_PENDING_SHORTCUT_ID, SHORTCUT_ID)
+        val previousId = prefs.getString(KEY_PENDING_SHORTCUT_ID, null)
         val previousTime = prefs.getLong(KEY_SHORTCUT_REQUESTED_AT, 0L)
-        if (!prefs.edit()
-                .putBoolean(KEY_SHORTCUT_PENDING, true)
-                .putString(KEY_PENDING_SHORTCUT_ID, shortcutId)
-                .putLong(KEY_SHORTCUT_REQUESTED_AT, System.currentTimeMillis())
-                .commit()
-        ) {
-            throw AppIconFailure("shortcut_failed", "无法保存快捷方式请求状态")
-        }
+        // 系统没有撤销请求接口。取消或超时后复用同一未确认 ID，避免堆积动态入口或失去旧请求。
+        // 已确认的入口不复用，因此再次添加仍会生成独立桌面图标。
+        val shortcutId = previousId?.takeIf { isCustomShortcut(it) && it !in pinnedIds }
+            ?: existingDynamic.firstOrNull()?.id
+            ?: (SHORTCUT_PREFIX + UUID.randomUUID().toString())
+        val wasDynamic = existingDynamic.any { it.id == shortcutId }
+        val shortcut = buildShortcut(context, bitmap, shortcutId)
         try {
+            if (!manager.addDynamicShortcuts(listOf(shortcut))) {
+                throw AppIconFailure("shortcut_failed", "无法登记待确认快捷方式")
+            }
+            if (!prefs.edit()
+                    .putBoolean(KEY_SHORTCUT_PENDING, true)
+                    .putString(KEY_PENDING_SHORTCUT_ID, shortcutId)
+                    .putLong(KEY_SHORTCUT_REQUESTED_AT, System.currentTimeMillis())
+                    .commit()
+            ) {
+                throw AppIconFailure("shortcut_failed", "无法保存快捷方式请求状态")
+            }
             if (!manager.requestPinShortcut(shortcut, pinCallback(context, shortcutId).intentSender)) {
                 throw AppIconFailure("shortcut_failed", "桌面未接受快捷方式请求")
             }
         } catch (error: Exception) {
-            prefs.edit()
-                .putBoolean(KEY_SHORTCUT_PENDING, previousPending)
-                .putString(KEY_PENDING_SHORTCUT_ID, previousId)
-                .putLong(KEY_SHORTCUT_REQUESTED_AT, previousTime)
-                .commit()
+            try {
+                val editor = prefs.edit().putBoolean(KEY_SHORTCUT_PENDING, previousPending)
+                    .putLong(KEY_SHORTCUT_REQUESTED_AT, previousTime)
+                if (previousId == null) editor.remove(KEY_PENDING_SHORTCUT_ID)
+                else editor.putString(KEY_PENDING_SHORTCUT_ID, previousId)
+                if (!editor.commit()) throw AppIconFailure("storage", "无法恢复快捷方式请求状态")
+                if (wasDynamic && previousIconBytes != null) {
+                    val previousBitmap = decodeSampled(previousIconBytes, CUSTOM_ICON_EDGE)
+                    try {
+                        if (!manager.addDynamicShortcuts(listOf(buildShortcut(context, previousBitmap, shortcutId)))) {
+                            throw AppIconFailure("shortcut_failed", "无法恢复上一张待确认快捷方式图标")
+                        }
+                    } finally {
+                        previousBitmap.recycle()
+                    }
+                } else if (!wasDynamic) {
+                    manager.removeDynamicShortcuts(listOf(shortcutId))
+                }
+            } catch (rollbackError: Exception) {
+                error.addSuppressed(rollbackError)
+            }
             throw error
         }
     }
 
-    private fun buildShortcut(context: Context, bitmap: Bitmap, shortcutId: String): ShortcutInfo {
+    private fun buildShortcut(
+        context: Context,
+        bitmap: Bitmap,
+        shortcutId: String,
+        builtinId: String = currentBuiltin(context) ?: "default",
+    ): ShortcutInfo {
         val intent = Intent(context, MainActivity::class.java).apply {
             action = Intent.ACTION_MAIN
             addCategory(Intent.CATEGORY_LAUNCHER)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
         }
-        val builtin = currentBuiltin(context) ?: "default"
         return ShortcutInfo.Builder(context, shortcutId)
             .setShortLabel("NUIST++")
             .setLongLabel("NUIST++ 自定义图标")
             .setIcon(Icon.createWithBitmap(bitmap))
             .setIntent(intent)
             // 官方要求 activity 自身提供 MAIN + LAUNCHER；绑定当前 enabled 的 alias，避免切换后失效。
-            .setActivity(aliasComponent(context, builtin))
+            .setActivity(aliasComponent(context, builtinId))
             .build()
     }
 
@@ -795,7 +918,8 @@ internal object AppIconStore {
     fun readCustomIcon(context: Context): ByteArray? = try {
         val file = iconFile(context)
         if (file.isFile) file.readBytes() else null
-    } catch (_: Exception) {
+    } catch (error: Exception) {
+        recordDegradation(error, "app_icon.image_read", "saved_image_read_failed")
         null
     }
 
@@ -812,7 +936,8 @@ internal object AppIconStore {
             } else {
                 temporary.delete()
             }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            recordDegradation(error, "app_icon.image_recovery", "image_file_recovery_failed")
         }
     }
 
@@ -857,15 +982,23 @@ internal object AppIconStore {
         }
 
         fun finish() {
-            backup.delete()
+            if (backup.exists() && !backup.delete()) {
+                recordDegradation(AppIconFailure("storage", "无法清理上一张图标备份"), "app_icon.image_save", "image_backup_cleanup_failed")
+            }
         }
 
         fun rollback() {
-            target.delete()
-            if (hadPrevious && backup.exists()) backup.renameTo(target)
-            temporary.delete()
+            if (target.exists() && !target.delete()) throw AppIconFailure("storage", "无法移除失败的新图标")
+            if (hadPrevious && backup.exists() && !backup.renameTo(target)) {
+                throw AppIconFailure("storage", "无法恢复上一张自定义图标")
+            }
+            if (temporary.exists() && !temporary.delete()) throw AppIconFailure("storage", "无法清理失败的图标临时文件")
         }
     }
 }
 
-private class AppIconFailure(val code: String, override val message: String) : Exception(message)
+/** 原生失败详情不做截断或输出，交给既有 Dart 日志出口统一脱敏。 */
+private fun appIconFailureDetails(error: Throwable, stage: String): Map<String, Any?> =
+    notifyFailureDetails(error, stage) + ("reason_code" to ((error as? AppIconFailure)?.code ?: "native_operation_failed"))
+
+private class AppIconFailure(val code: String, override val message: String, cause: Throwable? = null) : Exception(message, cause)

@@ -90,7 +90,7 @@ class AppIconController extends ChangeNotifier {
 
   /// 切换内置图标；失败时保留原状态并返回 false 供页面提示。
   Future<bool> setBuiltin(String id) async {
-    if (_busy || _picking || !_state.supported) return false;
+    if (_disposed || _busy || _picking || !_state.supported) return false;
     _busy = true;
     _clearError();
     _notify();
@@ -119,7 +119,9 @@ class AppIconController extends ChangeNotifier {
 
   /// 打开系统图片选择器。用户取消返回 null，且不改变当前状态。
   Future<Uint8List?> pickImage() async {
-    if (_busy || _picking || !_state.supported || !_state.canPin) return null;
+    if (_disposed || _busy || _picking || !_state.supported || !_state.canPin) {
+      return null;
+    }
     _picking = true;
     _clearError();
     _notify();
@@ -149,7 +151,9 @@ class AppIconController extends ChangeNotifier {
 
   /// 提交裁剪后的 512×512 PNG，并创建或更新桌面快捷方式。
   Future<bool> setCustomIcon(Uint8List pngBytes) async {
-    if (_busy || _picking || !_state.supported || !_state.canPin) return false;
+    if (_disposed || _busy || _picking || !_state.supported || !_state.canPin) {
+      return false;
+    }
     _busy = true;
     _clearError();
     _notify();
@@ -178,7 +182,8 @@ class AppIconController extends ChangeNotifier {
 
   /// 使用已保存的自定义图标请求一个新的桌面快捷方式。
   Future<bool> pinCustomIcon() async {
-    if (_busy ||
+    if (_disposed ||
+        _busy ||
         _picking ||
         !_state.supported ||
         !_state.canPin ||

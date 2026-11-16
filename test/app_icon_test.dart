@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/app.dart';
 import 'package:nuist_sta_app/core/colors.dart';
+import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/theme_mode.dart';
 import 'package:nuist_sta_app/shell/profile/settings/app_icon_bridge.dart';
 import 'package:nuist_sta_app/shell/profile/settings/app_icon_controller.dart';
@@ -261,6 +262,133 @@ void main() {
     expect(controller.state.builtinId, AppIconIds.mascot);
   });
 
+  test('已释放控制器拒绝所有操作，不调用原生桥接', () async {
+    final bridge = _FakeBridge(state: _state(customIcon: _wideImage()));
+    final controller = AppIconController(bridge: bridge);
+    await controller.ensureStarted();
+    controller.dispose();
+
+    expect(await controller.setBuiltin(AppIconIds.mascot), isFalse);
+    expect(await controller.pickImage(), isNull);
+    expect(await controller.setCustomIcon(_wideImage()), isFalse);
+    expect(await controller.pinCustomIcon(), isFalse);
+    expect(bridge.setBuiltinCalls, 0);
+    expect(bridge.pickCalls, 0);
+    expect(bridge.setCustomCalls, 0);
+    expect(bridge.pinCalls, 0);
+  });
+
+  test('所有平台失败保留原生原因和堆栈，诊断经统一出口脱敏', () async {
+    const channel = MethodChannel('nuist/app_icon');
+    final bridge = MethodChannelAppIconBridge(channel: channel);
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          throw PlatformException(
+            code: 'synthetic_native_code',
+            message: '合成存储失败',
+            details: {
+              'stage': 'custom.save',
+              'cause_chain': [
+                {
+                  'type': 'java.io.IOException',
+                  'message': 'No space left on device',
+                  'stack_trace': 'synthetic.native.storage.frame',
+                },
+              ],
+              'ticket': 'synthetic-private-ticket',
+            },
+          );
+        });
+    addTearDown(() {
+      AppLog.recordListenerForTesting = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    for (final (method, invoke) in <(String, Future<Object?> Function())>[
+      ('getState', bridge.getState),
+      ('setBuiltin', () => bridge.setBuiltin(AppIconIds.mascot)),
+      ('pickImage', bridge.pickImage),
+      ('setCustomIcon', () => bridge.setCustomIcon(_wideImage())),
+      ('pinCustomIcon', bridge.pinCustomIcon),
+    ]) {
+      await expectLater(
+        AppLog.logger('test.app_icon').operation(method, invoke),
+        throwsA(
+          isA<AppIconBridgeException>()
+              .having((error) => error.kind, 'kind', 'platform_error')
+              .having((error) => error.method, 'method', method)
+              .having((error) => error.cause, 'cause', isA<PlatformException>())
+              .having((error) => error.causeStackTrace, '原始通道堆栈', isNotNull)
+              .having(
+                (error) => error.causeStackTrace.toString(),
+                '原始通道堆栈',
+                isNotEmpty,
+              ),
+        ),
+      );
+      final details = AppLog.formatDetails(records.last);
+      expect(details, contains('synthetic_native_code'));
+      expect(details, contains('No space left on device'));
+      expect(details, contains('synthetic.native.storage.frame'));
+      expect(details, isNot(contains('synthetic-private-ticket')));
+    }
+  });
+
+  test('读取状态和选图成功时保留原生降级诊断，兼容字节回执', () async {
+    const channel = MethodChannel('nuist/app_icon');
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          channel,
+          (call) async => {
+            'supported': true,
+            'builtinId': 'default',
+            if (call.method == 'pickImage') 'bytes': _wideImage(),
+            'diagnostics': [
+              {
+                'stage': 'icon.recover',
+                'cause_chain': [
+                  {
+                    'message': 'synthetic recovery failure',
+                    'stack_trace': 'synthetic.native.recovery.frame',
+                  },
+                ],
+              },
+            ],
+          },
+        );
+    addTearDown(() {
+      AppLog.recordListenerForTesting = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+    final bridge = MethodChannelAppIconBridge(channel: channel);
+    final state = await bridge.getState();
+    expect(state.supported, isTrue);
+    expect(await bridge.pickImage(), orderedEquals(_wideImage()));
+    final diagnostics = records.where(
+      (record) => record['event'] == 'platform.degraded',
+    );
+    expect(diagnostics, hasLength(2));
+    for (final diagnostic in diagnostics) {
+      expect(
+        AppLog.formatDetails(diagnostic),
+        contains('synthetic recovery failure'),
+      );
+      expect(
+        AppLog.formatDetails(diagnostic),
+        contains('synthetic.native.recovery.frame'),
+      );
+    }
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async => _wideImage());
+    expect(await bridge.pickImage(), orderedEquals(_wideImage()));
+  });
+
   test('通道添加方法无参数，并解析返回状态与失败', () async {
     final channel = const MethodChannel('nuist/app_icon');
     MethodCall? received;
@@ -336,6 +464,10 @@ void main() {
     await tester.tap(find.byKey(const Key('app_icon_choose_image')));
     await tester.pump();
     expect(controller.picking, isTrue);
+    await tester.tap(find.byKey(const Key('app_icon_choice_mascot')));
+    await tester.pump();
+    expect(bridge.setBuiltinCalls, 0);
+    expect(controller.error, isFalse);
     expect(
       tester
           .widget<OutlinedButton>(find.byKey(const Key('app_icon_pin_custom')))
@@ -450,6 +582,8 @@ void main() {
       var pinCalls = 0;
       var pickCalls = 0;
       var saveCalls = 0;
+      var builtinCalls = 0;
+      var failBuiltin = false;
       var builtin = 'default';
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
         call,
@@ -468,6 +602,8 @@ void main() {
           await pinGate?.future;
         }
         if (call.method == 'setBuiltin') {
+          builtinCalls++;
+          if (failBuiltin) throw PlatformException(code: 'icon_failed');
           await builtinGate?.future;
           builtin = (call.arguments as Map)['id'] as String;
         }
@@ -499,6 +635,8 @@ void main() {
         pinCalls = 0;
         pickCalls = 0;
         saveCalls = 0;
+        builtinCalls = 0;
+        failBuiltin = false;
         addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
         AppThemeMode.instance.value = mode;
         await tester.pumpWidget(const NuistApp());
@@ -612,11 +750,25 @@ void main() {
         builtinGate.complete();
         await tester.pumpAndSettle();
         expect(route.popGestureEnabled, isTrue);
+        failBuiltin = true;
+        await tester.tap(find.byKey(const Key('app_icon_choice_mascot')));
+        await tester.pumpAndSettle();
+        expect(find.text('刷新状态'), findsOneWidget);
+        final oldRetry = tester
+            .widget<SnackBarAction>(find.byType(SnackBarAction))
+            .onPressed;
+        final writesBeforeLeaving = builtinCalls;
         await gesture('startBackGesture');
         await gesture('updateBackGestureProgress', progress: 0.4);
         await gesture('commitBackGesture');
         expect(find.widgetWithText(AppBar, '应用图标'), findsNothing);
         expect(find.text('深色模式'), findsOneWidget);
+        expect(find.text('当前：派龙'), findsOneWidget);
+        expect(find.byType(SnackBarAction), findsNothing);
+        expect(find.text('图标保存失败，请稍后重试'), findsNothing);
+        oldRetry();
+        await tester.pumpAndSettle();
+        expect(builtinCalls, writesBeforeLeaving);
         expect(find.text('当前：派龙'), findsOneWidget);
         await tester.pumpWidget(const SizedBox.shrink());
         await tester.pumpAndSettle();
@@ -626,20 +778,32 @@ void main() {
   );
 
   testWidgets(
-    '宽图可平移并导出完整方形内容，含浅深色',
+    '宽图在横屏、大字号和旋转后保持方形预览与导出一致，含浅深色',
     timeout: const Timeout(Duration(seconds: 30)),
     (tester) async {
       final bytes = _wideImage();
-      for (final mode in [ThemeMode.light, ThemeMode.dark]) {
+      for (final (mode, physicalSize, pixelRatio, textScale) in [
+        (ThemeMode.light, const Size(1080, 2400), 2.625, 1.0),
+        (ThemeMode.dark, const Size(1080, 2400), 2.625, 1.0),
+        (ThemeMode.light, const Size(900, 540), 1.5, 2.0),
+        (ThemeMode.dark, const Size(900, 540), 1.5, 2.0),
+        (ThemeMode.light, const Size(480, 640), 2.0, 3.0),
+        (ThemeMode.dark, const Size(480, 640), 2.0, 3.0),
+      ]) {
         final result = ValueNotifier<Uint8List?>(null);
-        tester.view.physicalSize = const Size(1080, 2400);
-        tester.view.devicePixelRatio = 2.625;
+        tester.view.physicalSize = physicalSize;
+        tester.view.devicePixelRatio = pixelRatio;
         addTearDown(tester.view.reset);
         await tester.pumpWidget(
           MaterialApp(
             theme: ThemeData.light().copyWith(extensions: [AppPalette.light]),
             darkTheme: ThemeData.dark().copyWith(extensions: [AppPalette.dark]),
             themeMode: mode,
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: TextScaler.linear(textScale)),
+              child: child!,
+            ),
             home: Builder(
               builder: (context) => Scaffold(
                 body: Center(
@@ -672,13 +836,39 @@ void main() {
             .transformationController!;
         expect(controller.value.storage[0], 1);
         expect(controller.value.storage[5], 1);
-        final viewport = tester.getSize(find.byType(InteractiveViewer)).width;
+        final viewportSize = tester.getSize(find.byType(InteractiveViewer));
+        final viewport = viewportSize.width;
+        expect(viewportSize.height, closeTo(viewport, 0.01));
+        expect(tester.takeException(), isNull);
         final shownWidth = tester.getSize(find.byType(RawImage)).width;
         expect(shownWidth, greaterThan(viewport));
         final cropLeft = tester.getTopLeft(find.byType(InteractiveViewer));
         final childLeft = tester.getTopLeft(find.byType(RawImage));
         expect(childLeft.dx, lessThan(cropLeft.dx));
         expect(childLeft.dy, closeTo(cropLeft.dy, 0.5));
+
+        // 先缩放平移再旋转；源图采样位置与范围必须保持一致。
+        controller.value = Matrix4.identity()
+          ..setEntry(0, 0, 2)
+          ..setEntry(1, 1, 2)
+          ..setTranslationRaw(-viewport * 0.75, -viewport * 0.25, 0);
+        tester.view.physicalSize = Size(
+          physicalSize.height,
+          physicalSize.width,
+        );
+        await tester.pumpAndSettle();
+        final rotatedSize = tester.getSize(find.byType(InteractiveViewer));
+        expect(rotatedSize.height, closeTo(rotatedSize.width, 0.01));
+        expect(controller.value.storage[0], closeTo(2, 0.001));
+        expect(
+          controller.value.storage[12] / rotatedSize.width,
+          closeTo(-0.75, 0.001),
+        );
+        expect(
+          controller.value.storage[13] / rotatedSize.width,
+          closeTo(-0.25, 0.001),
+        );
+        expect(tester.takeException(), isNull);
 
         // child 已是 cover 尺寸；直接平移到最左侧，验证原图左侧进入方框。
         controller.value = Matrix4.identity();

@@ -24,6 +24,8 @@ class _AppIconPageState extends State<AppIconPage> with WidgetsBindingObserver {
   late final AppIconController _controller =
       widget.controller ?? AppIconController();
   late final bool _ownsController = widget.controller == null;
+  // 提示和重试随图标页一起退出，避免在设置页继续触发旧页面的写入。
+  final _messengerKey = GlobalKey<ScaffoldMessengerState>();
 
   @override
   void initState() {
@@ -84,10 +86,10 @@ class _AppIconPageState extends State<AppIconPage> with WidgetsBindingObserver {
       return;
     }
     final state = _controller.state;
-    if (state.customPinned) {
-      _showMessage('自定义图标已添加到桌面', tone: AppSnackBarTone.success);
-    } else if (state.pending) {
+    if (state.pending) {
       _showMessage('请在系统提示中确认添加快捷方式');
+    } else if (state.customPinned) {
+      _showMessage('自定义图标已添加到桌面', tone: AppSnackBarTone.success);
     } else {
       _showMessage('已请求添加桌面快捷方式');
     }
@@ -105,15 +107,18 @@ class _AppIconPageState extends State<AppIconPage> with WidgetsBindingObserver {
 
   void _showErrorWithRetry(String? message, Future<void> Function() retry) {
     final text = message ?? '操作失败，请稍后重试';
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
+    _messengerKey.currentState
+      ?..hideCurrentSnackBar()
       ..showSnackBar(
         AppSnackBar(
           tone: AppSnackBarTone.error,
           content: Text(text),
           action: SnackBarAction(
             label: '重试',
-            onPressed: () => unawaited(retry()),
+            onPressed: () {
+              if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+              unawaited(retry());
+            },
           ),
         ),
       );
@@ -123,8 +128,8 @@ class _AppIconPageState extends State<AppIconPage> with WidgetsBindingObserver {
     String message, {
     AppSnackBarTone tone = AppSnackBarTone.info,
   }) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
+    _messengerKey.currentState
+      ?..hideCurrentSnackBar()
       ..showSnackBar(
         AppSnackBar(
           tone: tone,
@@ -136,79 +141,88 @@ class _AppIconPageState extends State<AppIconPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: _controller,
-      builder: (context, _) {
-        final palette = AppPalette.of(context);
-        final state = _controller.state;
-        return PopScope<Object?>(
-          canPop: !_controller.busy,
-          child: Scaffold(
-            appBar: AppBar(title: const Text('应用图标')),
-            body: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-              children: [
-                if (_controller.busy || _controller.picking)
-                  LinearProgressIndicator(
-                    key: const Key('app_icon_busy'),
-                    minHeight: 2,
-                    color: palette.accent,
-                    backgroundColor: palette.rowDivider,
-                  ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 16, 4, 6),
-                  child: Semantics(
-                    header: true,
-                    child: Text(
-                      '内置图标',
-                      style: TextStyle(color: palette.labelText, fontSize: 13),
+    return ScaffoldMessenger(
+      key: _messengerKey,
+      child: ListenableBuilder(
+        listenable: _controller,
+        builder: (context, _) {
+          final palette = AppPalette.of(context);
+          final state = _controller.state;
+          return PopScope<Object?>(
+            canPop: !_controller.busy,
+            child: Scaffold(
+              appBar: AppBar(title: const Text('应用图标')),
+              body: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                children: [
+                  if (_controller.busy || _controller.picking)
+                    LinearProgressIndicator(
+                      key: const Key('app_icon_busy'),
+                      minHeight: 2,
+                      color: palette.accent,
+                      backgroundColor: palette.rowDivider,
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 16, 4, 6),
+                    child: Semantics(
+                      header: true,
+                      child: Text(
+                        '内置图标',
+                        style: TextStyle(
+                          color: palette.labelText,
+                          fontSize: 13,
+                        ),
+                      ),
                     ),
                   ),
-                ),
-                Text(
-                  _controller.unsupported
-                      ? '当前系统暂不支持切换应用图标。'
-                      : '选择后会立即更新桌面入口；桌面布局可能随之调整。',
-                  style: TextStyle(
-                    color: palette.labelText,
-                    fontSize: 12,
-                    height: 1.45,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _BuiltinGrid(
-                  state: state,
-                  busy: _controller.busy,
-                  onSelected: _selectBuiltin,
-                ),
-                if (_controller.error && _controller.errorMessage != null)
-                  _InlineError(
-                    message: _controller.errorMessage!,
-                    onRetry: () => unawaited(_controller.refresh()),
-                  ),
-                const SizedBox(height: 26),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
-                  child: Semantics(
-                    header: true,
-                    child: Text(
-                      '自定义桌面图标',
-                      style: TextStyle(color: palette.labelText, fontSize: 13),
+                  Text(
+                    _controller.unsupported
+                        ? '当前系统暂不支持切换应用图标。'
+                        : '选择后会立即更新桌面入口；桌面布局可能随之调整。',
+                    style: TextStyle(
+                      color: palette.labelText,
+                      fontSize: 12,
+                      height: 1.45,
                     ),
                   ),
-                ),
-                _CustomSection(
-                  state: state,
-                  busy: _controller.busy || _controller.picking,
-                  unsupported: _controller.unsupported,
-                  onChoose: _chooseImage,
-                  onPin: _pinCustom,
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  _BuiltinGrid(
+                    state: state,
+                    busy: _controller.busy || _controller.picking,
+                    onSelected: _selectBuiltin,
+                  ),
+                  if (_controller.error && _controller.errorMessage != null)
+                    _InlineError(
+                      message: _controller.errorMessage!,
+                      onRetry: () => unawaited(_controller.refresh()),
+                    ),
+                  const SizedBox(height: 26),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+                    child: Semantics(
+                      header: true,
+                      child: Text(
+                        '自定义桌面图标',
+                        style: TextStyle(
+                          color: palette.labelText,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ),
+                  _CustomSection(
+                    state: state,
+                    busy: _controller.busy || _controller.picking,
+                    unsupported: _controller.unsupported,
+                    onChoose: _chooseImage,
+                    onPin: _pinCustom,
+                  ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 }
@@ -533,7 +547,7 @@ class _InlineError extends StatelessWidget {
                 ),
               ),
             ),
-            TextButton(onPressed: onRetry, child: const Text('重试')),
+            TextButton(onPressed: onRetry, child: const Text('刷新状态')),
           ],
         ),
       ),

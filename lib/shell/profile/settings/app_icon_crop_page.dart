@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/app_snack_bar.dart';
 import '../../../core/colors.dart';
+import '../../../core/logging/app_log.dart';
 
 /// 手动裁剪相册图片，返回 512×512 PNG；直接返回则放弃本次修改。
 class AppIconCropPage extends StatefulWidget {
@@ -18,6 +19,7 @@ class AppIconCropPage extends StatefulWidget {
 
 class _AppIconCropPageState extends State<AppIconCropPage> {
   static const _outputSize = 512.0;
+  static final _log = AppLog.logger('app_icon.crop');
   final _viewer = TransformationController();
   final _boundary = GlobalKey();
   bool _exporting = false;
@@ -34,15 +36,19 @@ class _AppIconCropPageState extends State<AppIconCropPage> {
 
   Future<void> _decode() async {
     try {
-      final codec = await ui.instantiateImageCodec(widget.imageBytes);
-      final frame = await codec.getNextFrame();
+      final image = await _log.operation('image.decode', () async {
+        final codec = await ui.instantiateImageCodec(widget.imageBytes);
+        try {
+          return (await codec.getNextFrame()).image;
+        } finally {
+          codec.dispose();
+        }
+      }, successLevel: AppLogLevel.debug);
       if (!mounted) {
-        frame.image.dispose();
-        codec.dispose();
+        image.dispose();
         return;
       }
-      setState(() => _image = frame.image);
-      codec.dispose();
+      setState(() => _image = image);
     } catch (_) {
       if (mounted) setState(() => _decodeFailed = true);
     }
@@ -63,8 +69,20 @@ class _AppIconCropPageState extends State<AppIconCropPage> {
         ? side / image.height
         : side / image.width;
     if (_viewportSide == side && _displayScale == displayScale) return;
+    final previousSide = _viewportSide;
     _viewportSide = side;
     _displayScale = displayScale;
+    if (previousSide != null && previousSide > 0) {
+      // 屏幕旋转或可用空间变化时按方框比例调整平移，保留原图采样区域。
+      final ratio = side / previousSide;
+      _viewer.value = Matrix4.copy(_viewer.value)
+        ..setTranslationRaw(
+          _viewer.value.storage[12] * ratio,
+          _viewer.value.storage[13] * ratio,
+          _viewer.value.storage[14],
+        );
+      return;
+    }
     final width = image.width * displayScale;
     final height = image.height * displayScale;
     // child 已是 cover 后的尺寸，矩阵只负责平移，初始缩放必须为 1。
@@ -80,58 +98,66 @@ class _AppIconCropPageState extends State<AppIconCropPage> {
     if (_exporting || _image == null) return null;
     setState(() => _exporting = true);
     try {
-      final image = _image!;
-      final side = _viewportSide;
-      final displayScale = _displayScale;
-      if (side == null || displayScale == null) {
-        throw StateError('裁剪区域尚未准备好');
-      }
-      final inverse = Matrix4.inverted(_viewer.value);
-      final topLeft = MatrixUtils.transformPoint(inverse, Offset.zero);
-      final bottomRight = MatrixUtils.transformPoint(
-        inverse,
-        Offset(side, side),
-      );
-      var source = Rect.fromLTRB(
-        topLeft.dx / displayScale,
-        topLeft.dy / displayScale,
-        bottomRight.dx / displayScale,
-        bottomRight.dy / displayScale,
-      );
-      final bounds = Rect.fromLTWH(
-        0,
-        0,
-        image.width.toDouble(),
-        image.height.toDouble(),
-      );
-      // 任何越界都会把背景色带进桌面图标；宁可失败让用户重新调整，
-      // 也不生成带空白边缘的图片。
-      if (source.isEmpty ||
-          source.left < bounds.left - 0.5 ||
-          source.top < bounds.top - 0.5 ||
-          source.right > bounds.right + 0.5 ||
-          source.bottom > bounds.bottom + 0.5) {
-        throw StateError('裁剪区域超出图片边界');
-      }
-      source = source.intersect(bounds);
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder);
-      canvas.drawImageRect(
-        image,
-        source,
-        const Rect.fromLTWH(0, 0, _outputSize, _outputSize),
-        Paint()..filterQuality = FilterQuality.high,
-      );
-      final picture = recorder.endRecording();
-      final rendered = await picture.toImage(
-        _outputSize.toInt(),
-        _outputSize.toInt(),
-      );
-      picture.dispose();
-      final data = await rendered.toByteData(format: ui.ImageByteFormat.png);
-      rendered.dispose();
-      if (data == null) throw StateError('图片编码失败');
-      return data.buffer.asUint8List();
+      return await _log.operation('image.export', () async {
+        final image = _image!;
+        final side = _viewportSide;
+        final displayScale = _displayScale;
+        if (side == null || displayScale == null) {
+          throw StateError('裁剪区域尚未准备好');
+        }
+        final inverse = Matrix4.inverted(_viewer.value);
+        final topLeft = MatrixUtils.transformPoint(inverse, Offset.zero);
+        final bottomRight = MatrixUtils.transformPoint(
+          inverse,
+          Offset(side, side),
+        );
+        var source = Rect.fromLTRB(
+          topLeft.dx / displayScale,
+          topLeft.dy / displayScale,
+          bottomRight.dx / displayScale,
+          bottomRight.dy / displayScale,
+        );
+        final bounds = Rect.fromLTWH(
+          0,
+          0,
+          image.width.toDouble(),
+          image.height.toDouble(),
+        );
+        // 任何越界都会把背景色带进桌面图标；宁可失败让用户重新调整，
+        // 也不生成带空白边缘的图片。
+        if (source.isEmpty ||
+            source.left < bounds.left - 0.5 ||
+            source.top < bounds.top - 0.5 ||
+            source.right > bounds.right + 0.5 ||
+            source.bottom > bounds.bottom + 0.5) {
+          throw StateError('裁剪区域超出图片边界');
+        }
+        source = source.intersect(bounds);
+        final recorder = ui.PictureRecorder();
+        final canvas = Canvas(recorder);
+        canvas.drawImageRect(
+          image,
+          source,
+          const Rect.fromLTWH(0, 0, _outputSize, _outputSize),
+          Paint()..filterQuality = FilterQuality.high,
+        );
+        final picture = recorder.endRecording();
+        ui.Image? rendered;
+        try {
+          rendered = await picture.toImage(
+            _outputSize.toInt(),
+            _outputSize.toInt(),
+          );
+          final data = await rendered.toByteData(
+            format: ui.ImageByteFormat.png,
+          );
+          if (data == null) throw StateError('图片编码失败');
+          return data.buffer.asUint8List();
+        } finally {
+          rendered?.dispose();
+          picture.dispose();
+        }
+      }, successLevel: AppLogLevel.debug);
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -169,88 +195,119 @@ class _AppIconCropPageState extends State<AppIconCropPage> {
             ),
           ],
         ),
-        body: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
-              child: Text(
-                '拖动图片调整位置，双指缩放。方框内的内容会用作图标。',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: palette.labelText, fontSize: 13),
-              ),
-            ),
-            Expanded(
-              child: Center(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final side = constraints.biggest.shortestSide
-                        .clamp(160.0, 420.0)
-                        .toDouble();
-                    _prepareViewport(side);
-                    final image = _image;
-                    final displayScale = _displayScale;
-                    return SizedBox.square(
-                      dimension: side,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          // 圆角只用于屏幕预览，位于截图边界之外；输出保持完整方形。
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(20),
-                            child: RepaintBoundary(
-                              key: _boundary,
-                              child: ColoredBox(
-                                color: palette.surface,
-                                child: image == null
-                                    ? _CropPlaceholder(failed: _decodeFailed)
-                                    : ClipRect(
-                                        child: InteractiveViewer(
-                                          transformationController: _viewer,
-                                          constrained: false,
-                                          boundaryMargin: EdgeInsets.zero,
-                                          minScale: 1,
-                                          maxScale: 6,
-                                          panEnabled: true,
-                                          scaleEnabled: true,
-                                          child: SizedBox(
-                                            width: image.width * displayScale!,
-                                            height: image.height * displayScale,
-                                            child: RawImage(
-                                              image: image,
-                                              fit: BoxFit.fill,
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // 滚动容器让空间不足时方框保持真实正方形，避免父约束只压缩
+              // 预览高度，而导出仍按原来的边长采样。宽度不超出安全区域。
+              final side = constraints.biggest.shortestSide
+                  .clamp(160.0, 420.0)
+                  .clamp(0.0, constraints.maxWidth)
+                  .toDouble();
+              _prepareViewport(side);
+              return SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+                        child: Text(
+                          '拖动图片调整位置，双指缩放。方框内的内容会用作图标。',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: palette.labelText,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Center(
+                          child: Builder(
+                            builder: (context) {
+                              final image = _image;
+                              final displayScale = _displayScale;
+                              return SizedBox.square(
+                                dimension: side,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    // 圆角只用于屏幕预览，位于截图边界之外；输出保持完整方形。
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(20),
+                                      child: RepaintBoundary(
+                                        key: _boundary,
+                                        child: ColoredBox(
+                                          color: palette.surface,
+                                          child: image == null
+                                              ? _CropPlaceholder(
+                                                  failed: _decodeFailed,
+                                                )
+                                              : ClipRect(
+                                                  child: InteractiveViewer(
+                                                    transformationController:
+                                                        _viewer,
+                                                    constrained: false,
+                                                    boundaryMargin:
+                                                        EdgeInsets.zero,
+                                                    minScale: 1,
+                                                    maxScale: 6,
+                                                    panEnabled: !_exporting,
+                                                    scaleEnabled: !_exporting,
+                                                    child: SizedBox(
+                                                      width:
+                                                          image.width *
+                                                          displayScale!,
+                                                      height:
+                                                          image.height *
+                                                          displayScale,
+                                                      child: RawImage(
+                                                        image: image,
+                                                        fit: BoxFit.fill,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                        ),
+                                      ),
+                                    ),
+                                    IgnorePointer(
+                                      child: DecoratedBox(
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
+                                          border: Border.all(
+                                            color: palette.accent.withValues(
+                                              alpha: 0.7,
                                             ),
+                                            width: 2,
                                           ),
                                         ),
                                       ),
-                              ),
-                            ),
-                          ),
-                          IgnorePointer(
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: palette.accent.withValues(alpha: 0.7),
-                                  width: 2,
+                                    ),
+                                  ],
                                 ),
-                              ),
-                            ),
+                              );
+                            },
                           ),
-                        ],
+                        ),
                       ),
-                    );
-                  },
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+                        child: Text(
+                          '系统会按桌面图标样式处理边缘',
+                          style: TextStyle(color: palette.hint, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-              child: Text(
-                '系统会按桌面图标样式处理边缘',
-                style: TextStyle(color: palette.hint, fontSize: 12),
-              ),
-            ),
-          ],
+              );
+            },
+          ),
         ),
       ),
     );
