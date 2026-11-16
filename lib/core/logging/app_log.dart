@@ -642,10 +642,14 @@ class AppLog {
         final native = entry['details'] is Map
             ? Map<String, Object?>.from(entry['details'] as Map)
             : <String, Object?>{};
+        // 原生系统事件仅允许已接入的模块，旧队列没有 scope 时沿用课表来源。
+        final scope = entry['scope'] == 'app_icon.native_background'
+            ? 'app_icon.native_background'
+            : 'timetable.native_background';
         final persisted = Completer<bool>();
-        logger('timetable.native_background').startSpan().run(
+        logger(scope).startSpan().run(
           () => _write(
-            'timetable.native_background',
+            scope,
             entry['event'] == 'background.failed'
                 ? AppLogLevel.error
                 : AppLogLevel.warning,

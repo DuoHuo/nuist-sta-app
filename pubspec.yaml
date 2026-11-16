@@ -88,8 +88,10 @@ flutter:
     - assets/js/portal_passkey.js
     # 端上调试控制台，只在 debug 构建注入页面（见 PortalBindPage._injectVConsole）。
     - assets/js/vconsole.min.js
-    # 应用图标唯一真源：flutter_launcher_icons 据此生成 Android 启动图标，关于页也直接展示它。
+    # 默认图标由 flutter_launcher_icons 生成；其他内置图标另有对应的 Android 资源。
     - assets/images/app_icon.png
+    - assets/images/app_icon_mascot.png
+    - assets/images/app_icon_mascot_color.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

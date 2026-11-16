@@ -524,6 +524,17 @@ void main() {
                   'native_message': 'Permission denied token=synthetic-secret',
                 },
               },
+              {
+                'id': 'native-icon-event',
+                'ts': milliseconds,
+                'scope': 'app_icon.native_background',
+                'event': 'background.degraded',
+                'details': {
+                  'stage': 'app_icon.pin_confirmation',
+                  'reason_code': 'confirmed_dynamic_cleanup_failed',
+                  'native_message': 'Synthetic shortcut cleanup failure',
+                },
+              },
             ];
           }
           if (call.method == 'acknowledgeNativeDiagnostics') {
@@ -538,7 +549,7 @@ void main() {
     await AppLog.collectNativeDiagnosticsForTesting();
     expect(acknowledgements, [
       {
-        'ids': ['native-event-a'],
+        'ids': ['native-event-a', 'native-icon-event'],
       },
     ]);
     final imported = records.singleWhere(
@@ -553,6 +564,11 @@ void main() {
     );
     expect(jsonEncode(imported), contains('Permission denied'));
     expect(jsonEncode(imported), isNot(contains('synthetic-secret')));
+    final iconEvent = records.singleWhere(
+      (record) => record['scope'] == 'app_icon.native_background',
+    );
+    expect(iconEvent['event'], 'background.degraded');
+    expect(jsonEncode(iconEvent), contains('confirmed_dynamic_cleanup_failed'));
   });
 
   test('后台诊断写盘失败时保留原生队列，不提前确认删除', () async {

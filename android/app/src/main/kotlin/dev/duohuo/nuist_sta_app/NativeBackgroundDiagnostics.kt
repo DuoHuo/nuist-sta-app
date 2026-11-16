@@ -16,18 +16,18 @@ internal object NativeBackgroundDiagnostics {
     private fun preferences(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     /** 广播调用使用此入口；同步 MethodChannel 操作由原回执记录，不能重复入队。 */
-    @Synchronized fun enqueue(context: Context, diagnostics: List<Map<String, Any?>>) {
+    @Synchronized fun enqueue(context: Context, diagnostics: List<Map<String, Any?>>, scope: String = "timetable.native_background") {
         if (diagnostics.isEmpty()) return
         try {
             val now = System.currentTimeMillis()
             val records = load(context).filter { now - (it["ts"] as Number).toLong() <= RETENTION_MS }.toMutableList()
             for (diagnostic in diagnostics) {
-                val fallback = diagnostic["reason_code"] in setOf(
+                val fallback = diagnostic["degraded"] == true || diagnostic["reason_code"] in setOf(
                     "exact_alarm_permission_unavailable", "exact_alarm_permission_revoked", "exact_alarm_failed",
                 )
                 records.add(mapOf(
                     "id" to UUID.randomUUID().toString(), "ts" to now,
-                    "scope" to "timetable.native_background", "event" to if (fallback) "background.degraded" else "background.failed",
+                    "scope" to scope, "event" to if (fallback) "background.degraded" else "background.failed",
                     "details" to safeDetails(diagnostic),
                 ))
             }
@@ -94,6 +94,10 @@ internal object NativeBackgroundDiagnostics {
         for (key in listOf("stage", "reason_code")) {
             val text = value[key] as? String
             if (text != null && text.matches(Regex("[a-zA-Z0-9_.]+"))) result[key] = text
+        }
+        val dropped = value["diagnostics_dropped_before"]
+        if (dropped is Int && dropped >= 0 || dropped is Long && dropped >= 0L) {
+            result["diagnostics_dropped_before"] = dropped
         }
         result["capture_source"] = "android_broadcast"
         return result

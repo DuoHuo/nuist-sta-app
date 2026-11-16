@@ -109,6 +109,9 @@ class MainActivity : FlutterActivity() {
         if (!flutterEngine.plugins.has(AppUpdatePlugin::class.java)) {
             flutterEngine.plugins.add(AppUpdatePlugin())
         }
+        if (!flutterEngine.plugins.has(AppIconPlugin::class.java)) {
+            flutterEngine.plugins.add(AppIconPlugin())
+        }
     }
 
     // 明暗切换（configChanges 含 uiMode，Activity 不重建）：桌面小组件按新配色重绘。
@@ -152,7 +155,13 @@ class MainActivity : FlutterActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1) return
         try {
             val sm = getSystemService(ShortcutManager::class.java) ?: return
-            sm.removeAllDynamicShortcuts()
+            try {
+                sm.removeDynamicShortcuts(listOf("add_timetable_widget"))
+            } catch (_: IllegalArgumentException) {
+                // 本机没有这个旧动态 shortcut 时继续禁用可能已固定到桌面的旧 id。
+            } catch (_: IllegalStateException) {
+                // 桌面/系统暂时不可用时仍尝试禁用旧 id。
+            }
             try {
                 sm.disableShortcuts(listOf("add_timetable_widget"))
             } catch (_: IllegalArgumentException) {
