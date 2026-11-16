@@ -1,0 +1,10 @@
+LibreOffice Android 26.2.7.3, build 08dfbf04dcac895fc3a8d30dbf5a00de1b9dda5e.
+The Word preview uses the ARM64 LibreOffice runtime and resources from F-Droid
+package org.documentfoundation.libreoffice, version code 135.
+
+Corresponding source and upstream licence information:
+https://f-droid.org/packages/org.documentfoundation.libreoffice/#135
+https://f-droid.org/repo/org.documentfoundation.libreoffice_135_src.tar.gz
+https://github.com/LibreOffice/core/tree/08dfbf04dcac895fc3a8d30dbf5a00de1b9dda5e
+https://www.libreoffice.org/about-us/licenses/
+https://www.mozilla.org/MPL/2.0/

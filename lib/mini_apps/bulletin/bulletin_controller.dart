@@ -11,6 +11,8 @@ import 'bulletin_store.dart';
 /// 公告浏览、缓存与订阅动态的共享状态。
 class BulletinController extends ChangeNotifier {
   static final _log = AppLog.logger('bulletin.controller');
+  static const _feedLimit = 2;
+  static final _oldestPublicationDate = DateTime.utc(1);
 
   /// 创建公告状态，可注入接口与存储以隔离数据来源。
   BulletinController({BulletinApi? api, BulletinStore? store})
@@ -29,8 +31,6 @@ class BulletinController extends ChangeNotifier {
   BulletinCategory _category = BulletinCategory.all.first;
   BulletinSubscription _subscription = const BulletinSubscription();
   List<Bulletin> _feed = [];
-  Set<String> _knownIds = {};
-  bool _baselineReady = false;
   bool _started = false;
   Future<void>? _starting;
   bool _feedLoading = false;
@@ -84,10 +84,7 @@ class BulletinController extends ChangeNotifier {
       ..clear()
       ..addAll(local.pages);
     _subscription = local.subscription;
-    // 空缓存和持久化快照可能不可修改，运行时始终使用可写副本。
-    _feed = List.of(local.feed);
-    _knownIds = Set.of(local.knownIds);
-    _baselineReady = local.baselineReady;
+    _feed = _recentMatches([...?_cachedFirstPage?.items, ...local.feed]);
     notifyListeners();
     if (_subscription.enabled) unawaited(refreshFeed());
   }
@@ -170,40 +167,38 @@ class BulletinController extends ChangeNotifier {
     }
   }
 
-  /// 更新订阅设置；首次开启会记录最新公告作为基线。
+  /// 更新订阅设置，并按当前主题刷新首页公告。
   Future<void> configureSubscription({
     required bool enabled,
     required Set<BulletinTopic> topics,
   }) async {
     await ensureStarted();
-    final wasEnabled = _subscription.enabled;
     _subscriptionRevision++;
     _feedUnavailable = false;
     _subscription = BulletinSubscription(
       enabled: enabled,
       topics: Set.unmodifiable(topics),
     );
-    _feed = _feed.where(_subscription.matches).toList();
-    if (enabled && !wasEnabled) _baselineReady = false;
+    _feed = _recentMatches([...?_cachedFirstPage?.items, ..._feed]);
     await _save();
     _log.info(
       'subscription.updated',
       fields: {'enabled': enabled, 'topic_count': topics.length},
     );
     notifyListeners();
-    if (enabled && !_baselineReady) unawaited(refreshFeed());
+    if (enabled) unawaited(refreshFeed());
   }
 
   /// 检查最新公告，失败后最多尝试三次，持续失败时静默隐藏动态。
   Future<void> refreshFeed() async {
     await ensureStarted();
-    if (_disposed || !_subscription.enabled || _feedLoading) {
+    final revision = _subscriptionRevision;
+    if (!_feedRequestIsCurrent(revision) || _feedLoading) {
       SilentRefresh.skipCurrent(
         reason: _feedLoading ? 'already_refreshing' : 'subscription_inactive',
       );
       return;
     }
-    final revision = _subscriptionRevision;
     _feedLoading = true;
     notifyListeners();
     try {
@@ -211,24 +206,12 @@ class BulletinController extends ChangeNotifier {
         'feed.refresh',
         () async {
           final latest = await _fetchFeedWithRetry(revision);
-          if (latest == null) {
+          if (latest == null || !_feedRequestIsCurrent(revision)) {
             SilentRefresh.skipCurrent();
             return false;
           }
-          final newItems = _baselineReady
-              ? latest.items
-                    .where((item) => !_knownIds.contains(item.id))
-                    .toList()
-              : <Bulletin>[];
-          _knownIds.addAll(latest.items.map((item) => item.id));
-          _baselineReady = true;
-          final matches = newItems.where(_subscription.matches).toList();
-          if (matches.isNotEmpty) _feed = [...matches, ..._feed];
-          if (_knownIds.length > 3000) {
-            _knownIds = _knownIds.skip(_knownIds.length - 2000).toSet();
-          }
-          if (_feed.length > 100) _feed = _feed.take(100).toList();
-          _pages[_pageKey(BulletinCategory.all.first, 1)] = latest;
+          _feed = latest.feed;
+          _pages[_pageKey(BulletinCategory.all.first, 1)] = latest.firstPage;
           _feedUnavailable = false;
           await _save();
           return true;
@@ -251,18 +234,15 @@ class BulletinController extends ChangeNotifier {
     }
   }
 
-  Future<BulletinListPage?> _fetchFeedWithRetry(int revision) async {
+  Future<({BulletinListPage firstPage, List<Bulletin> feed})?>
+  _fetchFeedWithRetry(int revision) async {
     for (var attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) {
         await Future<void>.delayed(Duration(seconds: attempt * 2));
       }
       if (!_feedRequestIsCurrent(revision)) return null;
       try {
-        final latest = await _api.fetchPage(
-          BulletinCategory.all.first.uri,
-          pageNumber: 1,
-        );
-        return _feedRequestIsCurrent(revision) ? latest : null;
+        return await _fetchRecentFeed(revision);
       } catch (error, stackTrace) {
         _log.debug(
           'feed.retry_failed',
@@ -281,8 +261,64 @@ class BulletinController extends ChangeNotifier {
     return null;
   }
 
+  Future<({BulletinListPage firstPage, List<Bulletin> feed})?> _fetchRecentFeed(
+    int revision,
+  ) async {
+    final firstUri = BulletinCategory.all.first.uri;
+    final firstPage = await _api.fetchPage(firstUri, pageNumber: 1);
+    final visited = {firstUri};
+    var page = firstPage;
+    var feed = <Bulletin>[];
+    while (_feedRequestIsCurrent(revision)) {
+      feed = _recentMatches([...feed, ...page.items]);
+      final next = Uri.tryParse(page.nextUrl ?? '');
+      if (next == null || !isOfficialBulletinUri(next) || !visited.add(next)) {
+        break;
+      }
+      if (feed.length == _feedLimit && page.items.isNotEmpty) {
+        // 用当前页尾的日期判断是否还需翻页，避免较早的置顶公告占满名额。
+        final cutoff = _publicationDate(feed.last);
+        final pageEnd = _publicationDate(page.items.last);
+        if (cutoff != null && pageEnd != null && !pageEnd.isAfter(cutoff)) {
+          break;
+        }
+      }
+      page = await _api.fetchPage(next, pageNumber: page.pageNumber + 1);
+    }
+    return _feedRequestIsCurrent(revision)
+        ? (firstPage: firstPage, feed: feed)
+        : null;
+  }
+
+  List<Bulletin> _recentMatches(Iterable<Bulletin> items) {
+    final seen = <String>{};
+    final ranked =
+        [
+          for (final (index, item) in items.indexed)
+            if (seen.add(item.id) && _subscription.matches(item))
+              (
+                index: index,
+                item: item,
+                date: _publicationDate(item) ?? _oldestPublicationDate,
+              ),
+        ]..sort((first, second) {
+          final order = second.date.compareTo(first.date);
+          return order == 0 ? first.index.compareTo(second.index) : order;
+        });
+    return [for (final match in ranked.take(_feedLimit)) match.item];
+  }
+
+  DateTime? _publicationDate(Bulletin item) =>
+      DateTime.tryParse(item.publishedAt.trim());
+
+  BulletinListPage? get _cachedFirstPage =>
+      _pages[_pageKey(BulletinCategory.all.first, 1)];
+
   bool _feedRequestIsCurrent(int revision) =>
-      !_disposed && _subscription.enabled && revision == _subscriptionRevision;
+      !_disposed &&
+      _subscription.enabled &&
+      _subscription.topics.isNotEmpty &&
+      revision == _subscriptionRevision;
 
   @override
   void dispose() {
@@ -312,8 +348,6 @@ class BulletinController extends ChangeNotifier {
       subscription: _subscription,
       pages: Map.unmodifiable(_pages),
       feed: List.unmodifiable(_feed),
-      knownIds: Set.unmodifiable(_knownIds),
-      baselineReady: _baselineReady,
     ),
   );
 }

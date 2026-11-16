@@ -32,10 +32,29 @@ const _new = Bulletin(
   publishedAt: '2026-10-19',
   topicScores: {'courses': 4},
 );
+const _historical = Bulletin(
+  id: 'historical',
+  title: '往年的选课说明',
+  url: 'https://bulletin.campus.invalid/info/1/historical.htm',
+  officialCategory: '教学考试',
+  publisher: '测试单位',
+  publishedAt: '2016-02-01',
+  topicScores: {'courses': 4},
+);
+const _unmatched = Bulletin(
+  id: 'unmatched',
+  title: '讲座通知',
+  url: 'https://bulletin.campus.invalid/info/1/unmatched.htm',
+  officialCategory: '学术报告',
+  publisher: '测试单位',
+  publishedAt: '2026-10-20',
+  topicScores: {'academicTalks': 4},
+);
 
 class _FixtureApi extends BulletinApi {
   int requests = 0;
   int failuresRemaining = 0;
+  final otherPages = <int, BulletinListPage>{};
   BulletinListPage page = const BulletinListPage(
     items: [_new, _old],
     pageNumber: 1,
@@ -50,7 +69,7 @@ class _FixtureApi extends BulletinApi {
       failuresRemaining--;
       throw TimeoutException('DioException: 测试连接超时');
     }
-    return page;
+    return pageNumber == 1 ? page : otherPages[pageNumber]!;
   }
 }
 
@@ -74,7 +93,7 @@ Widget _home(BulletinController controller) => MaterialApp(
 );
 
 void main() {
-  testWidgets('首次开启订阅可修改空缓存，不再触发不可修改集合异常', (tester) async {
+  testWidgets('首次开启订阅即展示最近两条匹配公告', (tester) async {
     final api = _FixtureApi();
     final store = _MemoryStore();
     final controller = BulletinController(api: api, store: store);
@@ -89,20 +108,14 @@ void main() {
     expect(api.requests, 1);
     expect(controller.feedUnavailable, isFalse);
     expect(controller.feedLoading, isFalse);
-    expect(controller.feed, isEmpty);
-    expect(store.data.baselineReady, isTrue);
-    expect(store.data.knownIds, {'new', 'old'});
+    expect(controller.feed, [_new, _old]);
+    expect(store.data.feed, [_new, _old]);
   });
 
-  testWidgets('刷新超时按 2 秒和 4 秒重试，成功后只加入一次新公告', (tester) async {
+  testWidgets('刷新按 2 秒和 4 秒重试，已有公告仍显示且不会重复', (tester) async {
     final api = _FixtureApi()..failuresRemaining = 2;
     final store = _MemoryStore(
-      const BulletinLocalData(
-        subscription: _subscription,
-        baselineReady: true,
-        knownIds: {'old'},
-        feed: [_old],
-      ),
+      const BulletinLocalData(subscription: _subscription, feed: [_old]),
     );
     final controller = BulletinController(api: api, store: store);
     addTearDown(controller.dispose);
@@ -121,15 +134,15 @@ void main() {
     expect(controller.feedLoading, isFalse);
     expect(controller.feedUnavailable, isFalse);
     expect(controller.feed.map((item) => item.id), ['new', 'old']);
-    expect(store.data.knownIds, {'old', 'new'});
+    expect(store.data.feed, [_new, _old]);
     await controller.refreshFeed();
     expect(controller.feed.map((item) => item.id), ['new', 'old']);
   });
 
-  testWidgets('初始化也会自动重试，成功建立基线时不把旧公告当作新动态', (tester) async {
+  testWidgets('初始化自动重试，成功后展示已缓存且仍符合条件的公告', (tester) async {
     final api = _FixtureApi()..failuresRemaining = 1;
     final store = _MemoryStore(
-      const BulletinLocalData(subscription: _subscription),
+      const BulletinLocalData(subscription: _subscription, feed: [_old]),
     );
     final controller = BulletinController(api: api, store: store);
     addTearDown(controller.dispose);
@@ -138,9 +151,92 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
 
     expect(api.requests, 2);
-    expect(store.data.baselineReady, isTrue);
-    expect(controller.feed, isEmpty);
+    expect(controller.feed, [_new, _old]);
     expect(controller.feedUnavailable, isFalse);
+  });
+
+  testWidgets('按发布时间和主题选最近两条，首页不足时翻页补入更早的公告', (tester) async {
+    final index = BulletinCategory.all.first.uri;
+    final api = _FixtureApi()
+      ..page = BulletinListPage(
+        items: const [_unmatched, _new],
+        pageNumber: 1,
+        nextUrl: index.resolve('index_2.htm').toString(),
+      )
+      ..otherPages[2] = BulletinListPage(
+        items: const [_new, _historical],
+        pageNumber: 2,
+        nextUrl: index.resolve('index_3.htm').toString(),
+      );
+    final controller = BulletinController(
+      api: api,
+      store: _MemoryStore(const BulletinLocalData(subscription: _subscription)),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_home(controller));
+    await tester.pumpAndSettle();
+
+    expect(api.requests, 2);
+    expect(controller.feed, [_new, _historical]);
+    expect(find.text('2 条动态'), findsOneWidget);
+    expect(find.text(_historical.title), findsOneWidget);
+    expect(find.text(_unmatched.title), findsNothing);
+
+    api.page = const BulletinListPage(
+      items: [_historical, _old, _new, _unmatched, _new],
+      pageNumber: 1,
+    );
+    await controller.refreshFeed();
+    await tester.pumpAndSettle();
+    expect(controller.feed, [_new, _old]);
+    expect(find.text(_historical.title), findsNothing);
+    expect(find.text(_new.title), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('修改订阅主题会立即刷新已发布的匹配公告', (tester) async {
+    final api = _FixtureApi()
+      ..page = const BulletinListPage(
+        items: [_new, _old, _unmatched],
+        pageNumber: 1,
+      );
+    final controller = BulletinController(
+      api: api,
+      store: _MemoryStore(const BulletinLocalData(subscription: _subscription)),
+    );
+    addTearDown(controller.dispose);
+    await controller.ensureStarted();
+    await tester.pump();
+    expect(controller.feed, [_new, _old]);
+
+    await controller.configureSubscription(
+      enabled: true,
+      topics: {BulletinTopic.academicTalks},
+    );
+    await tester.pump();
+    expect(api.requests, 2);
+    expect(controller.feed, [_unmatched]);
+  });
+
+  testWidgets('较旧的置顶公告不会挤掉后一页的较新公告', (tester) async {
+    final api = _FixtureApi()
+      ..page = BulletinListPage(
+        items: const [_historical, _new, _unmatched],
+        pageNumber: 1,
+        nextUrl: BulletinCategory.all.first.uri
+            .resolve('index_2.htm')
+            .toString(),
+      )
+      ..otherPages[2] = const BulletinListPage(items: [_old], pageNumber: 2);
+    final controller = BulletinController(
+      api: api,
+      store: _MemoryStore(const BulletinLocalData(subscription: _subscription)),
+    );
+    addTearDown(controller.dispose);
+    await controller.ensureStarted();
+    await tester.pump();
+    expect(api.requests, 2);
+    expect(controller.feed, [_new, _old]);
   });
 
   testWidgets('持续失败只保留首页入口，定时刷新成功后恢复动态', (tester) async {
@@ -148,12 +244,7 @@ void main() {
     final controller = BulletinController(
       api: api,
       store: _MemoryStore(
-        const BulletinLocalData(
-          subscription: _subscription,
-          baselineReady: true,
-          knownIds: {'old'},
-          feed: [_old],
-        ),
+        const BulletinLocalData(subscription: _subscription, feed: [_old]),
       ),
     );
     addTearDown(controller.dispose);
@@ -177,7 +268,7 @@ void main() {
     expect(find.byType(InkWell), findsOneWidget);
     expect(find.text(_old.title), findsNothing);
     expect(find.textContaining('条动态'), findsNothing);
-    expect(find.text('暂时没有匹配的新公告'), findsNothing);
+    expect(find.text('暂时没有匹配的公告'), findsNothing);
     expect(find.textContaining('失败'), findsNothing);
     expect(find.textContaining('DioException'), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsNothing);
@@ -231,7 +322,7 @@ void main() {
     expect(controller.feedLoading, isFalse);
   });
 
-  testWidgets('关闭后重新开启会丢弃旧请求，再建立新的订阅基线', (tester) async {
+  testWidgets('关闭后重新开启会丢弃旧请求，再展示当前主题匹配项', (tester) async {
     final pending = Completer<BulletinListPage>();
     final api = _FixtureApi()..pending = pending;
     final store = _MemoryStore(
@@ -251,9 +342,8 @@ void main() {
     await tester.pump();
 
     expect(api.requests, 2);
-    expect(store.data.knownIds, {'new', 'old'});
-    expect(store.data.baselineReady, isTrue);
-    expect(controller.feed, isEmpty);
+    expect(store.data.feed, [_new, _old]);
+    expect(controller.feed, [_new, _old]);
     expect(controller.feedUnavailable, isFalse);
   });
 
@@ -263,7 +353,7 @@ void main() {
     addTearDown(controller.dispose);
     await tester.pumpWidget(_home(controller));
 
-    expect(find.text('开启主题订阅，感兴趣的新公告会显示在这里'), findsOneWidget);
+    expect(find.text('开启主题订阅，在这里查看最近匹配的公告'), findsOneWidget);
     expect(api.requests, 0);
     await tester.pumpWidget(const SizedBox.shrink());
   });

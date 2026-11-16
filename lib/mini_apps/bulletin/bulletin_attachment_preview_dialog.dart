@@ -9,88 +9,185 @@ import '../../core/logging/app_log.dart';
 import 'bulletin_api.dart';
 import 'bulletin_attachment_preview.dart';
 import 'bulletin_models.dart';
+import 'bulletin_office_engine_view.dart';
+import 'bulletin_office_view.dart';
+import 'bulletin_pdf_view.dart';
+import 'bulletin_word_preview_cache.dart';
 
-/// 附件预览窗口：本机预览 PDF、图片和文本，不能预览时自动转入下载保存。
+/// 附件预览窗口，支持在其他应用中打开下载的文件。
 class BulletinAttachmentPreviewDialog extends StatefulWidget {
-  /// 使用公告现有的下载通道，并复用下载文件进行预览和保存。
+  /// 使用公告现有的下载通道，在同一窗口内复用文件。
   const BulletinAttachmentPreviewDialog({
     super.key,
     required this.attachment,
     required this.api,
-    required this.onDownload,
   });
 
   final BulletinAttachment attachment;
   final BulletinApi api;
-
-  /// 将已经下载的文件交给保存 / 分享面板，不再次发起网络请求。
-  final Future<void> Function(File file) onDownload;
 
   @override
   State<BulletinAttachmentPreviewDialog> createState() =>
       _BulletinAttachmentPreviewDialogState();
 }
 
+typedef _DownloadedAttachment = ({
+  File file,
+  BulletinPreviewKind kind,
+  String? mimeType,
+});
+
 class _BulletinAttachmentPreviewDialogState
     extends State<BulletinAttachmentPreviewDialog> {
+  static final _log = AppLog.logger('bulletin.attachment');
+  static const _actionsChannel = MethodChannel(
+    'dev.duohuo.nuist_sta_app/attachment_actions',
+  );
+  static const _downloadError = '附件下载失败，请检查校园网或 VPN 后重试';
+
+  Future<_DownloadedAttachment>? _download;
+  Future<BulletinOfficeDocument?>? _officeRequest;
   File? _file;
   BulletinPreviewKind? _kind;
   BulletinPdfDocument? _pdf;
-  Uint8List? _pageImage;
+  File? _convertedWord;
+  Uint8List? _firstPdfPage;
+  BulletinOfficeDocument? _office;
+  String? _engineMimeType;
   String? _text;
   String? _error;
-  int _page = 0;
   bool _loading = true;
-  bool _pageLoading = false;
-  bool _sharing = false;
-  bool _fallbackStarted = false;
+  bool _opening = false;
+  bool _useOfficeEngine = false;
+  bool _officeEngineReady = false;
+  bool _searchExpanded = false;
+
+  File? get _searchFile => switch (_kind) {
+    BulletinPreviewKind.pdf => _convertedWord,
+    BulletinPreviewKind.office
+        when isBulletinSearchableWorkbook(_office?.mimeType) =>
+      _file,
+    _ => null,
+  };
 
   @override
   void initState() {
     super.initState();
-    _load();
+    unawaited(_load());
   }
 
-  static final _log = AppLog.logger('bulletin.attachment');
+  Future<_DownloadedAttachment> _getAttachment() =>
+      _download ??= _downloadAttachment();
+
+  Future<BulletinOfficeDocument?> _openOffice(File file) async {
+    try {
+      return await BulletinOfficeDocument.open(file);
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  Future<_DownloadedAttachment> _downloadAttachment() async {
+    final File file;
+    try {
+      file = await Future<File>.sync(
+        () => BulletinWordPreviewCache.source(widget.attachment, widget.api),
+      );
+    } catch (_) {
+      _download = null;
+      rethrow;
+    }
+    if (mounted) {
+      try {
+        final preview = await detectBulletinPreview(file);
+        final mimeType = preview.kind == BulletinPreviewKind.office
+            ? preview.mimeType ?? await detectBulletinOfficeMimeType(file)
+            : preview.mimeType;
+        return (file: file, kind: preview.kind, mimeType: mimeType);
+      } on FileSystemException catch (error, stackTrace) {
+        // 读取文件类型失败时，仍允许用户尝试用其他应用打开。
+        _log.warning(
+          'preview.failed',
+          fields: {'stage': 'attachment.detect_type', 'outcome': 'degraded'},
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+    return (file: file, kind: BulletinPreviewKind.unsupported, mimeType: null);
+  }
 
   Future<void> _load() => _log.startSpan().run(_loadInSpan);
 
   Future<void> _loadInSpan() async {
     var stage = 'attachment.download';
+    void updateStage(String value) => stage = value;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final file = await widget.api.downloadAttachment(widget.attachment);
+      final (:file, :kind, :mimeType) = await _getAttachment();
       if (!mounted) return;
       _file = file;
-      stage = 'attachment.detect_type';
-      final kind = await detectBulletinPreview(file);
-      if (!mounted) return;
+      var displayKind = kind;
       switch (kind) {
         case BulletinPreviewKind.pdf:
-          stage = 'attachment.open_pdf';
-          final pdf = await BulletinPdfDocument.open(file);
-          if (!mounted) {
-            await pdf.close();
-            return;
-          }
-          _pdf = pdf;
-          stage = 'attachment.render_pdf';
-          _pageImage = await pdf.renderPage(0);
+          await _openPdf(file, updateStage);
         case BulletinPreviewKind.text:
           stage = 'attachment.read_text';
           _text = await readBulletinPreviewText(file);
+        case BulletinPreviewKind.office:
+          if (isBulletinSearchableWord(mimeType)) {
+            try {
+              stage = 'attachment.convert_word';
+              final converted = await renderBulletinWordPdf(file);
+              if (!mounted) return;
+              await _openPdf(converted, updateStage);
+              if (!mounted) return;
+              _convertedWord = converted;
+              displayKind = BulletinPreviewKind.pdf;
+              break;
+            } catch (error, stackTrace) {
+              if (!mounted) return;
+              // 新版 Word 转换异常时，继续使用原来的 Office 预览。
+              if (Platform.isAndroid && isBulletinLegacyWord(mimeType)) rethrow;
+              _log.warning(
+                'preview.failed',
+                fields: {'stage': stage, 'outcome': 'degraded'},
+                error: error,
+                stackTrace: stackTrace,
+              );
+            }
+          }
+          stage = 'attachment.open_office';
+          if (!Platform.isAndroid ||
+              preferBulletinOfficeGrid(mimeType) ||
+              mimeType == null) {
+            _office = await (_officeRequest ??= _openOffice(file));
+          }
+          if (!mounted) return;
+          final searchableWorkbook = isBulletinSearchableWorkbook(
+            _office?.mimeType,
+          );
+          if (!searchableWorkbook && _office?.sections.isNotEmpty != true) {
+            if (!Platform.isAndroid || isBulletinLegacyExcel(mimeType)) {
+              _fallback();
+              return;
+            }
+            _useOfficeEngine = true;
+          }
         case BulletinPreviewKind.image:
           break;
         case BulletinPreviewKind.unsupported:
-          await _fallback();
+          _fallback();
           return;
       }
       if (!mounted) return;
       setState(() {
-        _kind = kind;
+        _kind = displayKind;
         _loading = false;
       });
     } catch (error, stackTrace) {
@@ -105,84 +202,129 @@ class _BulletinAttachmentPreviewDialogState
       );
       if (!mounted) return;
       if (_file != null) {
-        await _fallback();
+        _fallback();
       } else {
         setState(() {
           _loading = false;
-          _error = '附件下载失败，请检查校园网或 VPN 后重试';
+          _error = _downloadError;
         });
       }
     }
   }
 
-  Future<void> _fallback() async {
-    if (!mounted || _fallbackStarted) return;
-    _fallbackStarted = true;
+  Future<void> _openPdf(File file, ValueChanged<String> updateStage) async {
+    updateStage('attachment.open_pdf');
+    final pdf = await BulletinPdfDocument.open(file);
+    try {
+      if (!mounted) {
+        await pdf.close();
+        return;
+      }
+      updateStage('attachment.render_pdf');
+      final firstPage = await pdf.renderPage(0);
+      if (!mounted) {
+        await pdf.close();
+        return;
+      }
+      _pdf = pdf;
+      _firstPdfPage = firstPage;
+    } catch (_) {
+      await pdf.close();
+      rethrow;
+    }
+  }
+
+  Future<void> _officeEngineFailed() async {
+    if (!mounted || !_useOfficeEngine) return;
+    setState(() {
+      _useOfficeEngine = false;
+      _officeEngineReady = false;
+      _loading = true;
+    });
+    final file = _file!;
+    final office = await (_officeRequest ??= _openOffice(file));
+    if (!mounted) return;
+    if (office?.sections.isNotEmpty != true) {
+      _fallback();
+      return;
+    }
+    setState(() {
+      _office = office;
+      _loading = false;
+    });
+  }
+
+  void _fallback() {
+    if (!mounted || _kind == BulletinPreviewKind.unsupported) return;
     final pdf = _pdf;
     _pdf = null;
+    _convertedWord = null;
+    _firstPdfPage = null;
     if (pdf != null) unawaited(pdf.close());
     setState(() {
       _kind = BulletinPreviewKind.unsupported;
       _loading = false;
-      _pageLoading = false;
     });
-    // 先显示不能预览的提示，再打开保存 / 分享面板。
-    await WidgetsBinding.instance.endOfFrame;
-    if (mounted) await _download();
   }
 
-  Future<void> _download() async {
-    final file = _file;
-    if (file == null || _sharing) return;
+  Future<void> _openExternally() => _log.startSpan().run(_openExternallyInSpan);
+
+  Future<void> _openExternallyInSpan() async {
+    if (_opening) return;
     setState(() {
-      _sharing = true;
+      _opening = true;
       _error = null;
     });
     try {
-      await widget.onDownload(file);
+      if (!_loading && _download == null) unawaited(_load());
+      final (:file, :mimeType, :kind) = await _getAttachment();
+      var openMimeType = mimeType ?? _engineMimeType;
+      if (mounted && kind == BulletinPreviewKind.office) {
+        // 已知后缀时可立即打开；解析已完成时优先采用文件实际类型。
+        openMimeType = _office?.mimeType ?? openMimeType;
+      }
+      if (mounted &&
+          kind == BulletinPreviewKind.office &&
+          openMimeType == null) {
+        final office = await (_officeRequest ??= _openOffice(file));
+        openMimeType = office?.mimeType;
+      }
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+      try {
+        await _actionsChannel.invokeMethod<void>('open', {
+          'path': file.path,
+          'mimeType': ?openMimeType,
+        });
+      } catch (error, stackTrace) {
+        _log.warning(
+          'open.failed',
+          fields: {'stage': 'attachment.open_external'},
+          error: error,
+          stackTrace: stackTrace,
+        );
+        final message = switch (error) {
+          PlatformException(code: 'no_app') => '本机没有可打开此附件的应用',
+          MissingPluginException() => '当前平台无法打开此选项',
+          _ => '无法用其他应用打开此附件，请重试',
+        };
+        if (mounted) setState(() => _error = message);
+      }
     } catch (error, stackTrace) {
       _log.warning(
-        'share.failed',
-        fields: {'stage': 'attachment.share'},
+        'open.failed',
+        fields: {'stage': 'attachment.download'},
         error: error,
         stackTrace: stackTrace,
       );
-      if (mounted) setState(() => _error = '无法打开保存面板，请重试');
+      if (mounted) setState(() => _error = _downloadError);
     } finally {
-      if (mounted) setState(() => _sharing = false);
-    }
-  }
-
-  Future<void> _showPage(int page) async {
-    final pdf = _pdf;
-    if (pdf == null || _pageLoading || page < 0 || page >= pdf.pageCount) {
-      return;
-    }
-    setState(() {
-      _page = page;
-      _pageLoading = true;
-    });
-    try {
-      final image = await pdf.renderPage(page);
-      if (!mounted) return;
-      setState(() {
-        _pageImage = image;
-        _pageLoading = false;
-      });
-    } catch (error, stackTrace) {
-      _log.warning(
-        'pdf.render_failed',
-        fields: {'stage': 'attachment.render_pdf', 'outcome': 'degraded'},
-        error: error,
-        stackTrace: stackTrace,
-      );
-      await _fallback();
+      if (mounted) setState(() => _opening = false);
     }
   }
 
   Widget _imageError(BuildContext context, Object error, StackTrace? stack) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_fallback());
+      _fallback();
     });
     return const Center(child: Text('无法预览此附件'));
   }
@@ -197,6 +339,11 @@ class _BulletinAttachmentPreviewDialogState
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
+    final canPreview =
+        !_loading &&
+        _kind != null &&
+        _kind != BulletinPreviewKind.unsupported &&
+        (!_useOfficeEngine || _officeEngineReady);
     return Dialog.fullscreen(
       child: Scaffold(
         backgroundColor: palette.pageBg,
@@ -207,67 +354,60 @@ class _BulletinAttachmentPreviewDialogState
             icon: const Icon(Icons.close),
             onPressed: () => Navigator.of(context).pop(),
           ),
-        ),
-        body: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                widget.attachment.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: palette.titleText,
-                  fontWeight: FontWeight.w600,
-                ),
+          actions: [
+            if (canPreview && _searchFile != null)
+              IconButton(
+                tooltip: _searchExpanded ? '关闭查找' : '查找文字',
+                onPressed: () =>
+                    setState(() => _searchExpanded = !_searchExpanded),
+                icon: Icon(_searchExpanded ? Icons.search_off : Icons.search),
               ),
-            ),
-            Expanded(child: _buildContent(palette)),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text(_error!, style: TextStyle(color: palette.danger)),
+            if (canPreview)
+              IconButton(
+                tooltip: '用其他应用打开',
+                onPressed: _opening ? null : _openExternally,
+                icon: const Icon(Icons.open_in_new),
               ),
-            SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: palette.accent,
-                  ),
-                  onPressed: _file == null || _loading || _sharing
-                      ? null
-                      : _download,
-                  icon: _sharing
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.download_outlined),
-                  label: const Text('下载并分享'),
-                ),
-              ),
-            ),
           ],
+        ),
+        body: SafeArea(
+          top: false,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  widget.attachment.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: palette.titleText,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Expanded(child: _buildContent(palette)),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(_error!, style: TextStyle(color: palette.danger)),
+                ),
+            ],
+          ),
         ),
       ),
     );
   }
 
+  Widget _openButton() => FilledButton.icon(
+    onPressed: _opening ? null : _openExternally,
+    icon: const Icon(Icons.open_in_new),
+    label: const Text('用其他应用打开'),
+  );
+
   Widget _buildContent(AppPalette palette) {
     if (_loading) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(color: palette.accent),
-            const SizedBox(height: 12),
-            const Text('正在加载附件…'),
-          ],
-        ),
-      );
+      return _previewMessage('正在加载附件…', progressColor: palette.accent);
     }
     switch (_kind) {
       case BulletinPreviewKind.text:
@@ -296,63 +436,69 @@ class _BulletinAttachmentPreviewDialogState
           ),
         );
       case BulletinPreviewKind.pdf:
-        return Column(
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                  tooltip: '上一页',
-                  onPressed: _pageLoading || _page == 0
-                      ? null
-                      : () => _showPage(_page - 1),
-                  icon: const Icon(Icons.chevron_left),
+        return BulletinPdfView(
+          document: _pdf!,
+          firstPage: _firstPdfPage!,
+          searchFile: _searchFile,
+          searchExpanded: _searchExpanded,
+        );
+      case BulletinPreviewKind.office:
+        if (_useOfficeEngine) {
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              BulletinOfficeEngineView(
+                file: _file!,
+                onReady: (mime) {
+                  if (mounted) {
+                    setState(() {
+                      _officeEngineReady = true;
+                      _engineMimeType = mime;
+                    });
+                  }
+                },
+                onFailure: _officeEngineFailed,
+              ),
+              if (!_officeEngineReady)
+                ColoredBox(
+                  color: palette.pageBg,
+                  child: _previewMessage(
+                    '正在加载附件…',
+                    progressColor: palette.accent,
+                  ),
                 ),
-                Text('第 ${_page + 1} 页 / 共 ${_pdf!.pageCount} 页'),
-                IconButton(
-                  tooltip: '下一页',
-                  onPressed: _pageLoading || _page + 1 >= _pdf!.pageCount
-                      ? null
-                      : () => _showPage(_page + 1),
-                  icon: const Icon(Icons.chevron_right),
-                ),
-              ],
-            ),
-            Expanded(
-              child: _pageLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : InteractiveViewer(
-                      key: ValueKey(_page),
-                      maxScale: 5,
-                      child: Center(
-                        child: Image.memory(
-                          _pageImage!,
-                          fit: BoxFit.contain,
-                          errorBuilder: _imageError,
-                        ),
-                      ),
-                    ),
-            ),
-          ],
+            ],
+          );
+        }
+        return BulletinOfficeView(
+          document: _office!,
+          searchFile: _searchFile,
+          searchExpanded: _searchExpanded,
         );
       case BulletinPreviewKind.unsupported:
-        return const Center(
-          child: Padding(
-            padding: EdgeInsets.all(24),
-            child: Text(
-              '无法预览此附件，已为你下载\n请在保存面板中保存或分享',
-              textAlign: TextAlign.center,
-            ),
-          ),
-        );
+        return _previewMessage('无法预览此附件');
       case null:
-        return Center(
-          child: OutlinedButton.icon(
-            onPressed: _load,
-            icon: const Icon(Icons.refresh),
-            label: const Text('重新下载'),
-          ),
-        );
+        return Center(child: _openButton());
     }
+  }
+
+  Widget _previewMessage(String message, {Color? progressColor}) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (progressColor != null) ...[
+              CircularProgressIndicator(color: progressColor),
+              const SizedBox(height: 12),
+            ],
+            Text(message, textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            _openButton(),
+          ],
+        ),
+      ),
+    );
   }
 }

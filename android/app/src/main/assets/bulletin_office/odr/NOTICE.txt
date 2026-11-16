@@ -1,0 +1,9 @@
+OpenDocument.core 7.7.0
+
+The bundled Android library is app.opendocument:odr-core-android:7.7.0.
+The OpenDocument.core source is available under the
+Mozilla Public License 2.0, with the upstream third-party notices, at:
+https://github.com/opendocument-app/OpenDocument.core/tree/v7.7.0
+
+License: https://www.mozilla.org/MPL/2.0/
+Distribution: https://repo.maven.apache.org/maven2/app/opendocument/odr-core-android/7.7.0/

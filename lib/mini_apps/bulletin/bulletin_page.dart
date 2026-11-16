@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/colors.dart';
 import 'bulletin_controller.dart';
 import 'bulletin_detail_page.dart';
+import 'bulletin_detail_repository.dart';
 import 'bulletin_models.dart';
 
 /// 学校公告浏览与订阅管理页。
@@ -29,19 +30,47 @@ class _BulletinPageState extends State<BulletinPage> {
 
   Future<void> _initialize() async {
     await _controller.ensureStarted();
-    if (mounted) {
-      await Future.wait([
-        _controller.refreshCurrentCategory(),
-        if (_controller.subscription.enabled) _controller.refreshFeed(),
-      ]);
-    }
+    if (mounted) await _refresh();
   }
 
   Future<void> _refresh() async {
+    final category = _controller.category;
     await Future.wait([
-      _controller.refreshCurrentCategory(),
+      _controller.refreshCurrentCategory().then(
+        (_) => _preloadDetails(category),
+      ),
       if (_controller.subscription.enabled) _controller.refreshFeed(),
     ]);
+  }
+
+  Future<void> _selectCategory(BulletinCategory category) async {
+    await _controller.selectCategory(category);
+    _preloadDetails(category);
+  }
+
+  void _preloadDetails(BulletinCategory category) {
+    if (!mounted ||
+        _controller.category != category ||
+        _controller.isLoadingCategory ||
+        _controller.categoryError != null) {
+      return;
+    }
+    final route = ModalRoute.of(context);
+    bool shouldContinue() {
+      final lifecycle = WidgetsBinding.instance.lifecycleState;
+      return mounted &&
+          (route?.isCurrent ?? true) &&
+          _controller.category == category &&
+          (lifecycle == null || lifecycle == AppLifecycleState.resumed);
+    }
+
+    if (!shouldContinue()) return;
+    unawaited(
+      BulletinDetailRepository.instance.preload(
+        _controller.items,
+        shouldContinue: shouldContinue,
+      ),
+    );
   }
 
   @override
@@ -84,7 +113,7 @@ class _BulletinPageState extends State<BulletinPage> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '选择感兴趣的主题，匹配的新公告会显示在首页。',
+                    '选择感兴趣的主题，首页会显示最近匹配的公告。',
                     style: TextStyle(fontSize: 13, color: palette.hint),
                   ),
                   const SizedBox(height: 12),
@@ -101,7 +130,7 @@ class _BulletinPageState extends State<BulletinPage> {
                         ),
                       ),
                       subtitle: Text(
-                        enabled ? '只展示所选主题的新公告' : '目前不会显示订阅动态',
+                        enabled ? '展示所选主题最近发布的公告' : '目前不会显示订阅动态',
                         style: const TextStyle(fontSize: 12),
                       ),
                       onChanged: (value) =>
@@ -258,7 +287,7 @@ class _BulletinPageState extends State<BulletinPage> {
                         side: BorderSide(
                           color: selected ? palette.accent : palette.divider,
                         ),
-                        onSelected: (_) => _controller.selectCategory(category),
+                        onSelected: (_) => _selectCategory(category),
                       );
                     },
                   ),

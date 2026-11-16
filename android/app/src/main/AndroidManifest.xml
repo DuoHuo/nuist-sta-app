@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:launcher="http://schemas.android.com/apk/res/android">
+    xmlns:launcher="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- 固定的 Office 引擎版本兼容应用的 Android 7.0 安装下限。 -->
+    <uses-sdk tools:overrideLibrary="app.opendocument.core" />
     <!-- H5 小程序（WebView）联网；debug 模板自带，release 必须显式声明 -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- 校园地图 GPS 定位 -->
@@ -22,7 +25,20 @@
         android:enableOnBackInvokedCallback="true"
         android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher">
+        <provider
+            android:name=".BulletinAttachmentFileProvider"
+            android:authorities="${applicationId}.bulletin_attachments"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/bulletin_attachment_paths"/>
+        </provider>
         <service android:name=".AppUpdateService" android:exported="false" android:foregroundServiceType="dataSync"/>
+        <service
+            android:name=".BulletinWordPdfService"
+            android:exported="false"
+            android:process=":bulletin_word_pdf" />
         <receiver android:name=".AppUpdateActionReceiver" android:exported="false"/>
         <receiver android:name=".AppUpdateInstallReceiver" android:exported="false"/>
         <receiver android:name=".NextDayReminderReceiver" android:exported="true">
@@ -163,6 +179,11 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- 检测已安装的公告附件打开应用。 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="content" android:mimeType="*/*"/>
         </intent>
     </queries>
 </manifest>

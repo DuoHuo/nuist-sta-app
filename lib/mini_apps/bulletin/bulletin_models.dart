@@ -308,15 +308,11 @@ class BulletinLocalData {
     this.subscription = const BulletinSubscription(),
     this.pages = const {},
     this.feed = const [],
-    this.knownIds = const {},
-    this.baselineReady = false,
   });
 
   final BulletinSubscription subscription;
   final Map<String, BulletinListPage> pages;
   final List<Bulletin> feed;
-  final Set<String> knownIds;
-  final bool baselineReady;
 
   /// 从本地 JSON 记录恢复公告模块数据。
   factory BulletinLocalData.fromJson(Map<String, dynamic>? json) {
@@ -332,7 +328,6 @@ class BulletinLocalData {
       }
     }
     final rawFeed = json?['feed'];
-    final rawKnownIds = json?['knownIds'];
     final rawSubscription = json?['subscription'];
     return BulletinLocalData(
       subscription: BulletinSubscription.fromJson(
@@ -344,8 +339,6 @@ class BulletinLocalData {
           for (final item in rawFeed)
             if (item is Map<String, dynamic>) Bulletin.fromJson(item),
       ],
-      knownIds: {if (rawKnownIds is List) ...rawKnownIds.whereType<String>()},
-      baselineReady: json?['baselineReady'] == true,
     );
   }
 
@@ -356,7 +349,5 @@ class BulletinLocalData {
       for (final entry in pages.entries) entry.key: entry.value.toJson(),
     },
     'feed': [for (final item in feed) item.toJson()],
-    'knownIds': knownIds.toList(),
-    'baselineReady': baselineReady,
   };
 }

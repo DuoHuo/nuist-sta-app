@@ -1,0 +1,10 @@
+JExcelAPI 2.6.12 is distributed under the GNU Lesser General Public License.
+Source archive:
+https://repo.maven.apache.org/maven2/net/sourceforge/jexcelapi/jxl/2.6.12/jxl-2.6.12-sources.jar
+License: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+The Android build resolves the JExcelAPI jar separately through Gradle. A local
+build may replace that dependency with a modified, compatible JExcelAPI jar.
+
+PdfBox-Android 2.0.27.0 is distributed under the Apache License 2.0.
+https://github.com/TomRoush/PdfBox-Android
+https://www.apache.org/licenses/LICENSE-2.0

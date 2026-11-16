@@ -15,6 +15,13 @@ import 'bulletin_tagger.dart';
 /// 信息公告栏官网首页地址（主机名由 `campus_config.dart` 的校园根域派生）。
 final bulletinHomeUri = 'https://${CampusHosts.bulletin}/';
 
+/// 可在后台预读和落盘的官网 HTTPS 地址。
+bool isOfficialBulletinUri(Uri uri) =>
+    uri.scheme == 'https' &&
+    uri.host == CampusHosts.bulletin &&
+    uri.port == 443 &&
+    uri.userInfo.isEmpty;
+
 /// 从学校官网读取公告列表。
 class BulletinApi {
   static final _log = AppLog.logger('bulletin.api');
@@ -69,11 +76,32 @@ class BulletinApi {
 
   /// 请求并解析单条公告正文；无法识别正文时返回 null 交给 WebView 兜底。
   Future<BulletinDetailDocument?> fetchDetail(Bulletin bulletin) async {
-    final uri = Uri.parse(bulletin.url);
-    final response = await _dio.get<String>(
-      uri.toString(),
-      options: Options(responseType: ResponseType.plain),
-    );
+    var uri = Uri.parse(bulletin.url);
+    final official = isOfficialBulletinUri(uri);
+    const redirectCodes = {301, 302, 303, 307, 308};
+    Response<String> response;
+    for (var redirects = 0; ; redirects++) {
+      response = await _dio.getUri<String>(
+        uri,
+        options: Options(
+          responseType: ResponseType.plain,
+          followRedirects: !official,
+          validateStatus: official
+              ? (status) =>
+                    status != null &&
+                    (status >= 200 && status < 300 ||
+                        redirectCodes.contains(status))
+              : null,
+        ),
+      );
+      if (!official || !redirectCodes.contains(response.statusCode)) break;
+      final location = response.headers.value(HttpHeaders.locationHeader);
+      if (redirects >= 5 || location == null || location.isEmpty) return null;
+      final next = uri.resolve(location);
+      // 后台读取正文只跟随官网内的跳转，其他页面仍由主动打开时的网页兜底处理。
+      if (!isOfficialBulletinUri(next)) return null;
+      uri = next;
+    }
     final html = response.data;
     if (html == null || html.isEmpty) return null;
     return compute(_parseDetail, (
@@ -82,27 +110,81 @@ class BulletinApi {
     ), debugLabel: 'bulletin.parse_detail');
   }
 
-  /// 下载公告附件到临时目录，供系统分享面板保存或打开。
+  /// 下载公告附件到独立的临时目录，供预览、外部打开和分享复用。
   Future<File> downloadAttachment(BulletinAttachment attachment) async {
-    final directory = await getTemporaryDirectory();
-    final sourceName = Uri.tryParse(attachment.url)?.pathSegments.last ?? '';
-    // 官网的 download.jsp 是下载接口，不能把 .jsp 拼到真实附件名后面。
-    final extension =
-        sourceName.contains('.') && !sourceName.toLowerCase().endsWith('.jsp')
-        ? '.${sourceName.split('.').last}'
-        : '';
-    var name = attachment.name.trim();
-    if (name.isEmpty) name = '公告附件';
-    name = name.replaceAll(RegExp(r'''[\\/:*?"<>|]'''), '_');
-    if (extension.isNotEmpty &&
-        !name.toLowerCase().endsWith(extension.toLowerCase())) {
-      name += extension;
-    }
-    final file = File(
-      '${directory.path}${Platform.pathSeparator}nuist-announcement-$name',
+    final paths = Uri.tryParse(attachment.url)?.pathSegments ?? const [];
+    final sourceName = paths.isEmpty ? '' : paths.last;
+    final cache = await getTemporaryDirectory();
+    final separator = Platform.pathSeparator;
+    final directory = Directory(
+      '${cache.path}${separator}bulletin_attachments',
     );
-    await _dio.download(attachment.url, file.path, deleteOnError: true);
+    await directory.create(recursive: true);
+    final target = await directory.createTemp('attachment-');
+    late File file;
+    try {
+      await _dio.download(attachment.url, (Headers headers) {
+        var name = _attachmentFileName(headers) ?? attachment.name.trim();
+        if (name.isEmpty) name = '公告附件';
+        final extension = _fileExtension(sourceName);
+        if (extension != null && _fileExtension(name) == null) {
+          name += '.$extension';
+        }
+        name = name.replaceAll(RegExp(r'''[\\/:*?"<>|\x00-\x1f]'''), '_');
+        file = File('${target.path}${separator}nuist-announcement-$name');
+        return file.path;
+      }, deleteOnError: true);
+    } catch (_) {
+      try {
+        await target.delete();
+      } on FileSystemException {
+        // 清理失败时保留原始下载错误。
+      }
+      rethrow;
+    }
     return file;
+  }
+}
+
+String? _fileExtension(String name) {
+  final extension = RegExp(
+    r'\.([a-z0-9]{1,10})$',
+    caseSensitive: false,
+  ).firstMatch(name)?.group(1)?.toLowerCase();
+  // CMS 下载接口的后缀属于网页，并不代表附件格式。
+  return {'jsp', 'aspx', 'php', 'cgi'}.contains(extension) ? null : extension;
+}
+
+String? _attachmentFileName(Headers headers) {
+  final values = headers['content-disposition'];
+  if (values == null || values.isEmpty) return null;
+  try {
+    final parameters = HeaderValue.parse(
+      values.first,
+      preserveBackslash: true,
+    ).parameters;
+    var fileName = parameters['filename'];
+    final parts = RegExp(
+      r"^utf-8'[^']*'(.*)$",
+      caseSensitive: false,
+    ).firstMatch(parameters['filename*'] ?? '');
+    if (parts != null) {
+      try {
+        fileName = Uri.decodeComponent(parts.group(1)!);
+      } on FormatException {
+        // 扩展参数编码无效时保留普通 filename。
+      } on ArgumentError {
+        // 不完整的百分号编码也会被拒绝。
+      }
+    }
+    final name = fileName?.split(RegExp(r'[/\\]')).last.trim();
+    return name == null || name.isEmpty || name == '.' || name == '..'
+        ? null
+        : name;
+  } on FormatException {
+    return null;
+  } on HttpException {
+    return null;
   }
 }
 

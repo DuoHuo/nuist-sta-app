@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -103,7 +104,7 @@ void main() {
 
     expect(find.text('请提交申请材料。'), findsOneWidget);
     expect(find.text('申请表.pdf'), findsOneWidget);
-    expect(find.text('点击预览，无法预览时下载'), findsOneWidget);
+    expect(find.text('点击查看附件'), findsOneWidget);
     expect(
       tester.widget<ListTile>(find.widgetWithText(ListTile, '申请表.pdf')).onTap,
       isNotNull,
@@ -143,6 +144,148 @@ void main() {
 
     dio.httpClientAdapter = _BulletinAdapter('该信息仅允许校内地址访问');
     expect(await api.fetchDetail(page.items.single), isNull);
+  });
+
+  testWidgets('公告标题和正文长按后只显示中文复制和全选', (tester) async {
+    final copied = _captureClipboard();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BulletinDetailPage(
+          bulletin: const Bulletin(
+            id: 'copy',
+            title: 'NoticeTitle',
+            url: 'https://bulletin.campus.invalid/info/copy.htm',
+            officialCategory: '其他',
+            publisher: '',
+            publishedAt: '',
+          ),
+          api: _DocumentBulletinApi(
+            const BulletinDetailDocument(
+              blocks: [
+                BulletinDetailBlock(
+                  kind: BulletinDetailBlockKind.paragraph,
+                  text: 'CopyTarget',
+                ),
+              ],
+              attachments: [],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    for (final value in ['NoticeTitle', 'CopyTarget']) {
+      final target = find.text(value);
+      await tester.longPressAt(
+        tester.getTopLeft(target) + const Offset(12, 10),
+      );
+      await tester.pumpAndSettle();
+      final toolbar = tester.widget<AdaptiveTextSelectionToolbar>(
+        find.byType(AdaptiveTextSelectionToolbar),
+      );
+      expect(toolbar.buttonItems!.map((item) => item.label), ['复制', '全选']);
+      await tester.tap(find.text('复制'));
+      await tester.pumpAndSettle();
+      expect(copied.last, value);
+    }
+    expect(copied, ['NoticeTitle', 'CopyTarget']);
+  });
+
+  testWidgets('复制全文包含未渲染的段落、名单与表格，排除附件按钮文案', (tester) async {
+    final copied = _captureClipboard();
+    final items = List.generate(200, (i) => '合成名单条目 $i');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BulletinDetailPage(
+          bulletin: const Bulletin(
+            id: 'copy-all',
+            title: '名单公告',
+            url: 'https://bulletin.campus.invalid/info/copy-all.htm',
+            officialCategory: '其他',
+            publisher: '测试单位',
+            publishedAt: '2026-11-13',
+          ),
+          api: _DocumentBulletinApi(
+            BulletinDetailDocument(
+              blocks: [
+                const BulletinDetailBlock(
+                  kind: BulletinDetailBlockKind.paragraph,
+                  text: '请核对下面的名单。',
+                ),
+                BulletinDetailBlock(
+                  kind: BulletinDetailBlockKind.numberedList,
+                  items: items,
+                ),
+                const BulletinDetailBlock(
+                  kind: BulletinDetailBlockKind.table,
+                  items: ['事项  ·  时间', '材料领取  ·  上午'],
+                ),
+                const BulletinDetailBlock(
+                  kind: BulletinDetailBlockKind.paragraph,
+                  text: '正文结束',
+                ),
+              ],
+              attachments: const [
+                BulletinAttachment(
+                  name: '名单说明.pdf',
+                  url: 'https://bulletin.campus.invalid/files/example.pdf',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('正文结束', skipOffstage: false), findsNothing);
+
+    await tester.tap(find.byTooltip('复制全文'));
+    await tester.pumpAndSettle();
+    final fullText = [
+      '名单公告',
+      '测试单位 · 2026-11-13',
+      '请核对下面的名单。',
+      [for (final (i, item) in items.indexed) '${i + 1}. $item'].join('\n'),
+      '事项  ·  时间\n材料领取  ·  上午',
+      '正文结束',
+    ].join('\n\n');
+    expect(copied.single, fullText);
+    expect(find.text('全文已复制'), findsOneWidget);
+
+    final firstParagraph = find.text('请核对下面的名单。');
+    final paragraphTextPoint =
+        tester.getTopLeft(firstParagraph) + const Offset(12, 10);
+    await tester.longPressAt(paragraphTextPoint);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('全选'));
+    await tester.pumpAndSettle();
+    final toolbar = tester.widget<AdaptiveTextSelectionToolbar>(
+      find.byType(AdaptiveTextSelectionToolbar),
+    );
+    expect(toolbar.buttonItems!.map((item) => item.label), ['复制']);
+    expect(find.text('正文结束', skipOffstage: false), findsNothing);
+    await tester.tap(find.text('复制'));
+    await tester.pumpAndSettle();
+    expect(copied, [fullText, fullText]);
+
+    await tester.longPressAt(paragraphTextPoint);
+    await tester.pumpAndSettle();
+    expect(find.text('复制'), findsOneWidget);
+    expect(find.text('全选'), findsOneWidget);
+
+    await tester.tap(find.text('全选'));
+    await tester.pumpAndSettle();
+    final lastParagraph = find.text('正文结束');
+    await tester.scrollUntilVisible(lastParagraph, 500, maxScrolls: 100);
+    await tester.pumpAndSettle();
+    final renderedParagraph = tester.widget<RichText>(
+      find.descendant(of: lastParagraph, matching: find.byType(RichText)),
+    );
+    expect(renderedParagraph.text.style?.backgroundColor, isNotNull);
+    await tester.tap(find.text('复制'));
+    await tester.pumpAndSettle();
+    expect(copied, [fullText, fullText, fullText]);
   });
 
   for (final dark in [false, true]) {
@@ -222,6 +365,11 @@ void main() {
         expect(find.text('正文结束'), findsOneWidget);
         expect(find.text('合成名单条目 199'), findsOneWidget);
         expect(find.text('合成名单条目 0', skipOffstage: false), findsNothing);
+        expect(find.text('测试公告', skipOffstage: false), findsNothing);
+        expect(
+          find.text('测试单位 · 2026-11-07', skipOffstage: false),
+          findsNothing,
+        );
         if (kind == BulletinDetailBlockKind.numberedList) {
           expect(find.text('200.'), findsOneWidget);
         }
@@ -253,14 +401,12 @@ void main() {
       ),
       pages: {'all|1': BulletinListPage(items: items, pageNumber: 1)},
       feed: items.take(3).toList(),
-      knownIds: items.map((item) => item.id).toSet(),
-      baselineReady: true,
     );
     await store.save(data);
     expect((await store.read()).toJson(), data.toJson());
 
     final first = store.save(data);
-    const latest = BulletinLocalData(baselineReady: true);
+    const latest = BulletinLocalData();
     final second = store.save(latest);
     expect((await store.read()).toJson(), latest.toJson());
     await Future.wait([first, second]);
@@ -269,6 +415,14 @@ void main() {
       '${directory.path}${Platform.pathSeparator}announcements'
       '${Platform.pathSeparator}announcements.json',
     );
+    await file.writeAsString(
+      jsonEncode({
+        ...data.toJson(),
+        'knownIds': ['old'],
+        'baselineReady': true,
+      }),
+    );
+    expect((await store.read()).toJson(), data.toJson());
     await file.writeAsString('{');
     expect((await store.read()).toJson(), const BulletinLocalData().toJson());
     await store.save(data);
@@ -291,10 +445,7 @@ void main() {
 
     tearDown(() async {
       binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
-      await for (final file in directory.list()) {
-        await file.delete();
-      }
-      await directory.delete();
+      await directory.delete(recursive: true);
     });
 
     for (final sample in [
@@ -323,7 +474,44 @@ void main() {
         expect(await file.readAsString(), payload);
       });
     }
+
+    test('官网下载响应可恢复带中文和实际扩展名的附件名', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _BulletinAdapter(
+          'synthetic attachment bytes',
+          headers: {
+            'content-disposition': [
+              "attachment; filename=old.dat; filename*=UTF-8''..%2F%E6%8A%A5%E5%90%8D%E8%A1%A8.docx",
+            ],
+          },
+        );
+      addTearDown(() => dio.close(force: true));
+      final file = await BulletinApi(dio: dio).downloadAttachment(
+        const BulletinAttachment(
+          name: '附件',
+          url: 'https://bulletin.campus.invalid/system/download.jsp?id=1',
+        ),
+      );
+      expect(file.uri.pathSegments.last, 'nuist-announcement-报名表.docx');
+      expect(await file.readAsString(), 'synthetic attachment bytes');
+    });
   });
+}
+
+List<String> _captureClipboard() {
+  final copied = <String>[];
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+    if (call.method == 'Clipboard.setData') {
+      copied.add((call.arguments as Map)['text'] as String);
+    }
+    return null;
+  });
+  addTearDown(
+    () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+  );
+  return copied;
 }
 
 class _AwaitableBulletinApi extends BulletinApi {
@@ -347,16 +535,17 @@ class _DocumentBulletinApi extends BulletinApi {
 }
 
 class _BulletinAdapter implements HttpClientAdapter {
-  _BulletinAdapter(this.body);
+  _BulletinAdapter(this.body, {this.headers = const {}});
 
   final String body;
+  final Map<String, List<String>> headers;
 
   @override
   Future<ResponseBody> fetch(
     RequestOptions options,
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
-  ) async => ResponseBody.fromString(body, 200);
+  ) async => ResponseBody.fromString(body, 200, headers: headers);
 
   @override
   void close({bool force = false}) {}

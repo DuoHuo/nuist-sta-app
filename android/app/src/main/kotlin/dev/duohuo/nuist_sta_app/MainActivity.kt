@@ -100,6 +100,11 @@ class MainActivity : FlutterActivity() {
         if (!flutterEngine.plugins.has(AttachmentPdfPreviewPlugin::class.java)) {
             flutterEngine.plugins.add(AttachmentPdfPreviewPlugin())
         }
+        BulletinAttachmentActions.register(this, flutterEngine.dartExecutor.binaryMessenger)
+        flutterEngine.platformViewsController.registry.registerViewFactory(
+            BulletinOfficeViewFactory.VIEW_TYPE,
+            BulletinOfficeViewFactory(flutterEngine.dartExecutor.binaryMessenger),
+        )
         if (!flutterEngine.plugins.has(ClientMetadataPlugin::class.java)) {
             flutterEngine.plugins.add(ClientMetadataPlugin())
         }
