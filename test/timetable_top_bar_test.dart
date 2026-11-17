@@ -627,7 +627,7 @@ void main() {
       // 同一次过期：再来一次自动同步过期失败，不再弹。
       await tester.runAsync(_c.onAppStart);
       await _settleIo(tester);
-      expect(fetches, 2);
+      expect(fetches, 1, reason: '同一次过期失败仍遵守90分钟自动尝试间隔');
       expect(_c.portalSessionExpired, isTrue);
       expect(expiredText, findsNothing);
       semantics.dispose();

@@ -87,7 +87,7 @@ class InnovationCreditController extends ChangeNotifier {
     notifyListeners();
     final cached = _credit;
     if (_portalBound && (cached == null || !isFetchedToday(cached.fetchedAt))) {
-      await refresh();
+      await _runRefresh();
     }
   }
 

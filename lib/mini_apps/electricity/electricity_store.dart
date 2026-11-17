@@ -120,6 +120,22 @@ class ElectricityStore {
   static Future<void> saveRoom(ElecRoom room) =>
       _writeJson(_roomFile, room.toJson());
 
+  // ==================== 自动刷新尝试 ====================
+
+  static const _syncStateFile = 'sync_state.json';
+
+  /// 最近一次冷启动自动拉取的时间；失败也保存，重启后继续限制重复请求。
+  static Future<DateTime?> readLastAutomaticAttempt() async {
+    final value = (await _readJson(_syncStateFile))['lastAutomaticAttemptAt'];
+    return value is String ? DateTime.tryParse(value) : null;
+  }
+
+  static Future<void> saveLastAutomaticAttempt(DateTime at) async {
+    final state = await _readJson(_syncStateFile);
+    state['lastAutomaticAttemptAt'] = at.toIso8601String();
+    await _writeJson(_syncStateFile, state);
+  }
+
   // ==================== 历史 ====================
 
   static const _historyFile = 'history.json';

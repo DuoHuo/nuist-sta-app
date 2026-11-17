@@ -78,8 +78,29 @@ void main() {
     expect(c.lastSyncSuccessAt, now);
   });
 
+  test('自动同步失败后打开页面和频繁回前台遵守尝试间隔，手动与重绑可立即恢复', () async {
+    failWith = const JwxtHttpError('kb', 500);
+    expect(await c.onAppStart(), isTrue);
+    expect(c.lastSyncSuccessAt, isNull);
+    for (var index = 0; index < 5; index++) {
+      await c.autoSyncIfNeeded();
+      await c.onAppResumed();
+      await pumpEventQueue();
+      expect(await c.onAppStart(), isFalse);
+    }
+    expect(fetches, 1);
+    advance(TimetableController.autoSyncInterval);
+    expect(await c.onAppStart(), isTrue);
+    expect(fetches, 2);
+    failWith = null;
+    expect(await c.manualSync(), isTrue);
+    expect(fetches, 3);
+    expect(await c.onLoginSucceeded(), isTrue);
+    expect(fetches, 4);
+  });
+
   test(
-    'AS22: restart within 10 min does not sync (interval persisted)',
+    'AS22: restart within 90 min does not sync (interval persisted)',
     () async {
       await c.onAppStart();
       expect(fetches, 1);
@@ -91,9 +112,9 @@ void main() {
     },
   );
 
-  test('AS23: restart after 10 min syncs again', () async {
+  test('AS23: restart after 90 min syncs again', () async {
     await c.onAppStart();
-    advance(const Duration(minutes: 10));
+    advance(const Duration(minutes: 90));
     await restart();
     expect(await c.onAppStart(), isTrue);
     expect(fetches, 2);
@@ -103,7 +124,7 @@ void main() {
     'AS17 AS24: offline failure, network restored 1 min later → one retry',
     () async {
       await c.onAppStart(); // 成功，t0
-      advance(const Duration(minutes: 11));
+      advance(const Duration(minutes: 91));
       failWith = const SocketException('Network is unreachable');
       await c.onAppStart();
       expect(fetches, 2);
@@ -124,7 +145,7 @@ void main() {
   test('network restored without an offline failure does nothing', () async {
     await c.onAppStart();
     expect(await c.onNetworkRestored(), isFalse);
-    advance(const Duration(minutes: 11));
+    advance(const Duration(minutes: 91));
     failWith = TimeoutException('t');
     await c.onAppStart();
     expect(await c.onNetworkRestored(), isFalse, reason: 'timeout ≠ offline');
@@ -146,27 +167,33 @@ void main() {
     test('AS25: ${entry.key} does not reset the interval', () async {
       await c.onAppStart();
       final t0 = c.lastSyncSuccessAt;
-      advance(const Duration(minutes: 11));
+      advance(const Duration(minutes: 91));
       failWith = entry.value;
       expect(await c.onAppStart(), isTrue);
       expect(c.syncStatus, TimetableSyncStatus.failure);
       expect(c.lastSyncSuccessAt, t0);
       await restart();
       expect(c.lastSyncSuccessAt, t0);
-      // 仍按上次成功算，未被重置 → 再次启动照样同步。
+      // 失败时间也持久化，重启仍等待自动尝试间隔。
       failWith = null;
+      expect(await c.onAppStart(), isFalse);
+      expect(fetches, 2);
+      advance(TimetableController.autoSyncInterval);
       expect(await c.onAppStart(), isTrue);
       expect(fetches, 3);
       expect(c.lastSyncSuccessAt, now);
     });
   }
 
-  test('first-install failure keeps no timestamp; next start syncs', () async {
+  test('首次失败保留成功时间为空，重启90分钟内不自动重拉，手动仍可立即恢复', () async {
     failWith = const JwxtHttpError('kb', 500);
     await c.onAppStart();
     expect(c.lastSyncSuccessAt, isNull);
     await restart();
     failWith = null;
+    expect(await c.onAppStart(), isFalse);
+    expect(fetches, 1);
+    advance(TimetableController.autoSyncInterval);
     expect(await c.onAppStart(), isTrue);
     expect(fetches, 2);
   });
@@ -331,25 +358,25 @@ void main() {
     expect(fetches, 1, reason: '距上次成功不足 6 小时，回前台只重读本地');
   });
 
-  test('autoSyncIfNeeded respects the 10-min throttle', () async {
+  test('autoSyncIfNeeded respects the 90-min throttle', () async {
     await c.onAppStart();
     c.debugSetSnapshot(const TimetableSnapshot()); // needsSync = true
     await c.autoSyncIfNeeded();
     expect(fetches, 1);
   });
 
-  test('AS10: restart at 9m59s after success does not sync', () async {
+  test('AS10: restart at 89m59s after success does not sync', () async {
     await c.onAppStart();
     expect(fetches, 1);
-    advance(const Duration(minutes: 9, seconds: 59));
+    advance(const Duration(minutes: 89, seconds: 59));
     await restart();
     expect(await c.onAppStart(), isFalse);
     expect(fetches, 1);
   });
 
-  test('AS11: restart at 10m01s after success syncs', () async {
+  test('AS11: restart at 90m01s after success syncs', () async {
     await c.onAppStart();
-    advance(const Duration(minutes: 10, seconds: 1));
+    advance(const Duration(minutes: 90, seconds: 1));
     await restart();
     expect(await c.onAppStart(), isTrue);
     expect(fetches, 2);
@@ -493,7 +520,7 @@ void main() {
     'AS16: resume does not retry remotely after a timeout failure',
     () async {
       await c.onAppStart();
-      advance(const Duration(minutes: 26));
+      advance(const Duration(minutes: 91));
       failWith = TimeoutException('t');
       expect(await c.onAppStart(), isTrue);
       expect(c.syncStatus, TimetableSyncStatus.failure);
@@ -507,7 +534,7 @@ void main() {
 
   test('AS18: after the one offline retry, a later outage is not retried until another offline failure', () async {
     await c.onAppStart();
-    advance(const Duration(minutes: 11));
+    advance(const Duration(minutes: 91));
     failWith = const SocketException('offline');
     await c.onAppStart();
     failWith = null;
@@ -517,7 +544,7 @@ void main() {
     expect(await c.onNetworkRestored(), isFalse);
     expect(fetches, 3);
     // 再有一次自动同步因无网失败后，才重新允许一次。
-    advance(const Duration(minutes: 11));
+    advance(const Duration(minutes: 91));
     failWith = const SocketException('offline');
     await c.onAppStart();
     expect(fetches, 4);
@@ -534,7 +561,7 @@ void main() {
       'AS19: ${entry.key} failure, then network restored → no retry',
       () async {
         await c.onAppStart();
-        advance(const Duration(minutes: 11));
+        advance(const Duration(minutes: 91));
         failWith = entry.value;
         await c.onAppStart();
         expect(c.syncStatus, TimetableSyncStatus.failure);
@@ -663,7 +690,7 @@ void main() {
       () async {
         await c.onAppStart(); // 成功，写 lastSuccessAt
         final lastOk = c.lastSyncSuccessAt;
-        advance(const Duration(minutes: 11));
+        advance(const Duration(minutes: 91));
         failWith = expired;
         var notified = 0;
         void listener() => notified++;

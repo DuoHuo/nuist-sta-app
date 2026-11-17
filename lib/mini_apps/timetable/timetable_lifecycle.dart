@@ -56,7 +56,7 @@ class NetworkRestoreDetector {
 }
 
 /// App 层课表同步时机接线（第 7 条 AS）：
-/// - 挂载时（冷启动）调用一次 [TimetableController.onAppStart]（远程同步，受 10 分钟
+/// - 挂载时（冷启动）调用一次 [TimetableController.onAppStart]（远程同步，受 90 分钟
 ///   节流）；经 [_fire] 异步发出，不阻塞首页展示。
 /// - 回到前台（[AppLifecycleState.resumed]）调用 [TimetableController.onAppResumed]
 ///   （始终本地刷新；距上次成功远程同步超过 6 小时则再静默补一次远程）；

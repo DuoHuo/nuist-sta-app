@@ -248,6 +248,7 @@ void main() {
     final api = _FixtureApi()..failuresRemaining = 3;
     final controller = BulletinController(
       api: api,
+      now: () => tester.binding.clock.now(),
       store: _MemoryStore(
         const BulletinLocalData(subscription: _subscription, feed: [_old]),
       ),
@@ -287,6 +288,37 @@ void main() {
     expect(find.text(_old.title), findsOneWidget);
     expect(find.text('2 条动态'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('返回前台自动刷新受十五分钟冷却，失败也冷却且手动绕过', (tester) async {
+    var now = DateTime(2026, 11, 17, 12);
+    final api = _FixtureApi()..failuresRemaining = 3;
+    final controller = BulletinController(
+      api: api,
+      now: () => now,
+      store: _MemoryStore(const BulletinLocalData(subscription: _subscription)),
+    );
+    addTearDown(controller.dispose);
+    await controller.ensureStarted();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(seconds: 4));
+    expect(api.requests, 3);
+    await controller.refreshFeed(automatic: true);
+    expect(api.requests, 3);
+    now = now.add(const Duration(minutes: 15));
+    await controller.refreshFeed(automatic: true);
+    expect(api.requests, 4);
+    await controller.refreshFeed(automatic: true);
+    expect(api.requests, 4);
+    await controller.refreshFeed();
+    expect(api.requests, 5);
+    await controller.configureSubscription(
+      enabled: true,
+      topics: {BulletinTopic.academicTalks},
+    );
+    await tester.pump();
+    expect(api.requests, 6);
   });
 
   testWidgets('空订阅初始化持续失败时不显示错误或空状态提示，且不会无限重试', (tester) async {

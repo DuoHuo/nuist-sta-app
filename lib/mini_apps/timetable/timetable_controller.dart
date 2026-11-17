@@ -843,6 +843,7 @@ class TimetableController extends ChangeNotifier {
     _daySwaps = List.unmodifiable(await ScheduleStore.readDaySwaps());
     _examOverrides = Map.unmodifiable(await ScheduleStore.readExamOverrides());
     _lastSyncSuccessAt = await ScheduleStore.readLastSyncSuccess();
+    _lastAutomaticAttemptAt = await ScheduleStore.readLastAutomaticAttempt();
     _portalSessionExpired = await ScheduleStore.readPortalSessionExpired();
     final cached = await TimetableStore.readSnapshot();
     final storedSettings = await TimetableStore.readSettings();
@@ -1010,12 +1011,21 @@ class TimetableController extends ChangeNotifier {
   }
 
   /// 课表页打开时：已登录且缓存为空/过期则自动从教务全量同步。
-  /// 同样受 10 分钟节流（距上次成功不足则不同步）。仍走远程。
+  /// 同样受 90 分钟节流（距上次成功不足则不同步）。仍走远程。
   Future<void> autoSyncIfNeeded() async {
     if (_loading || !needsSync) return;
     if (!_elapsedSinceSuccess(autoSyncInterval)) return;
+    if (!_automaticAttemptDue()) return;
     if (!await refreshPortalBound()) return;
     if (_loading || _syncInFlight != null) return;
+    final bindingRevision = _portalBindingRevision;
+    await _recordAutomaticAttempt();
+    if (_loading ||
+        _syncInFlight != null ||
+        !_portalBound ||
+        bindingRevision != _portalBindingRevision) {
+      return;
+    }
     _nextSyncAuto = true;
     await syncFromJwxt();
   }
@@ -1326,6 +1336,7 @@ class TimetableController extends ChangeNotifier {
     _daySwaps = const [];
     _examOverrides = const {};
     _lastSyncSuccessAt = null;
+    _lastAutomaticAttemptAt = null;
     debugBeforeRefreshLocal = null;
     _lastFailureOffline = false;
     _offlineRetryPending = false;
@@ -3062,8 +3073,9 @@ class TimetableController extends ChangeNotifier {
 
   // ===== 第 7 条：自动同步与节流 =====
 
-  /// 自动同步最短间隔（距上次成功）。冷启动 / 打开课表页 / 网络恢复补同步共用。
-  static const autoSyncInterval = Duration(minutes: 10);
+  /// 自动同步最短间隔（成功或失败尝试后均限流）。冷启动 / 打开课表共用；
+  /// 手动同步、重新绑定和一次离线恢复重试绕过限制。
+  static const autoSyncInterval = Duration(minutes: 90);
 
   /// 回前台静默补拉教务的阈值：距上次**成功**远程同步超过此时长才补一次。
   /// 首页切回 / 下拉仍只走 [refreshLocal]，不受此常量影响。
@@ -3078,6 +3090,8 @@ class TimetableController extends ChangeNotifier {
   static Future<void> Function()? debugBeforeRefreshLocal;
 
   DateTime? _lastSyncSuccessAt;
+  // 自动失败仍有持久化尝试间隔；手动/重新绑定和一次离线恢复不受此限制。
+  DateTime? _lastAutomaticAttemptAt;
   bool _lastFailureOffline = false;
   bool _offlineRetryPending = false;
   bool _triggerBusy = false;
@@ -3089,6 +3103,26 @@ class TimetableController extends ChangeNotifier {
     final last = _lastSyncSuccessAt;
     if (last == null) return true;
     return syncClock().difference(last) >= d;
+  }
+
+  bool _automaticAttemptDue() {
+    final last = _lastAutomaticAttemptAt;
+    return last == null || syncClock().difference(last) >= autoSyncInterval;
+  }
+
+  Future<void> _recordAutomaticAttempt() async {
+    final at = syncClock();
+    _lastAutomaticAttemptAt = at;
+    try {
+      await ScheduleStore.saveLastAutomaticAttempt(at);
+    } on TimetablePersistenceException catch (error, stackTrace) {
+      // 本机记录失败仍允许拉取，本进程中的间隔继续有效。
+      _log.warning(
+        'sync.attempt_timestamp_save_failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   /// 是否「网络不可用」（断网/DNS/连不上）；超时、5xx 不算。
@@ -3108,6 +3142,7 @@ class TimetableController extends ChangeNotifier {
     bool Function()? due,
     bool armOfflineRetry = true,
     bool automatic = false,
+    bool automaticBackoff = true,
   }) async {
     if (_triggerBusy || _syncInFlight != null || _loading) return false;
     _triggerBusy = true;
@@ -3115,8 +3150,19 @@ class TimetableController extends ChangeNotifier {
       await ensureStarted();
       if (_syncInFlight != null || _loading) return false;
       if (due != null && !due()) return false;
+      if (automatic && automaticBackoff && !_automaticAttemptDue()) {
+        return false;
+      }
       if (!await refreshPortalBound()) return false;
       if (_syncInFlight != null || _loading) return false;
+      final bindingRevision = _portalBindingRevision;
+      if (automatic) await _recordAutomaticAttempt();
+      if (_syncInFlight != null ||
+          _loading ||
+          !_portalBound ||
+          bindingRevision != _portalBindingRevision) {
+        return false;
+      }
       _nextSyncAuto = automatic;
       await syncFromJwxt();
       if (armOfflineRetry) {
@@ -3129,7 +3175,7 @@ class TimetableController extends ChangeNotifier {
     }
   }
 
-  /// App 冷启动：距上次成功 ≥10 分钟（或从未成功，即首次安装）才同步。
+  /// App 冷启动：距上次成功 ≥90 分钟（或从未成功，即首次安装）才同步。
   Future<bool> onAppStart() => _trigger(
     due: () => _elapsedSinceSuccess(autoSyncInterval),
     automatic: true,
@@ -3185,7 +3231,7 @@ class TimetableController extends ChangeNotifier {
     final ok = await refreshLocal();
     followCurrentWeekIfChanged();
     if (_elapsedSinceSuccess(resumeRemoteSyncInterval)) {
-      // 与冷启动一样走 _trigger（10 分钟节流不再套用；此处用 6h due）。
+      // 与冷启动一样走 _trigger（90 分钟节流不再套用；此处用 6h due）。
       // 不 await：本地刷新结果立刻返回，远程在后台跑。
       unawaited(
         _trigger(
@@ -3198,13 +3244,17 @@ class TimetableController extends ChangeNotifier {
   }
 
   /// 网络恢复（由 App 层的连接监听调用）：只有上一次自动同步因断网失败时，
-  /// 立即重试一次（不等 10 分钟）；重试失败不再自动重试。其他情况忽略。
+  /// 立即重试一次（不等 90 分钟）；重试失败不再自动重试。其他情况忽略。
   Future<bool> onNetworkRestored() {
     if (!_offlineRetryPending || _triggerBusy || _syncInFlight != null) {
       return Future.value(false);
     }
     _offlineRetryPending = false;
-    return _trigger(armOfflineRetry: false, automatic: true);
+    return _trigger(
+      armOfflineRetry: false,
+      automatic: true,
+      automaticBackoff: false,
+    );
   }
 
   /// 远程手动同步（周课表顶栏用，不受节流限制）。未绑定返回 false（页面跳转登录）。

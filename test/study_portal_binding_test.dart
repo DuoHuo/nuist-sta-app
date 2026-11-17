@@ -156,6 +156,17 @@ void _registerCases<T>(
 
     tearDown(() => controller.notifier.dispose());
 
+    test('首次无缓存的自动刷新不发送手动成功提示，手动刷新仍可立即执行', () async {
+      dependencies.cached = null;
+      final updated = SilentRefresh.updated.value;
+      await controller.ensureStarted();
+      expect(dependencies.requests, 1);
+      expect(SilentRefresh.updated.value, updated);
+      await controller.refresh();
+      expect(dependencies.requests, 2);
+      expect(SilentRefresh.updated.value, updated + 1);
+    });
+
     test('自动刷新在批次外启动并失败，手动批量复用仍汇总失败', () async {
       dependencies.cached = null;
       final started = Completer<void>();

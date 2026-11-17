@@ -45,7 +45,7 @@ class _BulletinHomeCardState extends State<BulletinHomeCard>
 
   void _refreshIfEnabled() {
     if (_isForeground && _controller.subscription.enabled) {
-      unawaited(_controller.refreshFeed());
+      unawaited(_controller.refreshFeed(automatic: true));
     }
   }
 

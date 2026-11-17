@@ -86,7 +86,7 @@ class LaborScoreController extends ChangeNotifier {
     notifyListeners();
     final cached = _score;
     if (_portalBound && (cached == null || !isFetchedToday(cached.fetchedAt))) {
-      await refresh();
+      await _runRefresh();
     }
   }
 

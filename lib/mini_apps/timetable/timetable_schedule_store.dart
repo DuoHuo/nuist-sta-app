@@ -198,6 +198,16 @@ class ScheduleStore {
   static Future<void> saveLastSyncSuccess(DateTime at) =>
       _write(syncStateFile, {'lastSuccessAt': at.toIso8601String()});
 
+  /// 最近一次自动拉取尝试；失败也保存，重启后继续限制重复自动请求。
+  static Future<DateTime?> readLastAutomaticAttempt() async {
+    final value = (await _read(syncStateFile))['lastAutomaticAttemptAt'];
+    return value is String ? DateTime.tryParse(value) : null;
+  }
+
+  /// 只合并尝试时间，不改上次成功时间、过期标记或未来扩展键。
+  static Future<void> saveLastAutomaticAttempt(DateTime at) =>
+      _write(syncStateFile, {'lastAutomaticAttemptAt': at.toIso8601String()});
+
   /// 门户 / 教务登录是否已过期（`sync_state.json` 的 `portalSessionExpired`）。
   /// 缺失 / 类型不对 → false；文件坏按 [_read] 的备份规则处理。
   static Future<bool> readPortalSessionExpired() async =>

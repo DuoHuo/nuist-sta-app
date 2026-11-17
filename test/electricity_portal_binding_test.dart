@@ -24,6 +24,9 @@ class _Harness {
   ElecReading? cached;
   Future<bool> Function()? checkBinding;
   Future<double> Function()? query;
+  DateTime Function()? now;
+  Future<DateTime?> Function()? readAttempt;
+  Future<void> Function(DateTime at)? saveAttempt;
   int roomReads = 0;
   int queries = 0;
   final readings = <ElecReading>[];
@@ -41,12 +44,67 @@ class _Harness {
       return query == null ? 30 : await query!();
     },
     appendReading: (_, reading) async => readings.add(reading),
+    readLastAutomaticAttempt: () async => await readAttempt?.call(),
+    saveLastAutomaticAttempt: (at) async => await saveAttempt?.call(at),
+    now: () => now == null ? DateTime.now() : now!(),
   );
 }
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('八小时内的自动尝试避免冷启动请求，手动与换绑立即刷新', () async {
+    var clock = DateTime(2026, 11, 17, 12);
+    DateTime? lastAttempt = clock.subtract(
+      const Duration(hours: 7, minutes: 59),
+    );
+    _Harness harness() {
+      final h = _Harness(storedRoom: _room, cached: _cached);
+      h.bound = true;
+      h.now = () => clock;
+      h.readAttempt = () async => lastAttempt;
+      h.saveAttempt = (at) async => lastAttempt = at;
+      return h;
+    }
+
+    final h = harness();
+    final updated = SilentRefresh.updated.value;
+    await h.controller.ensureStarted();
+    expect(h.queries, 0);
+    expect(h.controller.portalBound, isTrue);
+    await h.controller.refresh();
+    expect(h.queries, 1);
+    expect(SilentRefresh.updated.value, updated + 1);
+    await h.controller.onPortalBindingChanged(true);
+    expect(h.queries, 2);
+    expect(SilentRefresh.updated.value, updated + 1);
+
+    // 到期后冷启动自动拉取，并记录本次尝试。
+    clock = clock.add(const Duration(minutes: 1));
+    final expired = harness();
+    await expired.controller.ensureStarted();
+    expect(expired.queries, 1);
+    expect(lastAttempt, clock);
+  });
+
+  test('自动拉取失败也计入八小时冷却', () async {
+    final clock = DateTime(2026, 11, 17, 12);
+    DateTime? lastAttempt;
+    Future<_Harness> start() async {
+      final h = _Harness(storedRoom: _room, cached: _cached);
+      h.bound = true;
+      h.now = () => clock;
+      h.readAttempt = () async => lastAttempt;
+      h.saveAttempt = (at) async => lastAttempt = at;
+      h.query = () async => throw StateError('synthetic offline');
+      await h.controller.ensureStarted();
+      return h;
+    }
+
+    expect((await start()).queries, 1);
+    expect(lastAttempt, clock);
+    expect((await start()).queries, 0);
+  });
   test('自动刷新在批次外失败，手动下拉复用不会记为成功', () async {
     final h = _Harness(storedRoom: _room, cached: _cached)..bound = true;
     final started = Completer<void>();

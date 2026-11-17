@@ -15,15 +15,23 @@ class BulletinController extends ChangeNotifier {
   static final _oldestPublicationDate = DateTime.utc(1);
 
   /// 创建公告状态，可注入接口与存储以隔离数据来源。
-  BulletinController({BulletinApi? api, BulletinStore? store})
-    : _api = api ?? BulletinApi(),
-      _store = store ?? BulletinStore();
+  BulletinController({
+    BulletinApi? api,
+    BulletinStore? store,
+    DateTime Function()? now,
+  }) : _api = api ?? BulletinApi(),
+       _store = store ?? BulletinStore(),
+       _now = now ?? DateTime.now;
 
   /// 首页卡片与公告阅读页共用的状态控制器。
   static final BulletinController instance = BulletinController();
 
   final BulletinApi _api;
   final BulletinStore _store;
+  final DateTime Function() _now;
+  DateTime? _lastAutomaticFeedAttempt;
+  final _automaticCategoryAttempts = <String, DateTime>{};
+  static const automaticRefreshInterval = Duration(minutes: 15);
   final Map<String, BulletinListPage> _pages = {};
   final Set<String> _loadingCategories = {};
   final Map<String, String> _categoryErrors = {};
@@ -86,7 +94,7 @@ class BulletinController extends ChangeNotifier {
     _subscription = local.subscription;
     _feed = _recentMatches([...?_cachedFirstPage?.items, ...local.feed]);
     notifyListeners();
-    if (_subscription.enabled) unawaited(refreshFeed());
+    if (_subscription.enabled) unawaited(refreshFeed(automatic: true));
   }
 
   /// 切换当前公告分类并加载首屏内容。
@@ -100,12 +108,22 @@ class BulletinController extends ChangeNotifier {
   Future<void> loadCategory(
     BulletinCategory category, {
     bool forceRefresh = false,
+    bool automatic = false,
   }) async {
     await ensureStarted();
     final key = _categoryKey(category);
     final cacheKey = _pageKey(category, 1);
     if (!forceRefresh && _pages.containsKey(cacheKey)) return;
+    final now = _now();
+    final last = _automaticCategoryAttempts[key];
+    if (automatic &&
+        last != null &&
+        !last.isAfter(now) &&
+        now.difference(last) < automaticRefreshInterval) {
+      return;
+    }
     if (!_loadingCategories.add(key)) return;
+    if (automatic) _automaticCategoryAttempts[key] = now;
     _categoryErrors.remove(key);
     notifyListeners();
     try {
@@ -131,8 +149,8 @@ class BulletinController extends ChangeNotifier {
   }
 
   /// 刷新当前分类的首屏。
-  Future<void> refreshCurrentCategory() =>
-      loadCategory(_category, forceRefresh: true);
+  Future<void> refreshCurrentCategory({bool automatic = false}) =>
+      loadCategory(_category, forceRefresh: true, automatic: automatic);
 
   /// 加载当前分类的下一页。
   Future<void> loadMore() async {
@@ -174,6 +192,7 @@ class BulletinController extends ChangeNotifier {
   }) async {
     await ensureStarted();
     _subscriptionRevision++;
+    _lastAutomaticFeedAttempt = null;
     _feedUnavailable = false;
     _subscription = BulletinSubscription(
       enabled: enabled,
@@ -190,7 +209,7 @@ class BulletinController extends ChangeNotifier {
   }
 
   /// 检查最新公告，失败后最多尝试三次，持续失败时静默隐藏动态。
-  Future<void> refreshFeed() async {
+  Future<void> refreshFeed({bool automatic = false}) async {
     await ensureStarted();
     final revision = _subscriptionRevision;
     if (!_feedRequestIsCurrent(revision) || _feedLoading) {
@@ -199,6 +218,17 @@ class BulletinController extends ChangeNotifier {
       );
       return;
     }
+    final now = _now();
+    final last = _lastAutomaticFeedAttempt;
+    if (automatic &&
+        last != null &&
+        !last.isAfter(now) &&
+        now.difference(last) < automaticRefreshInterval) {
+      SilentRefresh.skipCurrent(reason: 'automatic_refresh_cooldown');
+      return;
+    }
+    // 失败也从本次尝试起冷却，回前台不能反复触发整轮重试。
+    if (automatic) _lastAutomaticFeedAttempt = now;
     _feedLoading = true;
     notifyListeners();
     try {

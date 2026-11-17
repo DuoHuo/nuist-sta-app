@@ -80,7 +80,7 @@ class AcademicController extends ChangeNotifier {
     notifyListeners();
     final cached = _summary;
     if (_portalBound && (cached == null || !isFetchedToday(cached.fetchedAt))) {
-      await refresh();
+      await _runRefresh();
     }
   }
 

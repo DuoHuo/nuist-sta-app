@@ -78,7 +78,7 @@ class ScoreController extends ChangeNotifier {
     notifyListeners();
     final cached = _report;
     if (_portalBound && (cached == null || !isFetchedToday(cached.fetchedAt))) {
-      await refresh();
+      await _runRefresh();
     }
   }
 

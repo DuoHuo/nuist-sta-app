@@ -30,16 +30,17 @@ class _BulletinPageState extends State<BulletinPage> {
 
   Future<void> _initialize() async {
     await _controller.ensureStarted();
-    if (mounted) await _refresh();
+    if (mounted) await _refresh(automatic: true);
   }
 
-  Future<void> _refresh() async {
+  Future<void> _refresh({bool automatic = false}) async {
     final category = _controller.category;
     await Future.wait([
-      _controller.refreshCurrentCategory().then(
-        (_) => _preloadDetails(category),
-      ),
-      if (_controller.subscription.enabled) _controller.refreshFeed(),
+      _controller
+          .refreshCurrentCategory(automatic: automatic)
+          .then((_) => _preloadDetails(category)),
+      if (_controller.subscription.enabled)
+        _controller.refreshFeed(automatic: automatic),
     ]);
   }
 

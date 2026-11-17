@@ -499,7 +499,7 @@ void main() {
       });
     }
 
-    test('EX32 考试失败后：<10 分钟自动不拉；≥10 分钟自动或手动重新拉', () async {
+    test('EX32 考试失败后：<90 分钟自动不拉；≥90 分钟自动或手动重新拉', () async {
       var t = now;
       TimetableController.syncClock = () => t;
       exams = (_) async => throw const JwxtHttpError('cxxsksap.do', 500);
@@ -508,7 +508,7 @@ void main() {
       expect(_c.statusIsSuccess, isTrue);
 
       exams = (_) async => _parse('exam_mock.json');
-      t = t.add(const Duration(minutes: 9));
+      t = t.add(const Duration(minutes: 89));
       expect(await _c.onAppStart(), isFalse);
       expect(examCalls, 1);
 

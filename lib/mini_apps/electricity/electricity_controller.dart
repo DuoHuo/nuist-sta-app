@@ -19,11 +19,21 @@ class ElectricityController extends ChangeNotifier {
     Future<ElecReading?> Function(ElecRoom room)? readLatest,
     Future<double> Function(ElecRoom room)? queryBalance,
     Future<void> Function(ElecRoom room, ElecReading reading)? appendReading,
+    Future<DateTime?> Function()? readLastAutomaticAttempt,
+    Future<void> Function(DateTime at)? saveLastAutomaticAttempt,
+    DateTime Function()? now,
   }) : _bindingCheck = bindingCheck ?? _readPortalBound,
        _readRoom = readRoom ?? ElectricityStore.readRoom,
        _readLatest = readLatest ?? ElectricityStore.latest,
        _queryBalance = queryBalance ?? ElectricityApi.queryBalance,
-       _appendReading = appendReading ?? ElectricityStore.appendReading;
+       _appendReading = appendReading ?? ElectricityStore.appendReading,
+       _readLastAutomaticAttempt =
+           readLastAutomaticAttempt ??
+           ElectricityStore.readLastAutomaticAttempt,
+       _saveLastAutomaticAttempt =
+           saveLastAutomaticAttempt ??
+           ElectricityStore.saveLastAutomaticAttempt,
+       _now = now ?? DateTime.now;
 
   /// 注入绑定状态、余额请求与本地缓存，用合成数据验证生命周期。
   @visibleForTesting
@@ -34,18 +44,28 @@ class ElectricityController extends ChangeNotifier {
     required Future<double> Function(ElecRoom room) queryBalance,
     required Future<void> Function(ElecRoom room, ElecReading reading)
     appendReading,
+    Future<DateTime?> Function()? readLastAutomaticAttempt,
+    Future<void> Function(DateTime at)? saveLastAutomaticAttempt,
+    DateTime Function()? now,
   }) => ElectricityController._(
     bindingCheck: bindingCheck,
     readRoom: readRoom,
     readLatest: readLatest,
     queryBalance: queryBalance,
     appendReading: appendReading,
+    readLastAutomaticAttempt: readLastAutomaticAttempt ?? () async => null,
+    saveLastAutomaticAttempt: saveLastAutomaticAttempt ?? (_) async {},
+    now: now,
   );
 
   static final ElectricityController instance = ElectricityController._();
   static final _log = AppLog.logger('electricity.controller');
 
   static const lowKwhThreshold = 10.0;
+
+  /// 冷启动自动刷新的最短间隔（成功或失败的尝试都计入）。
+  /// 手动刷新、换宿舍和重新绑定不受限制。
+  static const autoRefreshInterval = Duration(hours: 8);
 
   static Future<bool> _readPortalBound() async =>
       await PasskeyStore.read() != null;
@@ -56,6 +76,9 @@ class ElectricityController extends ChangeNotifier {
   final Future<double> Function(ElecRoom room) _queryBalance;
   final Future<void> Function(ElecRoom room, ElecReading reading)
   _appendReading;
+  final Future<DateTime?> Function() _readLastAutomaticAttempt;
+  final Future<void> Function(DateTime at) _saveLastAutomaticAttempt;
+  final DateTime Function() _now;
 
   ElecRoom? _room;
   ElecReading? _latest;
@@ -86,14 +109,30 @@ class ElectricityController extends ChangeNotifier {
   /// 余额为负即欠费，比 [isLow] 更严重，UI 上优先展示。
   bool get isOverdue => (_latest?.kwh ?? double.infinity) < 0;
 
-  /// 读本地缓存并自动刷新一次；重复调用只会执行一次。
+  /// 读本地缓存并自动刷新一次（距上次自动尝试不足 8 小时则只读缓存）；重复调用只会执行一次。
   Future<void> ensureStarted() => _starting ??= _start();
 
   Future<void> _start() async {
     await _ensureLocalLoaded();
     // 绑定事件自己负责刷新，首次挂载不再重复请求。
     if (_bindingRevision == 0) {
-      await _refresh(userInitiated: true, trigger: 'startup');
+      final revision = _bindingRevision;
+      final bound = await _bindingCheck();
+      if (revision != _bindingRevision) return;
+      _portalBound = bound;
+      notifyListeners();
+      if (!bound || _room == null) return;
+      final now = _now();
+      final last = await _readLastAutomaticAttempt();
+      if (revision != _bindingRevision) return;
+      if (last != null &&
+          !last.isAfter(now) &&
+          now.difference(last) < autoRefreshInterval) {
+        return;
+      }
+      // 失败也从本次尝试起冷却，反复冷启动不会反复请求。
+      await _saveLastAutomaticAttempt(now);
+      await _refresh(knownBinding: bound, trigger: 'startup');
     }
   }
 
