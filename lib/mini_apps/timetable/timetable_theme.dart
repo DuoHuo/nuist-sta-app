@@ -125,24 +125,44 @@ abstract final class TimetableTheme {
         CoursePaletteScheme.morandi: _paletteMorandi,
       };
 
-  /// A 柔和（spec §13.5，默认方案）：浅色底配同色系深色字，不再用白字。
+  /// A 晴空清透（默认方案）：等明度浅底配同色系深字，对比度 ≥ 5.45。
   static const List<CourseColorPair> _paletteSoft = [
-    CourseColorPair(Color(0xFFDCE8FB), Color(0xFF1F4E99)), // 0
-    CourseColorPair(Color(0xFFFCE3D6), Color(0xFF9A3E1C)), // 1
-    CourseColorPair(Color(0xFFDCF1E2), Color(0xFF1E6B3A)), // 2
-    CourseColorPair(Color(0xFFE9E0FA), Color(0xFF5B36A8)), // 3
-    CourseColorPair(Color(0xFFFBEBC8), Color(0xFF7F4A00)), // 4
-    CourseColorPair(Color(0xFFD5EFF0), Color(0xFF145F66)), // 5
-    CourseColorPair(Color(0xFFFADDE8), Color(0xFF9C2857)), // 6
-    CourseColorPair(Color(0xFFE3E7EF), Color(0xFF3F4A60)), // 7
-    CourseColorPair(Color(0xFFDEE2FB), Color(0xFF3240A8)), // 8
-    CourseColorPair(Color(0xFFE8F0D2), Color(0xFF4A6214)), // 9
-    CourseColorPair(Color(0xFFFBDCDC), Color(0xFFA3282A)), // 10
-    CourseColorPair(Color(0xFFD3EEE8), Color(0xFF17665A)), // 11
-    CourseColorPair(Color(0xFFF6E3D3), Color(0xFF82431A)), // 12
-    CourseColorPair(Color(0xFFF1DDF5), Color(0xFF7D2F8F)), // 13
-    CourseColorPair(Color(0xFFFCDCEF), Color(0xFFA0236C)), // 14
-    CourseColorPair(Color(0xFFD6EAF8), Color(0xFF1B5B87)), // 15
+    CourseColorPair(Color(0xFFDCEBFF), Color(0xFF154F96)), // 0 晴空蓝
+    CourseColorPair(Color(0xFFFFE4D6), Color(0xFFA33A14)), // 1 珊瑚橙
+    CourseColorPair(Color(0xFFD7F5E6), Color(0xFF116341)), // 2 薄荷绿
+    CourseColorPair(Color(0xFFECE3FF), Color(0xFF5730A8)), // 3 薰衣紫
+    CourseColorPair(Color(0xFFFFF0C7), Color(0xFF804E00)), // 4 蜜柚黄
+    CourseColorPair(Color(0xFFD4F2FA), Color(0xFF0C5B6E)), // 5 冰川青
+    CourseColorPair(Color(0xFFFFE0EC), Color(0xFF9E204E)), // 6 蔷薇粉
+    CourseColorPair(Color(0xFFE9F7CC), Color(0xFF41630D)), // 7 青柠绿
+    CourseColorPair(Color(0xFFE0E4FF), Color(0xFF303EA6)), // 8 矢车菊
+    CourseColorPair(Color(0xFFFFEBD4), Color(0xFF8F470A)), // 9 蜜桃杏
+    CourseColorPair(Color(0xFFD1F2EE), Color(0xFF0E6158)), // 10 翡翠青
+    CourseColorPair(Color(0xFFF7E3FC), Color(0xFF78248F)), // 11 丁香紫
+    CourseColorPair(Color(0xFFFFDEDE), Color(0xFFA62126)), // 12 莓果红
+    CourseColorPair(Color(0xFFE2F2DB), Color(0xFF276322)), // 13 森林绿
+    CourseColorPair(Color(0xFFE3EBF2), Color(0xFF354B6E)), // 14 雾霾蓝
+    CourseColorPair(Color(0xFFF5E8D7), Color(0xFF6E4A1E)), // 15 焦糖沙
+  ];
+
+  /// A 晴空清透深色方案：低明度微饱和暗底 + 柔和浅字，对比度 ≥ 7.30。
+  static const List<CourseColorPair> _paletteSoftDark = [
+    CourseColorPair(Color(0xFF1A2D47), Color(0xFF96C5FF)), // 0 晴空蓝
+    CourseColorPair(Color(0xFF3D2219), Color(0xFFFFB394)), // 1 珊瑚橙
+    CourseColorPair(Color(0xFF163327), Color(0xFF85E0B8)), // 2 薄荷绿
+    CourseColorPair(Color(0xFF2B2142), Color(0xFFC4ADFF)), // 3 薰衣紫
+    CourseColorPair(Color(0xFF382B14), Color(0xFFF7CA74)), // 4 蜜柚黄
+    CourseColorPair(Color(0xFF153038), Color(0xFF80DBED)), // 5 冰川青
+    CourseColorPair(Color(0xFF3D1C28), Color(0xFFFFA3C4)), // 6 蔷薇粉
+    CourseColorPair(Color(0xFF253314), Color(0xFFBBE075)), // 7 青柠绿
+    CourseColorPair(Color(0xFF202445), Color(0xFFA3B0FF)), // 8 矢车菊
+    CourseColorPair(Color(0xFF3B2614), Color(0xFFFFBC7D)), // 9 蜜桃杏
+    CourseColorPair(Color(0xFF153330), Color(0xFF7EDCD2)), // 10 翡翠青
+    CourseColorPair(Color(0xFF341D3B), Color(0xFFDFA3F0)), // 11 丁香紫
+    CourseColorPair(Color(0xFF3D1D1E), Color(0xFFFFA3A6)), // 12 莓果红
+    CourseColorPair(Color(0xFF1D321B), Color(0xFF9AD993)), // 13 森林绿
+    CourseColorPair(Color(0xFF202836), Color(0xFFA3B9DB)), // 14 雾霾蓝
+    CourseColorPair(Color(0xFF33281B), Color(0xFFE0BE94)), // 15 焦糖沙
   ];
 
   /// B 马卡龙（§13.7）所有色号共用的文字色。
@@ -228,13 +248,19 @@ abstract final class TimetableTheme {
         light.bg,
       );
 
-  /// 色号 → 当前明暗下的（底色, 文字色）。浅色与 [courseColor]/[courseTextColor]
-  /// 完全一致；深色见 [darkCoursePair]。
+  /// 色号 → 当前明暗下的（底色, 文字色）。
+  /// 默认方案 [CoursePaletteScheme.soft] 在深色下使用精调的 [_paletteSoftDark]；
+  /// 其余方案见 [darkCoursePair]。
   static CourseColorPair coursePair(
     int index, {
     CoursePaletteScheme scheme = currentScheme,
     bool dark = false,
   }) {
+    if (dark && scheme == CoursePaletteScheme.soft) {
+      return index < 0
+          ? _paletteSoftDark[0]
+          : _paletteSoftDark[index % _paletteSoftDark.length];
+    }
     final list = pairsOf(scheme);
     final p = index < 0 ? list[0] : list[index % list.length];
     return dark ? darkCoursePair(p) : p;
@@ -378,19 +404,15 @@ abstract final class TimetableTheme {
     return unique.length > count ? unique.sublist(0, count) : unique;
   }
 
-  /// 未自选 [userColors] 的课：按下标取 [coursePresetColors]（冷暖交错 12 色）。
-  /// 自动配色下标应为 [coursePresetIndexForName]（课名哈希 % 12），不是 Course.id。
-  static CourseColorPair autoCoursePair(int index, {bool dark = false}) {
-    final list = coursePresetColors;
-    final bg = list[index < 0 ? 0 : index % list.length];
-    return _softCoursePair(bg, dark: dark);
-  }
+  /// 未自选 [userColors] 的课：按下标取「晴空清透」16 色对（与 [coursePair] 一致）。
+  static CourseColorPair autoCoursePair(int index, {bool dark = false}) =>
+      coursePair(index, scheme: CoursePaletteScheme.soft, dark: dark);
 
-  /// 课名 → 自动色对：稳定哈希进 12 预设（同名同色）。
+  /// 课名 → 自动色对：稳定哈希进 16 色（同名同色）。
   static CourseColorPair autoCoursePairForName(
     String name, {
     bool dark = false,
-  }) => autoCoursePair(coursePresetIndexForName(name), dark: dark);
+  }) => autoCoursePair(courseColorIndexForName(name), dark: dark);
 
   /// 自选颜色原样显示，明暗主题都不改变所选色值；自动文字取对比度更高的黑或白。
   static CourseColorPair userCoursePair(Color c, {bool dark = false}) {
@@ -402,26 +424,6 @@ abstract final class TimetableTheme {
       c,
       whiteContrast >= blackContrast ? forcedWhiteText : forcedBlackText,
     );
-  }
-
-  /// 自动分配的默认色仍使用柔和配色，自选颜色不经过此转换。
-  static CourseColorPair _softCoursePair(Color c, {bool dark = false}) {
-    final hsl = HSLColor.fromColor(c);
-    final Color lightBg;
-    if (c.computeLuminance() > 0.4) {
-      lightBg = c;
-    } else {
-      lightBg = hsl
-          .withLightness(0.82)
-          .withSaturation(hsl.saturation.clamp(0.20, 0.45))
-          .toColor();
-    }
-    final lightFg = hsl
-        .withLightness(0.28)
-        .withSaturation(hsl.saturation.clamp(0.35, 0.75))
-        .toColor();
-    final p = CourseColorPair(lightBg, lightFg);
-    return dark ? darkCoursePair(p) : p;
   }
 
   /// item 14「文字颜色」强制白字 / 黑字（明暗都一样）。

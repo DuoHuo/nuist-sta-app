@@ -778,7 +778,7 @@ void main() {
 
     test('ST17/ST18 对比度：三套 × 16 色 × 100..30% 均 ≥ 4.5，最低值与规范一致', () {
       const expected = {
-        CoursePaletteScheme.soft: (5.5, 5.7, 5.8),
+        CoursePaletteScheme.soft: (5.46, 5.71, 5.91),
         CoursePaletteScheme.macaron: (8.66, 11.25, 12.43),
         CoursePaletteScheme.morandi: (6.75, 9.36, 10.58),
       };
@@ -837,20 +837,29 @@ void main() {
         for (final x in _c.manualCourses) x.id: _c.colorIndexOf(x),
       };
       final settingsFile = File('${tmp.path}/timetable/settings.json');
-      final expected = {
-        'A': {'b': 13, 'd': 11, 'z': 12, 'n': 5},
-        'B': {'b': 12, 'd': 12, 'z': 12, 'n': 5},
-        'C': {'b': 12, 'd': 11, 'z': 12, 'n': 5},
-      };
       Map<String, int>? first;
       for (final k in ['A', 'B', 'C', 'A']) {
         await _c.updateSettings(_c.settings.copyWith(paletteScheme: k));
         final m = colors();
-        expect(m['a'], 1, reason: k);
-        expect(m['c'], 5, reason: k);
-        for (final e in expected[k]!.entries) {
-          expect(m[e.key], e.value, reason: '$k ${e.key}');
-        }
+        final scheme = coursePaletteSchemeOf(k);
+        // 全局去重：6 门课分配到 6 个互不相同的色号，手动色号 12 保留，相邻不撞色。
+        expect(m.values.toSet(), hasLength(6), reason: k);
+        expect(m['z'], 12, reason: k);
+        expect(
+          colorsClash(m['a']!, m['b']!, scheme: scheme),
+          isFalse,
+          reason: '$k a/b',
+        );
+        expect(
+          colorsClash(m['c']!, m['d']!, scheme: scheme),
+          isFalse,
+          reason: '$k c/d',
+        );
+        expect(
+          colorsClash(m['z']!, m['n']!, scheme: scheme),
+          isFalse,
+          reason: '$k z/n',
+        );
         first ??= m;
         // 手动色号仍是 12；课程数据不写顺延后的色号。
         expect(_c.manualCourses.firstWhere((x) => x.id == 'z').colorIndex, 12);

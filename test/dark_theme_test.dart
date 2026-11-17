@@ -432,21 +432,18 @@ void _timetableDarkTests() {
       expect(d.pageBg, _darkBase);
     });
 
-    test('DK02 色板 A 16 色：深色格 = 深字色往 #121316 混 45%，字 = 浅底色，对比度 ≥ 4.5', () {
+    test('DK02 色板 A 16 色：深色采用独立精调暗底浅字，对比度 ≥ 7.0', () {
       final pairs = TimetableTheme.pairsOf(CoursePaletteScheme.soft);
       expect(pairs, hasLength(16));
       for (var i = 0; i < pairs.length; i++) {
-        final p = pairs[i];
         final d = TimetableTheme.coursePair(
           i,
           scheme: CoursePaletteScheme.soft,
           dark: true,
         );
-        expect(d.bg, Color.lerp(p.fg, _darkBase, 0.45));
-        expect(d.fg, p.bg);
         expect(
           _contrast(d.fg, d.bg),
-          greaterThanOrEqualTo(4.5),
+          greaterThanOrEqualTo(7.0),
           reason: '色号 $i',
         );
         // 浅色不变。
@@ -462,6 +459,16 @@ void _timetableDarkTests() {
           l.fg,
           TimetableTheme.courseTextColor(i, scheme: CoursePaletteScheme.soft),
         );
+      }
+      // B/C 方案深色仍按 darkCoursePair 换算。
+      for (final s in [
+        CoursePaletteScheme.macaron,
+        CoursePaletteScheme.morandi,
+      ]) {
+        final p = TimetableTheme.pairsOf(s)[0];
+        final d = TimetableTheme.coursePair(0, scheme: s, dark: true);
+        expect(d.bg, Color.lerp(p.fg, _darkBase, 0.45));
+        expect(d.fg, p.bg);
       }
     });
 

@@ -463,6 +463,13 @@ class TimetableController extends ChangeNotifier {
     return _colorMap!;
   }
 
+  List<Course> _userOccupiedCourses() => [
+    for (final c in _snapshot.courses)
+      if (!_autoColored(c)) c,
+    for (final c in _manualCourses)
+      if (!_autoColored(c)) c,
+  ];
+
   /// 无可用配色表时重建一次：教务课按原始位置（忽略调课记录）；手动课已存的
   /// [Course.assignedColorIndex] 当固定色参与、不重新顺延。手动课与教务课同名时
   /// 不拿手动课的 assignedColorIndex 去固定该课名（否则改名成教务课名的手动课
@@ -471,15 +478,20 @@ class TimetableController extends ChangeNotifier {
     final jwxtNames = {
       for (final c in _snapshot.courses) normalizeCourseName(c.name),
     };
-    return assignCourseColors([
-      ..._snapshot.courses.where(_autoColored),
-      for (final c in _manualCourses.where(_autoColored))
-        c.colorIndex == null &&
-                c.assignedColorIndex != null &&
-                !jwxtNames.contains(normalizeCourseName(c.name))
-            ? c.copyWith(colorIndex: c.assignedColorIndex)
-            : c,
-    ], scheme: scheme);
+    return assignCourseColors(
+      [
+        ..._snapshot.courses.where(_autoColored),
+        for (final c in _manualCourses.where(_autoColored))
+          c.colorIndex == null &&
+                  c.assignedColorIndex != null &&
+                  !jwxtNames.contains(normalizeCourseName(c.name))
+              ? c.copyWith(colorIndex: c.assignedColorIndex)
+              : c,
+      ],
+      scheme: scheme,
+      userColors: _userColors,
+      userOccupiedCourses: _userOccupiedCourses(),
+    );
   }
 
   /// 全量重算配色（手动课只固定用户自选色号），把结果写回手动课的
@@ -488,12 +500,17 @@ class TimetableController extends ChangeNotifier {
   /// 只有四处调用：换配色方案、同步成功、增手动课、删手动课。
   Future<bool> _recomputeColors() async {
     final scheme = coursePaletteSchemeOf(settings.paletteScheme);
-    final map = assignCourseColors([
-      // 教务原始位置，不套调课记录；用户自选色的课不参与（item 9）。
-      ..._snapshot.courses.where(_autoColored),
-      for (final c in _manualCourses.where(_autoColored))
-        c.copyWith(clearAssignedColor: true),
-    ], scheme: scheme);
+    final map = assignCourseColors(
+      [
+        // 教务原始位置，不套调课记录；用户自选色的课作为占用参考，不写进 map（item 9）。
+        ..._snapshot.courses.where(_autoColored),
+        for (final c in _manualCourses.where(_autoColored))
+          c.copyWith(clearAssignedColor: true),
+      ],
+      scheme: scheme,
+      userColors: _userColors,
+      userOccupiedCourses: _userOccupiedCourses(),
+    );
     _colorMap = map;
     _colorMapJwxt = _snapshot.courses;
     _colorMapScheme = scheme;
@@ -528,16 +545,25 @@ class TimetableController extends ChangeNotifier {
   /// [target] 不带任何色号参与顺延。不改配色表、不改任何其他课。
   int _colorForOne(Course target) {
     final scheme = coursePaletteSchemeOf(settings.paletteScheme);
-    final map = assignCourseColors([
-      for (final c in _snapshot.courses)
-        c.copyWith(colorIndex: colorIndexOf(c)),
-      for (final c in _manualCourses)
-        if (c.id != target.id)
-          c.copyWith(
-            colorIndex: c.colorIndex ?? c.assignedColorIndex ?? colorIndexOf(c),
-          ),
-      target.copyWith(clearColor: true, clearAssignedColor: true),
-    ], scheme: scheme);
+    final map = assignCourseColors(
+      [
+        for (final c in _snapshot.courses)
+          if (_autoColored(c)) c.copyWith(colorIndex: colorIndexOf(c)),
+        for (final c in _manualCourses)
+          if (c.id != target.id && _autoColored(c))
+            c.copyWith(
+              colorIndex:
+                  c.colorIndex ?? c.assignedColorIndex ?? colorIndexOf(c),
+            ),
+        target.copyWith(clearColor: true, clearAssignedColor: true),
+      ],
+      scheme: scheme,
+      userColors: _userColors,
+      userOccupiedCourses: [
+        for (final c in _userOccupiedCourses())
+          if (c.id != target.id) c,
+      ],
+    );
     return map[normalizeCourseName(target.name)] ?? target.resolvedColorIndex;
   }
 

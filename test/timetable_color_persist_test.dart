@@ -221,7 +221,7 @@ void main() {
     expect(colorsJson()['scheme'], 'soft');
     await c.updateSettings(c.settings.copyWith(paletteScheme: 'B'));
     final raw = colorsJson();
-    expect(raw['schemaVersion'], 1);
+    expect(raw['schemaVersion'], TimetableStore.courseColorsSchemaVersion);
     expect(raw['scheme'], 'macaron');
     expect(Map<String, int>.from(raw['map'] as Map), c.courseColorMap);
     final after = colours();
@@ -261,13 +261,17 @@ void main() {
       '顶层不是对象': (f) => f.writeAsStringSync('[1, 2]'),
       '其他配色方案': (f) => f.writeAsStringSync(
         jsonEncode({
-          'schemaVersion': 1,
+          'schemaVersion': TimetableStore.courseColorsSchemaVersion,
           'scheme': 'macaron',
           'map': {_j: 3, _a: 3},
         }),
       ),
       '未知方案名': (f) => f.writeAsStringSync(
-        jsonEncode({'schemaVersion': 1, 'scheme': 'Z', 'map': {}}),
+        jsonEncode({
+          'schemaVersion': TimetableStore.courseColorsSchemaVersion,
+          'scheme': 'Z',
+          'map': {},
+        }),
       ),
       '版本不对': (f) => f.writeAsStringSync(
         jsonEncode({
@@ -278,21 +282,21 @@ void main() {
       ),
       'map 值类型不对': (f) => f.writeAsStringSync(
         jsonEncode({
-          'schemaVersion': 1,
+          'schemaVersion': TimetableStore.courseColorsSchemaVersion,
           'scheme': 'soft',
           'map': {_j: '3'},
         }),
       ),
       'map 色号越界': (f) => f.writeAsStringSync(
         jsonEncode({
-          'schemaVersion': 1,
+          'schemaVersion': TimetableStore.courseColorsSchemaVersion,
           'scheme': 'soft',
           'map': {_j: 99},
         }),
       ),
       'map 不是对象': (f) => f.writeAsStringSync(
         jsonEncode({
-          'schemaVersion': 1,
+          'schemaVersion': TimetableStore.courseColorsSchemaVersion,
           'scheme': 'soft',
           'map': [3],
         }),
@@ -305,7 +309,7 @@ void main() {
         await restart();
         expect(colours(), before);
         final raw = colorsJson();
-        expect(raw['schemaVersion'], 1);
+        expect(raw['schemaVersion'], TimetableStore.courseColorsSchemaVersion);
         expect(raw['scheme'], 'soft');
         expect(
           (raw['map'] as Map)[normalizeCourseName(_j)],

@@ -169,13 +169,11 @@ void main() {
     await drag('b', toDay: 5);
     final bumped = c.colorIndexOf(byId('b'));
     expect(bumped, isNot(12));
+    // 增课重算后仍避开同周课程 a（12）；删掉 a 后重新回到哈希色 12。
     await c.addManualCourse(_m('c', '体育', day: 7, start: 11, end: 12));
-    expect(c.colorIndexOf(byId('b')), 12); // 不再相邻 → 回到哈希色
-    // 再造相邻后删课触发重算
-    await drag('b', toDay: 1, toStart: 3);
-    expect(c.colorIndexOf(byId('b')), 12); // 拖动不重算
-    expect(await c.deleteManualCourse('c'), isTrue);
     expect(c.colorIndexOf(byId('b')), isNot(12));
+    expect(await c.deleteManualCourse('a'), isTrue);
+    expect(c.colorIndexOf(byId('b')), 12);
   });
 
   test('换配色方案会重算并落盘', () async {
@@ -183,10 +181,11 @@ void main() {
     await drag('b', toDay: 5);
     expect(c.colorIndexOf(byId('b')), isNot(12));
     await c.updateSettings(c.settings.copyWith(paletteScheme: 'B'));
-    expect(c.colorIndexOf(byId('b')), 12);
-    expect(c.manualCourseById('b')!.assignedColorIndex, 12);
+    final after = c.colorIndexOf(byId('b'));
+    expect(after, isNot(12));
+    expect(c.manualCourseById('b')!.assignedColorIndex, after);
     await restart();
-    expect(c.manualCourseById('b')!.assignedColorIndex, 12);
+    expect(c.manualCourseById('b')!.assignedColorIndex, after);
   });
 
   test('旧数据缺字段：启动算一次并落盘，未知键保留，之后不再改写', () async {
