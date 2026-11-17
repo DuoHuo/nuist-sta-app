@@ -657,11 +657,9 @@ class CourseColorRow extends StatelessWidget {
         : base.course.forSlot(base.course.slots[base.slotIndex]);
     final fallback = inheritBaseColor
         ? coursePairFor(controller, baseCourse, dark: colors.isDark).bg
-        : TimetableTheme.autoCoursePair(
-            coursePresetIndexForCourse(
-              course,
-              colorName: controller.colorNameOf(course),
-            ),
+        : coursePairFor(
+            controller,
+            course.copyWith(useDefaultColor: true),
             dark: colors.isDark,
           ).bg;
     return IconButton(

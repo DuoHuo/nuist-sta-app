@@ -120,7 +120,7 @@ void main() {
       test('把 B 移到 A 旁边：B 保持原色（不因新位置相邻而顺延）', () async {
         load([_j('A', _a), _j('B', _b, day: 4, start: 7, end: 8)]);
         final before = colours();
-        expect(before, {'A': 12, 'B': 12}); // 前提：原本不相邻
+        expect(before.values.toSet(), hasLength(2));
         await move('B', scope, toDay: 1, toStart: 3);
         expect(colours(), before);
         await recompute();
@@ -147,7 +147,7 @@ void main() {
         await TimetableStore.saveSnapshot(snapshotOf(jwxt));
         load(jwxt);
         final before = colours();
-        expect(before['B'], 12);
+        expect(before.values.toSet(), hasLength(3));
         await move('B', scope, toDay: 1, toStart: 3); // 移到 A 旁边
         await move('C', scope, toDay: 5, toStart: 1);
         final afterMove = colours();

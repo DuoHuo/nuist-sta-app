@@ -476,7 +476,7 @@ class TimetableStore {
   /// 只在重算配色（教务同步、手动课增删、换配色方案）后写；重启直接读，避免惰性
   /// 重建时因调课/编辑改了相邻关系而换色。同步/解绑/清教务缓存都不删它。
   static const courseColorsFile = 'course_colors.json';
-  static const int courseColorsSchemaVersion = 1;
+  static const int courseColorsSchemaVersion = 2;
 
   /// 读配色表。文件不存在、JSON 坏、版本/方案名不认识、map 不是 {String: 0..15}
   /// 任一情况 → null（调用方重建并落盘）。不抛异常。

@@ -328,24 +328,22 @@ void main() {
       }
     });
 
-    test('无 userColors 时 coursePairFor 优先 Course.id 哈希进 12 预设', () {
+    test('无 userColors 时 coursePairFor 走全局防重分配的 16 色对', () {
       c.debugSetSnapshot(_snap([_jwxt('MATH|01', '高数')]), viewingWeek: 2);
       expect(c.userColorOf(c.courses.single), isNull);
       final pair = coursePairFor(c, c.courses.single);
-      final byId = TimetableTheme.autoCoursePair(
-        coursePresetIndexForCourse(c.courses.single),
+      final byAssigned = TimetableTheme.autoCoursePair(
+        c.colorIndexOf(c.courses.single),
       );
-      expect(pair.bg.toARGB32(), byId.bg.toARGB32());
-      expect(pair.fg.toARGB32(), byId.fg.toARGB32());
-      // 同名不同 id → 可不同色（id 优先）
+      expect(pair.bg.toARGB32(), byAssigned.bg.toARGB32());
+      expect(pair.fg.toARGB32(), byAssigned.fg.toARGB32());
+      // 同名课程走同一稳定课名配色入口
       c.debugSetSnapshot(_snap([_jwxt('OTHER|99', '高数')]), viewingWeek: 2);
       final other = coursePairFor(c, c.courses.single).bg.toARGB32();
-      // 不强制异色（哈希可能撞），但路径必须走 id
       expect(
         other,
-        TimetableTheme.autoCoursePair(
-          coursePresetIndexForCourse(c.courses.single),
-        ).bg.toARGB32(),
+        TimetableTheme.autoCoursePair(c.colorIndexOf(c.courses.single)).bg
+            .toARGB32(),
       );
       // 自选颜色保持原色，明暗主题一致；自动文字选择黑或白以保证可读。
       for (final raw in TimetableTheme.coursePresetColors) {

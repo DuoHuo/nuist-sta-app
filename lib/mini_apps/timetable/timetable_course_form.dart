@@ -329,11 +329,8 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
   }
 
   int get _defaultColorIndex => _entryCourse == null
-      ? coursePresetIndexForName(_name.text.trim())
-      : coursePresetIndexForCourse(
-          _entryCourse,
-          colorName: widget.controller.colorNameOf(_entryCourse),
-        );
+      ? courseColorIndexForName(_name.text.trim())
+      : widget.controller.colorIndexOf(_entryCourse);
 
   Future<void> _pickColor() async {
     FocusScope.of(context).unfocus();
