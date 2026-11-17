@@ -95,13 +95,9 @@ class _BulletinHomeCardState extends State<BulletinHomeCard>
                         ),
                       ),
                       const Spacer(),
-                      if (controller.feedLoading)
-                        const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      else if (enabled && !hideFeed)
+                      if (enabled &&
+                          !hideFeed &&
+                          (feed.isNotEmpty || !controller.feedLoading))
                         Text(
                           '${feed.length} 条动态',
                           style: TextStyle(color: palette.hint, fontSize: 11),

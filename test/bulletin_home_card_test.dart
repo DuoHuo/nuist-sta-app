@@ -123,6 +123,10 @@ void main() {
     await tester.pump();
     expect(api.requests, 1);
     expect(controller.feedLoading, isTrue);
+    await tester.pumpWidget(_home(controller));
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.text(_old.title), findsOneWidget);
+    expect(find.text('1 条动态'), findsOneWidget);
 
     await controller.refreshFeed();
     expect(api.requests, 1);
@@ -137,6 +141,7 @@ void main() {
     expect(store.data.feed, [_new, _old]);
     await controller.refreshFeed();
     expect(controller.feed.map((item) => item.id), ['new', 'old']);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('初始化自动重试，成功后展示已缓存且仍符合条件的公告', (tester) async {
