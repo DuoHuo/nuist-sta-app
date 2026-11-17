@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -161,6 +162,52 @@ void main() {
           throw const SocketException('offline');
       await c.syncFromJwxt();
       expect(c.syncStatus, TimetableSyncStatus.failure);
+      expect(c.viewingWeek, 9);
+    });
+
+    test('SW01 同步开始时在本周、请求期间手动翻到第 9 周：同步完成后停留在第 9 周', () async {
+      await seed([_jwxt('j1', '高等数学')]);
+      expect(c.currentWeek, 2);
+      expect(c.viewingWeek, 2);
+
+      final gate = Completer<TimetableSnapshot>();
+      TimetableController.fetchSnapshot = (t, {baseSettings}) => gate.future;
+
+      final syncFuture = c.manualSync();
+      await pumpEventQueue();
+      c.setViewingWeek(9);
+      expect(c.viewingWeek, 9);
+
+      gate.complete(_snap([_jwxt('j1', '高等数学')]));
+      expect(await syncFuture, isTrue);
+      await pumpEventQueue();
+      expect(c.syncStatus, TimetableSyncStatus.success);
+      expect(c.viewingWeek, 9);
+      expect(c.isViewingCurrentWeek, isFalse);
+    });
+
+    test('SW01 非本周同步期间即使当前周变化，仍停留在用户正在看的第 9 周', () async {
+      await seed([_jwxt('j1', '高等数学')]);
+      c.setViewingWeek(9);
+      expect(c.currentWeek, 2);
+
+      // 模拟跨周或 dqzc 推算修正后本周变为第 3 周。
+      TimetableController.clock = () => DateTime(2026, 9, 14);
+      expect(c.currentWeek, 3);
+
+      await c.syncFromJwxt();
+      expect(c.syncStatus, TimetableSyncStatus.success);
+      expect(c.viewingWeek, 9);
+      expect(c.isViewingCurrentWeek, isFalse);
+    });
+
+    test('SW01 仅手动课首次同步（旧 termCode 为空但已有开学日）仍停留在第 9 周', () async {
+      await c.ensureStarted();
+      await c.updateSettings(TimetableSettings(termStartDate: _termStart));
+      c.setViewingWeek(9);
+      nextFetch = [_jwxt('j1', '高等数学')];
+      await c.syncFromJwxt();
+      expect(c.syncStatus, TimetableSyncStatus.success);
       expect(c.viewingWeek, 9);
     });
   });
