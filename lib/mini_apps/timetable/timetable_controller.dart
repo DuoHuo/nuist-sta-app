@@ -756,7 +756,7 @@ class TimetableController extends ChangeNotifier {
   /// 把 [viewingWeek] 跳到 [_defaultViewingWeek]（本周，钳到 1..totalWeeks）。
   /// 同一本周内用户手动翻周不打断。返回是否改了 viewingWeek。
   ///
-  /// 打开周课表、[onAppResumed]、同步成功后调用；PageView 由页面监听
+  /// 打开周课表、[onAppResumed] 时调用；PageView 由页面监听
   /// [setViewingWeek] 的 notify 对齐页码。
   bool followCurrentWeekIfChanged() {
     final week = currentWeek;
@@ -1078,7 +1078,8 @@ class TimetableController extends ChangeNotifier {
               ? settings.termCode
               : '2026-2027-1';
           final previous = settings;
-          // SW01：记下同步前是否正在看本周。
+          // SW01：记下同步前浏览周与是否在看本周。
+          final viewingWeekBeforeSync = _viewingWeek;
           final wasOnCurrentWeek = isViewingCurrentWeek;
           var snapshot = await fetchSnapshot(
             term,
@@ -1174,16 +1175,21 @@ class TimetableController extends ChangeNotifier {
           }
           lastSyncDiff = syncDiff;
           // SW01（§13.10）：同步成功后停留在正在看的周（只钳到 1..totalWeeks）。
-          // 同步前就在看本周、之前周次未知（无开学日）或换了学期时才跟到新的本周。
-          if (wasOnCurrentWeek ||
-              previous.termStartDate == null ||
-              previous.termCode != _snapshot.settings.termCode) {
+          // 同步期间未手动切周，且（同步前就在看本周 / 之前无开学日 / 从已知旧学期切到新学期）
+          // 时才跟到新的本周；不再调用 followCurrentWeekIfChanged，避免把非当前周拉回本周。
+          final switchedDuringSync = _viewingWeek != viewingWeekBeforeSync;
+          final termChanged =
+              previous.termCode.isNotEmpty &&
+              previous.termCode != _snapshot.settings.termCode;
+          if (!switchedDuringSync &&
+              (wasOnCurrentWeek ||
+                  previous.termStartDate == null ||
+                  termChanged)) {
             _viewingWeek = _defaultViewingWeek; // 已钳到 1..totalWeeks
           } else {
             _clampViewingWeek();
           }
-          // 系统日期/本周相对上次已变时跟到本周（同周内手动翻周仍由上面 SW01 保留）。
-          followCurrentWeekIfChanged();
+          _lastSeenCurrentWeek = currentWeek;
           // 教务优先（jwxt §3.2）：原课被删、SKZC 与 origWeeks 不同（含缺 origWeeks
           // 的旧记录）、或原时段星期/节次变了 → 删掉记录，显示教务数据。其余保留。
           // 只在同步成功这里比较；解绑不删。
