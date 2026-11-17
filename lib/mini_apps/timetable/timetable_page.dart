@@ -11,6 +11,7 @@ import 'timetable_controller.dart';
 import 'timetable_export_page.dart';
 import 'timetable_perf.dart';
 import 'timetable_settings_page.dart';
+import 'timetable_sync_diff.dart';
 import 'timetable_theme.dart';
 import 'timetable_course_detail_sheet.dart';
 import 'timetable_week_grid.dart';
@@ -37,6 +38,8 @@ class _TimetablePageState extends State<TimetablePage> {
   Widget? _weekPager;
   double? _dragStartPage;
   bool _viewingWeekCleared = false;
+  bool _syncAlertQueued = false;
+  bool _openedPendingCourse = false;
   ScheduleEvent? _focusedEvent;
   bool _eventFocusRevealed = false;
   String? _focusUnavailableMessage;
@@ -132,6 +135,42 @@ class _TimetablePageState extends State<TimetablePage> {
       }
     });
     await _controller.autoSyncIfNeeded();
+    if (!mounted || _viewingWeekCleared) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_maybeShowPendingChangeAlert());
+    });
+  }
+
+  Future<void> _maybeShowPendingChangeAlert() async {
+    if (!mounted ||
+        _viewingWeekCleared ||
+        _syncAlertQueued ||
+        _openedPendingCourse ||
+        widget.focusEvent != null) {
+      return;
+    }
+    final fromController = _controller.pendingChangeAlerts;
+    final records = fromController.isNotEmpty
+        ? fromController
+        : await TimetableChangeLogStore.readUnnotified();
+    if (records.isEmpty ||
+        !mounted ||
+        _viewingWeekCleared ||
+        _syncAlertQueued ||
+        _openedPendingCourse) {
+      return;
+    }
+    _syncAlertQueued = true;
+    try {
+      await showTimetableChangeAlert(
+        context,
+        records: records,
+        controller: _controller,
+      );
+    } finally {
+      _syncAlertQueued = false;
+    }
   }
 
   @override
@@ -212,6 +251,7 @@ class _TimetablePageState extends State<TimetablePage> {
   Future<void> _openPendingCourse() async {
     final pending = _controller.consumePendingOpen();
     if (pending == null || !mounted) return;
+    _openedPendingCourse = true;
     _controller.goToCurrentWeek();
     final page = _pageFor(_controller.viewingWeek);
     if (_pageController != null && _pageController!.hasClients) {
@@ -275,9 +315,14 @@ class _TimetablePageState extends State<TimetablePage> {
       messenger.hideCurrentSnackBar();
       // 有未通知变动时弹摘要 sheet，不再叠「已同步」SnackBar。
       if (_controller.pendingChangeAlerts.isNotEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          showTimetableChangeAlert(context, controller: _controller);
+        _syncAlertQueued = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          try {
+            if (!mounted) return;
+            await showTimetableChangeAlert(context, controller: _controller);
+          } finally {
+            _syncAlertQueued = false;
+          }
         });
         return;
       }

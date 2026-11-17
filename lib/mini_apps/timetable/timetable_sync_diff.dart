@@ -10,6 +10,7 @@ import 'package:pointycastle/digests/sha256.dart';
 
 import '../../core/logging/app_log.dart';
 import 'timetable_models.dart';
+import 'timetable_schedule_event.dart';
 import 'timetable_store.dart';
 import 'timetable_week_format.dart';
 
@@ -179,7 +180,7 @@ class TimetableSyncDiffResult {
   bool get hasNewChanges => toNotify.isNotEmpty;
 }
 
-/// 扁平化后的教务时段（仅固定时间、仅 jwxt）。
+/// 扁平化后的教务时段（含固定时间与未排课，仅 jwxt）。
 @visibleForTesting
 class DiffSlot {
   const DiffSlot({
@@ -192,7 +193,12 @@ class DiffSlot {
   final CourseSlot slot;
   final String slotKey;
 
-  String get courseClassKey => '${course.code.trim()}|${course.classId.trim()}';
+  String get courseClassKey {
+    final prefix = slot.hasFixedTime ? 'fixed' : 'other';
+    final code = course.code.trim();
+    if (code.isEmpty) return '$prefix|id:${course.id.trim()}';
+    return '$prefix|$code|${course.classId.trim()}';
+  }
 }
 
 /// 课表同步 diff 纯逻辑。
@@ -210,14 +216,19 @@ class TimetableSyncDiff {
   }) =>
       '${code.trim()}|${classId.trim()}|$day|$startNode|$endNode|${weeks.trim()}';
 
-  static String slotKeyOf(Course course, CourseSlot slot) => buildSlotKey(
-    code: course.code,
-    classId: course.classId,
-    day: slot.day,
-    startNode: slot.startNode,
-    endNode: slot.endNode,
-    weeks: slot.weeks,
-  );
+  static String slotKeyOf(Course course, CourseSlot slot) {
+    if (!slot.hasFixedTime) {
+      return 'other|${course.id.trim()}|${course.code.trim()}|${course.classId.trim()}|${slot.weeksLabel.trim()}';
+    }
+    return buildSlotKey(
+      code: course.code,
+      classId: course.classId,
+      day: slot.day,
+      startNode: slot.startNode,
+      endNode: slot.endNode,
+      weeks: slot.weeks,
+    );
+  }
 
   /// 教师规范化：trim；中英文逗号统一；分割后 trim、去空、排序再 `,` 拼接。
   static String normalizeTeachers(String raw) {
@@ -257,6 +268,8 @@ class TimetableSyncDiff {
     'KSJC': slot.startNode,
     'JSJC': slot.endNode,
     'SKZC': slot.weeks.trim(),
+    if (!slot.hasFixedTime && slot.weeksLabel.trim().isNotEmpty)
+      'ZCMC': slot.weeksLabel.trim(),
     'JASMC': normalizeLocation(slot.location),
     'SKJS': normalizeTeachers(slot.teacher),
     'ISTK': normalizeIstk(slot.istk),
@@ -285,14 +298,29 @@ class TimetableSyncDiff {
     return 'sha256:$hex';
   }
 
-  /// 只展开教务源、有固定时间的时段；忽略手动课与「其他课程」。
+  /// 展开教务源时段（含固定时间与无固定时间的「其他课程」）；忽略手动课。
   @visibleForTesting
   static List<DiffSlot> flatten(List<Course> courses) {
     final out = <DiffSlot>[];
     for (final c in courses) {
       if (c.source != CourseSource.jwxt) continue;
+      if (c.slots.isEmpty) {
+        const emptySlot = CourseSlot(
+          day: 0,
+          startNode: 0,
+          endNode: 0,
+          weeks: '',
+        );
+        out.add(
+          DiffSlot(
+            course: c,
+            slot: emptySlot,
+            slotKey: slotKeyOf(c, emptySlot),
+          ),
+        );
+        continue;
+      }
       for (final s in c.slots) {
-        if (!s.hasFixedTime) continue;
         out.add(DiffSlot(course: c, slot: s, slotKey: slotKeyOf(c, s)));
       }
     }
@@ -541,6 +569,189 @@ class TimetableSyncDiff {
     return _PairResult(records: records);
   }
 
+  /// 教务考试稳定 key。
+  static String examSlotKeyOf(ScheduleEvent exam) =>
+      'exam|${exam.jwxtKey ?? exam.id}';
+
+  static String _examDateStr(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  /// 教务考试快照，供 fingerprint 与文案格式化复用。
+  static Map<String, dynamic> examSnapshotOf(ScheduleEvent exam) => {
+    'KIND': 'exam',
+    'KCH': (exam.courseCode ?? '').trim(),
+    'KCM': exam.title.trim(),
+    'KSRQ': _examDateStr(exam.date),
+    'KSKSSJ': exam.start.format(),
+    'KSJSSJ': exam.end.format(),
+    'JASMC': normalizeLocation(exam.location),
+  };
+
+  /// 计算教务考试候选变动。
+  ///
+  /// [allowWhenOldEmpty] 为 true（例如已有教务课表缓存、后续批次新公布考试）时，
+  /// 旧考试为空也会记入新增考试；首次全量同步时应保持 false。
+  static List<TimetableChangeRecord> computeExams({
+    required List<ScheduleEvent> oldExams,
+    required List<ScheduleEvent> newExams,
+    bool allowWhenOldEmpty = false,
+    DateTime? detectedAt,
+    String xnxqdm = '',
+    String Function()? idFactory,
+  }) {
+    final oldList = [
+      for (final e in oldExams)
+        if (e.isFromJwxt && e.isExam) e,
+    ];
+    if (!allowWhenOldEmpty && oldList.isEmpty) return const [];
+
+    final now = detectedAt ?? DateTime.now();
+    var seq = 0;
+    String nextId() {
+      if (idFactory != null) return idFactory();
+      seq += 1;
+      return '${now.microsecondsSinceEpoch}-exam-$seq';
+    }
+
+    final oldByKey = <String, ScheduleEvent>{
+      for (final e in oldList) examSlotKeyOf(e): e,
+    };
+    final newByKey = <String, ScheduleEvent>{
+      for (final e in newExams)
+        if (e.isFromJwxt && e.isExam) examSlotKeyOf(e): e,
+    };
+
+    final removed = <ScheduleEvent>[];
+    final added = <ScheduleEvent>[];
+    final records = <TimetableChangeRecord>[];
+
+    TimetableChangeRecord makeRecord({
+      required TimetableChangeType type,
+      required String slotKey,
+      required String courseName,
+      Map<String, dynamic>? before,
+      Map<String, dynamic>? after,
+    }) => TimetableChangeRecord(
+      id: nextId(),
+      time: now,
+      type: type,
+      slotKey: slotKey,
+      courseName: courseName,
+      xnxqdm: xnxqdm,
+      before: before,
+      after: after,
+      fingerprint: fingerprintOf(
+        type: type,
+        slotKey: slotKey,
+        before: before,
+        after: after,
+      ),
+    );
+
+    for (final e in oldByKey.entries) {
+      final neu = newByKey[e.key];
+      if (neu == null) {
+        removed.add(e.value);
+        continue;
+      }
+      final oldSnap = examSnapshotOf(e.value);
+      final newSnap = examSnapshotOf(neu);
+      if (e.value.end != neu.end) {
+        records.add(
+          makeRecord(
+            type: TimetableChangeType.timeChanged,
+            slotKey: e.key,
+            courseName: neu.title,
+            before: oldSnap,
+            after: newSnap,
+          ),
+        );
+      }
+      if (normalizeLocation(e.value.location) !=
+          normalizeLocation(neu.location)) {
+        records.add(
+          makeRecord(
+            type: TimetableChangeType.locationChanged,
+            slotKey: e.key,
+            courseName: neu.title,
+            before: oldSnap,
+            after: newSnap,
+          ),
+        );
+      }
+    }
+    for (final e in newByKey.entries) {
+      if (!oldByKey.containsKey(e.key)) added.add(e.value);
+    }
+
+    String pairKeyOf(ScheduleEvent e) {
+      final code = (e.courseCode ?? '').trim();
+      return code.isNotEmpty ? 'code:$code' : 'id:${e.id}';
+    }
+
+    final remByCourse = <String, List<ScheduleEvent>>{};
+    final addByCourse = <String, List<ScheduleEvent>>{};
+    for (final e in removed) {
+      (remByCourse[pairKeyOf(e)] ??= []).add(e);
+    }
+    for (final e in added) {
+      (addByCourse[pairKeyOf(e)] ??= []).add(e);
+    }
+
+    final usedRem = <String>{};
+    final usedAdd = <String>{};
+    for (final ck in {...remByCourse.keys, ...addByCourse.keys}) {
+      final rs = List<ScheduleEvent>.from(remByCourse[ck] ?? const [])
+        ..sort((a, b) => examSlotKeyOf(a).compareTo(examSlotKeyOf(b)));
+      final as_ = List<ScheduleEvent>.from(addByCourse[ck] ?? const [])
+        ..sort((a, b) => examSlotKeyOf(a).compareTo(examSlotKeyOf(b)));
+      while (rs.isNotEmpty && as_.isNotEmpty) {
+        final r = rs.removeAt(0);
+        final a = as_.removeAt(0);
+        final rKey = examSlotKeyOf(r);
+        final aKey = examSlotKeyOf(a);
+        usedRem.add(rKey);
+        usedAdd.add(aKey);
+        records.add(
+          makeRecord(
+            type: TimetableChangeType.timeChanged,
+            slotKey: aKey,
+            courseName: a.title.isNotEmpty ? a.title : r.title,
+            before: examSnapshotOf(r),
+            after: examSnapshotOf(a),
+          ),
+        );
+      }
+    }
+
+    for (final r in removed) {
+      final key = examSlotKeyOf(r);
+      if (usedRem.contains(key)) continue;
+      records.add(
+        makeRecord(
+          type: TimetableChangeType.removed,
+          slotKey: key,
+          courseName: r.title,
+          before: examSnapshotOf(r),
+        ),
+      );
+    }
+    for (final a in added) {
+      final key = examSlotKeyOf(a);
+      if (usedAdd.contains(key)) continue;
+      records.add(
+        makeRecord(
+          type: TimetableChangeType.added,
+          slotKey: key,
+          courseName: a.title,
+          after: examSnapshotOf(a),
+        ),
+      );
+    }
+
+    return records;
+  }
+
   /// 全量拉取成功后的钩子：比对旧/新教务源、按 fingerprint 去重后写入本地变更日志。
   ///
   /// 不改变同步成功/失败语义；调用方在写快照前后均可调用。
@@ -554,6 +765,27 @@ class TimetableSyncDiff {
     final candidates = compute(
       oldCourses: previousJwxtCourses,
       newCourses: newJwxtCourses,
+      detectedAt: detectedAt,
+      xnxqdm: xnxqdm,
+    );
+    if (candidates.isEmpty) {
+      return const TimetableSyncDiffResult(allWritten: [], toNotify: []);
+    }
+    return TimetableChangeLogStore.upsertCandidates(candidates);
+  }
+
+  /// 考试同步成功后的 diff 写入钩子。
+  static Future<TimetableSyncDiffResult> applyExamsAfterFetch({
+    required List<ScheduleEvent> previousJwxtExams,
+    required List<ScheduleEvent> newJwxtExams,
+    bool allowWhenOldEmpty = false,
+    String xnxqdm = '',
+    DateTime? detectedAt,
+  }) async {
+    final candidates = computeExams(
+      oldExams: previousJwxtExams,
+      newExams: newJwxtExams,
+      allowWhenOldEmpty: allowWhenOldEmpty,
       detectedAt: detectedAt,
       xnxqdm: xnxqdm,
     );

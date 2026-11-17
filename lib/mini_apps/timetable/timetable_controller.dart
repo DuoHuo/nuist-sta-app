@@ -1234,10 +1234,52 @@ class TimetableController extends ChangeNotifier {
           }
           // 第 11 条：课表成功后拉考试（不受 showExams 影响）。考试失败不影响本次课表
           // 同步结果、成功时间与离线补同步逻辑，已有考试保留。
-          await _syncExams(term, bindingRevision: bindingRevision);
+          final previousJwxtExams = [
+            for (final e in _scheduleEvents)
+              if (e.isFromJwxt && e.isExam) e,
+          ];
+          final syncedExams = await _syncExams(
+            term,
+            bindingRevision: bindingRevision,
+          );
           if (bindingRevision != _portalBindingRevision) {
             AppLog.reportOutcome('skipped', reason: 'superseded');
             return;
+          }
+          if (syncedExams != null) {
+            try {
+              final examDiff = await TimetableSyncDiff.applyExamsAfterFetch(
+                previousJwxtExams: previousJwxtExams,
+                newJwxtExams: syncedExams,
+                allowWhenOldEmpty: previousJwxt.isNotEmpty,
+                xnxqdm: snapshot.settings.termCode.isNotEmpty
+                    ? snapshot.settings.termCode
+                    : term,
+                detectedAt: snapshot.syncedAt,
+              );
+              if (bindingRevision != _portalBindingRevision) {
+                AppLog.reportOutcome('skipped', reason: 'superseded');
+                return;
+              }
+              if (examDiff.allWritten.isNotEmpty ||
+                  examDiff.toNotify.isNotEmpty) {
+                lastSyncDiff = _mergeSyncDiff(lastSyncDiff, examDiff);
+              }
+            } catch (error, stackTrace) {
+              AppLog.reportOutcome(
+                'degraded',
+                reason: 'change_history_unavailable',
+              );
+              _log.warning(
+                'changes.exam_update_failed',
+                fields: {
+                  'stage': 'sync.exam_change_detection',
+                  'outcome': 'degraded',
+                },
+                error: error,
+                stackTrace: stackTrace,
+              );
+            }
           }
           // 只有成功才重置自动同步计时。
           final succeededAt = syncClock();
@@ -2383,14 +2425,28 @@ class TimetableController extends ChangeNotifier {
     return changed;
   }
 
+  static TimetableSyncDiffResult _mergeSyncDiff(
+    TimetableSyncDiffResult? a,
+    TimetableSyncDiffResult b,
+  ) {
+    if (a == null) return b;
+    return TimetableSyncDiffResult(
+      allWritten: [...a.allWritten, ...b.allWritten],
+      toNotify: [...a.toNotify, ...b.toNotify],
+    );
+  }
+
   /// 课表同步成功后拉教务考试并整批替换（覆盖层由 [replaceJwxtExams] 按 examKey
   /// 保留 / 清理）。任何失败只记一条通用日志，已有考试不动。
-  Future<void> _syncExams(String term, {required int bindingRevision}) async {
+  Future<List<ScheduleEvent>?> _syncExams(
+    String term, {
+    required int bindingRevision,
+  }) async {
     final List<ScheduleEvent>? exams;
     try {
       exams = await fetchExams(term);
     } catch (error, stackTrace) {
-      if (bindingRevision != _portalBindingRevision) return;
+      if (bindingRevision != _portalBindingRevision) return null;
       AppLog.reportOutcome('degraded', reason: 'exams_fetch_failed');
       _log.warning(
         'exams.fetch_failed_using_existing',
@@ -2398,13 +2454,17 @@ class TimetableController extends ChangeNotifier {
         error: error,
         stackTrace: stackTrace,
       );
-      return;
+      return null;
     }
-    if (bindingRevision != _portalBindingRevision || exams == null) return;
+    if (bindingRevision != _portalBindingRevision || exams == null) return null;
     try {
       await replaceJwxtExams(exams);
+      return [
+        for (final e in _scheduleEvents)
+          if (e.isFromJwxt && e.isExam) e,
+      ];
     } catch (error, stackTrace) {
-      if (bindingRevision != _portalBindingRevision) return;
+      if (bindingRevision != _portalBindingRevision) return null;
       AppLog.reportOutcome('degraded', reason: 'exams_save_failed');
       _log.warning(
         'exams.save_failed_using_existing',
@@ -2412,6 +2472,7 @@ class TimetableController extends ChangeNotifier {
         error: error,
         stackTrace: stackTrace,
       );
+      return null;
     }
   }
 
