@@ -31,9 +31,14 @@ abstract final class PortalServices {
 
   /// 校园一卡通（电费）。登录落地 URL 的 query 里带 `synjones-auth`，这才是
   /// icard 接口真正认的凭据，Cookie 在那边没用。
+  ///
+  /// service 是回调地址 `/berserker-auth/cas/callback/wisedu`，`redirectUrl`
+  /// 的值在 service 内部已是一次编码的形式（`%3A`、`%2F`、`%3F`、`%3D`），
+  /// 对应浏览器 CAS 登录 URL 里的二次编码，保持原样。
   static final icard =
-      'https://${CampusHosts.icard}/berserker-auth/cas/login/wisedu'
-      '?targetUrl=https://${CampusHosts.icard}/plat-pc/?name=loginTransit';
+      'https://${CampusHosts.icard}/berserker-auth/cas/callback/wisedu'
+      '?redirectUrl=https%3A%2F%2F${CampusHosts.icard}'
+      '%2Fplat-pc%2F%3Fname%3DloginTransit';
 
   /// 信息门户（学业数据等 cus 接口）。实测未登录访问会被 302 到
   /// `authserver/login?service=https://i.<校园根域>/login`。
