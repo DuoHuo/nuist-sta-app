@@ -13,6 +13,8 @@ import 'timetable_change_format.dart';
 import 'timetable_colors.dart';
 import 'timetable_date_edits.dart';
 import 'timetable_exam_parser.dart';
+import 'timetable_import_models.dart';
+import 'timetable_multi_models.dart';
 import 'timetable_remaining_weeks.dart';
 import 'timetable_models.dart';
 import 'timetable_next_day_reminder.dart';
@@ -138,10 +140,144 @@ enum ScheduleChangeReason {
 
 /// 课表全局状态：首页卡片与周视图共用。
 class TimetableController extends ChangeNotifier {
-  TimetableController._();
+  TimetableController._([this._scopedId, this._manager]);
 
   static final TimetableController instance = TimetableController._();
   static final _log = AppLog.logger('timetable.controller');
+
+  final String? _scopedId;
+  final TimetableController? _manager;
+
+  /// 是否为主控制器单例（负责首页卡片、桌面小组件、通知提醒及多课表管理）。
+  bool get _isPrimaryHost => _manager == null;
+
+  /// 当前控制器读写磁盘时所处的课表作用域 id。
+  String get activeStorageId =>
+      _manager == null ? _primaryScheduleId : _scopedId!;
+
+  Future<T> _inScope<T>(Future<T> Function() action) =>
+      TimetableStore.withScheduleScope(activeStorageId, action);
+
+  // ---- 多课表状态（仅主控制器维护，子控制器通过 _manager 访问）----
+  SchedulesIndex _schedulesIndex = const SchedulesIndex();
+  String _primaryScheduleId = kDefaultScheduleId;
+  String _viewingScheduleId = kDefaultScheduleId;
+  final Map<String, TimetableController> _scopedControllers = {};
+  final Map<String, TimetableSnapshot> _probedHistoricalSnapshots = {};
+  int _importSeq = 0;
+  bool _historicalDiscoveryAttempted = false;
+  Future<void>? _historicalDiscoveryInFlight;
+
+  /// 是否已在本会话中触发过一次往年课表自动发现。
+  bool get historicalDiscoveryAttempted =>
+      (_manager ?? this)._historicalDiscoveryAttempted;
+
+  SchedulesIndex get _rootIndex =>
+      _manager == null ? _schedulesIndex : _manager._schedulesIndex;
+
+  /// 全部已纳入多课表管理的课表元信息列表（始终至少包含当前默认课表）。
+  List<ScheduleMetadata> get schedules {
+    final idx = _rootIndex;
+    if (idx.schedules.isNotEmpty) return idx.schedules;
+    return [
+      ScheduleMetadata(
+        id: kDefaultScheduleId,
+        name: _deriveDefaultScheduleName(),
+        sourceKind: TimetableSourceKind.jwxt,
+        termCode: _snapshot.settings.termCode,
+        courseCount: _snapshot.courses.length,
+      ),
+    ];
+  }
+
+  /// 用户自己的教务课表（含当前学期与往年学期）。
+  List<ScheduleMetadata> get ownSchedules => [
+    for (final s in schedules)
+      if (s.isOwnSchedule) s,
+  ];
+
+  /// 从 WakeUp 口令导入的他人课表。
+  List<ScheduleMetadata> get importedSchedules => [
+    for (final s in schedules)
+      if (s.isImportedSchedule) s,
+  ];
+
+  /// 主课表 id（用于首页卡片、桌面小组件、上课/明日提醒与校园地图）。
+  String get primaryScheduleId =>
+      _manager == null ? _primaryScheduleId : _manager._primaryScheduleId;
+
+  /// 课表页当前正在浏览的课表 id。
+  String get viewingScheduleId =>
+      _manager == null ? _viewingScheduleId : _manager._viewingScheduleId;
+
+  /// 主课表是否为当前正在浏览的课表。
+  bool get isViewingPrimary => viewingScheduleId == primaryScheduleId;
+
+  /// 当前已确认的教务学期代码。
+  String get currentTermCode {
+    final fromIdx = _rootIndex.currentTermCode.trim();
+    if (fromIdx.isNotEmpty) return fromIdx;
+    final def = scheduleMetaOf(kDefaultScheduleId);
+    if (def != null && def.termCode.isNotEmpty) return def.termCode;
+    return settings.termCode;
+  }
+
+  ScheduleMetadata? scheduleMetaOf(String id) {
+    for (final s in schedules) {
+      if (s.id == id) return s;
+    }
+    return null;
+  }
+
+  ScheduleMetadata? get primaryScheduleMeta =>
+      scheduleMetaOf(primaryScheduleId);
+
+  ScheduleMetadata? get viewingScheduleMeta =>
+      scheduleMetaOf(viewingScheduleId);
+
+  /// 当前控制器所代表的课表元信息。
+  ScheduleMetadata? get currentScheduleMeta => scheduleMetaOf(activeStorageId);
+
+  /// 当前控制器是否为 WakeUp 导入的他人课表。
+  bool get isImportedSchedule =>
+      currentScheduleMeta?.isImportedSchedule == true;
+
+  /// 判断指定课表是否属于「已过去的往年学期」（不再自动拉取更新）。
+  bool isHistoricalSchedule(String id) {
+    final meta = scheduleMetaOf(id);
+    if (meta == null || !meta.isOwnSchedule) return false;
+    if (id == kDefaultScheduleId) return false;
+    final curr = currentTermCode;
+    if (curr.isEmpty || meta.termCode.isEmpty) return true;
+    return isHistoricalTerm(meta.termCode, currentTermCode: curr);
+  }
+
+  /// 当前课表页应绑定使用的控制器：看主课表时直接复用 [instance]，看其他课表时返回对应子控制器。
+  TimetableController get viewingController {
+    if (_manager != null) return _manager.viewingController;
+    if (_viewingScheduleId == _primaryScheduleId) return this;
+    return _scopedControllers[_viewingScheduleId] ??= TimetableController._(
+      _viewingScheduleId,
+      this,
+    );
+  }
+
+  /// 获取指定课表对应的控制器（主课表返回主控制器，其余课表确保加载后返回子控制器）。
+  Future<TimetableController> controllerForSchedule(String scheduleId) async {
+    final host = _manager ?? this;
+    await host.ensureStarted();
+    if (scheduleId == host._primaryScheduleId) return host;
+    return host._ensureScopedController(scheduleId);
+  }
+
+  String _deriveDefaultScheduleName() {
+    final storedName = _snapshot.settings.scheduleName.trim();
+    if (storedName.isNotEmpty && storedName != '我的课表') {
+      return storedName;
+    }
+    final term = _snapshot.settings.termCode.trim();
+    return term.isNotEmpty ? formatTermScheduleName(term) : '当前学期';
+  }
 
   static Map<String, Object?> _savedResultFields(Object? result) => {
     'saved': result != null,
@@ -195,7 +331,7 @@ class TimetableController extends ChangeNotifier {
   }) async {
     if (revision != _changeAlertRevision) return;
     final confirmed = fingerprints.toSet();
-    await TimetableChangeLogStore.markNotified(confirmed);
+    await _inScope(() => TimetableChangeLogStore.markNotified(confirmed));
     if (revision != _changeAlertRevision) return;
     _pendingChangeAlerts.removeWhere((fp, _) => confirmed.contains(fp));
     final diff = lastSyncDiff;
@@ -218,7 +354,7 @@ class TimetableController extends ChangeNotifier {
     _changeAlertRevision++;
     _pendingChangeAlerts.clear();
     lastSyncDiff = null;
-    await TimetableChangeLogStore.clear();
+    await _inScope(() => TimetableChangeLogStore.clear());
   }
 
   List<Course> _manualCourses = const [];
@@ -240,15 +376,18 @@ class TimetableController extends ChangeNotifier {
 
   void _fireScheduleChanged(ScheduleChangeReason r) {
     _scheduleChanged.add(r);
-    unawaited(updateNextDayReminder());
+    if (_isPrimaryHost) unawaited(updateNextDayReminder());
   }
 
   /// 将套用调课、单日修改后的课程生成通知缓存，覆盖未来 400 个本机自然日。
   /// 只排明日提醒，不读取 reminderEnabled（课前提醒开关）。
   Future<void> updateNextDayReminder() async {
+    if (!_isPrimaryHost) return;
+    final primaryIsImported = primaryScheduleMeta?.isImportedSchedule == true;
+    final loggedInForReminder = _portalBound || primaryIsImported;
     final enabled =
         settings.nextDayReminderEnabled &&
-        _portalBound &&
+        loggedInForReminder &&
         settings.termStartDate != null &&
         (_snapshot.syncedAt != null || hasCourses);
     final payloads = <String, Object?>{};
@@ -270,7 +409,7 @@ class TimetableController extends ChangeNotifier {
           periods: periods,
           startTimeOf: (item) =>
               timeForSlot(item.course, item.slot, date: tomorrow).start,
-          loggedIn: _portalBound,
+          loggedIn: loggedInForReminder,
           hasCache: true,
           outsideTerm: outsideTerm,
         );
@@ -463,18 +602,20 @@ class TimetableController extends ChangeNotifier {
       ];
     }
     // 全局色与被清除的局部颜色一起保存，任一文件失败都不提前改内存。
-    await TimetableStore.writeBatch(() async {
-      await TimetableStore.saveUserCourseColors(next);
-      if (nextManual != null) {
-        await TimetableStore.saveManualCourses(nextManual);
-      }
-      if (nextCourseEdits != null) {
-        await ScheduleStore.saveCourseEdits(nextCourseEdits);
-      }
-      if (nextDateEdits != null) {
-        await ScheduleStore.saveCourseDateEdits(nextDateEdits);
-      }
-    });
+    await _inScope(
+      () => TimetableStore.writeBatch(() async {
+        await TimetableStore.saveUserCourseColors(next);
+        if (nextManual != null) {
+          await TimetableStore.saveManualCourses(nextManual);
+        }
+        if (nextCourseEdits != null) {
+          await ScheduleStore.saveCourseEdits(nextCourseEdits);
+        }
+        if (nextDateEdits != null) {
+          await ScheduleStore.saveCourseDateEdits(nextDateEdits);
+        }
+      }),
+    );
     _userColors = next;
     if (nextManual != null) _manualCourses = List.unmodifiable(nextManual);
     if (nextCourseEdits != null) {
@@ -562,7 +703,7 @@ class TimetableController extends ChangeNotifier {
     _colorMapJwxt = _snapshot.courses;
     _colorMapScheme = scheme;
     final changed = _writeAssigned(map, onlyMissing: false);
-    await TimetableStore.saveCourseColors(scheme, map);
+    await _inScope(() => TimetableStore.saveCourseColors(scheme, map));
     return changed;
   }
 
@@ -670,6 +811,7 @@ class TimetableController extends ChangeNotifier {
   /// 周网格内容的变化标识，仅供界面比较，不包含临时浏览周或同步进度。
   /// 所有内容和配色集合均以新引用替换；布局尺寸、主题和系统日期由界面监听。
   Object get weekGridContentKey => (
+    activeStorageId,
     _snapshot,
     _manualCourses,
     _overrides,
@@ -714,6 +856,16 @@ class TimetableController extends ChangeNotifier {
   static Future<bool> _defaultBindingCheck() async =>
       await PasskeyStore.read() != null;
 
+  /// 由学号前 4 位推导的入学年份（测试可替换；未绑定或解析失败返回 null）。
+  @visibleForTesting
+  static Future<int?> Function() enrollmentYearCheck =
+      _defaultEnrollmentYearCheck;
+
+  static Future<int?> _defaultEnrollmentYearCheck() async {
+    final bundle = await PasskeyStore.read();
+    return enrollmentYearFromStudentId(bundle?.studentId);
+  }
+
   /// 测试用：替换教务拉取。
   @visibleForTesting
   static Future<TimetableSnapshot> Function(
@@ -739,6 +891,32 @@ class TimetableController extends ChangeNotifier {
     if (!identical(fetchSnapshot, _defaultFetch)) return null;
     return TimetableApi.fetchExams(term);
   }
+
+  /// 测试用：替换教务可选学期列表查询。
+  @visibleForTesting
+  static Future<List<JwxtTermOption>> Function() fetchAvailableTerms =
+      _defaultFetchAvailableTerms;
+
+  static Future<List<JwxtTermOption>> _defaultFetchAvailableTerms() async {
+    if (!identical(fetchSnapshot, _defaultFetch)) return const [];
+    return TimetableApi.fetchAvailableTerms();
+  }
+
+  /// 测试用：替换往年教务课表拉取。
+  @visibleForTesting
+  static Future<TimetableSnapshot> Function(
+    String term, {
+    TimetableSettings? baseSettings,
+  })
+  fetchHistoricalSnapshot = _defaultFetchHistoricalSnapshot;
+
+  static Future<TimetableSnapshot> _defaultFetchHistoricalSnapshot(
+    String term, {
+    TimetableSettings? baseSettings,
+  }) => TimetableApi.fetchHistoricalTermSnapshot(
+    term,
+    baseSettings: baseSettings,
+  );
 
   /// 作息表；快照为空时回退到校历默认作息，避免实验/体育连堂时刻算不出。
   List<PeriodTime> get periods =>
@@ -855,7 +1033,7 @@ class TimetableController extends ChangeNotifier {
     await _loadColorMap();
     if (_fillMissingAssignedColors()) {
       try {
-        await TimetableStore.saveManualCourses(_manualCourses);
+        await _inScope(() => TimetableStore.saveManualCourses(_manualCourses));
       } on TimetablePersistenceException {
         // 旧数据色号可以再次推导；回填失败不阻断课表读取。
       }
@@ -863,9 +1041,11 @@ class TimetableController extends ChangeNotifier {
     // 旧数据：「其他」日程的名称还没有固定色号 → 补一次并落盘（只写 schedule_events.json）。
     if (_backfillOtherColors()) {
       try {
-        await ScheduleStore.saveEventsAndOtherColors(
-          _scheduleEvents,
-          _otherColors,
+        await _inScope(
+          () => ScheduleStore.saveEventsAndOtherColors(
+            _scheduleEvents,
+            _otherColors,
+          ),
         );
       } on TimetablePersistenceException {
         // 保留内存中可用的固定色，下次启动仍可补写。
@@ -873,54 +1053,112 @@ class TimetableController extends ChangeNotifier {
     }
     _viewingWeek = _defaultViewingWeek;
     _lastSeenCurrentWeek = currentWeek;
-    _portalBound = await bindingCheck();
     if (_snapshot.syncedAt != null || _snapshot.courses.isNotEmpty) {
-      _mergePendingChanges(await TimetableChangeLogStore.readUnnotified());
+      _mergePendingChanges(
+        await _inScope(() => TimetableChangeLogStore.readUnnotified()),
+      );
     }
-    await updateNextDayReminder();
+    if (_isPrimaryHost) {
+      _portalBound = await bindingCheck();
+      await updateNextDayReminder();
+    } else {
+      _portalBound = _manager!._portalBound;
+    }
     notifyListeners();
   }
 
   /// 从磁盘重载全部本地数据（快照、手动课程、调课 / 编辑 / 日程记录、同步状态）。
   /// [_start] 与 [refreshLocal] 共用；不读门户绑定状态，也不发网络请求。
   Future<void> _reloadFromDisk() async {
-    _manualCourses = await TimetableStore.readManualCourses();
-    _overrides = await TimetableStore.readOverrides();
-    _scheduleEvents = List.unmodifiable(await ScheduleStore.readEvents());
-    _otherColors = Map.unmodifiable(await ScheduleStore.readOtherColors());
-    _courseEdits = Map.unmodifiable(await ScheduleStore.readCourseEdits());
-    _dateEdits = List.unmodifiable(await ScheduleStore.readCourseDateEdits());
-    _daySwaps = List.unmodifiable(await ScheduleStore.readDaySwaps());
-    _examOverrides = Map.unmodifiable(await ScheduleStore.readExamOverrides());
-    _lastSyncSuccessAt = await ScheduleStore.readLastSyncSuccess();
-    _lastAutomaticAttemptAt = await ScheduleStore.readLastAutomaticAttempt();
-    _portalSessionExpired = await ScheduleStore.readPortalSessionExpired();
-    final cached = await TimetableStore.readSnapshot();
-    final storedSettings = await TimetableStore.readSettings();
-    if (cached != null) {
-      _snapshot = cached.copyWith(
-        settings: cached.settings.termCode.isEmpty
-            ? storedSettings
-            : cached.settings
-                  .withDisplayPrefsFrom(storedSettings)
-                  .copyWith(
-                    scheduleName: storedSettings.scheduleName != '我的课表'
-                        ? storedSettings.scheduleName
-                        : cached.settings.scheduleName,
-                  ),
-      );
-    } else {
-      _snapshot = TimetableSnapshot(settings: storedSettings);
+    if (_isPrimaryHost) {
+      final storedIndex = await TimetableStore.readSchedulesIndex();
+      if (storedIndex != null) {
+        final sorted = _sortedSchedules(storedIndex.schedules);
+        _schedulesIndex = storedIndex.copyWith(
+          schedules: List.unmodifiable(sorted),
+        );
+        final validPrimary =
+            storedIndex.primaryScheduleId == kDefaultScheduleId ||
+            storedIndex.byId(storedIndex.primaryScheduleId) != null;
+        _primaryScheduleId = validPrimary
+            ? storedIndex.primaryScheduleId
+            : kDefaultScheduleId;
+        if (_viewingScheduleId != kDefaultScheduleId &&
+            storedIndex.byId(_viewingScheduleId) == null) {
+          _viewingScheduleId = _primaryScheduleId;
+        }
+        // 启动初始加载尚未切到别的课表时，默认浏览主课表。
+        if (!_started) {
+          _viewingScheduleId = _primaryScheduleId;
+        }
+      }
     }
-    _snapshot = _snapshot.copyWith(
-      settings: _withResolvedTermStart(
-        _snapshot.settings.termCode.isEmpty
-            ? _snapshot.settings.copyWith(termCode: '2026-2027-1')
-            : _snapshot.settings,
-      ),
-    );
-    if (_snapshot.periods.isEmpty) {
-      _snapshot = _snapshot.copyWith(periods: defaultPeriods());
+    await _inScope(() async {
+      _manualCourses = await TimetableStore.readManualCourses();
+      _overrides = await TimetableStore.readOverrides();
+      _scheduleEvents = List.unmodifiable(await ScheduleStore.readEvents());
+      _otherColors = Map.unmodifiable(await ScheduleStore.readOtherColors());
+      _courseEdits = Map.unmodifiable(await ScheduleStore.readCourseEdits());
+      _dateEdits = List.unmodifiable(await ScheduleStore.readCourseDateEdits());
+      _daySwaps = List.unmodifiable(await ScheduleStore.readDaySwaps());
+      _examOverrides = Map.unmodifiable(
+        await ScheduleStore.readExamOverrides(),
+      );
+      _lastSyncSuccessAt = await ScheduleStore.readLastSyncSuccess();
+      _lastAutomaticAttemptAt = await ScheduleStore.readLastAutomaticAttempt();
+      _portalSessionExpired = await ScheduleStore.readPortalSessionExpired();
+      final cached = await TimetableStore.readSnapshot();
+      final storedSettings = await TimetableStore.readSettings();
+      if (cached != null) {
+        if (activeStorageId == kDefaultScheduleId) {
+          _snapshot = cached.copyWith(
+            settings: cached.settings.termCode.isEmpty
+                ? storedSettings
+                : cached.settings
+                      .withDisplayPrefsFrom(storedSettings)
+                      .copyWith(
+                        scheduleName: storedSettings.scheduleName != '我的课表'
+                            ? storedSettings.scheduleName
+                            : cached.settings.scheduleName,
+                      ),
+          );
+        } else {
+          _snapshot = cached.copyWith(
+            settings: cached.settings.withDisplayPrefsFrom(storedSettings),
+          );
+        }
+      } else {
+        _snapshot = TimetableSnapshot(
+          settings: activeStorageId == kDefaultScheduleId
+              ? storedSettings
+              : const TimetableSettings().withDisplayPrefsFrom(storedSettings),
+        );
+      }
+      final isImported =
+          scheduleMetaOf(activeStorageId)?.isImportedSchedule == true;
+      _snapshot = _snapshot.copyWith(
+        settings: _withResolvedTermStart(
+          !isImported &&
+                  activeStorageId == kDefaultScheduleId &&
+                  _snapshot.settings.termCode.isEmpty
+              ? _snapshot.settings.copyWith(termCode: '2026-2027-1')
+              : _snapshot.settings,
+        ),
+      );
+      if (_snapshot.periods.isEmpty) {
+        _snapshot = _snapshot.copyWith(periods: defaultPeriods());
+      }
+    });
+    if (_isPrimaryHost) {
+      for (final scoped in _scopedControllers.values.toList()) {
+        if (scoped._started) {
+          await scoped._reloadFromDisk();
+          scoped._colorMap = null;
+          await scoped._loadColorMap();
+          scoped._clampViewingWeek();
+          scoped.notifyListeners();
+        }
+      }
     }
   }
 
@@ -929,28 +1167,30 @@ class TimetableController extends ChangeNotifier {
   Future<void> _loadColorMap() async {
     final scheme = coursePaletteSchemeOf(settings.paletteScheme);
     StoredCourseColors? stored;
-    try {
-      _userColors = await TimetableStore.readUserCourseColors();
-    } catch (_) {
-      _userColors = const {};
-    }
-    try {
-      stored = await TimetableStore.readCourseColors();
-    } catch (_) {
-      stored = null;
-    }
-    _colorMapJwxt = _snapshot.courses;
-    _colorMapScheme = scheme;
-    if (stored != null && stored.scheme == scheme) {
-      _colorMap = stored.map;
-      return;
-    }
-    _colorMap = _buildFallbackColorMap(scheme);
-    try {
-      await TimetableStore.saveCourseColors(scheme, _colorMap!);
-    } on TimetablePersistenceException {
-      // 配色表是派生缓存；保存失败仍使用本次计算结果。
-    }
+    await _inScope(() async {
+      try {
+        _userColors = await TimetableStore.readUserCourseColors();
+      } catch (_) {
+        _userColors = const {};
+      }
+      try {
+        stored = await TimetableStore.readCourseColors();
+      } catch (_) {
+        stored = null;
+      }
+      _colorMapJwxt = _snapshot.courses;
+      _colorMapScheme = scheme;
+      if (stored case final loaded? when loaded.scheme == scheme) {
+        _colorMap = loaded.map;
+        return;
+      }
+      _colorMap = _buildFallbackColorMap(scheme);
+      try {
+        await TimetableStore.saveCourseColors(scheme, _colorMap!);
+      } on TimetablePersistenceException {
+        // 配色表是派生缓存；保存失败仍使用本次计算结果。
+      }
+    });
   }
 
   void setViewingWeek(int week) {
@@ -1018,15 +1258,24 @@ class TimetableController extends ChangeNotifier {
                 course,
           ];
         }
-        await TimetableStore.writeBatch(() async {
-          if (colors != null) {
-            await TimetableStore.saveCourseColors(scheme, colors);
-          }
-          if (manual != null) await TimetableStore.saveManualCourses(manual);
-          // 未改动的原始值和未知键仍由 Store 保留。
-          await TimetableStore.mergeSettingsChanges(previous, applied);
-          await TimetableStore.saveSnapshot(snapshot);
-        });
+        await _inScope(
+          () => TimetableStore.writeBatch(() async {
+            if (colors != null) {
+              await TimetableStore.saveCourseColors(scheme, colors);
+            }
+            if (manual != null) await TimetableStore.saveManualCourses(manual);
+            // 未改动的原始值和未知键仍由 Store 保留；非默认课表只把外观偏好合入全局 settings.json。
+            if (activeStorageId == kDefaultScheduleId) {
+              await TimetableStore.mergeSettingsChanges(previous, applied);
+            } else {
+              await TimetableStore.mergeSettingsChanges(
+                previous,
+                previous.withDisplayPrefsFrom(applied),
+              );
+            }
+            await TimetableStore.saveSnapshot(snapshot);
+          }),
+        );
         _snapshot = snapshot;
         if (manual != null) _manualCourses = manual;
         if (colors != null) {
@@ -1034,12 +1283,35 @@ class TimetableController extends ChangeNotifier {
           _colorMapJwxt = snapshot.courses;
           _colorMapScheme = scheme;
         }
+        _syncDisplayPrefsAcrossControllers(applied);
       } finally {
         if (revision == _settingsWriteRevision) _pendingSettings = null;
         notifyListeners();
       }
       _fireScheduleChanged(ScheduleChangeReason.settings);
     });
+  }
+
+  void _syncDisplayPrefsAcrossControllers(TimetableSettings applied) {
+    final host = _manager ?? this;
+    if (!identical(host, this)) {
+      host._snapshot = host._snapshot.copyWith(
+        settings: host._snapshot.settings.withDisplayPrefsFrom(applied),
+      );
+      if (host.settings.paletteScheme != applied.paletteScheme) {
+        host._colorMap = null;
+      }
+      host.notifyListeners();
+      host._fireScheduleChanged(ScheduleChangeReason.settings);
+    }
+    for (final scoped in host._scopedControllers.values) {
+      if (identical(scoped, this)) continue;
+      scoped._snapshot = scoped._snapshot.copyWith(
+        settings: scoped._snapshot.settings.withDisplayPrefsFrom(applied),
+      );
+      scoped._colorMap = null;
+      scoped.notifyListeners();
+    }
   }
 
   /// 缓存为空或非今日同步 → 需要同步。
@@ -1062,7 +1334,12 @@ class TimetableController extends ChangeNotifier {
 
   /// 课表页打开时：已登录且缓存为空/过期则自动从教务全量同步。
   /// 同样受 90 分钟节流（距上次成功不足则不同步）。仍走远程。
+  /// 往年学期与导入的他人课表不再主动拉取更新。
   Future<void> autoSyncIfNeeded() async {
+    if (_isPrimaryHost && isHistoricalSchedule(_primaryScheduleId)) return;
+    if (_isPrimaryHost && primaryScheduleMeta?.isImportedSchedule == true) {
+      return;
+    }
     if (_loading || !needsSync) return;
     if (!_elapsedSinceSuccess(autoSyncInterval)) return;
     if (!_automaticAttemptDue()) return;
@@ -1083,6 +1360,7 @@ class TimetableController extends ChangeNotifier {
   /// 远程手动「立即同步」入口（周课表顶栏用）：未绑定门户时不发请求、不报失败，
   /// 返回 false 由页面跳转登录；已绑定则从教务全量同步并返回 true。
   Future<bool> syncIfBound() async {
+    if (isImportedSchedule) return true;
     if (!await refreshPortalBound()) return false;
     await syncFromJwxt();
     return true;
@@ -1091,6 +1369,17 @@ class TimetableController extends ChangeNotifier {
   /// 从教务 wdkb 同步课表（复用门户会话）。失败保留缓存并在同步条提示。
   /// 进行中再次调用返回同一个 Future（不重复请求）。
   Future<void> syncFromJwxt() {
+    if (_manager != null && activeStorageId != kDefaultScheduleId) {
+      if (isImportedSchedule) {
+        _statusMessage = '导入的课表不支持从教务同步';
+        notifyListeners();
+        return Future.value();
+      }
+      return _syncHistoricalScoped();
+    }
+    if (_isPrimaryHost && _primaryScheduleId != kDefaultScheduleId) {
+      return _syncDefaultFromHost();
+    }
     final inFlight = _syncInFlight;
     if (inFlight != null) return SilentRefresh.join(inFlight);
     if (_loading) {
@@ -1107,6 +1396,131 @@ class TimetableController extends ChangeNotifier {
     );
     _syncInFlight = f;
     return SilentRefresh.join(f);
+  }
+
+  Future<void> _syncDefaultFromHost() async {
+    final automatic = _nextSyncAuto;
+    _nextSyncAuto = false;
+    final scoped = await _ensureScopedController(kDefaultScheduleId);
+    scoped._portalBound = _portalBound;
+    scoped._nextSyncAuto = automatic;
+    await scoped.syncFromJwxt();
+    _syncStatus = scoped._syncStatus;
+    _syncFailure = scoped._syncFailure;
+    _lastAutoSyncFailed = scoped._lastAutoSyncFailed;
+    _lastSyncOutcome = scoped._lastSyncOutcome;
+    _portalSessionExpired = scoped._portalSessionExpired;
+    notifyListeners();
+    if (scoped._lastSyncOutcome case final outcome?) {
+      _syncOutcomes.add(outcome);
+    }
+  }
+
+  Future<void> _syncHistoricalScoped() {
+    final inFlight = _syncInFlight;
+    if (inFlight != null) return SilentRefresh.join(inFlight);
+    if (_loading) return Future.value();
+    final term = settings.termCode.trim();
+    if (term.isEmpty) return Future.value();
+    late final Future<void> f;
+    f = _doSyncHistorical(term).whenComplete(() {
+      if (identical(_syncInFlight, f)) _syncInFlight = null;
+    });
+    _syncInFlight = f;
+    return f;
+  }
+
+  Future<void> _doSyncHistorical(String term) async {
+    final host = _manager ?? this;
+    final bindingRevision = host._portalBindingRevision;
+    TimetableSyncOutcome? outcome;
+    _loading = true;
+    _statusMessage = '正在同步往年课表…';
+    _syncStatus = TimetableSyncStatus.syncing;
+    _syncFailure = TimetableSyncFailure.none;
+    notifyListeners();
+    try {
+      final previous = settings;
+      var snapshot = await fetchHistoricalSnapshot(
+        term,
+        baseSettings: previous.copyWith(clearTermStart: true),
+      );
+      if (bindingRevision != host._portalBindingRevision) return;
+      if (snapshot.periods.isEmpty) {
+        snapshot = snapshot.copyWith(
+          periods: _snapshot.periods.isEmpty
+              ? defaultPeriods()
+              : _snapshot.periods,
+        );
+      }
+      final existingMeta = scheduleMetaOf(activeStorageId);
+      final resolvedName = existingMeta?.customName == true
+          ? existingMeta!.name
+          : formatTermScheduleName(term);
+      snapshot = snapshot.copyWith(
+        courses: [
+          for (final c in snapshot.courses)
+            if (c.source == CourseSource.jwxt) c,
+        ],
+        settings: snapshot.settings
+            .withDisplayPrefsFrom(settings)
+            .copyWith(termCode: term, scheduleName: resolvedName),
+        syncedAt: DateTime.now(),
+        clearError: true,
+      );
+      await _inScope(
+        () => TimetableStore.writeBatch(
+          () => TimetableStore.saveSnapshot(snapshot),
+        ),
+      );
+      _snapshot = snapshot;
+      await _serializeAppearance(() async {
+        final colorsChanged = await _recomputeColors();
+        if (colorsChanged) {
+          await _inScope(
+            () => TimetableStore.saveManualCourses(_manualCourses),
+          );
+        }
+      });
+      await _syncExams(term, bindingRevision: bindingRevision);
+      await host._upsertScheduleMetadata(
+        ScheduleMetadata(
+          id: activeStorageId,
+          name: resolvedName,
+          customName: existingMeta?.customName ?? false,
+          sourceKind: TimetableSourceKind.jwxt,
+          termCode: term,
+          createdAt: existingMeta?.createdAt ?? DateTime.now(),
+          syncedAt: snapshot.syncedAt,
+          courseCount: snapshot.courses.length,
+        ),
+        persist: true,
+      );
+      _clampViewingWeek();
+      _statusMessage = '已同步 ${_snapshot.courses.length} 门课程';
+      _syncStatus = TimetableSyncStatus.success;
+      _syncFailure = TimetableSyncFailure.none;
+      outcome = const TimetableSyncOutcome.success(automatic: false);
+      _fireScheduleChanged(ScheduleChangeReason.sync);
+    } catch (e) {
+      if (bindingRevision != host._portalBindingRevision) return;
+      _syncFailure = classifySyncError(e);
+      outcome = TimetableSyncOutcome.failure(
+        automatic: false,
+        failure: _syncFailure,
+        offline: _isOffline(e),
+      );
+      _statusMessage = '同步失败：$e';
+      _syncStatus = TimetableSyncStatus.failure;
+      if (_syncFailure == TimetableSyncFailure.sessionExpired) {
+        await host._setPortalSessionExpired(true);
+      }
+    } finally {
+      _loading = false;
+      if (outcome != null) _lastSyncOutcome = outcome;
+      notifyListeners();
+      if (outcome case final completed?) _syncOutcomes.add(completed);
+    }
   }
 
   /// [syncFromJwxt] 的别名：从教务远程拉取全量课表，行为与 [syncFromJwxt] 完全等同。
@@ -1165,9 +1579,10 @@ class TimetableController extends ChangeNotifier {
           );
           late final List<Course> previousJwxt;
           late final bool hasSyncBaseline;
+          final host = _manager ?? this;
           // 与设置保存共用队列：落盘后立即发布快照，后续设置不能再写回旧课表。
           await _serializeAppearance(() async {
-            if (bindingRevision != _portalBindingRevision) {
+            if (bindingRevision != host._portalBindingRevision) {
               AppLog.reportOutcome('skipped', reason: 'superseded');
               return;
             }
@@ -1175,46 +1590,78 @@ class TimetableController extends ChangeNotifier {
             hasSyncBaseline =
                 _snapshot.settings.termCode == snapshot.settings.termCode &&
                 (_snapshot.syncedAt != null || previousJwxt.isNotEmpty);
+            final newTerm = snapshot.settings.termCode.isNotEmpty
+                ? snapshot.settings.termCode
+                : term;
+            final termRolledOver =
+                previous.termCode.isNotEmpty &&
+                previous.termCode != newTerm &&
+                isHistoricalTerm(previous.termCode, currentTermCode: newTerm) &&
+                previousJwxt.isNotEmpty;
+            if (termRolledOver && activeStorageId == kDefaultScheduleId) {
+              final archiveId = 'jwxt_${sanitizeScheduleId(previous.termCode)}';
+              await TimetableStore.archiveDefaultToSchedule(archiveId);
+              final prevMeta = host.scheduleMetaOf(kDefaultScheduleId);
+              await host._upsertScheduleMetadata(
+                ScheduleMetadata(
+                  id: archiveId,
+                  name: prevMeta?.customName == true
+                      ? prevMeta!.name
+                      : formatTermScheduleName(previous.termCode),
+                  customName: prevMeta?.customName ?? false,
+                  sourceKind: TimetableSourceKind.jwxt,
+                  termCode: previous.termCode,
+                  createdAt: prevMeta?.createdAt ?? DateTime.now(),
+                  syncedAt: _snapshot.syncedAt,
+                  courseCount: previousJwxt.length,
+                ),
+                persist: true,
+              );
+            }
             snapshot = snapshot.copyWith(
               settings: snapshot.settings
                   .withDisplayPrefsFrom(settings)
                   .copyWith(scheduleName: settings.scheduleName),
             );
             // 快照与学期设置一起落盘，失败时保留原有内存和磁盘数据。
-            await TimetableStore.writeBatch(() async {
-              await TimetableStore.saveSnapshot(snapshot);
-              // 只合并学期四键，保留展示设置的原始值与未知键。
-              await TimetableStore.mergeTermSettings(snapshot.settings);
-              // 绑定变更时取消尚未提交的旧批次；外层按 revision 忽略本次同步。
-              if (bindingRevision != _portalBindingRevision) {
-                throw const TimetablePersistenceException();
-              }
-            });
-            if (bindingRevision != _portalBindingRevision) {
+            await _inScope(
+              () => TimetableStore.writeBatch(() async {
+                await TimetableStore.saveSnapshot(snapshot);
+                // 只合并学期四键，保留展示设置的原始值与未知键。
+                await TimetableStore.mergeTermSettings(snapshot.settings);
+                // 绑定变更时取消尚未提交的旧批次；外层按 revision 忽略本次同步。
+                if (bindingRevision != host._portalBindingRevision) {
+                  throw const TimetablePersistenceException();
+                }
+              }),
+            );
+            if (bindingRevision != host._portalBindingRevision) {
               AppLog.reportOutcome('skipped', reason: 'superseded');
               return;
             }
             _snapshot = snapshot;
           });
-          if (bindingRevision != _portalBindingRevision) {
+          if (bindingRevision != host._portalBindingRevision) {
             AppLog.reportOutcome('skipped', reason: 'superseded');
             return;
           }
           // 变更日志沿用已捕获的旧教务源；I/O 等待不占设置队列，也不再次覆盖快照。
           if (!hasSyncBaseline) {
             await _resetSyncChanges();
-            if (bindingRevision != _portalBindingRevision) return;
+            if (bindingRevision != host._portalBindingRevision) return;
           }
           TimetableSyncDiffResult? syncDiff;
           try {
-            syncDiff = await TimetableSyncDiff.applyAfterFetch(
-              previousJwxtCourses: hasSyncBaseline ? previousJwxt : const [],
-              newJwxtCourses: snapshot.courses,
-              allowWhenOldEmpty: hasSyncBaseline,
-              xnxqdm: snapshot.settings.termCode.isNotEmpty
-                  ? snapshot.settings.termCode
-                  : term,
-              detectedAt: snapshot.syncedAt,
+            syncDiff = await _inScope(
+              () => TimetableSyncDiff.applyAfterFetch(
+                previousJwxtCourses: hasSyncBaseline ? previousJwxt : const [],
+                newJwxtCourses: snapshot.courses,
+                allowWhenOldEmpty: hasSyncBaseline,
+                xnxqdm: snapshot.settings.termCode.isNotEmpty
+                    ? snapshot.settings.termCode
+                    : term,
+                detectedAt: snapshot.syncedAt,
+              ),
             );
           } catch (error, stackTrace) {
             AppLog.reportOutcome(
@@ -1228,7 +1675,7 @@ class TimetableController extends ChangeNotifier {
               stackTrace: stackTrace,
             );
           }
-          if (bindingRevision != _portalBindingRevision) {
+          if (bindingRevision != host._portalBindingRevision) {
             AppLog.reportOutcome('skipped', reason: 'superseded');
             return;
           }
@@ -1259,8 +1706,8 @@ class TimetableController extends ChangeNotifier {
               for (final o in _overrides)
                 if (!stale.contains(o.id)) o,
             ]);
-            await TimetableStore.saveOverrides(_overrides);
-            if (bindingRevision != _portalBindingRevision) {
+            await _inScope(() => TimetableStore.saveOverrides(_overrides));
+            if (bindingRevision != host._portalBindingRevision) {
               AppLog.reportOutcome('skipped', reason: 'superseded');
               return;
             }
@@ -1274,27 +1721,29 @@ class TimetableController extends ChangeNotifier {
             _courseEdits = Map.unmodifiable(
               {..._courseEdits}..removeWhere((k, _) => staleEdits.contains(k)),
             );
-            await ScheduleStore.saveCourseEdits(_courseEdits);
-            if (bindingRevision != _portalBindingRevision) {
+            await _inScope(() => ScheduleStore.saveCourseEdits(_courseEdits));
+            if (bindingRevision != host._portalBindingRevision) {
               AppLog.reportOutcome('skipped', reason: 'superseded');
               return;
             }
           }
           await _serializeAppearance(() async {
-            if (bindingRevision != _portalBindingRevision) {
+            if (bindingRevision != host._portalBindingRevision) {
               AppLog.reportOutcome('skipped', reason: 'superseded');
               return;
             }
             final colorsChanged = await _recomputeColors();
-            if (bindingRevision != _portalBindingRevision) {
+            if (bindingRevision != host._portalBindingRevision) {
               AppLog.reportOutcome('skipped', reason: 'superseded');
               return;
             }
             if (colorsChanged) {
-              await TimetableStore.saveManualCourses(_manualCourses);
+              await _inScope(
+                () => TimetableStore.saveManualCourses(_manualCourses),
+              );
             }
           });
-          if (bindingRevision != _portalBindingRevision) {
+          if (bindingRevision != host._portalBindingRevision) {
             AppLog.reportOutcome('skipped', reason: 'superseded');
             return;
           }
@@ -1308,24 +1757,26 @@ class TimetableController extends ChangeNotifier {
             term,
             bindingRevision: bindingRevision,
           );
-          if (bindingRevision != _portalBindingRevision) {
+          if (bindingRevision != host._portalBindingRevision) {
             AppLog.reportOutcome('skipped', reason: 'superseded');
             return;
           }
           if (syncedExams != null) {
             try {
-              final examDiff = await TimetableSyncDiff.applyExamsAfterFetch(
-                previousJwxtExams: hasSyncBaseline
-                    ? previousJwxtExams
-                    : const [],
-                newJwxtExams: syncedExams,
-                allowWhenOldEmpty: hasSyncBaseline,
-                xnxqdm: snapshot.settings.termCode.isNotEmpty
-                    ? snapshot.settings.termCode
-                    : term,
-                detectedAt: snapshot.syncedAt,
+              final examDiff = await _inScope(
+                () => TimetableSyncDiff.applyExamsAfterFetch(
+                  previousJwxtExams: hasSyncBaseline
+                      ? previousJwxtExams
+                      : const [],
+                  newJwxtExams: syncedExams,
+                  allowWhenOldEmpty: hasSyncBaseline,
+                  xnxqdm: snapshot.settings.termCode.isNotEmpty
+                      ? snapshot.settings.termCode
+                      : term,
+                  detectedAt: snapshot.syncedAt,
+                ),
               );
-              if (bindingRevision != _portalBindingRevision) {
+              if (bindingRevision != host._portalBindingRevision) {
                 AppLog.reportOutcome('skipped', reason: 'superseded');
                 return;
               }
@@ -1350,15 +1801,41 @@ class TimetableController extends ChangeNotifier {
               );
             }
           }
+          final effectiveTerm = _snapshot.settings.termCode.isNotEmpty
+              ? _snapshot.settings.termCode
+              : term;
+          final existingDefault = host.scheduleMetaOf(kDefaultScheduleId);
+          final defaultMetaName = existingDefault?.customName == true
+              ? existingDefault!.name
+              : (settings.scheduleName != '我的课表' &&
+                        previous.termCode == effectiveTerm
+                    ? settings.scheduleName
+                    : formatTermScheduleName(effectiveTerm));
+          await host._upsertScheduleMetadata(
+            ScheduleMetadata(
+              id: kDefaultScheduleId,
+              name: defaultMetaName,
+              customName: existingDefault?.customName ?? false,
+              sourceKind: TimetableSourceKind.jwxt,
+              termCode: effectiveTerm,
+              createdAt: existingDefault?.createdAt ?? DateTime.now(),
+              syncedAt: _snapshot.syncedAt,
+              courseCount: _snapshot.courses.length,
+            ),
+            currentTermCode: effectiveTerm,
+            persist:
+                host._schedulesIndex.schedules.length > 1 ||
+                await TimetableStore.readSchedulesIndex() != null,
+          );
           // 只有成功才重置自动同步计时。
           final succeededAt = syncClock();
           await ScheduleStore.saveLastSyncSuccess(succeededAt);
-          if (bindingRevision != _portalBindingRevision) {
+          if (bindingRevision != host._portalBindingRevision) {
             AppLog.reportOutcome('skipped', reason: 'superseded');
             return;
           }
-          await _setPortalSessionExpired(false);
-          if (bindingRevision != _portalBindingRevision) {
+          await host._setPortalSessionExpired(false);
+          if (bindingRevision != host._portalBindingRevision) {
             AppLog.reportOutcome('skipped', reason: 'superseded');
             return;
           }
@@ -1370,6 +1847,11 @@ class TimetableController extends ChangeNotifier {
           _lastAutoSyncFailed = false;
           outcome = TimetableSyncOutcome.success(automatic: automatic);
           _fireScheduleChanged(ScheduleChangeReason.sync);
+          if (_isPrimaryHost) {
+            unawaited(
+              _autoDiscoverHistoricalTerms(bindingRevision: bindingRevision),
+            );
+          }
         },
         fields: {'automatic': automatic, 'has_cache': hasCourses},
         resultFields: (_) => {'course_count': _snapshot.courses.length},
@@ -1379,7 +1861,8 @@ class TimetableController extends ChangeNotifier {
         },
       );
     } catch (e) {
-      if (bindingRevision != _portalBindingRevision) return;
+      final host = _manager ?? this;
+      if (bindingRevision != host._portalBindingRevision) return;
       SilentRefresh.failCurrent();
       _lastFailureOffline = _isOffline(e);
       _syncFailure = classifySyncError(e);
@@ -1393,12 +1876,13 @@ class TimetableController extends ChangeNotifier {
       _syncStatus = TimetableSyncStatus.failure;
       _snapshot = _snapshot.copyWith(lastError: '$e');
       if (_syncFailure == TimetableSyncFailure.sessionExpired) {
-        await _setPortalSessionExpired(true);
+        await host._setPortalSessionExpired(true);
       }
     } finally {
+      final host = _manager ?? this;
       _loading = false;
       // 等待存储期间也可能换绑，过时同步不能再发布成功或失败提示。
-      if (bindingRevision != _portalBindingRevision) outcome = null;
+      if (bindingRevision != host._portalBindingRevision) outcome = null;
       if (outcome != null) _lastSyncOutcome = outcome;
       notifyListeners();
       if (outcome case final completed?) _syncOutcomes.add(completed);
@@ -1473,6 +1957,14 @@ class TimetableController extends ChangeNotifier {
     _portalBindingChange = Future.value();
     _portalBound = false;
     _pendingOpen = null;
+    _schedulesIndex = const SchedulesIndex();
+    _primaryScheduleId = kDefaultScheduleId;
+    _viewingScheduleId = kDefaultScheduleId;
+    _scopedControllers.clear();
+    _probedHistoricalSnapshots.clear();
+    _importSeq = 0;
+    _historicalDiscoveryAttempted = false;
+    _historicalDiscoveryInFlight = null;
   }
 
   /// 清空教务课程与 snapshot 磁盘缓存，并清除教务写入的学期元数据；
@@ -1510,17 +2002,21 @@ class TimetableController extends ChangeNotifier {
 
     try {
       // 每项清理独立尝试，磁盘失败不能让后面的数据继续残留。
-      await attemptCleanup(TimetableStore.clearJwxtSnapshot);
+      await attemptCleanup(() => _inScope(TimetableStore.clearJwxtSnapshot));
       if (hadJwxtExams) {
         await attemptCleanup(
-          () => ScheduleStore.saveEventsAndOtherColors(
-            _scheduleEvents,
-            _otherColors,
+          () => _inScope(
+            () => ScheduleStore.saveEventsAndOtherColors(
+              _scheduleEvents,
+              _otherColors,
+            ),
           ),
         );
       }
       // 不序列化内存设置：只从原始 settings.json 中删除学期键。
-      await attemptCleanup(TimetableStore.removeTermSettingKeys);
+      if (activeStorageId == kDefaultScheduleId) {
+        await attemptCleanup(TimetableStore.removeTermSettingKeys);
+      }
     } finally {
       _clampViewingWeek();
       try {
@@ -1536,7 +2032,7 @@ class TimetableController extends ChangeNotifier {
   Future<void> clearCourses() => clearJwxtCourses();
 
   /// 退出登录/解绑门户：默认清掉教务课程、snapshot 磁盘缓存与教务学期元数据，
-  /// 手动课程与展示设置保留。
+  /// 手动课程与展示设置保留；从 WakeUp 导入的他人课表保留。
   /// [clearJwxt] 为 false 时仅更新登录态，教务缓存与手动课程都保留。
   Future<void> handleLogout({bool clearJwxt = true}) async {
     _portalBound = false;
@@ -1549,11 +2045,688 @@ class TimetableController extends ChangeNotifier {
     try {
       await _setPortalSessionExpired(false);
       // 调课记录保留（jwxt §3.2 第 7 条），重新绑定同步后重新套用。
-      if (clearJwxt) await clearJwxtCourses();
+      if (clearJwxt) {
+        if (activeStorageId == kDefaultScheduleId) {
+          await clearJwxtCourses();
+        } else if (primaryScheduleMeta?.isOwnSchedule == true) {
+          await clearJwxtCourses();
+        }
+        if (_isPrimaryHost) {
+          await _clearHistoricalJwxtOnLogout();
+        }
+      }
     } finally {
       notifyListeners();
       _fireScheduleChanged(ScheduleChangeReason.unbind);
     }
+  }
+
+  Future<void> _clearHistoricalJwxtOnLogout() async {
+    _historicalDiscoveryAttempted = false;
+    final historicalIds = [
+      for (final s in _schedulesIndex.schedules)
+        if (s.isOwnSchedule && s.id != kDefaultScheduleId) s.id,
+    ];
+    if (historicalIds.isEmpty &&
+        _schedulesIndex.checkedEmptyTerms.isEmpty &&
+        _schedulesIndex.currentTermCode.isEmpty) {
+      return;
+    }
+    for (final id in historicalIds) {
+      _scopedControllers.remove(id);
+      try {
+        await TimetableStore.deleteScheduleDirectory(id);
+      } catch (_) {}
+    }
+    final primaryWasCleared = historicalIds.contains(_primaryScheduleId);
+    if (primaryWasCleared) {
+      _primaryScheduleId = kDefaultScheduleId;
+    }
+    if (historicalIds.contains(_viewingScheduleId)) {
+      _viewingScheduleId = _primaryScheduleId;
+    }
+    final remaining = [
+      for (final s in _schedulesIndex.schedules)
+        if (!historicalIds.contains(s.id))
+          if (s.id == kDefaultScheduleId)
+            s.copyWith(
+              termCode: '',
+              name: s.customName ? s.name : '当前学期',
+              clearSyncedAt: true,
+              courseCount: 0,
+            )
+          else
+            s,
+    ];
+    _schedulesIndex = SchedulesIndex(
+      primaryScheduleId: _primaryScheduleId,
+      currentTermCode: '',
+      schedules: List.unmodifiable(remaining),
+    );
+    if (await TimetableStore.readSchedulesIndex() != null ||
+        remaining.any((s) => s.isImportedSchedule)) {
+      await TimetableStore.saveSchedulesIndex(_schedulesIndex);
+    }
+    if (primaryWasCleared) {
+      await _reloadFromDisk();
+      _colorMap = null;
+      await _loadColorMap();
+    }
+  }
+
+  // ---- 多课表管理：切换 / 主课表 / 命名 / 删除 / WakeUp 导入 / 往年学期 ----
+
+  Future<TimetableController> _ensureScopedController(String id) async {
+    final host = _manager ?? this;
+    final ctrl = host._scopedControllers[id] ??= TimetableController._(
+      id,
+      host,
+    );
+    await ctrl.ensureStarted();
+    return ctrl;
+  }
+
+  Future<void> _ensureIndexSeeded() async {
+    if (_schedulesIndex.schedules.isNotEmpty) return;
+    _schedulesIndex = SchedulesIndex(
+      primaryScheduleId: _primaryScheduleId,
+      currentTermCode: _snapshot.settings.termCode,
+      schedules: [
+        ScheduleMetadata(
+          id: kDefaultScheduleId,
+          name: _deriveDefaultScheduleName(),
+          customName:
+              _snapshot.settings.scheduleName.trim().isNotEmpty &&
+              _snapshot.settings.scheduleName.trim() != '我的课表' &&
+              _snapshot.settings.scheduleName.trim() !=
+                  formatTermScheduleName(_snapshot.settings.termCode),
+          sourceKind: TimetableSourceKind.jwxt,
+          termCode: _snapshot.settings.termCode,
+          createdAt: DateTime.now(),
+          syncedAt: _snapshot.syncedAt,
+          courseCount: _snapshot.courses.length,
+        ),
+      ],
+    );
+  }
+
+  List<ScheduleMetadata> _sortedSchedules(List<ScheduleMetadata> raw) {
+    final own = <ScheduleMetadata>[];
+    final imported = <ScheduleMetadata>[];
+    for (final s in raw) {
+      if (s.isOwnSchedule) {
+        own.add(s);
+      } else {
+        imported.add(s);
+      }
+    }
+    own.sort((a, b) {
+      final ta = a.termCode.trim();
+      final tb = b.termCode.trim();
+      if (ta.isNotEmpty && tb.isNotEmpty) {
+        final byTerm = compareTermCodes(tb, ta);
+        if (byTerm != 0) return byTerm;
+      } else if (ta.isNotEmpty || tb.isNotEmpty) {
+        return tb.isNotEmpty ? 1 : -1;
+      }
+      if (a.id == kDefaultScheduleId && b.id != kDefaultScheduleId) return -1;
+      if (b.id == kDefaultScheduleId && a.id != kDefaultScheduleId) return 1;
+      final ca = a.createdAt;
+      final cb = b.createdAt;
+      if (ca != null && cb != null) return cb.compareTo(ca);
+      return a.id.compareTo(b.id);
+    });
+    return [...own, ...imported];
+  }
+
+  /// 按当前学期同步后或用户打开切换面板时，在后台静默自动发现并拉取往年有课学期（幂等且不阻断当前流程）。
+  Future<void> triggerHistoricalDiscoveryIfNeeded() {
+    final host = _manager ?? this;
+    return host._autoDiscoverHistoricalTerms(
+      bindingRevision: host._portalBindingRevision,
+    );
+  }
+
+  Future<void> _autoDiscoverHistoricalTerms({
+    required int bindingRevision,
+  }) async {
+    if (!_isPrimaryHost) return;
+    if (_historicalDiscoveryInFlight != null) {
+      return _historicalDiscoveryInFlight!;
+    }
+    if (_historicalDiscoveryAttempted) return;
+    if (!_portalBound || currentTermCode.trim().isEmpty) return;
+    late final Future<void> task;
+    task = () async {
+      _historicalDiscoveryAttempted = true;
+      try {
+        final added = await _discoverHistoricalTermsImpl();
+        if (bindingRevision != _portalBindingRevision) return;
+        if (added.isNotEmpty) notifyListeners();
+      } catch (_) {
+        // 自动发现失败时重置标记，以便下次同步或打开切换器时可再次尝试。
+        if (bindingRevision == _portalBindingRevision) {
+          _historicalDiscoveryAttempted = false;
+        }
+      } finally {
+        if (identical(_historicalDiscoveryInFlight, task)) {
+          _historicalDiscoveryInFlight = null;
+        }
+      }
+    }();
+    _historicalDiscoveryInFlight = task;
+    return task;
+  }
+
+  Future<void> _upsertScheduleMetadata(
+    ScheduleMetadata meta, {
+    String? currentTermCode,
+    bool persist = true,
+  }) async {
+    await _ensureIndexSeeded();
+    final list = [..._schedulesIndex.schedules];
+    final idx = list.indexWhere((s) => s.id == meta.id);
+    if (idx >= 0) {
+      list[idx] = meta;
+    } else {
+      list.add(meta);
+    }
+    final sorted = _sortedSchedules(list);
+    _schedulesIndex = _schedulesIndex.copyWith(
+      primaryScheduleId: _primaryScheduleId,
+      currentTermCode: currentTermCode ?? _schedulesIndex.currentTermCode,
+      schedules: List.unmodifiable(sorted),
+    );
+    if (persist) {
+      await TimetableStore.saveSchedulesIndex(_schedulesIndex);
+    }
+    notifyListeners();
+  }
+
+  /// 切换课表页当前浏览的课表（不影响首页/小组件/提醒绑定的主课表）。
+  Future<void> switchViewingSchedule(String scheduleId) async {
+    final host = _manager ?? this;
+    await host._ensureIndexSeeded();
+    if (scheduleId != kDefaultScheduleId &&
+        host.scheduleMetaOf(scheduleId) == null) {
+      return;
+    }
+    if (scheduleId != host._primaryScheduleId) {
+      await host._ensureScopedController(scheduleId);
+    }
+    host._viewingScheduleId = scheduleId;
+    host.notifyListeners();
+  }
+
+  /// 将指定课表设为主课表（驱动首页卡片、桌面小组件、上课提醒与校园地图），并切过去查看。
+  Future<void> setPrimarySchedule(String scheduleId) async {
+    final host = _manager ?? this;
+    await host._ensureIndexSeeded();
+    if (scheduleId != kDefaultScheduleId &&
+        host.scheduleMetaOf(scheduleId) == null) {
+      return;
+    }
+    if (host._primaryScheduleId != scheduleId) {
+      host._primaryScheduleId = scheduleId;
+      host._schedulesIndex = host._schedulesIndex.copyWith(
+        primaryScheduleId: scheduleId,
+      );
+      await TimetableStore.saveSchedulesIndex(host._schedulesIndex);
+      // 原主课表如果刚好被缓存为子控制器，释放后按新主课表重新加载 host。
+      host._scopedControllers.remove(scheduleId);
+      await host._reloadFromDisk();
+      host._colorMap = null;
+      await host._loadColorMap();
+      host._viewingWeek = host._defaultViewingWeek;
+      host._lastSeenCurrentWeek = host.currentWeek;
+    }
+    host._viewingScheduleId = scheduleId;
+    host.notifyListeners();
+    host._fireScheduleChanged(ScheduleChangeReason.settings);
+  }
+
+  /// 重命名任意课表（自己的教务课表或导入课表），之后同步不覆盖自定义名称。
+  Future<void> renameSchedule(String scheduleId, String newName) async {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) return;
+    final host = _manager ?? this;
+    await host._ensureIndexSeeded();
+    final existing = host.scheduleMetaOf(scheduleId);
+    if (existing == null) return;
+    final updated = existing.copyWith(name: trimmed, customName: true);
+    await host._upsertScheduleMetadata(updated, persist: true);
+
+    if (scheduleId == host._primaryScheduleId) {
+      final snap = host._snapshot.copyWith(
+        settings: host._snapshot.settings.copyWith(scheduleName: trimmed),
+      );
+      await host._inScope(() => TimetableStore.saveSnapshot(snap));
+      if (scheduleId == kDefaultScheduleId) {
+        await TimetableStore.mergeSettingsChanges(
+          host._snapshot.settings,
+          snap.settings,
+        );
+      }
+      host._snapshot = snap;
+      host.notifyListeners();
+    } else if (host._scopedControllers[scheduleId] case final scoped?) {
+      final snap = scoped._snapshot.copyWith(
+        settings: scoped._snapshot.settings.copyWith(scheduleName: trimmed),
+      );
+      await scoped._inScope(() => TimetableStore.saveSnapshot(snap));
+      if (scheduleId == kDefaultScheduleId) {
+        await TimetableStore.mergeSettingsChanges(
+          scoped._snapshot.settings,
+          snap.settings,
+        );
+      }
+      scoped._snapshot = snap;
+      scoped.notifyListeners();
+    } else {
+      await TimetableStore.withScheduleScope(scheduleId, () async {
+        final snap = await TimetableStore.readSnapshot();
+        if (snap != null) {
+          final next = snap.copyWith(
+            settings: snap.settings.copyWith(scheduleName: trimmed),
+          );
+          await TimetableStore.saveSnapshot(next);
+        }
+      });
+    }
+  }
+
+  /// 删除非默认课表（如导入的他人课表或往年学期缓存）。
+  /// 若删除的刚好是主课表或当前浏览课表，则回退到默认课表。
+  Future<bool> deleteSchedule(String scheduleId) async {
+    if (scheduleId == kDefaultScheduleId) return false;
+    final host = _manager ?? this;
+    await host._ensureIndexSeeded();
+    if (host.scheduleMetaOf(scheduleId) == null) return false;
+
+    final wasPrimary = host._primaryScheduleId == scheduleId;
+    final wasViewing = host._viewingScheduleId == scheduleId;
+
+    host._scopedControllers.remove(scheduleId);
+    await TimetableStore.deleteScheduleDirectory(scheduleId);
+    final nextList = [
+      for (final s in host._schedulesIndex.schedules)
+        if (s.id != scheduleId) s,
+    ];
+    if (wasPrimary) {
+      host._primaryScheduleId = kDefaultScheduleId;
+    }
+    if (wasViewing) {
+      host._viewingScheduleId = host._primaryScheduleId;
+    }
+    host._schedulesIndex = host._schedulesIndex.copyWith(
+      primaryScheduleId: host._primaryScheduleId,
+      schedules: List.unmodifiable(nextList),
+    );
+    await TimetableStore.saveSchedulesIndex(host._schedulesIndex);
+    if (wasPrimary) {
+      await host._reloadFromDisk();
+      host._colorMap = null;
+      await host._loadColorMap();
+      host._viewingWeek = host._defaultViewingWeek;
+      host._lastSeenCurrentWeek = host.currentWeek;
+      host._fireScheduleChanged(ScheduleChangeReason.settings);
+    }
+    host.notifyListeners();
+    return true;
+  }
+
+  /// 将解析后的 WakeUp 课表保存为独立的「导入课表」，并切换到该课表查看。
+  Future<ScheduleMetadata> importWakeupSchedule(
+    WakeupImportResult result, {
+    required String name,
+    bool setAsPrimary = false,
+  }) async {
+    final host = _manager ?? this;
+    await host._ensureIndexSeeded();
+    final trimmedName = name.trim().isEmpty ? result.defaultName : name.trim();
+    String id;
+    do {
+      id = sanitizeScheduleId(
+        'wakeup_${DateTime.now().millisecondsSinceEpoch}_${host._importSeq++}',
+      );
+    } while (host.scheduleMetaOf(id) != null);
+
+    final periods = result.snapshot.periods.isEmpty
+        ? defaultPeriods()
+        : result.snapshot.periods;
+    final snapSettings = result.snapshot.settings
+        .withDisplayPrefsFrom(host.settings)
+        .copyWith(scheduleName: trimmedName);
+    final snapshot = result.snapshot.copyWith(
+      periods: periods,
+      settings: snapSettings,
+      syncedAt: DateTime.now(),
+    );
+    final scheme = coursePaletteSchemeOf(host.settings.paletteScheme);
+    final adaptedCourses = <Course>[
+      for (final c in snapshot.courses)
+        if (result.userColors[c.id] case final rawArgb?)
+          c.copyWith(
+            colorIndex: adaptedPaletteIndexForArgb(rawArgb, scheme: scheme),
+          )
+        else
+          c,
+    ];
+    final adaptedSnapshot = snapshot.copyWith(
+      courses: List.unmodifiable(adaptedCourses),
+    );
+    final colorMap = assignCourseColors(adaptedCourses, scheme: scheme);
+
+    await TimetableStore.withScheduleScope(id, () async {
+      await TimetableStore.writeBatch(() async {
+        await TimetableStore.saveSnapshot(adaptedSnapshot);
+        await TimetableStore.saveCourseColors(scheme, colorMap);
+        if (result.exams.isNotEmpty) {
+          await ScheduleStore.saveEvents(result.exams);
+        }
+      });
+    });
+
+    final meta = ScheduleMetadata(
+      id: id,
+      name: trimmedName,
+      customName: true,
+      sourceKind: TimetableSourceKind.wakeupImport,
+      createdAt: DateTime.now(),
+      syncedAt: snapshot.syncedAt,
+      courseCount: snapshot.courses.length,
+    );
+    await host._upsertScheduleMetadata(meta, persist: true);
+    if (setAsPrimary) {
+      await host.setPrimarySchedule(id);
+    } else {
+      await host.switchViewingSchedule(id);
+    }
+    return meta;
+  }
+
+  /// 将考试裁剪到目标学期的合理日期窗内（仅在已知开学日且用于历史学期时启用，防止无 XNXQDM 的跨学期数据污染）。
+  List<ScheduleEvent> _filterExamsToTermWindow(
+    List<ScheduleEvent> exams,
+    TimetableSettings termSettings,
+  ) {
+    final start = termSettings.termStartDate;
+    if (start == null) return exams;
+    final weeks = termSettings.maxWeeks > 0 ? termSettings.maxWeeks : 20;
+    final minDate = start.subtract(const Duration(days: 30));
+    final maxDate = start.add(Duration(days: (weeks + 8) * 7));
+    return [
+      for (final e in exams)
+        if (!e.date.isBefore(minDate) && !e.date.isAfter(maxDate)) e,
+    ];
+  }
+
+  /// 查询并筛选教务可选学年学期列表（按学号推导的入学年份过滤，且剔除拉取不到或无课的学期）。
+  Future<List<JwxtTermOption>> fetchAvailableJwxtTerms({
+    bool refresh = false,
+  }) async {
+    final host = _manager ?? this;
+    await host._ensureIndexSeeded();
+    final rawOptions = await fetchAvailableTerms();
+    final enrollmentYear = await enrollmentYearCheck();
+    final curr = host.currentTermCode.trim();
+    final candidates = [
+      for (final opt in rawOptions)
+        if (opt.termCode.trim().isNotEmpty &&
+            isTermAtOrAfterEnrollment(
+              opt.termCode,
+              enrollmentYear: enrollmentYear,
+            ) &&
+            (curr.isEmpty || compareTermCodes(opt.termCode, curr) <= 0))
+          opt,
+    ]..sort((a, b) => compareTermCodes(b.termCode, a.termCode));
+
+    final emptyTerms = refresh
+        ? <String>[]
+        : List<String>.of(host._schedulesIndex.checkedEmptyTerms);
+    final available = <JwxtTermOption>[];
+    for (final opt in candidates) {
+      final term = opt.termCode.trim();
+      if (curr.isNotEmpty && term == curr) {
+        available.add(opt);
+        continue;
+      }
+      final id = sanitizeScheduleId('jwxt_$term');
+      final existing = host.scheduleMetaOf(id);
+      if (existing != null && (existing.courseCount ?? 0) > 0) {
+        available.add(opt);
+        continue;
+      }
+      if (!refresh && emptyTerms.contains(term)) {
+        continue;
+      }
+      try {
+        final snap = await fetchHistoricalSnapshot(
+          term,
+          baseSettings: host.settings.copyWith(clearTermStart: true),
+        );
+        final jwxtCourses = [
+          for (final c in snap.courses)
+            if (c.source == CourseSource.jwxt) c,
+        ];
+        if (jwxtCourses.isEmpty) {
+          if (!emptyTerms.contains(term)) emptyTerms.add(term);
+          continue;
+        }
+        emptyTerms.remove(term);
+        host._probedHistoricalSnapshots[term] = snap;
+        available.add(opt);
+      } catch (e) {
+        final failure = classifySyncError(e);
+        if (failure == TimetableSyncFailure.sessionExpired ||
+            (failure == TimetableSyncFailure.network && _isOffline(e))) {
+          rethrow;
+        }
+        if (!emptyTerms.contains(term)) emptyTerms.add(term);
+      }
+    }
+    if (!listEquals(emptyTerms, host._schedulesIndex.checkedEmptyTerms)) {
+      host._schedulesIndex = host._schedulesIndex.copyWith(
+        checkedEmptyTerms: List.unmodifiable(emptyTerms),
+      );
+      if (host._schedulesIndex.schedules.length > 1 ||
+          emptyTerms.isNotEmpty ||
+          await TimetableStore.readSchedulesIndex() != null) {
+        await TimetableStore.saveSchedulesIndex(host._schedulesIndex);
+      }
+    }
+    return available;
+  }
+
+  /// 手动拉取并保存指定往年学期课表（不会设为自动更新目标，也不覆盖当前学期）。
+  Future<ScheduleMetadata> syncHistoricalTerm(String termCode) async {
+    final host = _manager ?? this;
+    await host._ensureIndexSeeded();
+    final trimmed = termCode.trim();
+    final curr = host.currentTermCode;
+    if (trimmed == curr && curr.isNotEmpty) {
+      await host.syncFromJwxt();
+      return host.scheduleMetaOf(kDefaultScheduleId)!;
+    }
+    final id = sanitizeScheduleId('jwxt_$trimmed');
+    final existing = host.scheduleMetaOf(id);
+    final name = existing?.customName == true
+        ? existing!.name
+        : formatTermScheduleName(trimmed);
+    final cachedProbe = existing == null
+        ? host._probedHistoricalSnapshots.remove(trimmed)
+        : null;
+    var snapshot =
+        cachedProbe ??
+        await fetchHistoricalSnapshot(
+          trimmed,
+          baseSettings: host.settings.copyWith(clearTermStart: true),
+        );
+    if (snapshot.periods.isEmpty) {
+      snapshot = snapshot.copyWith(periods: defaultPeriods());
+    }
+    snapshot = snapshot.copyWith(
+      courses: [
+        for (final c in snapshot.courses)
+          if (c.source == CourseSource.jwxt) c,
+      ],
+      settings: snapshot.settings
+          .withDisplayPrefsFrom(host.settings)
+          .copyWith(termCode: trimmed, scheduleName: name),
+      syncedAt: DateTime.now(),
+      clearError: true,
+    );
+    final scheme = coursePaletteSchemeOf(host.settings.paletteScheme);
+    final colorMap = assignCourseColors(snapshot.courses, scheme: scheme);
+    await TimetableStore.withScheduleScope(id, () async {
+      await TimetableStore.writeBatch(() async {
+        await TimetableStore.saveSnapshot(snapshot);
+        await TimetableStore.saveCourseColors(scheme, colorMap);
+      });
+    });
+    // 尽力拉取该学期考试，按学期与时间窗过滤后保存，失败不阻断往年课表保存。
+    try {
+      final exams = await fetchExams(trimmed);
+      if (exams != null) {
+        final cleaned = _filterExamsToTermWindow([
+          for (final e in exams)
+            ExamParser.cleanImportedExam(
+              e.copyWith(source: ScheduleSource.jwxt, kind: ScheduleKind.exam),
+            ),
+        ], snapshot.settings);
+        await TimetableStore.withScheduleScope(
+          id,
+          () => ScheduleStore.saveEvents(cleaned),
+        );
+      }
+    } catch (_) {}
+
+    final meta = ScheduleMetadata(
+      id: id,
+      name: name,
+      customName: existing?.customName ?? false,
+      sourceKind: TimetableSourceKind.jwxt,
+      termCode: trimmed,
+      createdAt: existing?.createdAt ?? DateTime.now(),
+      syncedAt: snapshot.syncedAt,
+      courseCount: snapshot.courses.length,
+    );
+    await host._upsertScheduleMetadata(meta, persist: true);
+    if (host._scopedControllers[id] case final scoped?) {
+      await scoped.refreshLocal();
+    }
+    return meta;
+  }
+
+  /// 发现并自动纳入近几个有课的往年教务学期（[forceRescan] 为 true 时重新拉取并探测全部候选学期）。
+  Future<List<ScheduleMetadata>> discoverHistoricalTerms({
+    int maxAcademicYears = 4,
+    bool forceRescan = false,
+  }) async {
+    final host = _manager ?? this;
+    final inFlight = host._historicalDiscoveryInFlight;
+    if (inFlight != null) await inFlight;
+    return host._discoverHistoricalTermsImpl(
+      maxAcademicYears: maxAcademicYears,
+      forceRescan: forceRescan,
+    );
+  }
+
+  Future<List<ScheduleMetadata>> _discoverHistoricalTermsImpl({
+    int maxAcademicYears = 4,
+    bool forceRescan = false,
+  }) async {
+    final host = _manager ?? this;
+    await host._ensureIndexSeeded();
+    final curr = host.currentTermCode;
+    if (curr.isEmpty) return const [];
+    final options = await fetchAvailableTerms();
+    final enrollmentYear = await enrollmentYearCheck();
+    final candidates = [
+      for (final opt in options)
+        if (opt.termCode.isNotEmpty &&
+            isTermAtOrAfterEnrollment(
+              opt.termCode,
+              enrollmentYear: enrollmentYear,
+            ) &&
+            isHistoricalTerm(opt.termCode, currentTermCode: curr))
+          opt.termCode,
+    ]..sort((a, b) => compareTermCodes(b, a));
+
+    final added = <ScheduleMetadata>[];
+    final emptyTerms = forceRescan
+        ? <String>[]
+        : List<String>.of(host._schedulesIndex.checkedEmptyTerms);
+    var consecutiveEmpty = 0;
+    final limit = maxAcademicYears * 3;
+    for (final term in candidates.take(limit)) {
+      final id = sanitizeScheduleId('jwxt_$term');
+      final existing = host.scheduleMetaOf(id);
+      if (!forceRescan && (existing != null || emptyTerms.contains(term))) {
+        continue;
+      }
+      if (forceRescan && existing != null) {
+        try {
+          await host.syncHistoricalTerm(term);
+        } catch (_) {}
+        continue;
+      }
+      try {
+        final snap = await fetchHistoricalSnapshot(
+          term,
+          baseSettings: host.settings.copyWith(clearTermStart: true),
+        );
+        final jwxtCourses = [
+          for (final c in snap.courses)
+            if (c.source == CourseSource.jwxt) c,
+        ];
+        if (jwxtCourses.isEmpty) {
+          if (!emptyTerms.contains(term)) emptyTerms.add(term);
+          consecutiveEmpty++;
+          if (consecutiveEmpty >= 3) break;
+          continue;
+        }
+        consecutiveEmpty = 0;
+        final name = formatTermScheduleName(term);
+        final prepared = snap.copyWith(
+          courses: jwxtCourses,
+          periods: snap.periods.isEmpty ? defaultPeriods() : snap.periods,
+          settings: snap.settings
+              .withDisplayPrefsFrom(host.settings)
+              .copyWith(termCode: term, scheduleName: name),
+          syncedAt: DateTime.now(),
+          clearError: true,
+        );
+        final scheme = coursePaletteSchemeOf(host.settings.paletteScheme);
+        final colorMap = assignCourseColors(prepared.courses, scheme: scheme);
+        await TimetableStore.withScheduleScope(id, () async {
+          await TimetableStore.writeBatch(() async {
+            await TimetableStore.saveSnapshot(prepared);
+            await TimetableStore.saveCourseColors(scheme, colorMap);
+          });
+        });
+        final meta = ScheduleMetadata(
+          id: id,
+          name: name,
+          sourceKind: TimetableSourceKind.jwxt,
+          termCode: term,
+          createdAt: DateTime.now(),
+          syncedAt: prepared.syncedAt,
+          courseCount: prepared.courses.length,
+        );
+        await host._upsertScheduleMetadata(meta, persist: true);
+        added.add(meta);
+      } catch (_) {
+        // 单个历史学期失败不影响继续发现或当前课表使用。
+      }
+    }
+    if (!listEquals(emptyTerms, host._schedulesIndex.checkedEmptyTerms)) {
+      host._schedulesIndex = host._schedulesIndex.copyWith(
+        checkedEmptyTerms: List.unmodifiable(emptyTerms),
+      );
+      await TimetableStore.saveSchedulesIndex(host._schedulesIndex);
+    }
+    return added;
   }
 
   // ---- 手动课程 CRUD（只作用于 isManual 课程）----
@@ -1632,7 +2805,7 @@ class TimetableController extends ChangeNotifier {
         for (final e in _dateEdits)
           if (e.courseId != id) e,
       ]);
-      await ScheduleStore.saveCourseDateEdits(_dateEdits);
+      await _inScope(() => ScheduleStore.saveCourseDateEdits(_dateEdits));
     }
     await _persistManual();
     return true;
@@ -1685,9 +2858,9 @@ class TimetableController extends ChangeNotifier {
     ScheduleChangeReason reason = ScheduleChangeReason.manualCourse,
   ]) async {
     try {
-      await TimetableStore.saveManualCourses(_manualCourses);
+      await _inScope(() => TimetableStore.saveManualCourses(_manualCourses));
     } on TimetablePersistenceException {
-      _manualCourses = await TimetableStore.readManualCourses();
+      _manualCourses = await _inScope(TimetableStore.readManualCourses);
       _colorMap = null;
       notifyListeners();
       rethrow;
@@ -2084,27 +3257,29 @@ class TimetableController extends ChangeNotifier {
       ...previousEvents,
       exam,
     ]);
-    await TimetableStore.writeBatch(() async {
-      if (nextManual != null) {
-        await TimetableStore.saveManualCourses(nextManual);
-      }
-      if (nextCourseEdits != null) {
-        await ScheduleStore.saveCourseEdits(nextCourseEdits);
-      }
-      if (nextDateEdits.length != previousDateEdits.length) {
-        await ScheduleStore.saveCourseDateEdits(nextDateEdits);
-      }
-      await ScheduleStore.saveEvents(nextEvents);
-      if (!identical(_dateEdits, previousDateEdits) ||
-          !identical(_scheduleEvents, previousEvents) ||
-          !identical(_manualCourses, previousManual) ||
-          !identical(_courseEdits, previousCourseEdits) ||
-          !identical(_snapshot, previousSnapshot) ||
-          !identical(_overrides, previousOverrides) ||
-          !identical(_daySwaps, previousDaySwaps)) {
-        throw const TimetablePersistenceException();
-      }
-    });
+    await _inScope(
+      () => TimetableStore.writeBatch(() async {
+        if (nextManual != null) {
+          await TimetableStore.saveManualCourses(nextManual);
+        }
+        if (nextCourseEdits != null) {
+          await ScheduleStore.saveCourseEdits(nextCourseEdits);
+        }
+        if (nextDateEdits.length != previousDateEdits.length) {
+          await ScheduleStore.saveCourseDateEdits(nextDateEdits);
+        }
+        await ScheduleStore.saveEvents(nextEvents);
+        if (!identical(_dateEdits, previousDateEdits) ||
+            !identical(_scheduleEvents, previousEvents) ||
+            !identical(_manualCourses, previousManual) ||
+            !identical(_courseEdits, previousCourseEdits) ||
+            !identical(_snapshot, previousSnapshot) ||
+            !identical(_overrides, previousOverrides) ||
+            !identical(_daySwaps, previousDaySwaps)) {
+          throw const TimetablePersistenceException();
+        }
+      }),
+    );
     if (nextManual != null) _manualCourses = nextManual;
     if (nextCourseEdits != null) _courseEdits = nextCourseEdits;
     _dateEdits = nextDateEdits;
@@ -2514,11 +3689,12 @@ class TimetableController extends ChangeNotifier {
     String term, {
     required int bindingRevision,
   }) async {
+    final host = _manager ?? this;
     final List<ScheduleEvent>? exams;
     try {
       exams = await fetchExams(term);
     } catch (error, stackTrace) {
-      if (bindingRevision != _portalBindingRevision) return null;
+      if (bindingRevision != host._portalBindingRevision) return null;
       AppLog.reportOutcome('degraded', reason: 'exams_fetch_failed');
       _log.warning(
         'exams.fetch_failed_using_existing',
@@ -2528,15 +3704,22 @@ class TimetableController extends ChangeNotifier {
       );
       return null;
     }
-    if (bindingRevision != _portalBindingRevision || exams == null) return null;
+    if (bindingRevision != host._portalBindingRevision || exams == null) {
+      return null;
+    }
+    final scopedExams =
+        activeStorageId != kDefaultScheduleId &&
+            isHistoricalSchedule(activeStorageId)
+        ? _filterExamsToTermWindow(exams, settings)
+        : exams;
     try {
-      await replaceJwxtExams(exams);
+      await replaceJwxtExams(scopedExams);
       return [
         for (final e in _scheduleEvents)
           if (e.isFromJwxt && e.isExam) e,
       ];
     } catch (error, stackTrace) {
-      if (bindingRevision != _portalBindingRevision) return null;
+      if (bindingRevision != host._portalBindingRevision) return null;
       AppLog.reportOutcome('degraded', reason: 'exams_save_failed');
       _log.warning(
         'exams.save_failed_using_existing',
@@ -2660,7 +3843,7 @@ class TimetableController extends ChangeNotifier {
         ..._examOverrides,
         key: ExamOverride.diff(raw, event),
       });
-      await ScheduleStore.saveExamOverrides(next);
+      await _inScope(() => ScheduleStore.saveExamOverrides(next));
       _examOverrides = next;
       _notifyEvents();
       return true;
@@ -2693,7 +3876,7 @@ class TimetableController extends ChangeNotifier {
         ..._examOverrides,
         key: ExamOverride(key: key, deleted: true),
       });
-      await ScheduleStore.saveExamOverrides(next);
+      await _inScope(() => ScheduleStore.saveExamOverrides(next));
       _examOverrides = next;
       _notifyEvents();
       return true;
@@ -2726,22 +3909,29 @@ class TimetableController extends ChangeNotifier {
         if (keys.contains(o.key)) o.key: o,
     };
     if (keptOverrides.length != _examOverrides.length) {
-      await ScheduleStore.saveExamOverrides(keptOverrides);
+      await _inScope(() => ScheduleStore.saveExamOverrides(keptOverrides));
       _examOverrides = Map.unmodifiable(keptOverrides);
     }
-    await ScheduleStore.saveEventsAndOtherColors(_scheduleEvents, _otherColors);
+    await _inScope(
+      () =>
+          ScheduleStore.saveEventsAndOtherColors(_scheduleEvents, _otherColors),
+    );
     _notifyEvents(ScheduleChangeReason.sync);
   }
 
   Future<void> _persistEvents() async {
     try {
-      await ScheduleStore.saveEventsAndOtherColors(
-        _scheduleEvents,
-        _otherColors,
+      await _inScope(
+        () => ScheduleStore.saveEventsAndOtherColors(
+          _scheduleEvents,
+          _otherColors,
+        ),
       );
     } on TimetablePersistenceException {
-      _scheduleEvents = List.unmodifiable(await ScheduleStore.readEvents());
-      _otherColors = Map.unmodifiable(await ScheduleStore.readOtherColors());
+      await _inScope(() async {
+        _scheduleEvents = List.unmodifiable(await ScheduleStore.readEvents());
+        _otherColors = Map.unmodifiable(await ScheduleStore.readOtherColors());
+      });
       notifyListeners();
       rethrow;
     }
@@ -2816,7 +4006,7 @@ class TimetableController extends ChangeNotifier {
   }
 
   Future<void> _setCourseEdits(Map<String, CourseEdit> next) async {
-    await ScheduleStore.saveCourseEdits(next);
+    await _inScope(() => ScheduleStore.saveCourseEdits(next));
     _courseEdits = Map.unmodifiable(next);
     _clampViewingWeek();
     notifyListeners();
@@ -3170,7 +4360,7 @@ class TimetableController extends ChangeNotifier {
     final next = Map<String, ExamOverride>.unmodifiable(
       {..._examOverrides}..remove(examKey),
     );
-    await ScheduleStore.saveExamOverrides(next);
+    await _inScope(() => ScheduleStore.saveExamOverrides(next));
     _examOverrides = next;
     _notifyEvents(ScheduleChangeReason.restore);
     return true;
@@ -3196,7 +4386,7 @@ class TimetableController extends ChangeNotifier {
       ], fire: false);
     }
     if (_examOverrides.isNotEmpty) {
-      await ScheduleStore.saveExamOverrides(const {});
+      await _inScope(() => ScheduleStore.saveExamOverrides(const {}));
       _examOverrides = const {};
     }
     if (_courseEdits.isNotEmpty) await _setCourseEdits(const {});
@@ -3397,7 +4587,7 @@ class TimetableController extends ChangeNotifier {
     List<SlotOverride> next,
     ScheduleChangeReason reason,
   ) async {
-    await TimetableStore.saveOverrides(next);
+    await _inScope(() => TimetableStore.saveOverrides(next));
     _overrides = List.unmodifiable(next);
     _clampViewingWeek();
     notifyListeners();
@@ -3888,7 +5078,7 @@ class TimetableController extends ChangeNotifier {
   }
 
   Future<void> _setDaySwaps(List<DaySwap> next) async {
-    await ScheduleStore.saveDaySwaps(next);
+    await _inScope(() => ScheduleStore.saveDaySwaps(next));
     _daySwaps = List.unmodifiable(next);
     notifyListeners();
     _fireScheduleChanged(ScheduleChangeReason.daySwap);
@@ -4303,7 +5493,7 @@ class TimetableController extends ChangeNotifier {
     List<CourseDateEdit> next, {
     bool fire = true,
   }) async {
-    await ScheduleStore.saveCourseDateEdits(next);
+    await _inScope(() => ScheduleStore.saveCourseDateEdits(next));
     _dateEdits = List.unmodifiable(next);
     notifyListeners();
     if (fire) _fireScheduleChanged(ScheduleChangeReason.dateEdit);

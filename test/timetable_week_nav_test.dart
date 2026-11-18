@@ -12,7 +12,6 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 import 'package:nuist_sta_app/router.dart';
 
 final _c = TimetableController.instance;
@@ -158,6 +157,11 @@ void main() {
 
       await tester.tap(find.textContaining('第 8 周', findRichText: true));
       await tester.pumpAndSettle();
+      expect(find.byKey(const Key('timetable_week_strip')), findsOneWidget);
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('timetable_week_strip')), findsNothing);
+
       final route =
           ModalRoute.of(tester.element(find.byType(TimetablePage)))!
               as PageRoute;
@@ -187,7 +191,6 @@ void main() {
       await gesture('cancelBackGesture');
       expect(route.isCurrent, isTrue);
       expect(_c.viewingWeek, _week + 1);
-      expect(find.byKey(const Key('timetable_week_strip')), findsOneWidget);
 
       await gesture('startBackGesture');
       await gesture('updateBackGestureProgress', progress: 0.4);
@@ -236,15 +239,18 @@ void main() {
     });
   });
 
-  group('item 5 顶栏周条', () {
+  group('item 5 顶栏周滑条', () {
     final strip = find.byKey(const Key('timetable_week_strip'));
-    Finder chip(int w) => find.byKey(ValueKey('week_chip_$w'));
-    Material chipMaterial(WidgetTester tester, int w) =>
-        tester.widget<Material>(
-          find.descendant(of: chip(w), matching: find.byType(Material)).first,
-        );
+    final sliderFinder = find.byKey(const Key('timetable_week_slider'));
 
-    testWidgets('NAV03 点周数展开周条，再点收起；读屏「第 N 周」', (tester) async {
+    Future<void> slideToWeek(WidgetTester tester, int week) async {
+      final slider = tester.widget<Slider>(sliderFinder);
+      slider.onChanged?.call(week.toDouble());
+      await tester.pump();
+      slider.onChangeEnd?.call(week.toDouble());
+    }
+
+    testWidgets('NAV03 点周数弹出滑条，再点外部收起；读屏「第 N 周，本周」', (tester) async {
       final semantics = tester.ensureSemantics();
       _load(manual: [_course('a', '测试课甲')]);
       await pumpPage(tester);
@@ -252,43 +258,55 @@ void main() {
       await tester.tap(find.textContaining('第 7 周', findRichText: true));
       await tester.pumpAndSettle();
       expect(strip, findsOneWidget);
+      expect(sliderFinder, findsOneWidget);
       expect(find.bySemanticsLabel('第 7 周，本周'), findsOneWidget);
-      expect(find.bySemanticsLabel('第 6 周'), findsOneWidget);
-      await tester.tap(find.textContaining('第 7 周', findRichText: true));
+      await tester.tapAt(const Offset(20, 20));
       await tester.pumpAndSettle();
       expect(strip, findsNothing);
       semantics.dispose();
     });
 
-    testWidgets('NAV04 选中周实心、本周描边；选某周后收起并翻到该周', (tester) async {
+    testWidgets('NAV04 滑条默认定位选中周；松手后在背景翻到目标周且弹窗不自动关闭以便微调', (tester) async {
       _load(manual: [_course('a', '测试课甲')]);
       await pumpPage(tester);
       await tester.tap(find.textContaining('第 7 周', findRichText: true));
       await tester.pumpAndSettle();
-      final colors = TimetableColors.light;
-      expect(chipMaterial(tester, 7).color, colors.accent);
-      expect(chipMaterial(tester, 6).color, colors.chipBg);
-      await tester.tap(chip(5));
+      expect(tester.widget<Slider>(sliderFinder).value, 7);
+      await slideToWeek(tester, 5);
       await tester.pump();
-      expect(strip, findsNothing, reason: '选中后立即收起');
-      // 2 周 → 300ms 动画，开始时还没到。
+      // 翻周动画刚开始（2 周 → 300ms），还没到第 5 周。
       expect(_c.viewingWeek, isNot(5));
       await tester.pumpAndSettle();
+      expect(strip, findsOneWidget, reason: '松手后弹窗暂不关闭，方便继续微调');
       expect(_c.viewingWeek, 5);
-      await tester.tap(find.textContaining('第 5 周'));
+      expect(tester.widget<Slider>(sliderFinder).value, 5);
+
+      // 不关闭弹窗直接继续拖动微调到第 9 周。
+      await slideToWeek(tester, 9);
       await tester.pumpAndSettle();
-      expect(chipMaterial(tester, 5).color, colors.accent);
-      final current = chipMaterial(tester, 7);
-      expect(current.color, colors.chipBg);
-      expect((current.shape! as StadiumBorder).side.color, colors.accent);
+      expect(strip, findsOneWidget);
+      expect(_c.viewingWeek, 9);
+      expect(tester.widget<Slider>(sliderFinder).value, 9);
+
+      // 点外部关闭弹窗后再次打开，滑条仍定位在最新第 9 周。
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+      expect(strip, findsNothing);
+      await tester.tap(find.textContaining('第 9 周'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<Slider>(sliderFinder).value, 9);
+      expect(
+        find.byKey(const Key('timetable_week_strip_current')),
+        findsOneWidget,
+      );
     });
 
-    testWidgets('NAV05 减少动画：选周直接跳转', (tester) async {
+    testWidgets('NAV05 减少动画：滑条选周直接跳转', (tester) async {
       _load(manual: [_course('a', '测试课甲')]);
       await pumpPage(tester, disableAnimations: true);
       await tester.tap(find.textContaining('第 7 周', findRichText: true));
-      await tester.pump();
-      await tester.tap(chip(5));
+      await tester.pumpAndSettle();
+      await slideToWeek(tester, 5);
       await tester.pump();
       expect(_c.viewingWeek, 5);
     });

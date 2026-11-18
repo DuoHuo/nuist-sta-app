@@ -122,14 +122,12 @@ void main() {
       expect(rot().duration, const Duration(milliseconds: 150));
 
       await tester.tap(find.textContaining('第 $_week 周'));
-      await tester.pump(); // start
-      await tester.pump(const Duration(milliseconds: 150));
+      await tester.pumpAndSettle();
       expect(strip, findsOneWidget);
       expect(rot().turns, 0.5);
 
-      await tester.tap(find.textContaining('第 $_week 周'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 150));
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
       expect(strip, findsNothing);
       expect(rot().turns, 0);
     });

@@ -14,8 +14,9 @@ class ExamParser {
   /// （仅供脱敏日志；缺课程号的行记为空串）。未排时间（SFAPSJ≠1 或时间为空）
   /// 属于正常跳过，不计入。
   static ({List<ScheduleEvent> exams, List<String> skippedCourseCodes}) parse(
-    Object? decoded,
-  ) {
+    Object? decoded, {
+    String? expectedTermCode,
+  }) {
     if (decoded is! Map) {
       throw const ExamResponseError(
         '教务考试接口未返回 JSON',
@@ -34,19 +35,24 @@ class ExamParser {
         code: 'response_rows_missing',
       );
     }
-    return parseRows(rows);
+    return parseRows(rows, expectedTermCode: expectedTermCode);
   }
 
-  /// 逐行解析；坏行只丢这一行。
+  /// 逐行解析；坏行只丢这一行。若传入 [expectedTermCode]，跳过明确标有其他 `XNXQDM` 的跨学期考试。
   static ({List<ScheduleEvent> exams, List<String> skippedCourseCodes})
-  parseRows(List<Object?> rows) {
+  parseRows(List<Object?> rows, {String? expectedTermCode}) {
     final exams = <ScheduleEvent>[];
     final skipped = <String>[];
     final seen = <String>{};
+    final targetTerm = expectedTermCode?.trim() ?? '';
     for (final row in rows) {
       if (row is! Map) {
         skipped.add('');
         continue;
+      }
+      if (targetTerm.isNotEmpty) {
+        final rowTerm = _str(row['XNXQDM']);
+        if (rowTerm.isNotEmpty && rowTerm != targetTerm) continue;
       }
       final ExamRowResult r;
       try {

@@ -74,6 +74,7 @@ class TimetableSettingsRow extends StatelessWidget {
   const TimetableSettingsRow({
     super.key,
     required this.title,
+    this.subtitle,
     this.trailing,
     this.onTap,
     this.enabled = true,
@@ -83,6 +84,7 @@ class TimetableSettingsRow extends StatelessWidget {
   });
 
   final String title;
+  final String? subtitle;
   final Widget? trailing;
   final VoidCallback? onTap;
   final bool enabled;
@@ -147,10 +149,8 @@ class TimetableSettingsRow extends StatelessWidget {
                 style: textStyle(context)
                     .copyWith(color: titleColor ?? colors.titleText),
               );
-              return Row(
-                children: [
-                  Expanded(
-                    child: balancedWidth == null
+              final labelColumn = subtitle == null
+                  ? (balancedWidth == null
                         ? titleText
                         : Align(
                             alignment: Alignment.centerLeft,
@@ -158,8 +158,27 @@ class TimetableSettingsRow extends StatelessWidget {
                               width: balancedWidth,
                               child: titleText,
                             ),
+                          ))
+                  : Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          titleText,
+                          const SizedBox(height: 2),
+                          Text(
+                            subtitle!,
+                            style: TimetableTheme.microStyle(
+                              color: colors.hint,
+                            ),
                           ),
-                  ),
+                        ],
+                      ),
+                    );
+              return Row(
+                children: [
+                  Expanded(child: labelColumn),
                   if (trailing != null || value != null)
                     const SizedBox(width: 8),
                   if (trailing != null)
@@ -210,17 +229,20 @@ class TimetableSettingsSwitchRow extends StatelessWidget {
   const TimetableSettingsSwitchRow({
     super.key,
     required this.title,
+    this.subtitle,
     required this.value,
     required this.onChanged,
   });
 
   final String title;
+  final String? subtitle;
   final bool value;
   final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) => TimetableSettingsRow(
     title: title,
+    subtitle: subtitle,
     onTap: () => onChanged(!value),
     trailing: Switch(
       value: value,

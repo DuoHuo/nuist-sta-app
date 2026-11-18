@@ -2005,6 +2005,8 @@ class AppLog {
             'exam_overrides.json',
             'sync_state.json',
             'day_swaps.json',
+            'schedules_index.json',
+            'timetable_changes.json',
           }.contains(text)
           ? text
           : null;

@@ -1284,6 +1284,23 @@ class TimetableParser {
     return settings.copyWith(termStartDate: start, termStartFromJwxt: true);
   }
 
+  /// 应用 cxxljc 行：读取开学日期 XQKSRQ 与总周数 ZZC（用于往年/未来学期）。
+  static TimetableSettings _applyCxxljcMeta(
+    TimetableSettings settings,
+    Map<dynamic, dynamic> cxxljc,
+  ) {
+    final rows = cxxljc['rows'] as List? ?? const [];
+    if (rows.isEmpty || rows.first is! Map) return settings;
+    final row = rows.first as Map;
+    final start = _parseDate(row['XQKSRQ']?.toString().split(' ').first);
+    final zzc = _asInt(row['ZZC']);
+    return settings.copyWith(
+      termStartDate: start ?? settings.termStartDate,
+      termStartFromJwxt: start != null ? true : settings.termStartFromJwxt,
+      maxWeeks: zzc != null && zzc > 0 ? zzc : settings.maxWeeks,
+    );
+  }
+
   /// 解析本地/debug JSON：既支持教务原始结构，也支持 [TimetableSnapshot]。
   static TimetableSnapshot parseImportJson(
     Map<String, dynamic> json, {
@@ -1326,6 +1343,11 @@ class TimetableParser {
       final dqzc = datas['dqzc'];
       if (dqzc is Map) {
         settings = _applyDqzcMeta(settings, dqzc);
+      }
+      // 往年/教历学期元数据：cxxljc XQKSRQ/ZZC（仅在未由 dqzc 拿到时补充开学日）
+      final cxxljc = datas['cxxljc'];
+      if (cxxljc is Map) {
+        settings = _applyCxxljcMeta(settings, cxxljc);
       }
       // 总周：配置 maxWeeks 与最长 SKZC 位串取较大值（无单独教历）
       final fromSkzc = maxWeeksFromSkzc(weekRows, fallback: settings.maxWeeks);

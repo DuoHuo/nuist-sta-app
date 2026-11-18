@@ -4,6 +4,8 @@
 // 16 色以上时再兜底避开相邻与近似色对）。用户手动选的 colorIndex 与 userColors
 // 固定不动，并作为其他自动课的占用参考色。
 
+import 'dart:math' as math;
+
 import 'timetable_models.dart';
 
 /// 课程配色方案：A 晴空清透（默认）、B 马卡龙、C 莫兰迪（§13.7）。
@@ -125,6 +127,78 @@ int nearestPaletteIndexForArgb(
     }
   }
   return best;
+}
+
+/// 将导入课表的任意 ARGB 原色自动适配到 [scheme] 下最接近的 0..15 配色色号。
+///
+/// 若原色已是相近浅色底则优先按加权 sRGB 距离精确命中；
+/// 对高饱和或深色原色（如 WakeUp 默认色板）按 HSL 色相与饱和度匹配同色系。
+int adaptedPaletteIndexForArgb(
+  int argb, {
+  CoursePaletteScheme scheme = kDefaultCoursePaletteScheme,
+}) {
+  final list =
+      kPaletteLightBgArgb[scheme] ??
+      kPaletteLightBgArgb[kDefaultCoursePaletteScheme]!;
+  final r1 = (argb >> 16) & 0xFF;
+  final g1 = (argb >> 8) & 0xFF;
+  final b1 = argb & 0xFF;
+
+  var bestRgb = 0;
+  var bestRgbDist = 1 << 30;
+  for (var i = 0; i < list.length; i++) {
+    final c = list[i];
+    final dr = r1 - ((c >> 16) & 0xFF);
+    final dg = g1 - ((c >> 8) & 0xFF);
+    final db = b1 - (c & 0xFF);
+    final dist = 2 * dr * dr + 4 * dg * dg + 3 * db * db;
+    if (dist < bestRgbDist) {
+      bestRgbDist = dist;
+      bestRgb = i;
+    }
+  }
+  if (bestRgbDist <= 4000) return bestRgb;
+
+  final (h1, s1, l1) = _rgbToHsl(r1, g1, b1);
+  if (s1 < 0.12) return bestRgb;
+
+  var bestIdx = bestRgb;
+  var bestScore = double.infinity;
+  for (var i = 0; i < list.length; i++) {
+    final c = list[i];
+    final (h2, s2, l2) = _rgbToHsl((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+    final rawDiff = (h1 - h2).abs();
+    final hueDiff = math.min(rawDiff, 360.0 - rawDiff);
+    final satDiff = (s1 - s2).abs();
+    final lightDiff = (l1 - l2).abs();
+    final score = hueDiff * 1.5 + satDiff * 18.0 + lightDiff * 10.0;
+    if (score < bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+(double, double, double) _rgbToHsl(int rInt, int gInt, int bInt) {
+  final r = rInt / 255.0;
+  final g = gInt / 255.0;
+  final b = bInt / 255.0;
+  final maxC = math.max(r, math.max(g, b));
+  final minC = math.min(r, math.min(g, b));
+  final l = (maxC + minC) / 2.0;
+  final d = maxC - minC;
+  if (d == 0) return (0.0, 0.0, l);
+  final s = l > 0.5 ? d / (2.0 - maxC - minC) : d / (maxC + minC);
+  double h;
+  if (maxC == r) {
+    h = (g - b) / d + (g < b ? 6.0 : 0.0);
+  } else if (maxC == g) {
+    h = (b - r) / d + 2.0;
+  } else {
+    h = (r - g) / d + 4.0;
+  }
+  return (h * 60.0, s, l);
 }
 
 /// 各方案的近似色对（0-based 色号，写死，不在运行时算色相）。

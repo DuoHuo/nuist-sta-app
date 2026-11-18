@@ -19,7 +19,7 @@ abstract final class TimetableCopy {
   static const changeLogTitle = '变动记录';
   static const changeLogEmpty = '还没有变动';
   static const changeLogSettingsTitle = '变动记录';
-  static const changeLogSettingsSubtitle = '同步后的改动';
+  static const changeLogSettingsSubtitle = '教务同步后的增删改明细';
 
   static String changeAlertMoreLabel(int n) =>
       changeAlertMore.replaceFirst('{n}', '$n');

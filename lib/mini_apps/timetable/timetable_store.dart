@@ -10,6 +10,7 @@ import '../../core/logging/diagnostic_error.dart';
 import '../../core/refresh/silent_refresh.dart';
 import 'timetable_colors.dart';
 import 'timetable_models.dart';
+import 'timetable_multi_models.dart';
 import 'timetable_overrides.dart';
 
 /// 课表本地 JSON 存储：`ApplicationDocuments/timetable/`。
@@ -17,9 +18,26 @@ class TimetableStore {
   TimetableStore._();
   static final _log = AppLog.logger('timetable.store');
   static final _batchZoneKey = Object();
+  static final _scheduleZoneKey = Object();
 
   static _TimetableWriteBatch? get _currentBatch =>
       Zone.current[_batchZoneKey] as _TimetableWriteBatch?;
+
+  /// 当前作用域指向的课表 id（默认为 [kDefaultScheduleId]）。
+  static String get currentScheduleId =>
+      (Zone.current[_scheduleZoneKey] as String?) ?? kDefaultScheduleId;
+
+  /// 在指定课表存储作用域内执行读写；全局文件（settings/index/sync_state）仍在根目录。
+  static Future<T> withScheduleScope<T>(
+    String? scheduleId,
+    Future<T> Function() action,
+  ) {
+    final normalized = (scheduleId == null || scheduleId.trim().isEmpty)
+        ? kDefaultScheduleId
+        : sanitizeScheduleId(scheduleId);
+    if (normalized == currentScheduleId) return action();
+    return runZoned(action, zoneValues: {_scheduleZoneKey: normalized});
+  }
 
   /// 将回调中等待完成的 JSON 保存作为一个批次提交。
   /// 回调仅准备存储数据；全部准备成功才替换文件，提交失败时恢复已替换的旧文件。
@@ -53,6 +71,29 @@ class TimetableStore {
 
   static const _snapshotFile = 'snapshot.json';
   static const _settingsFile = 'settings.json';
+  static const _schedulesIndexFile = 'schedules_index.json';
+  static const _schedulesFolder = 'schedules';
+
+  /// 全局文件（不随课表作用域切分，始终存放在 `timetable/` 根目录）。
+  static const Set<String> _globalFiles = {
+    _settingsFile,
+    _reminderIntroFile,
+    _schedulesIndexFile,
+    'sync_state.json',
+  };
+
+  /// 单个课表目录下的隔离文件清单（归档/清理时复用）。
+  static const List<String> _perScheduleFiles = [
+    _snapshotFile,
+    _manualFile,
+    _overridesFile,
+    courseColorsFile,
+    'schedule_events.json',
+    'course_edits.json',
+    'day_swaps.json',
+    'exam_overrides.json',
+    'timetable_changes.json',
+  ];
 
   /// 提醒说明的已读标记独立保存，不改变 settings.json 的键集合。
   static const _reminderIntroFile = 'reminder_intro_seen';
@@ -104,14 +145,14 @@ class TimetableStore {
     try {
       final override = debugDirectory;
       if (override != null) {
-        if (!await override.exists()) await override.create(recursive: true);
+        if (!override.existsSync()) override.createSync(recursive: true);
         return override;
       }
       // flutter_test 无可靠平台通道；直接退化，避免 timeout Timer 残留。
       if (Platform.environment.containsKey('FLUTTER_TEST')) return null;
       final base = await getApplicationDocumentsDirectory();
       final dir = Directory('${base.path}${Platform.pathSeparator}timetable');
-      if (!await dir.exists()) await dir.create(recursive: true);
+      if (!dir.existsSync()) dir.createSync(recursive: true);
       return dir;
     } catch (error) {
       _log.debug(
@@ -122,18 +163,47 @@ class TimetableStore {
     }
   }
 
-  static Future<File?> _file(String name, {bool forWrite = false}) async {
+  static Future<File?> _file(
+    String name, {
+    bool forWrite = false,
+    String? scheduleId,
+  }) async {
     final dir = await _dir();
-    if (dir == null && forWrite) checkStorageAvailable();
-    return dir == null
-        ? null
-        : File('${dir.path}${Platform.pathSeparator}$name');
+    if (dir == null) {
+      if (forWrite) checkStorageAvailable();
+      return null;
+    }
+    final targetId = _globalFiles.contains(name)
+        ? kDefaultScheduleId
+        : (scheduleId == null || scheduleId.trim().isEmpty
+              ? currentScheduleId
+              : sanitizeScheduleId(scheduleId));
+    if (targetId == kDefaultScheduleId) {
+      return File('${dir.path}${Platform.pathSeparator}$name');
+    }
+    final scheduleDir = Directory(
+      '${dir.path}${Platform.pathSeparator}$_schedulesFolder${Platform.pathSeparator}$targetId',
+    );
+    if (forWrite && !scheduleDir.existsSync()) {
+      try {
+        scheduleDir.createSync(recursive: true);
+      } catch (error, stackTrace) {
+        throw TimetablePersistenceException(
+          cause: error,
+          causeStackTrace: stackTrace,
+        );
+      }
+    }
+    return File('${scheduleDir.path}${Platform.pathSeparator}$name');
   }
 
   /// 课表目录下的文件；读取无存储时返回 null，关键写入传 [forWrite] 时反馈失败。
   /// 默认无平台存储的 widget 测试仍返回 null，显式指定测试目录时按真机处理。
-  static Future<File?> fileFor(String name, {bool forWrite = false}) =>
-      _file(name, forWrite: forWrite);
+  static Future<File?> fileFor(
+    String name, {
+    bool forWrite = false,
+    String? scheduleId,
+  }) => _file(name, forWrite: forWrite, scheduleId: scheduleId);
 
   static Future<Map<String, dynamic>> _readJson(String name) =>
       _log.inSpan(() async {
@@ -142,6 +212,11 @@ class TimetableStore {
           if (file == null) return {};
           final staged = _currentBatch?.read(file);
           if (staged != null) return staged;
+          if (Platform.environment.containsKey('FLUTTER_TEST')) {
+            if (!file.existsSync()) return {};
+            final decoded = jsonDecode(file.readAsStringSync());
+            return decoded is Map<String, dynamic> ? decoded : {};
+          }
           if (!await file.exists()) return {};
           // 解析放到后台 isolate，避免启动时阻塞主线程。
           final decoded = await compute(_decode, await file.readAsString());
@@ -635,6 +710,74 @@ class TimetableStore {
     if (debugDirectory != null ||
         !Platform.environment.containsKey('FLUTTER_TEST')) {
       throw const TimetablePersistenceException();
+    }
+  }
+
+  /// 读取多课表索引；首次运行尚未建索引时返回 null。
+  static Future<SchedulesIndex?> readSchedulesIndex() async {
+    final json = await _readJson(_schedulesIndexFile);
+    if (json.isEmpty) return null;
+    try {
+      return SchedulesIndex.fromJson(json);
+    } catch (error, stackTrace) {
+      _log.warning(
+        'schedules_index.parse_failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return null;
+    }
+  }
+
+  /// 保存多课表索引（始终在根目录，支持参与 [writeBatch]）。
+  static Future<void> saveSchedulesIndex(SchedulesIndex index) =>
+      _writeJson(_schedulesIndexFile, index.toJson());
+
+  /// 将默认课表根目录中的单课表文件复制归档到 `schedules/<targetScheduleId>/`
+  /// （如跨学期自动归档旧学期）。目标目录已有 `snapshot.json` 时跳过，避免覆盖已有记录。
+  static Future<void> archiveDefaultToSchedule(String targetScheduleId) async {
+    final target = sanitizeScheduleId(targetScheduleId);
+    if (target == kDefaultScheduleId) return;
+    final dir = await _dir();
+    if (dir == null) return;
+    final existingSnap = await _file(_snapshotFile, scheduleId: target);
+    if (existingSnap != null && await existingSnap.exists()) return;
+    for (final name in _perScheduleFiles) {
+      final src = await _file(name, scheduleId: kDefaultScheduleId);
+      if (src == null || !await src.exists()) continue;
+      final dst = await _file(name, forWrite: true, scheduleId: target);
+      if (dst == null) continue;
+      await dst.writeAsBytes(await src.readAsBytes(), flush: true);
+    }
+  }
+
+  /// 删除指定非默认课表的全部本地存储文件；默认课表禁止通过此接口删除。
+  static Future<void> deleteScheduleDirectory(String scheduleId) async {
+    final target = sanitizeScheduleId(scheduleId);
+    if (target == kDefaultScheduleId) return;
+    try {
+      final dir = await _dir();
+      if (dir == null) {
+        checkStorageAvailable();
+        return;
+      }
+      final targetDir = Directory(
+        '${dir.path}${Platform.pathSeparator}$_schedulesFolder${Platform.pathSeparator}$target',
+      );
+      if (await targetDir.exists()) {
+        await targetDir.delete(recursive: true);
+      }
+    } catch (error, stackTrace) {
+      _log.error(
+        'schedule_dir.delete_failed',
+        error: error,
+        stackTrace: stackTrace,
+        errorKind: 'storage_write',
+      );
+      throw TimetablePersistenceException(
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     }
   }
 

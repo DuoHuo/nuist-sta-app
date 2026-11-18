@@ -10,6 +10,7 @@ import '../../core/config/campus_config.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/logging/diagnostic_error.dart';
 import 'timetable_models.dart';
+import 'timetable_multi_models.dart';
 import '../../core/auth/safe_message.dart';
 import 'timetable_exam_parser.dart';
 import 'timetable_schedule_event.dart';
@@ -61,6 +62,9 @@ class TimetableApi {
   static final Uri _jcUrl = Uri.parse(
     '$_base/jwapp/sys/$_app/modules/jshkcb/jc.do',
   );
+  static final Uri _xnxqcxUrl = Uri.parse(
+    '$_base/jwapp/sys/$_app/modules/jshkcb/xnxqcx.do',
+  );
 
   // 仍未核实方法/参数：cxjcs.do、cxxljc.do（可选）
   static final Uri _cxjcsUrl = Uri.parse(
@@ -105,7 +109,7 @@ class TimetableApi {
     if (decoded == null) {
       throw const ExamResponseError('教务考试接口未返回 JSON');
     }
-    final r = ExamParser.parse(decoded);
+    final r = ExamParser.parse(decoded, expectedTermCode: termCode);
     if (r.skippedCourseCodes.isNotEmpty) {
       portalLog(
         'exams.records_skipped',
@@ -215,6 +219,98 @@ class TimetableApi {
       'datas': datas,
     }, baseSettings: settings.copyWith(termCode: termCode));
     return snapshot.copyWith(syncedAt: DateTime.now(), clearError: true);
+  }
+
+  /// 查询教务可选学年学期列表（`jshkcb/xnxqcx.do`），按学期降序返回。
+  static Future<List<JwxtTermOption>> fetchAvailableTerms() async {
+    _reloginUsed = false;
+    final rows = await _postRows(
+      _xnxqcxUrl,
+      sectionKey: 'xnxqcx',
+      form: const {'*order': '-DM'},
+    );
+    final out = <JwxtTermOption>[];
+    final seen = <String>{};
+    for (final raw in rows) {
+      if (raw is! Map) continue;
+      final code = '${raw['DM'] ?? raw['XNXQDM'] ?? ''}'.trim();
+      if (code.isEmpty || !seen.add(code)) continue;
+      out.add(
+        JwxtTermOption(
+          termCode: code,
+          displayName: '${raw['MC'] ?? ''}'.trim(),
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// 拉取指定（往年/独立）学期快照：周课表 + 未排课 + `cxxljc`（开学日与周数）+ `jc`（节次）。
+  /// 不调用 `dqxnxq` 与 `dqzc`，避免把历史学期代码或开学日覆盖为当前学期。
+  static Future<TimetableSnapshot> fetchHistoricalTermSnapshot(
+    String termCode, {
+    TimetableSettings? baseSettings,
+  }) async {
+    _reloginUsed = false;
+    final base = (baseSettings ?? const TimetableSettings()).copyWith(
+      termCode: termCode,
+      scheduleName: formatTermScheduleName(termCode),
+    );
+    final datas = <String, dynamic>{};
+    void merge(Map<String, dynamic>? raw) {
+      final d = raw?['datas'];
+      if (d is Map<String, dynamic>) datas.addAll(d);
+    }
+
+    final weekRaw = await _post(_weekKbUrl, {'XNXQDM': termCode});
+    if (weekRaw == null) {
+      throw const DiagnosticException(
+        '教务课表接口未返回数据',
+        code: 'response_empty',
+        stage: 'response.validate',
+        context: {'endpoint': 'timetable.cxxszhxqkb', 'service': 'jwxt'},
+      );
+    }
+    final weekDatas = weekRaw['datas'];
+    final weekSection = weekDatas is Map ? weekDatas['cxxszhxqkb'] : null;
+    if (weekSection is! Map || weekSection['rows'] is! List) {
+      throw const DiagnosticException(
+        '教务课表响应缺少课程列表',
+        code: 'response_rows_missing',
+        stage: 'response.validate',
+        context: {'endpoint': 'timetable.cxxszhxqkb', 'service': 'jwxt'},
+      );
+    }
+    merge(weekRaw);
+    merge(
+      await _optional(
+        'xswpkc',
+        () => _post(_unscheduledUrl, {'XNXQDM': termCode}),
+      ),
+    );
+    merge(await _optional('jc', () => _post(_jcUrl, const {})));
+    final parts = splitTermCode(termCode);
+    if (parts != null) {
+      merge(
+        await _optional(
+          'cxxljc',
+          () => _post(_cxxljcUrl, {'XN': parts.year, 'XQ': parts.term}),
+        ),
+      );
+    }
+
+    final snapshot = TimetableParser.parseImportJson({
+      'code': '0',
+      'datas': datas,
+    }, baseSettings: base);
+    return snapshot.copyWith(
+      settings: snapshot.settings.copyWith(
+        termCode: termCode,
+        scheduleName: base.scheduleName,
+      ),
+      syncedAt: DateTime.now(),
+      clearError: true,
+    );
   }
 
   static Future<Map<String, dynamic>?> _optional(

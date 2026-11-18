@@ -95,14 +95,20 @@ List<ScheduleGridItem> scheduleItemsForColumn(
           activeThisWeek: true,
         ),
   ];
-  // 幽灵：仅考试、仅更早周、仅 showNonCurrentWeek + showExams。
-  if (controller.settings.showNonCurrentWeek && controller.settings.showExams) {
+  // 幽灵：仅考试、仅更早周、仅 showNonCurrentWeek + showExams；
+  // 往年已结束学期不提前把期末考试投射成幽灵格，以免遮挡正常周课表，
+  // 且只投射落在当前学期总周数内的考试（防止跨学期日期误入）。
+  if (!controller.isHistoricalSchedule(controller.activeStorageId) &&
+      controller.settings.showNonCurrentWeek &&
+      controller.settings.showExams) {
     final seen = {for (final i in items) i.event.id};
+    final maxWeek = controller.totalWeeks;
     for (final e in controller.scheduleEvents) {
       if (!e.isExam) continue;
       if (seen.contains(e.id)) continue;
       if (e.date.weekday != day) continue;
       final examWeek = controller.weekOfDate(e.date);
+      if (examWeek < 1 || examWeek > maxWeek) continue;
       if (!examHasRemainingWeeks(examWeek, week)) continue;
       if (scheduleNodeRange(controller.periods, e.start, e.end) case final r?) {
         items.add(

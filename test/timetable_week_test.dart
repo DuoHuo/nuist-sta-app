@@ -218,13 +218,18 @@ void main() {
 
       c.setViewingWeek(6);
       await tester.pumpAndSettle();
-      await tester.tap(find.textContaining('第 6 周', findRichText: true));
-      await tester.pumpAndSettle();
       await tester.fling(find.byType(PageView), const Offset(-70, 0), 1500);
       await tester.pump(const Duration(milliseconds: 16));
       expect(pageController.position.isScrollingNotifier.value, isTrue);
-      // 手势吸附还没结束就选远周，不能在程序动画结束后被旧起点拉回相邻周。
-      await tester.tap(find.byKey(const ValueKey('week_chip_9')));
+      // 滑动中直接点顶栏打开周数与课表弹窗并选第 9 周，不会在结束后被旧起点拉回相邻周。
+      await tester.tap(find.textContaining('第 6 周', findRichText: true));
+      await tester.pumpAndSettle();
+      final slider = tester.widget<Slider>(
+        find.byKey(const Key('timetable_week_slider')),
+      );
+      slider.onChanged?.call(9);
+      await tester.pump();
+      slider.onChangeEnd?.call(9);
       await tester.pumpAndSettle();
       expect(c.viewingWeek, 9);
       expect(pageController.page, closeTo(8, 0.001));

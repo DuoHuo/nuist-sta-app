@@ -152,13 +152,18 @@ void main() {
         expect(find.text('课程a'), findsNothing);
       }
 
-      // 选周条包含第 19、20 周，空周也可直接选择。
+      // 周数滑条最大为第 20 周，空周也可直接选择。
       await tester.tap(find.textContaining('第 20 周', findRichText: true));
       await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('week_chip_19')), findsOneWidget);
-      expect(find.byKey(const ValueKey('week_chip_20')), findsOneWidget);
-      expect(find.byKey(const ValueKey('week_chip_21')), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('week_chip_19')));
+      final slider = tester.widget<Slider>(
+        find.byKey(const Key('timetable_week_slider')),
+      );
+      expect(slider.min, 1);
+      expect(slider.max, 20);
+      expect(slider.divisions, 19);
+      slider.onChanged?.call(19);
+      await tester.pump();
+      slider.onChangeEnd?.call(19);
       await tester.pumpAndSettle();
       expect(_c.viewingWeek, 19);
       expect(tester.takeException(), isNull);

@@ -9,8 +9,10 @@ import 'timetable_schedule_event.dart';
 import 'timetable_change_alert.dart';
 import 'timetable_controller.dart';
 import 'timetable_export_page.dart';
+import 'timetable_import_page.dart';
 import 'timetable_perf.dart';
 import 'timetable_settings_page.dart';
+import 'timetable_switcher_sheet.dart';
 import 'timetable_theme.dart';
 import 'timetable_course_detail_sheet.dart';
 import 'timetable_week_grid.dart';
@@ -30,7 +32,10 @@ class TimetablePage extends StatefulWidget {
 }
 
 class _TimetablePageState extends State<TimetablePage> {
-  final _controller = TimetableController.instance;
+  final _host = TimetableController.instance;
+  TimetableController get _controller => _host.viewingController;
+  TimetableController? _attachedViewing;
+  StreamSubscription<TimetableSyncOutcome>? _viewingOutcomeSub;
   PageController? _pageController;
   bool _ready = false;
   Object? _weekPagerInputs;
@@ -53,7 +58,7 @@ class _TimetablePageState extends State<TimetablePage> {
   static bool _sessionExpiryWatching = false;
 
   /// AS-1：顶栏同步图标是否显示失败圆点（最近一次自动同步失败，下次成功后清除）。
-  bool get _showSyncErrorDot => _controller.lastAutoSyncFailed;
+  bool get _showSyncErrorDot => _host.lastAutoSyncFailed;
 
   /// 学期固定为 20 周，包含没有课程的周。
   int get _totalWeeks => _controller.totalWeeks;
@@ -62,12 +67,34 @@ class _TimetablePageState extends State<TimetablePage> {
   void initState() {
     super.initState();
     TimetablePerf.start();
-    _controller.addListener(_syncPageToViewingWeek);
-    _controller.addListener(_maybeShowSessionExpired);
-    _controller.addListener(_queuePendingChangeAlert);
-    _outcomeSub = _controller.syncOutcomes.listen(_onSyncOutcome);
-    _watchSessionExpiry(_controller);
+    _host.addListener(_onHostChanged);
+    _host.addListener(_maybeShowSessionExpired);
+    _host.addListener(_queuePendingChangeAlert);
+    _outcomeSub = _host.syncOutcomes.listen(_onSyncOutcome);
+    _syncViewingListener();
+    _watchSessionExpiry(_host);
     _bootstrap();
+  }
+
+  void _onHostChanged() {
+    _syncViewingListener();
+    _syncPageToViewingWeek();
+    _queuePendingChangeAlert();
+  }
+
+  void _syncViewingListener() {
+    final current = _controller;
+    if (identical(_attachedViewing, current)) return;
+    _attachedViewing?.removeListener(_syncPageToViewingWeek);
+    _attachedViewing?.removeListener(_queuePendingChangeAlert);
+    _viewingOutcomeSub?.cancel();
+    _viewingOutcomeSub = null;
+    _attachedViewing = current;
+    if (!identical(current, _host)) {
+      current.addListener(_syncPageToViewingWeek);
+      current.addListener(_queuePendingChangeAlert);
+      _viewingOutcomeSub = current.syncOutcomes.listen(_onSyncOutcome);
+    }
   }
 
   /// 过期标记清掉（重新登录 / 解绑 / 同步成功）后，下一次过期要再提示一次。
@@ -110,7 +137,7 @@ class _TimetablePageState extends State<TimetablePage> {
   bool get _termEnded => _controller.currentWeek > _totalWeeks;
 
   Future<void> _bootstrap() async {
-    await _controller.ensureStarted();
+    await _host.ensureStarted();
     if (!mounted || _viewingWeekCleared) return;
     // 退出时已清除浏览周；离开期间跨周或修改系统日期时，再对齐到本周。
     _controller.followCurrentWeekIfChanged();
@@ -140,7 +167,7 @@ class _TimetablePageState extends State<TimetablePage> {
         _queuePendingChangeAlert();
       }
     });
-    await _controller.autoSyncIfNeeded();
+    await _host.autoSyncIfNeeded();
     _queuePendingChangeAlert();
   }
 
@@ -259,14 +286,23 @@ class _TimetablePageState extends State<TimetablePage> {
   Future<void> _openLogin() async {
     await context.push('/portal-bind');
     if (!mounted) return;
-    await _controller.refreshPortalBound();
+    await _host.refreshPortalBound();
   }
 
   /// 顶栏同步图标：[TimetableController.manualSync]（不受节流）；未绑定门户时直接去登录，
-  /// 不发请求也不弹网络失败。
+  /// 不发请求也不弹网络失败。导入课表不支持教务同步。
   Future<void> _manualSync() async {
+    if (_controller.isImportedSchedule) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        AppSnackBar(
+          tone: AppSnackBarTone.info,
+          content: const Text('导入的课表不支持从教务同步'),
+        ),
+      );
+      return;
+    }
     final started = await _controller.manualSync();
-    if (!started && !_controller.portalBound && mounted) await _openLogin();
+    if (!started && !_host.portalBound && mounted) await _openLogin();
   }
 
   Future<void> _openPendingCourse() async {
@@ -292,7 +328,7 @@ class _TimetablePageState extends State<TimetablePage> {
   /// 已过期也提示一次。自动失败的圆点照常显示。
   void _maybeShowSessionExpired() {
     if (!mounted || !_ready) return;
-    if (!_controller.portalSessionExpired || _sessionExpiryNotified) return;
+    if (!_host.portalSessionExpired || _sessionExpiryNotified) return;
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) return;
     _sessionExpiryNotified = true;
@@ -396,9 +432,12 @@ class _TimetablePageState extends State<TimetablePage> {
   @override
   void dispose() {
     _outcomeSub?.cancel();
-    _controller.removeListener(_maybeShowSessionExpired);
-    _controller.removeListener(_syncPageToViewingWeek);
-    _controller.removeListener(_queuePendingChangeAlert);
+    _viewingOutcomeSub?.cancel();
+    _attachedViewing?.removeListener(_syncPageToViewingWeek);
+    _attachedViewing?.removeListener(_queuePendingChangeAlert);
+    _host.removeListener(_maybeShowSessionExpired);
+    _host.removeListener(_onHostChanged);
+    _host.removeListener(_queuePendingChangeAlert);
     _pageController?.dispose();
     _clearViewingWeek();
     super.dispose();
@@ -430,16 +469,33 @@ class _TimetablePageState extends State<TimetablePage> {
     return false;
   }
 
-  /// item 5：顶栏周数下方的横向周条是否展开。
+  /// 顶部周数与课表切换弹窗是否处于打开状态（驱动小尖头旋转）。
   bool _weekStripOpen = false;
 
-  void _toggleWeekStrip() => setState(() => _weekStripOpen = !_weekStripOpen);
+  Future<void> _openWeekAndSchedulePopup() async {
+    if (_weekStripOpen) return;
+    setState(() => _weekStripOpen = true);
+    try {
+      await showTimetableSwitcherSheet(
+        context,
+        controller: _host,
+        totalWeeks: _totalWeeks,
+        currentWeek: _controller.currentWeek,
+        selectedWeek: _controller.viewingWeek,
+        onSelectWeek: (w) => unawaited(_selectWeek(w)),
+      );
+    } finally {
+      if (mounted) setState(() => _weekStripOpen = false);
+    }
+  }
 
-  /// 周条选中某周：先收起，再按 item 3 的规则（[animateWeekPage]）翻过去。
+  int _weekSelectSeq = 0;
+
+  /// 选中某周后按 item 3 的规则（[animateWeekPage]）翻过去。
   Future<void> _selectWeek(int week) async {
+    final seq = ++_weekSelectSeq;
     // 正在吸附时改为程序化滚动不一定产生 ScrollEnd，不能沿用旧拖动的相邻周限制。
     _dragStartPage = null;
-    setState(() => _weekStripOpen = false);
     final pc = _pageController;
     if (pc != null && pc.hasClients) {
       await animateWeekPage(
@@ -448,25 +504,16 @@ class _TimetablePageState extends State<TimetablePage> {
         reduceMotion: MediaQuery.disableAnimationsOf(context),
       );
     }
-    if (mounted && !_viewingWeekCleared) _controller.setViewingWeek(week);
+    if (mounted && !_viewingWeekCleared && seq == _weekSelectSeq) {
+      _controller.setViewingWeek(week);
+    }
   }
 
-  /// 周条展开 / 收起 200ms；减少动画时不套 AnimatedSize，直接出现 / 消失。
-  Widget _weekStripSlot(BuildContext context) {
-    final strip = _weekStripOpen
-        ? _WeekStrip(
-            total: _totalWeeks,
-            current: _controller.currentWeek,
-            selected: _controller.viewingWeek,
-            onSelect: (w) => unawaited(_selectWeek(w)),
-          )
-        : const SizedBox(width: double.infinity);
-    if (MediaQuery.disableAnimationsOf(context)) return strip;
-    return AnimatedSize(
-      duration: const Duration(milliseconds: 200),
-      curve: Curves.easeOutCubic,
-      alignment: Alignment.topCenter,
-      child: strip,
+  void _openImport() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TimetableImportPage(controller: _host),
+      ),
     );
   }
 
@@ -496,52 +543,62 @@ class _TimetablePageState extends State<TimetablePage> {
       backgroundColor: colors.pageBg,
       body: SafeArea(
         child: ListenableBuilder(
-          listenable: _controller,
+          listenable: _host,
           builder: (context, _) {
-            if (!_ready || _pageController == null) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            return Stack(
-              children: [
-                Column(
+            final active = _controller;
+            return ListenableBuilder(
+              listenable: identical(active, _host)
+                  ? const _NoopListenable()
+                  : active,
+              builder: (context, _) {
+                if (!_ready || _pageController == null) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final meta = _host.viewingScheduleMeta;
+                final scheduleLabel =
+                    meta?.name ?? active.settings.scheduleName;
+                return Column(
                   children: [
                     _TopBar(
-                      week: _controller.viewingWeek,
-                      isCurrent: _controller.isViewingCurrentWeek,
-                      endedCurrentWeek: _termEnded
-                          ? _controller.currentWeek
-                          : null,
+                      week: active.viewingWeek,
+                      isCurrent: active.isViewingCurrentWeek,
+                      endedCurrentWeek: _termEnded ? active.currentWeek : null,
                       dateLabel: _dateLabel(),
-                      weekPending: _controller.weekPending,
-                      onWeekTap: _toggleWeekStrip,
+                      scheduleLabel: scheduleLabel,
+                      weekPending: active.weekPending,
+                      onWeekTap: _openWeekAndSchedulePopup,
+                      onSwitchSchedule: _openWeekAndSchedulePopup,
                       weekSelectorOpen: _weekStripOpen,
                       // §14.1：「+」三选一（课程 / 考试 / 其他）；「课程」仍是原手动课表单。
                       onAdd: () =>
-                          showAddEntrySheet(context, controller: _controller),
+                          showAddEntrySheet(context, controller: active),
                       onSync: _manualSync,
                       syncing:
-                          _controller.syncStatus == TimetableSyncStatus.syncing,
+                          active.syncStatus == TimetableSyncStatus.syncing ||
+                          (_host.isViewingPrimary &&
+                              _host.syncStatus == TimetableSyncStatus.syncing),
                       syncError: _showSyncErrorDot,
                       onSettings: _openSettings,
                       onExport: _openExport,
                     ),
-                    // item 5：点顶栏周数展开 / 收起的横向周条（200ms）。
-                    _weekStripSlot(context),
                     Expanded(
                       // 只有日程（考试 / 其他）没有课程时也显示周视图。
                       child:
-                          _controller.hasCourses ||
-                              _controller.scheduleEvents.isNotEmpty
+                          active.hasCourses || active.scheduleEvents.isNotEmpty
                           ? _buildWeekPager()
                           : _EmptyState(
-                              loggedIn: _controller.portalBound,
-                              loading: _controller.loading,
+                              loggedIn: _host.portalBound,
+                              loading: active.loading || _host.loading,
+                              isImported: meta?.isImportedSchedule == true,
+                              hasOtherSchedules: _host.schedules.length > 1,
                               onLogin: _openLogin,
+                              onImport: _openImport,
+                              onSwitchSchedule: _openWeekAndSchedulePopup,
                             ),
                     ),
                   ],
-                ),
-              ],
+                );
+              },
             );
           },
         ),
@@ -680,10 +737,12 @@ class _TopBar extends StatelessWidget {
     required this.isCurrent,
     this.endedCurrentWeek,
     required this.dateLabel,
+    required this.scheduleLabel,
     this.weekPending = false,
     this.syncing = false,
     this.syncError = false,
     required this.onWeekTap,
+    required this.onSwitchSchedule,
     required this.weekSelectorOpen,
     required this.onAdd,
     required this.onSync,
@@ -697,12 +756,14 @@ class _TopBar extends StatelessWidget {
   /// 本周已超出学期总周数时为本周周次（显示「课程已结束」，不显示「非本周」）。
   final int? endedCurrentWeek;
   final String dateLabel;
+  final String scheduleLabel;
   final bool weekPending;
   final bool syncing;
 
   /// AS-1：上次自动同步失败（同步图标右上角画圆点，读屏「同步，上次同步失败」）。
   final bool syncError;
   final VoidCallback onWeekTap;
+  final VoidCallback onSwitchSchedule;
   final bool weekSelectorOpen;
   final VoidCallback onAdd;
   final VoidCallback onSync;
@@ -720,82 +781,135 @@ class _TopBar extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: InkWell(
-                onTap: onWeekTap,
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  constraints: const BoxConstraints(minHeight: 40),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text.rich(
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        TextSpan(
-                          style: TimetableTheme.displayStyle(
-                            color: colors.titleText,
-                          ),
-                          children: [
-                            TextSpan(text: '第 $week 周'),
-                            WidgetSpan(
-                              alignment: PlaceholderAlignment.middle,
-                              child: Padding(
-                                padding: const EdgeInsets.only(left: 2),
-                                child: AnimatedRotation(
-                                  turns: weekSelectorOpen ? 0.5 : 0,
-                                  duration: const Duration(milliseconds: 150),
-                                  child: Icon(
-                                    Icons.arrow_drop_down,
-                                    key: const Key('timetable_week_tip_arrow'),
-                                    size: 16,
-                                    color: colors.titleText,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  InkWell(
+                    onTap: onWeekTap,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      constraints: const BoxConstraints(minHeight: 40),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text.rich(
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            TextSpan(
+                              style: TimetableTheme.displayStyle(
+                                color: colors.titleText,
+                              ),
+                              children: [
+                                TextSpan(text: '第 $week 周'),
+                                WidgetSpan(
+                                  alignment: PlaceholderAlignment.middle,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(left: 2),
+                                    child: AnimatedRotation(
+                                      turns: weekSelectorOpen ? 0.5 : 0,
+                                      duration: const Duration(
+                                        milliseconds: 150,
+                                      ),
+                                      child: Icon(
+                                        Icons.arrow_drop_down,
+                                        key: const Key(
+                                          'timetable_week_tip_arrow',
+                                        ),
+                                        size: 16,
+                                        color: colors.titleText,
+                                      ),
+                                    ),
                                   ),
                                 ),
+                                if (!isCurrent && endedCurrentWeek == null)
+                                  TextSpan(
+                                    text: '(非本周)',
+                                    style: TimetableTheme.displayStyle(
+                                      color: colors.hint,
+                                    ).copyWith(fontSize: 14),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          if (endedCurrentWeek != null && !weekPending)
+                            GestureDetector(
+                              key: const Key(
+                                'timetable_schedule_switcher_button',
+                              ),
+                              behavior: HitTestBehavior.opaque,
+                              onTap: onSwitchSchedule,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      '$scheduleLabel · 课程已结束',
+                                      key: const Key('timetable_term_ended'),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TimetableTheme.microStyle(
+                                        color: colors.hint,
+                                      ),
+                                    ),
+                                  ),
+                                  Icon(
+                                    Icons.unfold_more,
+                                    size: 12,
+                                    color: colors.hint,
+                                  ),
+                                ],
+                              ),
+                            )
+                          else if (weekPending)
+                            Text(
+                              '周次待同步 · 点此选择',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TimetableTheme.microStyle(
+                                color: colors.warning,
+                              ),
+                            )
+                          else
+                            GestureDetector(
+                              key: const Key(
+                                'timetable_schedule_switcher_button',
+                              ),
+                              behavior: HitTestBehavior.opaque,
+                              onTap: onSwitchSchedule,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      '$scheduleLabel · $dateLabel',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TimetableTheme.microStyle(
+                                        color: colors.hint,
+                                      ),
+                                    ),
+                                  ),
+                                  Icon(
+                                    Icons.unfold_more,
+                                    size: 12,
+                                    color: colors.hint,
+                                  ),
+                                ],
                               ),
                             ),
-                            if (!isCurrent && endedCurrentWeek == null)
-                              TextSpan(
-                                text: '(非本周)',
-                                style: TimetableTheme.displayStyle(
-                                  color: colors.hint,
-                                ).copyWith(fontSize: 14),
-                              ),
-                          ],
-                        ),
+                        ],
                       ),
-                      if (endedCurrentWeek != null && !weekPending)
-                        Text(
-                          '本周第 $endedCurrentWeek 周 · 课程已结束',
-                          key: const Key('timetable_term_ended'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TimetableTheme.microStyle(color: colors.hint),
-                        )
-                      else if (weekPending)
-                        Text(
-                          '周次待同步 · 点此选择',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TimetableTheme.microStyle(
-                            color: colors.warning,
-                          ),
-                        )
-                      else
-                        Text(
-                          dateLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TimetableTheme.microStyle(color: colors.hint),
-                        ),
-                    ],
+                    ),
                   ),
-                ),
+                ],
               ),
             ),
             _IconBtn(icon: Icons.add, onTap: onAdd, tooltip: '添加'),
@@ -893,17 +1007,25 @@ class _IconBtn extends StatelessWidget {
 }
 
 /// 空状态：未绑定显示「去登录」；已绑定不再有「立即同步」按钮（10/18 定：同步只走
-/// 自动同步和顶栏同步图标）。
+/// 自动同步和顶栏同步图标）。支持直接从 WakeUp 口令导入或切换课表。
 class _EmptyState extends StatelessWidget {
   const _EmptyState({
     required this.loggedIn,
     required this.loading,
+    required this.isImported,
+    required this.hasOtherSchedules,
     required this.onLogin,
+    required this.onImport,
+    required this.onSwitchSchedule,
   });
 
   final bool loggedIn;
   final bool loading;
+  final bool isImported;
+  final bool hasOtherSchedules;
   final VoidCallback onLogin;
+  final VoidCallback onImport;
+  final VoidCallback onSwitchSchedule;
 
   @override
   Widget build(BuildContext context) {
@@ -926,11 +1048,13 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              loggedIn ? '点右上角同步图标，从教务同步本学期课表' : '登录统一门户后自动同步课表',
+              isImported
+                  ? '该导入课表暂无课程安排'
+                  : (loggedIn ? '点右上角同步图标，从教务同步本学期课表' : '登录统一门户后自动同步课表'),
               textAlign: TextAlign.center,
               style: TimetableTheme.captionStyle(color: colors.hint),
             ),
-            if (!loggedIn) ...[
+            if (!loggedIn && !isImported) ...[
               const SizedBox(height: 20),
               FilledButton(
                 key: const Key('timetable_empty_login'),
@@ -939,11 +1063,41 @@ class _EmptyState extends StatelessWidget {
                 child: const Text('去登录'),
               ),
             ],
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                TextButton.icon(
+                  key: const Key('timetable_empty_import_wakeup'),
+                  onPressed: onImport,
+                  icon: const Icon(Icons.file_download_outlined, size: 18),
+                  label: const Text('从口令导入'),
+                ),
+                if (hasOtherSchedules)
+                  TextButton.icon(
+                    key: const Key('timetable_empty_switch'),
+                    onPressed: onSwitchSchedule,
+                    icon: const Icon(Icons.swap_horiz, size: 18),
+                    label: const Text('切换课表'),
+                  ),
+              ],
+            ),
           ],
         ),
       ),
     );
   }
+}
+
+class _NoopListenable extends Listenable {
+  const _NoopListenable();
+
+  @override
+  void addListener(VoidCallback listener) {}
+
+  @override
+  void removeListener(VoidCallback listener) {}
 }
 
 /// item 3：翻过 [weeks] 周的动画时长：1 周 250ms，每多 1 周 +50ms，上限 500ms。
@@ -973,102 +1127,4 @@ Future<void> animateWeekPage(
     duration: duration,
     curve: Curves.easeOutCubic,
   );
-}
-
-/// item 5：横向周条（1…N 周胶囊）。本周描边，当前选中实心；读屏「第 N 周」。
-class _WeekStrip extends StatefulWidget {
-  const _WeekStrip({
-    required this.total,
-    required this.current,
-    required this.selected,
-    required this.onSelect,
-  });
-
-  final int total;
-  final int current;
-  final int selected;
-  final ValueChanged<int> onSelect;
-
-  @override
-  State<_WeekStrip> createState() => _WeekStripState();
-}
-
-class _WeekStripState extends State<_WeekStrip> {
-  static const double _chipW = 48;
-  static const double _currentChipW = 56;
-  static const double _gap = 8;
-
-  late final ScrollController _scroll = ScrollController(
-    // 展开时让选中周大致居中（前面留 2 个胶囊）。
-    initialScrollOffset: ((widget.selected - 3) * (_chipW + _gap))
-        .clamp(0, double.infinity)
-        .toDouble(),
-  );
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = TimetableTheme.colorsOf(context);
-    return SizedBox(
-      key: const Key('timetable_week_strip'),
-      height: 56,
-      child: ListView.separated(
-        controller: _scroll,
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        itemCount: widget.total,
-        separatorBuilder: (_, _) => const SizedBox(width: _gap),
-        itemBuilder: (context, i) {
-          final week = i + 1;
-          final isCurrent = week == widget.current;
-          final isSelected = week == widget.selected;
-          return Semantics(
-            key: ValueKey('week_chip_$week'),
-            button: true,
-            selected: isSelected,
-            excludeSemantics: true,
-            label: isCurrent ? '第 $week 周，本周' : '第 $week 周',
-            onTap: () => widget.onSelect(week),
-            child: Material(
-              color: isSelected ? colors.accent : colors.chipBg,
-              shape: StadiumBorder(
-                side: isCurrent && !isSelected
-                    ? BorderSide(color: colors.accent, width: 1.5)
-                    : BorderSide.none,
-              ),
-              child: InkWell(
-                customBorder: const StadiumBorder(),
-                onTap: () => widget.onSelect(week),
-                child: SizedBox(
-                  // spec-next-1020 item 6：本周胶囊文案「本周」，点它即回到本周。
-                  width: isCurrent ? _currentChipW : _chipW,
-                  child: Center(
-                    child: Text(
-                      isCurrent ? '本周' : '$week',
-                      key: isCurrent
-                          ? const Key('timetable_week_strip_current')
-                          : null,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        // 选中为 accent 实心底，上面压白字。
-                        color: isSelected
-                            ? Colors.white
-                            : (isCurrent ? colors.accent : colors.titleText),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
 }

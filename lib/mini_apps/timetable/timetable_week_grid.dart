@@ -557,7 +557,6 @@ class _WeekGridState extends State<WeekGrid> {
       final width = _fontReferenceWidth;
       if (width <= 0) continue;
       final items = _dayLayoutItems(days[di], nodes);
-      final absorbed = <String>{};
       for (final group in _groupsForEventFocus(items.courses, items.events)) {
         final overlapping = [
           for (final e in items.events)
@@ -568,14 +567,6 @@ class _WeekGridState extends State<WeekGrid> {
         final extra = group.active.isEmpty
             ? const <ScheduleGridItem>[]
             : overlapping;
-        final focusedItem = extra
-            .where(
-              (e) =>
-                  e.event.id == _focusedEvent?.id &&
-                  !absorbed.contains(e.event.id),
-            )
-            .firstOrNull;
-        absorbed.addAll([for (final e in extra) e.event.id]);
         var start = group.startNode;
         var end = group.endNode;
         for (final e in extra) {
@@ -585,24 +576,12 @@ class _WeekGridState extends State<WeekGrid> {
         if (start > nodes) continue;
         final groupSpan = end.clamp(1, nodes) - start.clamp(1, nodes) + 1;
         final stack = group.active.length + extra.length;
-        if (focusedItem != null) {
-          take(
-            ScheduleEventCell(
-              controller: controller,
-              event: focusedItem.event,
-              width: width,
-              fontReferenceWidth: _fontReferenceWidth,
-              height: 0,
-              radius: radius,
-              stackCount: stack,
-            ).preferredHeight(context),
-            groupSpan,
-          );
-          continue;
-        }
         // 本周组内每门都测量，拖起主课后剩余课程仍能完整显示；灰组只画主课。
+        // 日程格（考试/日程）以及以「【考试】」导出的导入考试课程已在格子内部自适应，
+        // 不额外撑大整周行高，避免与拉取课表不一致或导致「格子高度」设置无法缩小。
         final courses = group.active.isEmpty ? [group.primary] : group.active;
         for (final cell in courses) {
+          if (cell.course.name.startsWith('【考试】')) continue;
           final span = cell.slot.startNode > nodes
               ? groupSpan
               : cell.slot.endNode.clamp(1, nodes) -
@@ -621,30 +600,6 @@ class _WeekGridState extends State<WeekGrid> {
             span,
           );
         }
-      }
-      // 已吸收入课程组的日程只在冲突列表显示，不能让它们把整周额外拉长。
-      for (final cluster in _eventClusters([
-        for (final e in items.events)
-          if (!absorbed.contains(e.event.id)) e,
-      ])) {
-        final primary =
-            cluster.where((e) => e.event.id == _focusedEvent?.id).firstOrNull ??
-            cluster.first;
-        final start = cluster.map((e) => e.startNode).reduce(math.min);
-        final end = cluster.map((e) => e.endNode).reduce(math.max);
-        take(
-          ScheduleEventCell(
-            controller: controller,
-            event: primary.event,
-            width: width,
-            fontReferenceWidth: _fontReferenceWidth,
-            height: 0,
-            radius: radius,
-            stackCount: cluster.length,
-            activeThisWeek: primary.activeThisWeek,
-          ).preferredHeight(context),
-          end - start + 1,
-        );
       }
     }
     return result;

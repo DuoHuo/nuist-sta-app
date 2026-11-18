@@ -167,6 +167,7 @@ class TimetableSettingsPage extends StatelessWidget {
                   TimetableSettingsSwitchRow(
                     key: const Key('tt_settings_next_day_reminder'),
                     title: TtSettingsText.nextDayReminder,
+                    subtitle: '每晚推送次日课程安排',
                     value: s.nextDayReminderEnabled,
                     onChanged: (v) async {
                       final saved = await update(
@@ -222,6 +223,7 @@ class TimetableSettingsPage extends StatelessWidget {
                         TimetableSettingsSwitchRow(
                           key: const Key('tt_settings_show_tomorrow'),
                           title: '显示明天的课',
+                          subtitle: '今日课程结束后展示明日安排',
                           value: s.showTomorrowOnHome,
                           onChanged: (v) =>
                               update((x) => x.copyWith(showTomorrowOnHome: v)),
@@ -261,6 +263,7 @@ class TimetableSettingsPage extends StatelessWidget {
                         TimetableSettingsRow(
                           key: const Key('tt_settings_management_entry'),
                           title: '课表管理',
+                          subtitle: '整天调课、变动记录与恢复课表',
                           showChevron: true,
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute<void>(
@@ -722,7 +725,7 @@ class _WidgetPinGuideSheet extends StatelessWidget {
   }
 }
 
-/// 调课、变动记录和恢复操作集中管理，恢复继续保留二次确认。
+/// 调课、变动记录与恢复操作集中管理，恢复继续保留二次确认。
 class TimetableManagementPage extends StatelessWidget {
   const TimetableManagementPage({super.key, this.controller});
 
@@ -737,32 +740,37 @@ class TimetableManagementPage extends StatelessWidget {
       children: () => [
         TimetableSettingsGroup(
           key: const Key('tt_settings_group_management'),
+          title: '课程调整',
           children: [
             TimetableSettingsRow(
               key: const Key('tt_settings_day_swaps'),
               title: '整天调课',
+              subtitle: '互换任意两天的全部课程',
               showChevron: true,
               onTap: () => openDaySwapPage(context, c),
             ),
             TimetableSettingsRow(
               key: const Key('tt_settings_change_log'),
               title: TimetableCopy.changeLogSettingsTitle,
+              subtitle: TimetableCopy.changeLogSettingsSubtitle,
               showChevron: true,
               onTap: () => openTimetableChangeLogPage(context, controller: c),
             ),
           ],
         ),
-        TimetableSettingsGroup(
-          key: const Key('tt_settings_group_restore'),
-          children: [
-            TimetableSettingsRow(
-              key: const Key('tt_settings_restore_jwxt'),
-              title: '恢复教务课程',
-              titleColor: TimetableTheme.colorsOf(context).danger,
-              onTap: () => _confirmRestoreAll(context, c),
-            ),
-          ],
-        ),
+        if (!c.isImportedSchedule)
+          TimetableSettingsGroup(
+            key: const Key('tt_settings_group_restore'),
+            children: [
+              TimetableSettingsRow(
+                key: const Key('tt_settings_restore_jwxt'),
+                title: '恢复教务课程',
+                subtitle: '清除本地编辑与调课，还原教务原始课表',
+                titleColor: TimetableTheme.colorsOf(context).danger,
+                onTap: () => _confirmRestoreAll(context, c),
+              ),
+            ],
+          ),
         if (kDebugMode && c.hasCourses)
           TimetableSettingsGroup(
             key: const Key('tt_settings_group_debug'),
