@@ -9,8 +9,8 @@ import 'timetable_theme.dart';
 
 /// 同步成功后弹出变动摘要（底部 sheet）；每 fingerprint 只弹一次。
 ///
-/// 关闭（下滑 / 知道了 / 查看记录）都会 [TimetableChangeLogStore.markNotified]
-/// 并清空 [TimetableController.lastSyncDiff]，避免同页重复弹出。
+/// 关闭（下滑 / 知道了 / 查看记录）只确认本次展示的记录。
+/// 查看记录时等待记录页返回，供调用方继续调度后续变动。
 Future<void> showTimetableChangeAlert(
   BuildContext context, {
   List<TimetableChangeRecord>? records,
@@ -20,14 +20,15 @@ Future<void> showTimetableChangeAlert(
   final c = controller ?? TimetableController.instance;
   final list = List<TimetableChangeRecord>.of(records ?? c.pendingChangeAlerts);
   if (list.isEmpty) return;
+  final revision = c.changeAlertRevision;
 
   var notified = false;
+  var viewLog = false;
   Future<void> markDone() async {
     if (notified) return;
     notified = true;
     final fps = {for (final r in list) r.fingerprint};
-    await TimetableChangeLogStore.markNotified(fps);
-    c.lastSyncDiff = null;
+    await c.acknowledgeChangeAlerts(fps, revision: revision);
   }
 
   await showModalBottomSheet<void>(
@@ -89,15 +90,9 @@ Future<void> showTimetableChangeAlert(
                   Expanded(
                     child: FilledButton(
                       key: const Key('tt_change_alert_view_log'),
-                      onPressed: () async {
-                        await markDone();
-                        if (!ctx.mounted) return;
+                      onPressed: () {
+                        viewLog = true;
                         Navigator.pop(ctx);
-                        if (!context.mounted) return;
-                        await openTimetableChangeLogPage(
-                          context,
-                          controller: c,
-                        );
                       },
                       child: const Text(TimetableCopy.changeAlertViewLog),
                     ),
@@ -122,6 +117,9 @@ Future<void> showTimetableChangeAlert(
       );
     },
   ).whenComplete(markDone);
+  if (viewLog && context.mounted && revision == c.changeAlertRevision) {
+    await openTimetableChangeLogPage(context, controller: c);
+  }
 }
 
 class _AlertRow extends StatelessWidget {

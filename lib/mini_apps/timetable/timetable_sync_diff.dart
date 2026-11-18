@@ -330,16 +330,17 @@ class TimetableSyncDiff {
   /// 计算候选变动（尚未查重 / 落盘）。
   ///
   /// [oldCourses]/[newCourses] 均为教务源缓存（可含手动课，会被忽略）。
-  /// 旧列表为空时返回空（首次同步不记「全量新增」，避免打扰）。
+  /// 默认旧列表为空时不记全量新增；已有成功同步基线时可显式允许。
   static List<TimetableChangeRecord> compute({
     required List<Course> oldCourses,
     required List<Course> newCourses,
+    bool allowWhenOldEmpty = false,
     DateTime? detectedAt,
     String xnxqdm = '',
     String Function()? idFactory,
   }) {
     final oldSlots = flatten(oldCourses);
-    if (oldSlots.isEmpty) return const [];
+    if (!allowWhenOldEmpty && oldSlots.isEmpty) return const [];
 
     final now = detectedAt ?? DateTime.now();
     var seq = 0;
@@ -473,20 +474,39 @@ class TimetableSyncDiff {
       final pairs = <(DiffSlot, DiffSlot)>[];
       final freeAdd = List<DiffSlot>.from(as_);
 
-      for (final r in List<DiffSlot>.from(rs)) {
-        final sameTimeIdx = freeAdd.indexWhere(
-          (a) =>
-              a.slot.day == r.slot.day &&
-              a.slot.startNode == r.slot.startNode &&
-              a.slot.endNode == r.slot.endNode,
-        );
-        if (sameTimeIdx >= 0) {
-          pairs.add((r, freeAdd.removeAt(sameTimeIdx)));
-          rs.remove(r);
+      if (rs.isNotEmpty && !rs.first.slot.hasFixedTime) {
+        // 先匹配原课程；仅一对且教学班字段缺失时允许补齐，避免串教学班。
+        for (final r in List<DiffSlot>.from(rs)) {
+          var index = freeAdd.indexWhere((a) => a.course.id == r.course.id);
+          if (index < 0 &&
+              rs.length == 1 &&
+              as_.length == 1 &&
+              freeAdd.length == 1 &&
+              (r.course.id.endsWith('|') ||
+                  freeAdd.single.course.id.endsWith('|'))) {
+            index = 0;
+          }
+          if (index >= 0) {
+            pairs.add((r, freeAdd.removeAt(index)));
+            rs.remove(r);
+          }
         }
-      }
-      while (rs.isNotEmpty && freeAdd.isNotEmpty) {
-        pairs.add((rs.removeAt(0), freeAdd.removeAt(0)));
+      } else {
+        for (final r in List<DiffSlot>.from(rs)) {
+          final sameTimeIdx = freeAdd.indexWhere(
+            (a) =>
+                a.slot.day == r.slot.day &&
+                a.slot.startNode == r.slot.startNode &&
+                a.slot.endNode == r.slot.endNode,
+          );
+          if (sameTimeIdx >= 0) {
+            pairs.add((r, freeAdd.removeAt(sameTimeIdx)));
+            rs.remove(r);
+          }
+        }
+        while (rs.isNotEmpty && freeAdd.isNotEmpty) {
+          pairs.add((rs.removeAt(0), freeAdd.removeAt(0)));
+        }
       }
 
       for (final (r, a) in pairs) {
@@ -494,6 +514,19 @@ class TimetableSyncDiff {
         usedAdd.add(a.slotKey);
         final before = snapshotOf(r.course, r.slot);
         final after = snapshotOf(a.course, a.slot);
+        if (!r.slot.hasFixedTime &&
+            r.slot.weeksLabel.trim() == a.slot.weeksLabel.trim()) {
+          records.addAll(
+            _attributeDiffs(
+              old: r,
+              neu: a,
+              time: time,
+              xnxqdm: xnxqdm,
+              idFactory: idFactory,
+            ),
+          );
+          continue;
+        }
         // 时间+周次都变仍是一条时间变动；fingerprint 含前后完整快照。
         records.add(
           TimetableChangeRecord(
@@ -759,12 +792,14 @@ class TimetableSyncDiff {
   static Future<TimetableSyncDiffResult> applyAfterFetch({
     required List<Course> previousJwxtCourses,
     required List<Course> newJwxtCourses,
+    bool allowWhenOldEmpty = false,
     String xnxqdm = '',
     DateTime? detectedAt,
   }) async {
     final candidates = compute(
       oldCourses: previousJwxtCourses,
       newCourses: newJwxtCourses,
+      allowWhenOldEmpty: allowWhenOldEmpty,
       detectedAt: detectedAt,
       xnxqdm: xnxqdm,
     );
@@ -816,7 +851,24 @@ class TimetableChangeLogStore {
   @visibleForTesting
   static List<TimetableChangeRecord>? debugMemory;
 
-  static Future<List<TimetableChangeRecord>> readAll() async {
+  static Future<void>? _operations;
+
+  static Future<T> _serialize<T>(Future<T> Function() action) {
+    final previous = _operations;
+    final result = previous == null ? action() : previous.then((_) => action());
+    late final Future<void> tail;
+    void finish() {
+      if (identical(_operations, tail)) _operations = null;
+    }
+
+    tail = result.then<void>((_) => finish(), onError: (Object _) => finish());
+    _operations = tail;
+    return result;
+  }
+
+  static Future<List<TimetableChangeRecord>> readAll() => _serialize(_readAll);
+
+  static Future<List<TimetableChangeRecord>> _readAll() async {
     final mem = debugMemory;
     if (mem != null) return List.unmodifiable(mem);
 
@@ -910,8 +962,12 @@ class TimetableChangeLogStore {
   /// 新 fingerprint → notified=false，进入 toNotify。
   static Future<TimetableSyncDiffResult> upsertCandidates(
     List<TimetableChangeRecord> candidates,
+  ) => _serialize(() => _upsertCandidates(candidates));
+
+  static Future<TimetableSyncDiffResult> _upsertCandidates(
+    List<TimetableChangeRecord> candidates,
   ) async {
-    final existing = await readAll();
+    final existing = await _readAll();
     final byFp = <String, TimetableChangeRecord>{
       for (final c in existing) c.fingerprint: c,
     };
@@ -940,10 +996,13 @@ class TimetableChangeLogStore {
   }
 
   /// 将给定 fingerprint 标为已通知（弹窗确认后调用）。
-  static Future<void> markNotified(Iterable<String> fingerprints) async {
+  static Future<void> markNotified(Iterable<String> fingerprints) =>
+      _serialize(() => _markNotified(fingerprints));
+
+  static Future<void> _markNotified(Iterable<String> fingerprints) async {
     final set = fingerprints.toSet();
     if (set.isEmpty) return;
-    final all = await readAll();
+    final all = await _readAll();
     var changed = false;
     final next = <TimetableChangeRecord>[];
     for (final c in all) {
@@ -972,7 +1031,9 @@ class TimetableChangeLogStore {
     return all.reversed.toList();
   }
 
-  static Future<void> clear() async {
+  static Future<void> clear() => _serialize(_clear);
+
+  static Future<void> _clear() async {
     if (debugMemory != null) {
       debugMemory = [];
       return;

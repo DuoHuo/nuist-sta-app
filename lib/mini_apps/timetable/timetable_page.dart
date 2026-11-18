@@ -11,7 +11,6 @@ import 'timetable_controller.dart';
 import 'timetable_export_page.dart';
 import 'timetable_perf.dart';
 import 'timetable_settings_page.dart';
-import 'timetable_sync_diff.dart';
 import 'timetable_theme.dart';
 import 'timetable_course_detail_sheet.dart';
 import 'timetable_week_grid.dart';
@@ -39,7 +38,8 @@ class _TimetablePageState extends State<TimetablePage> {
   double? _dragStartPage;
   bool _viewingWeekCleared = false;
   bool _syncAlertQueued = false;
-  bool _openedPendingCourse = false;
+  bool _syncAlertScheduled = false;
+  bool _openingEntryDetail = true;
   ScheduleEvent? _focusedEvent;
   bool _eventFocusRevealed = false;
   String? _focusUnavailableMessage;
@@ -64,6 +64,7 @@ class _TimetablePageState extends State<TimetablePage> {
     TimetablePerf.start();
     _controller.addListener(_syncPageToViewingWeek);
     _controller.addListener(_maybeShowSessionExpired);
+    _controller.addListener(_queuePendingChangeAlert);
     _outcomeSub = _controller.syncOutcomes.listen(_onSyncOutcome);
     _watchSessionExpiry(_controller);
     _bootstrap();
@@ -124,43 +125,56 @@ class _TimetablePageState extends State<TimetablePage> {
       initialPage: _pageFor(_controller.viewingWeek),
     );
     setState(() => _ready = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       // 打开页面时已处于过期状态（如上次进程留下的）：也提示一次。
       _maybeShowSessionExpired();
-      if (widget.focusEvent != null) {
-        _showUnavailableEventFocus();
-      } else {
-        _openPendingCourse();
+      try {
+        if (widget.focusEvent != null) {
+          await _showUnavailableEventFocus();
+        } else {
+          await _openPendingCourse();
+        }
+      } finally {
+        _openingEntryDetail = false;
+        _queuePendingChangeAlert();
       }
     });
     await _controller.autoSyncIfNeeded();
-    if (!mounted || _viewingWeekCleared) return;
+    _queuePendingChangeAlert();
+  }
+
+  void _queuePendingChangeAlert() {
+    if (!mounted ||
+        !_ready ||
+        _viewingWeekCleared ||
+        _syncAlertQueued ||
+        _syncAlertScheduled ||
+        _openingEntryDetail ||
+        _controller.loading ||
+        _controller.pendingChangeAlerts.isEmpty) {
+      return;
+    }
+    _syncAlertScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      _syncAlertScheduled = false;
       unawaited(_maybeShowPendingChangeAlert());
     });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   Future<void> _maybeShowPendingChangeAlert() async {
     if (!mounted ||
+        !_ready ||
         _viewingWeekCleared ||
         _syncAlertQueued ||
-        _openedPendingCourse ||
-        widget.focusEvent != null) {
+        _openingEntryDetail ||
+        _controller.loading ||
+        !(ModalRoute.of(context)?.isCurrent ?? true)) {
       return;
     }
-    final fromController = _controller.pendingChangeAlerts;
-    final records = fromController.isNotEmpty
-        ? fromController
-        : await TimetableChangeLogStore.readUnnotified();
-    if (records.isEmpty ||
-        !mounted ||
-        _viewingWeekCleared ||
-        _syncAlertQueued ||
-        _openedPendingCourse) {
-      return;
-    }
+    final records = _controller.pendingChangeAlerts;
+    if (records.isEmpty) return;
     _syncAlertQueued = true;
     try {
       await showTimetableChangeAlert(
@@ -170,6 +184,7 @@ class _TimetablePageState extends State<TimetablePage> {
       );
     } finally {
       _syncAlertQueued = false;
+      _queuePendingChangeAlert();
     }
   }
 
@@ -177,10 +192,16 @@ class _TimetablePageState extends State<TimetablePage> {
   void didUpdateWidget(covariant TimetablePage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.focusEvent != oldWidget.focusEvent && _ready) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      _openingEntryDetail = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         setState(_prepareEventFocus);
-        _showUnavailableEventFocus();
+        try {
+          await _showUnavailableEventFocus();
+        } finally {
+          _openingEntryDetail = false;
+          _queuePendingChangeAlert();
+        }
       });
     } else if (widget.focusTomorrow && _ready) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -216,7 +237,7 @@ class _TimetablePageState extends State<TimetablePage> {
     }
   }
 
-  void _showUnavailableEventFocus() {
+  Future<void> _showUnavailableEventFocus() async {
     final message = _focusUnavailableMessage;
     if (message == null) return;
     ScaffoldMessenger.of(context)
@@ -225,7 +246,7 @@ class _TimetablePageState extends State<TimetablePage> {
         .where((e) => e.id == widget.focusEvent?.id)
         .firstOrNull;
     if (event != null) {
-      showScheduleEventDetailSheet(
+      await showScheduleEventDetailSheet(
         context,
         event: event,
         controller: _controller,
@@ -251,7 +272,6 @@ class _TimetablePageState extends State<TimetablePage> {
   Future<void> _openPendingCourse() async {
     final pending = _controller.consumePendingOpen();
     if (pending == null || !mounted) return;
-    _openedPendingCourse = true;
     _controller.goToCurrentWeek();
     final page = _pageFor(_controller.viewingWeek);
     if (_pageController != null && _pageController!.hasClients) {
@@ -315,15 +335,7 @@ class _TimetablePageState extends State<TimetablePage> {
       messenger.hideCurrentSnackBar();
       // 有未通知变动时弹摘要 sheet，不再叠「已同步」SnackBar。
       if (_controller.pendingChangeAlerts.isNotEmpty) {
-        _syncAlertQueued = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          try {
-            if (!mounted) return;
-            await showTimetableChangeAlert(context, controller: _controller);
-          } finally {
-            _syncAlertQueued = false;
-          }
-        });
+        _queuePendingChangeAlert();
         return;
       }
       messenger.showSnackBar(
@@ -386,6 +398,7 @@ class _TimetablePageState extends State<TimetablePage> {
     _outcomeSub?.cancel();
     _controller.removeListener(_maybeShowSessionExpired);
     _controller.removeListener(_syncPageToViewingWeek);
+    _controller.removeListener(_queuePendingChangeAlert);
     _pageController?.dispose();
     _clearViewingWeek();
     super.dispose();
@@ -475,6 +488,7 @@ class _TimetablePageState extends State<TimetablePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (ModalRoute.isCurrentOf(context) ?? true) _queuePendingChangeAlert();
     final colors = TimetableTheme.colorsOf(context);
     final scaffold = Scaffold(
       // 输入只出现在弹层，键盘升降时保持背景课表的尺寸，避免重排整个周视图。

@@ -85,7 +85,7 @@ void main() {
       );
     });
 
-    test('忽略手动课与无固定时间时段', () {
+    test('忽略手动课，未排课未变时不重复记录', () {
       final manual = Course(
         id: 'm1',
         name: '手动',
@@ -488,6 +488,125 @@ void main() {
   });
 
   group('未排课与考试 diff', () {
+    test('已有课程新增独立时段、延长节次和增加周次均产生 diff', () {
+      final base = _jwxt(slots: [_slot(weeks: '1111')]);
+      final addedSlot = TimetableSyncDiff.compute(
+        oldCourses: [base],
+        newCourses: [
+          _jwxt(
+            slots: [
+              _slot(weeks: '1111'),
+              _slot(day: 3, weeks: '1111'),
+            ],
+          ),
+        ],
+      );
+      expect(addedSlot.single.type, TimetableChangeType.added);
+      expect(addedSlot.single.after!['SKXQ'], 3);
+      for (final slot in [
+        _slot(end: 7, weeks: '1111'),
+        _slot(weeks: '11111'),
+      ]) {
+        final changes = TimetableSyncDiff.compute(
+          oldCourses: [base],
+          newCourses: [
+            _jwxt(slots: [slot]),
+          ],
+        );
+        expect(changes.single.type, TimetableChangeType.timeChanged);
+      }
+    });
+
+    test('未排课补齐教学班 ID 只报告实际属性变化；不同教学班不强配对', () {
+      Course other(
+        String jxb, {
+        String teacher = '甲老师',
+        String weeks = '2-17周',
+      }) => TimetableParser.parseKbRows([
+        {
+          'KCM': '测试实践课',
+          'KCH': '9001',
+          'KXH': '01',
+          'JXBID': jxb,
+          'SKZC': weeks,
+          'SKJS': teacher,
+        },
+      ]).courses.single;
+      expect(
+        TimetableSyncDiff.compute(
+          oldCourses: [other('')],
+          newCourses: [other('a')],
+        ),
+        isEmpty,
+      );
+      final teacher = TimetableSyncDiff.compute(
+        oldCourses: [other('')],
+        newCourses: [other('a', teacher: '乙老师')],
+      );
+      expect(teacher.single.type, TimetableChangeType.teacherChanged);
+      expect(
+        TimetableChangeFormat.alertBody(teacher.single),
+        '测试实践课 甲老师 → 乙老师',
+      );
+      final moved = TimetableSyncDiff.compute(
+        oldCourses: [other('a')],
+        newCourses: [other('b')],
+      );
+      expect(moved.map((r) => r.type), [
+        TimetableChangeType.removed,
+        TimetableChangeType.added,
+      ]);
+      final ambiguous = TimetableSyncDiff.compute(
+        oldCourses: [other('')],
+        newCourses: [other('a'), other('b')],
+      );
+      expect(
+        ambiguous.where((r) => r.type == TimetableChangeType.added),
+        hasLength(2),
+      );
+      expect(
+        ambiguous.where((r) => r.type == TimetableChangeType.timeChanged),
+        isEmpty,
+      );
+    });
+
+    test('重复未排课行不重复记录，空课程号按课程隔离', () {
+      final baseline = _jwxt();
+      Course other(String id) =>
+          Course(id: id, name: id, source: CourseSource.jwxt, slots: const []);
+      final changes = TimetableSyncDiff.compute(
+        oldCourses: [baseline],
+        newCourses: [baseline, other('a'), other('a'), other('b')],
+      );
+      expect(changes, hasLength(2));
+      expect(changes.every((r) => r.type == TimetableChangeType.added), isTrue);
+    });
+
+    test('变动入库与已读确认并发时不会相互覆盖', () async {
+      final first = TimetableSyncDiff.compute(
+        oldCourses: [_jwxt()],
+        newCourses: [
+          _jwxt(slots: [_slot(location: '新教室')]),
+        ],
+      ).single;
+      final second = TimetableSyncDiff.compute(
+        oldCourses: [
+          _jwxt(slots: [_slot(location: '新教室')]),
+        ],
+        newCourses: [
+          _jwxt(slots: [_slot(location: '另一教室')]),
+        ],
+      ).single;
+      await TimetableChangeLogStore.upsertCandidates([first]);
+      await Future.wait([
+        TimetableChangeLogStore.upsertCandidates([second]),
+        TimetableChangeLogStore.markNotified([first.fingerprint]),
+      ]);
+      final pending = await TimetableChangeLogStore.readUnnotified();
+      expect(pending.single.fingerprint, second.fingerprint);
+      expect(await TimetableChangeLogStore.readAll(), hasLength(2));
+    });
+
     Course otherCourse({
       String id = 'other:o1',
       String code = '88001',
