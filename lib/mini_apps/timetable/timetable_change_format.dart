@@ -77,6 +77,38 @@ abstract final class TimetableChangeFormat {
     return n == 0 ? '否' : '是';
   }
 
+  static String zcmcOf(Map<String, dynamic>? snap) =>
+      '${snap?['ZCMC'] ?? ''}'.trim();
+
+  static bool _isExam(TimetableChangeRecord r) =>
+      (r.after ?? r.before)?['KIND'] == 'exam';
+
+  static bool _isUnscheduled(TimetableChangeRecord r) {
+    if (_isExam(r)) return false;
+    final snap = r.after ?? r.before;
+    if (snap == null) return false;
+    final day = snap['SKXQ'];
+    final dayInt = day is int ? day : int.tryParse('$day') ?? 0;
+    final weeks = '${snap['SKZC'] ?? ''}'.trim();
+    return dayInt == 0 && weeks.isEmpty;
+  }
+
+  static String _examTimeOf(Map<String, dynamic>? snap) {
+    if (snap == null) return '';
+    final rawDate = '${snap['KSRQ'] ?? ''}'.trim();
+    var dateLabel = rawDate;
+    final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(rawDate);
+    if (m != null) {
+      dateLabel = '${int.parse(m.group(2)!)}月${int.parse(m.group(3)!)}日';
+    }
+    final start = '${snap['KSKSSJ'] ?? ''}'.trim();
+    final end = '${snap['KSJSSJ'] ?? ''}'.trim();
+    final range = start.isNotEmpty && end.isNotEmpty
+        ? '$start–$end'
+        : (start.isNotEmpty ? start : end);
+    return [dateLabel, range].where((s) => s.isNotEmpty).join(' ');
+  }
+
   static Set<int> _weeks(Map<String, dynamic>? snap) =>
       weeksFromBits('${snap?['SKZC'] ?? ''}').toSet();
 
@@ -84,6 +116,34 @@ abstract final class TimetableChangeFormat {
   ///
   /// 有课程周次上下文时标明「全部周次」。
   static String scopeBodyOf(TimetableChangeRecord r) {
+    if (_isExam(r)) {
+      final beforeTime = _examTimeOf(r.before);
+      final afterTime = _examTimeOf(r.after);
+      if (r.type == TimetableChangeType.timeChanged &&
+          beforeTime.isNotEmpty &&
+          afterTime.isNotEmpty &&
+          beforeTime != afterTime) {
+        return '考试 · $beforeTime → $afterTime';
+      }
+      final t = r.type == TimetableChangeType.added
+          ? afterTime
+          : _examTimeOf(r.before ?? r.after);
+      return t.isEmpty ? '考试' : '考试 · $t';
+    }
+    if (_isUnscheduled(r)) {
+      final beforeZ = zcmcOf(r.before);
+      final afterZ = zcmcOf(r.after);
+      if (r.type == TimetableChangeType.timeChanged &&
+          beforeZ.isNotEmpty &&
+          afterZ.isNotEmpty &&
+          beforeZ != afterZ) {
+        return '其他课程 · $beforeZ → $afterZ';
+      }
+      final z = r.type == TimetableChangeType.added
+          ? afterZ
+          : zcmcOf(r.before ?? r.after);
+      return z.isEmpty ? '其他课程' : '其他课程 · $z';
+    }
     final before = _weeks(r.before);
     final after = _weeks(r.after);
     final sameTime = timeOf(r.before) == timeOf(r.after);
@@ -152,6 +212,58 @@ abstract final class TimetableChangeFormat {
   /// 弹窗单行摘要（不含类型胶囊）。
   static String alertBody(TimetableChangeRecord r) {
     final name = r.courseName.trim();
+    if (_isExam(r)) {
+      final label = name.isEmpty ? '考试' : '$name（考试）';
+      switch (r.type) {
+        case TimetableChangeType.added:
+          return [
+            label,
+            if (_examTimeOf(r.after).isNotEmpty) _examTimeOf(r.after),
+            if (locationOf(r.after).isNotEmpty) locationOf(r.after),
+          ].join(' · ');
+        case TimetableChangeType.removed:
+          return [
+            label,
+            if (_examTimeOf(r.before).isNotEmpty) _examTimeOf(r.before),
+            if (locationOf(r.before).isNotEmpty) locationOf(r.before),
+          ].join(' · ');
+        case TimetableChangeType.timeChanged:
+          final arrow = '${_examTimeOf(r.before)} → ${_examTimeOf(r.after)}';
+          return '$label $arrow';
+        case TimetableChangeType.locationChanged:
+          return '$label ${locationOf(r.before)} → ${locationOf(r.after)}';
+        case TimetableChangeType.teacherChanged:
+        case TimetableChangeType.retakeFlagChanged:
+          return label;
+      }
+    }
+    if (_isUnscheduled(r)) {
+      String unscheduledSummary(Map<String, dynamic>? snap) => [
+        if (name.isNotEmpty) name,
+        if (zcmcOf(snap).isNotEmpty) zcmcOf(snap),
+        if (locationOf(snap).isNotEmpty)
+          locationOf(snap)
+        else if (teacherOf(snap).isNotEmpty)
+          teacherOf(snap),
+      ].join(' · ');
+
+      switch (r.type) {
+        case TimetableChangeType.added:
+          return unscheduledSummary(r.after);
+        case TimetableChangeType.removed:
+          return unscheduledSummary(r.before);
+        case TimetableChangeType.timeChanged:
+          final arrow = '${zcmcOf(r.before)} → ${zcmcOf(r.after)}';
+          return [
+            if (name.isNotEmpty) name,
+            if (arrow != ' → ') arrow,
+          ].join(' ');
+        case TimetableChangeType.locationChanged:
+        case TimetableChangeType.teacherChanged:
+        case TimetableChangeType.retakeFlagChanged:
+          break;
+      }
+    }
     switch (r.type) {
       case TimetableChangeType.added:
         final parts = <String>[
@@ -193,6 +305,50 @@ abstract final class TimetableChangeFormat {
 
   /// 记录页明细行（课程名下方灰字）。
   static String detailOf(TimetableChangeRecord r) {
+    if (_isExam(r)) {
+      switch (r.type) {
+        case TimetableChangeType.added:
+          return [
+            if (_examTimeOf(r.after).isNotEmpty) _examTimeOf(r.after),
+            if (locationOf(r.after).isNotEmpty) locationOf(r.after),
+          ].join(' · ');
+        case TimetableChangeType.removed:
+          return [
+            if (_examTimeOf(r.before).isNotEmpty) _examTimeOf(r.before),
+            if (locationOf(r.before).isNotEmpty) locationOf(r.before),
+          ].join(' · ');
+        case TimetableChangeType.timeChanged:
+          return '${_examTimeOf(r.before)} → ${_examTimeOf(r.after)}';
+        case TimetableChangeType.locationChanged:
+          return '${locationOf(r.before)} → ${locationOf(r.after)}';
+        case TimetableChangeType.teacherChanged:
+        case TimetableChangeType.retakeFlagChanged:
+          return '';
+      }
+    }
+    if (_isUnscheduled(r)) {
+      String unscheduledDetail(Map<String, dynamic>? snap) => [
+        if (zcmcOf(snap).isNotEmpty) zcmcOf(snap),
+        if (locationOf(snap).isNotEmpty)
+          locationOf(snap)
+        else if (teacherOf(snap).isNotEmpty)
+          teacherOf(snap),
+      ].join(' · ');
+
+      switch (r.type) {
+        case TimetableChangeType.added:
+          return unscheduledDetail(r.after);
+        case TimetableChangeType.removed:
+          return unscheduledDetail(r.before);
+        case TimetableChangeType.timeChanged:
+          final arrow = '${zcmcOf(r.before)} → ${zcmcOf(r.after)}';
+          return arrow == ' → ' ? '' : arrow;
+        case TimetableChangeType.locationChanged:
+        case TimetableChangeType.teacherChanged:
+        case TimetableChangeType.retakeFlagChanged:
+          break;
+      }
+    }
     switch (r.type) {
       case TimetableChangeType.added:
         final parts = <String>[

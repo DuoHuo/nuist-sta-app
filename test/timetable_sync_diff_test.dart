@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_change_format.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_sync_diff.dart';
 
 CourseSlot _slot({
@@ -84,7 +85,7 @@ void main() {
       );
     });
 
-    test('忽略手动课与无固定时间时段', () {
+    test('忽略手动课，未排课未变时不重复记录', () {
       final manual = Course(
         id: 'm1',
         name: '手动',
@@ -483,6 +484,288 @@ void main() {
       final slot = parsed.courses.single.slots.single;
       expect(slot.istk, 1);
       expect(slot.location, '滨江楼');
+    });
+  });
+
+  group('未排课与考试 diff', () {
+    test('已有课程新增独立时段、延长节次和增加周次均产生 diff', () {
+      final base = _jwxt(slots: [_slot(weeks: '1111')]);
+      final addedSlot = TimetableSyncDiff.compute(
+        oldCourses: [base],
+        newCourses: [
+          _jwxt(
+            slots: [
+              _slot(weeks: '1111'),
+              _slot(day: 3, weeks: '1111'),
+            ],
+          ),
+        ],
+      );
+      expect(addedSlot.single.type, TimetableChangeType.added);
+      expect(addedSlot.single.after!['SKXQ'], 3);
+      for (final slot in [
+        _slot(end: 7, weeks: '1111'),
+        _slot(weeks: '11111'),
+      ]) {
+        final changes = TimetableSyncDiff.compute(
+          oldCourses: [base],
+          newCourses: [
+            _jwxt(slots: [slot]),
+          ],
+        );
+        expect(changes.single.type, TimetableChangeType.timeChanged);
+      }
+    });
+
+    test('未排课补齐教学班 ID 只报告实际属性变化；不同教学班不强配对', () {
+      Course other(
+        String jxb, {
+        String teacher = '甲老师',
+        String weeks = '2-17周',
+      }) => TimetableParser.parseKbRows([
+        {
+          'KCM': '测试实践课',
+          'KCH': '9001',
+          'KXH': '01',
+          'JXBID': jxb,
+          'SKZC': weeks,
+          'SKJS': teacher,
+        },
+      ]).courses.single;
+      expect(
+        TimetableSyncDiff.compute(
+          oldCourses: [other('')],
+          newCourses: [other('a')],
+        ),
+        isEmpty,
+      );
+      final teacher = TimetableSyncDiff.compute(
+        oldCourses: [other('')],
+        newCourses: [other('a', teacher: '乙老师')],
+      );
+      expect(teacher.single.type, TimetableChangeType.teacherChanged);
+      expect(
+        TimetableChangeFormat.alertBody(teacher.single),
+        '测试实践课 甲老师 → 乙老师',
+      );
+      final moved = TimetableSyncDiff.compute(
+        oldCourses: [other('a')],
+        newCourses: [other('b')],
+      );
+      expect(moved.map((r) => r.type), [
+        TimetableChangeType.removed,
+        TimetableChangeType.added,
+      ]);
+      final ambiguous = TimetableSyncDiff.compute(
+        oldCourses: [other('')],
+        newCourses: [other('a'), other('b')],
+      );
+      expect(
+        ambiguous.where((r) => r.type == TimetableChangeType.added),
+        hasLength(2),
+      );
+      expect(
+        ambiguous.where((r) => r.type == TimetableChangeType.timeChanged),
+        isEmpty,
+      );
+    });
+
+    test('重复未排课行不重复记录，空课程号按课程隔离', () {
+      final baseline = _jwxt();
+      Course other(String id) =>
+          Course(id: id, name: id, source: CourseSource.jwxt, slots: const []);
+      final changes = TimetableSyncDiff.compute(
+        oldCourses: [baseline],
+        newCourses: [baseline, other('a'), other('a'), other('b')],
+      );
+      expect(changes, hasLength(2));
+      expect(changes.every((r) => r.type == TimetableChangeType.added), isTrue);
+    });
+
+    test('变动入库与已读确认并发时不会相互覆盖', () async {
+      final first = TimetableSyncDiff.compute(
+        oldCourses: [_jwxt()],
+        newCourses: [
+          _jwxt(slots: [_slot(location: '新教室')]),
+        ],
+      ).single;
+      final second = TimetableSyncDiff.compute(
+        oldCourses: [
+          _jwxt(slots: [_slot(location: '新教室')]),
+        ],
+        newCourses: [
+          _jwxt(slots: [_slot(location: '另一教室')]),
+        ],
+      ).single;
+      await TimetableChangeLogStore.upsertCandidates([first]);
+      await Future.wait([
+        TimetableChangeLogStore.upsertCandidates([second]),
+        TimetableChangeLogStore.markNotified([first.fingerprint]),
+      ]);
+      final pending = await TimetableChangeLogStore.readUnnotified();
+      expect(pending.single.fingerprint, second.fingerprint);
+      expect(await TimetableChangeLogStore.readAll(), hasLength(2));
+    });
+
+    Course otherCourse({
+      String id = 'other:o1',
+      String code = '88001',
+      String classId = '01',
+      String name = '创新创业实践',
+      String weeksLabel = '2-17周',
+      String teacher = '李老师',
+      String location = '',
+    }) => Course(
+      id: id,
+      name: name,
+      code: code,
+      classId: classId,
+      source: CourseSource.jwxt,
+      slots: [
+        CourseSlot(
+          day: 0,
+          startNode: 0,
+          endNode: 0,
+          weeks: '',
+          weeksLabel: weeksLabel,
+          teacher: teacher,
+          location: location,
+        ),
+      ],
+    );
+
+    ScheduleEvent jwxtExam({
+      String code = '18001299',
+      String title = '学术英语（1）',
+      DateTime? date,
+      TimeOfDayMinutes start = const TimeOfDayMinutes(9, 0),
+      TimeOfDayMinutes end = const TimeOfDayMinutes(11, 0),
+      String location = '明德楼N201',
+      ScheduleSource source = ScheduleSource.jwxt,
+    }) {
+      final d = date ?? DateTime(2027, 1, 12);
+      return ScheduleEvent(
+        id: 'jwxt-exam:${ScheduleEvent.examKeyOf(code, d, start)}',
+        kind: ScheduleKind.exam,
+        source: source,
+        title: title,
+        date: d,
+        start: start,
+        end: end,
+        location: location,
+        courseCode: code,
+      );
+    }
+
+    test('未排课新增、删除、教师与周次文案变更均产生 diff 且格式正确', () {
+      final base = _jwxt();
+      final o1 = otherCourse();
+      final added = TimetableSyncDiff.compute(
+        oldCourses: [base],
+        newCourses: [base, o1],
+      );
+      expect(added, hasLength(1));
+      expect(added.single.type, TimetableChangeType.added);
+      expect(TimetableChangeFormat.scopeOf(added.single), '影响范围：其他课程 · 2-17周');
+      expect(
+        TimetableChangeFormat.alertBody(added.single),
+        '创新创业实践 · 2-17周 · 李老师',
+      );
+      expect(TimetableChangeFormat.detailOf(added.single), '2-17周 · 李老师');
+
+      final teacherChanged = TimetableSyncDiff.compute(
+        oldCourses: [base, o1],
+        newCourses: [
+          base,
+          otherCourse(teacher: '王老师'),
+        ],
+      );
+      expect(teacherChanged.single.type, TimetableChangeType.teacherChanged);
+      expect(
+        TimetableChangeFormat.alertBody(teacherChanged.single),
+        '创新创业实践 李老师 → 王老师',
+      );
+
+      final weeksLabelChanged = TimetableSyncDiff.compute(
+        oldCourses: [base, o1],
+        newCourses: [
+          base,
+          otherCourse(weeksLabel: '3-16周'),
+        ],
+      );
+      expect(weeksLabelChanged.single.type, TimetableChangeType.timeChanged);
+      expect(
+        TimetableChangeFormat.scopeOf(weeksLabelChanged.single),
+        '影响范围：其他课程 · 2-17周 → 3-16周',
+      );
+      expect(
+        TimetableChangeFormat.alertBody(weeksLabelChanged.single),
+        '创新创业实践 2-17周 → 3-16周',
+      );
+
+      final removed = TimetableSyncDiff.compute(
+        oldCourses: [base, o1],
+        newCourses: [base],
+      );
+      expect(removed.single.type, TimetableChangeType.removed);
+    });
+
+    test('教务考试支持首次空列表后续新增、时间变动、地点变动与删除', () {
+      final e1 = jwxtExam();
+      expect(
+        TimetableSyncDiff.computeExams(oldExams: const [], newExams: [e1]),
+        isEmpty,
+      );
+
+      final newlyPublished = TimetableSyncDiff.computeExams(
+        oldExams: const [],
+        newExams: [e1],
+        allowWhenOldEmpty: true,
+      );
+      expect(newlyPublished, hasLength(1));
+      expect(newlyPublished.single.type, TimetableChangeType.added);
+      expect(
+        TimetableChangeFormat.scopeOf(newlyPublished.single),
+        '影响范围：考试 · 1月12日 09:00–11:00',
+      );
+      expect(
+        TimetableChangeFormat.alertBody(newlyPublished.single),
+        '学术英语（1）（考试） · 1月12日 09:00–11:00 · 明德楼N201',
+      );
+
+      final timeMoved = TimetableSyncDiff.computeExams(
+        oldExams: [e1],
+        newExams: [
+          jwxtExam(
+            date: DateTime(2027, 1, 13),
+            start: const TimeOfDayMinutes(14, 0),
+            end: const TimeOfDayMinutes(16, 0),
+          ),
+        ],
+      );
+      expect(timeMoved, hasLength(1));
+      expect(timeMoved.single.type, TimetableChangeType.timeChanged);
+      expect(
+        TimetableChangeFormat.alertBody(timeMoved.single),
+        '学术英语（1）（考试） 1月12日 09:00–11:00 → 1月13日 14:00–16:00',
+      );
+
+      final roomMoved = TimetableSyncDiff.computeExams(
+        oldExams: [e1],
+        newExams: [jwxtExam(location: '逸夫楼S102')],
+      );
+      expect(roomMoved, hasLength(1));
+      expect(roomMoved.single.type, TimetableChangeType.locationChanged);
+      expect(
+        TimetableChangeFormat.alertBody(roomMoved.single),
+        '学术英语（1）（考试） 明德楼N201 → 逸夫楼S102',
+      );
+
+      final dropped = TimetableSyncDiff.computeExams(
+        oldExams: [e1],
+        newExams: const [],
+      );
+      expect(dropped.single.type, TimetableChangeType.removed);
     });
   });
 }

@@ -170,9 +170,56 @@ class TimetableController extends ChangeNotifier {
   /// 最近一次成功同步写入的变动结果（含待弹窗列表）；失败或无 diff 为 null。
   TimetableSyncDiffResult? lastSyncDiff;
 
-  /// 供变更提醒弹窗：最近一次同步中尚未标记 notified 的记录。
+  final _pendingChangeAlerts = <String, TimetableChangeRecord>{};
+  int _changeAlertRevision = 0;
+
+  /// 变动提醒所属的课表生命周期，防止旧弹窗确认新课表的记录。
+  int get changeAlertRevision => _changeAlertRevision;
+
+  /// 累计尚未通知的记录，包含重启恢复与多轮后台同步。
   List<TimetableChangeRecord> get pendingChangeAlerts =>
-      List.unmodifiable(lastSyncDiff?.toNotify ?? const []);
+      List.unmodifiable(_pendingChangeAlerts.values);
+
+  void _mergePendingChanges(Iterable<TimetableChangeRecord> records) {
+    for (final record in records) {
+      if (!record.notified && record.xnxqdm == settings.termCode) {
+        _pendingChangeAlerts[record.fingerprint] = record;
+      }
+    }
+  }
+
+  /// 仅确认实际展示的记录，不清掉弹窗显示期间新到的变动。
+  Future<void> acknowledgeChangeAlerts(
+    Iterable<String> fingerprints, {
+    required int revision,
+  }) async {
+    if (revision != _changeAlertRevision) return;
+    final confirmed = fingerprints.toSet();
+    await TimetableChangeLogStore.markNotified(confirmed);
+    if (revision != _changeAlertRevision) return;
+    _pendingChangeAlerts.removeWhere((fp, _) => confirmed.contains(fp));
+    final diff = lastSyncDiff;
+    if (diff != null) {
+      final remaining = [
+        for (final record in diff.toNotify)
+          if (!confirmed.contains(record.fingerprint)) record,
+      ];
+      lastSyncDiff = remaining.isEmpty
+          ? null
+          : TimetableSyncDiffResult(
+              allWritten: diff.allWritten,
+              toNotify: remaining,
+            );
+    }
+    notifyListeners();
+  }
+
+  Future<void> _resetSyncChanges() async {
+    _changeAlertRevision++;
+    _pendingChangeAlerts.clear();
+    lastSyncDiff = null;
+    await TimetableChangeLogStore.clear();
+  }
 
   List<Course> _manualCourses = const [];
   int _manualSeq = 0;
@@ -827,6 +874,9 @@ class TimetableController extends ChangeNotifier {
     _viewingWeek = _defaultViewingWeek;
     _lastSeenCurrentWeek = currentWeek;
     _portalBound = await bindingCheck();
+    if (_snapshot.syncedAt != null || _snapshot.courses.isNotEmpty) {
+      _mergePendingChanges(await TimetableChangeLogStore.readUnnotified());
+    }
     await updateNextDayReminder();
     notifyListeners();
   }
@@ -1114,6 +1164,7 @@ class TimetableController extends ChangeNotifier {
             clearError: true,
           );
           late final List<Course> previousJwxt;
+          late final bool hasSyncBaseline;
           // 与设置保存共用队列：落盘后立即发布快照，后续设置不能再写回旧课表。
           await _serializeAppearance(() async {
             if (bindingRevision != _portalBindingRevision) {
@@ -1121,6 +1172,9 @@ class TimetableController extends ChangeNotifier {
               return;
             }
             previousJwxt = _snapshot.courses;
+            hasSyncBaseline =
+                _snapshot.settings.termCode == snapshot.settings.termCode &&
+                (_snapshot.syncedAt != null || previousJwxt.isNotEmpty);
             snapshot = snapshot.copyWith(
               settings: snapshot.settings
                   .withDisplayPrefsFrom(settings)
@@ -1147,11 +1201,16 @@ class TimetableController extends ChangeNotifier {
             return;
           }
           // 变更日志沿用已捕获的旧教务源；I/O 等待不占设置队列，也不再次覆盖快照。
+          if (!hasSyncBaseline) {
+            await _resetSyncChanges();
+            if (bindingRevision != _portalBindingRevision) return;
+          }
           TimetableSyncDiffResult? syncDiff;
           try {
             syncDiff = await TimetableSyncDiff.applyAfterFetch(
-              previousJwxtCourses: previousJwxt,
+              previousJwxtCourses: hasSyncBaseline ? previousJwxt : const [],
               newJwxtCourses: snapshot.courses,
+              allowWhenOldEmpty: hasSyncBaseline,
               xnxqdm: snapshot.settings.termCode.isNotEmpty
                   ? snapshot.settings.termCode
                   : term,
@@ -1174,6 +1233,7 @@ class TimetableController extends ChangeNotifier {
             return;
           }
           lastSyncDiff = syncDiff;
+          if (syncDiff != null) _mergePendingChanges(syncDiff.toNotify);
           // SW01（§13.10）：同步成功后停留在正在看的周（只钳到 1..totalWeeks）。
           // 同步期间未手动切周，且（同步前就在看本周 / 之前无开学日 / 从已知旧学期切到新学期）
           // 时才跟到新的本周；不再调用 followCurrentWeekIfChanged，避免把非当前周拉回本周。
@@ -1240,10 +1300,55 @@ class TimetableController extends ChangeNotifier {
           }
           // 第 11 条：课表成功后拉考试（不受 showExams 影响）。考试失败不影响本次课表
           // 同步结果、成功时间与离线补同步逻辑，已有考试保留。
-          await _syncExams(term, bindingRevision: bindingRevision);
+          final previousJwxtExams = [
+            for (final e in _scheduleEvents)
+              if (e.isFromJwxt && e.isExam) e,
+          ];
+          final syncedExams = await _syncExams(
+            term,
+            bindingRevision: bindingRevision,
+          );
           if (bindingRevision != _portalBindingRevision) {
             AppLog.reportOutcome('skipped', reason: 'superseded');
             return;
+          }
+          if (syncedExams != null) {
+            try {
+              final examDiff = await TimetableSyncDiff.applyExamsAfterFetch(
+                previousJwxtExams: hasSyncBaseline
+                    ? previousJwxtExams
+                    : const [],
+                newJwxtExams: syncedExams,
+                allowWhenOldEmpty: hasSyncBaseline,
+                xnxqdm: snapshot.settings.termCode.isNotEmpty
+                    ? snapshot.settings.termCode
+                    : term,
+                detectedAt: snapshot.syncedAt,
+              );
+              if (bindingRevision != _portalBindingRevision) {
+                AppLog.reportOutcome('skipped', reason: 'superseded');
+                return;
+              }
+              if (examDiff.allWritten.isNotEmpty ||
+                  examDiff.toNotify.isNotEmpty) {
+                lastSyncDiff = _mergeSyncDiff(lastSyncDiff, examDiff);
+                _mergePendingChanges(examDiff.toNotify);
+              }
+            } catch (error, stackTrace) {
+              AppLog.reportOutcome(
+                'degraded',
+                reason: 'change_history_unavailable',
+              );
+              _log.warning(
+                'changes.exam_update_failed',
+                fields: {
+                  'stage': 'sync.exam_change_detection',
+                  'outcome': 'degraded',
+                },
+                error: error,
+                stackTrace: stackTrace,
+              );
+            }
           }
           // 只有成功才重置自动同步计时。
           final succeededAt = syncClock();
@@ -1320,6 +1425,8 @@ class TimetableController extends ChangeNotifier {
   @visibleForTesting
   void debugReset() {
     lastSyncDiff = null;
+    _pendingChangeAlerts.clear();
+    _changeAlertRevision++;
     _lastSeenCurrentWeek = null;
     _started = false;
     _starting = null;
@@ -1371,6 +1478,7 @@ class TimetableController extends ChangeNotifier {
   /// 清空教务课程与 snapshot 磁盘缓存，并清除教务写入的学期元数据；
   /// 手动课程与展示设置（周末/非本周/格子高度等）保留。
   Future<void> clearJwxtCourses() async {
+    await _resetSyncChanges();
     // 只重置学期相关字段；展示设置（周末/非本周/格子高度/网格线等）保留在内存。
     final clearedSettings = _snapshot.settings.copyWith(
       termCode: const TimetableSettings().termCode,
@@ -2389,14 +2497,28 @@ class TimetableController extends ChangeNotifier {
     return changed;
   }
 
+  static TimetableSyncDiffResult _mergeSyncDiff(
+    TimetableSyncDiffResult? a,
+    TimetableSyncDiffResult b,
+  ) {
+    if (a == null) return b;
+    return TimetableSyncDiffResult(
+      allWritten: [...a.allWritten, ...b.allWritten],
+      toNotify: [...a.toNotify, ...b.toNotify],
+    );
+  }
+
   /// 课表同步成功后拉教务考试并整批替换（覆盖层由 [replaceJwxtExams] 按 examKey
   /// 保留 / 清理）。任何失败只记一条通用日志，已有考试不动。
-  Future<void> _syncExams(String term, {required int bindingRevision}) async {
+  Future<List<ScheduleEvent>?> _syncExams(
+    String term, {
+    required int bindingRevision,
+  }) async {
     final List<ScheduleEvent>? exams;
     try {
       exams = await fetchExams(term);
     } catch (error, stackTrace) {
-      if (bindingRevision != _portalBindingRevision) return;
+      if (bindingRevision != _portalBindingRevision) return null;
       AppLog.reportOutcome('degraded', reason: 'exams_fetch_failed');
       _log.warning(
         'exams.fetch_failed_using_existing',
@@ -2404,13 +2526,17 @@ class TimetableController extends ChangeNotifier {
         error: error,
         stackTrace: stackTrace,
       );
-      return;
+      return null;
     }
-    if (bindingRevision != _portalBindingRevision || exams == null) return;
+    if (bindingRevision != _portalBindingRevision || exams == null) return null;
     try {
       await replaceJwxtExams(exams);
+      return [
+        for (final e in _scheduleEvents)
+          if (e.isFromJwxt && e.isExam) e,
+      ];
     } catch (error, stackTrace) {
-      if (bindingRevision != _portalBindingRevision) return;
+      if (bindingRevision != _portalBindingRevision) return null;
       AppLog.reportOutcome('degraded', reason: 'exams_save_failed');
       _log.warning(
         'exams.save_failed_using_existing',
@@ -2418,6 +2544,7 @@ class TimetableController extends ChangeNotifier {
         error: error,
         stackTrace: stackTrace,
       );
+      return null;
     }
   }
 
