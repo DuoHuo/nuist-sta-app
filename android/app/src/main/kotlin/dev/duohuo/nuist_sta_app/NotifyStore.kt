@@ -44,6 +44,8 @@ object NotifyStore {
     fun launchIntent(ctx: Context, route: String = ROUTE_TIMETABLE): Intent =
         Intent(ctx, MainActivity::class.java).apply {
             putExtra(EXTRA_ROUTE, route)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            // 系统入口直接打开课表，避免桌面放大动画与 Flutter 首屏重建同时发生。
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION
         }
 }

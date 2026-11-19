@@ -14,17 +14,37 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private var permissionResult: MethodChannel.Result? = null
     private var permissionRequestInFlight = false
+    private var initialRouteRead = false
+    private var initialRoute: String? = null
+
+    override fun getInitialRoute(): String? {
+        if (initialRouteRead) return initialRoute
+        initialRouteRead = true
+        val route = intent?.getStringExtra(NotifyStore.EXTRA_ROUTE)
+            ?: if (intent?.dataString == NextDayReminder.OPEN_URI) "/apps/timetable?focus=tomorrow" else null
+        // 可信系统入口在 Flutter 第一帧前决定目标；其余 Intent 沿用普通启动。
+        initialRoute = if (route == NotifyStore.ROUTE_TIMETABLE || route == "/apps/timetable?focus=tomorrow") route
+        else super.getInitialRoute()
+        return initialRoute
+    }
 
     override fun onNewIntent(intent: Intent) {
         // Flutter 插件在 super 内分发 Intent；由同一 openRoute 通道处理所有点击，避免双重压栈。
         if (intent.dataString == NextDayReminder.OPEN_URI) {
             intent.putExtra(NotifyStore.EXTRA_ROUTE, "/apps/timetable?focus=tomorrow")
         }
+        // Glance 用内部 URI 区分点击动作；交给提醒插件处理，不能作为 Flutter 深链。
+        if (intent.hasExtra(NotifyStore.EXTRA_ROUTE) && intent.data?.scheme == "glance-action") {
+            intent.data = null
+        }
         super.onNewIntent(intent)
         setIntent(intent)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        if (intent?.hasExtra(NotifyStore.EXTRA_ROUTE) == true && intent?.data?.scheme == "glance-action") {
+            intent.data = null
+        }
         // 旧版 WidgetPin 动态快捷方式覆盖安装后会残留（id=add_timetable_widget，文案「添加小组件」）。
         clearLegacyShortcuts()
         super.configureFlutterEngine(flutterEngine)

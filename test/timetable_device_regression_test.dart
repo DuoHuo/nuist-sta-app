@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -6,6 +7,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:nuist_sta_app/app.dart';
+import 'package:nuist_sta_app/core/theme_mode.dart';
+import 'package:nuist_sta_app/shell/home/home_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
@@ -221,6 +225,176 @@ void main() {
     expect(context.mounted, isTrue);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  for (final theme in [ThemeMode.light, ThemeMode.dark]) {
+    testWidgets('冷小组件初始路由首帧显示课表且不等待平台回执，${theme.name} 保留首页返回栈', (tester) async {
+      AppThemeMode.instance.value = theme;
+      tester.platformDispatcher.defaultRouteNameTestValue = '/apps/timetable';
+      TimetableNotifyBridge.debugIsAndroid = true;
+      const channel = MethodChannel('dev.duohuo.nuist_sta_app/notify_widget');
+      final messenger = tester.binding.defaultBinaryMessenger;
+      final launch = Completer<String?>();
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        return call.method == 'takeLaunchRoute' ? launch.future : null;
+      });
+      addTearDown(() {
+        if (!launch.isCompleted) launch.complete(null);
+        messenger.setMockMethodCallHandler(channel, null);
+        tester.platformDispatcher.clearDefaultRouteNameTestValue();
+        AppThemeMode.instance.value = ThemeMode.system;
+      });
+      load(TimetableParser.parseKbRows([row(1, 2)]).courses);
+
+      await tester.pumpWidget(const NuistApp());
+      expect(launch.isCompleted, isFalse);
+      expect(find.byType(TimetablePage), findsOneWidget);
+      expect(find.byType(HomePage), findsNothing, reason: '首页不能先暴露一帧再跳课表');
+      final router =
+          tester.widget<MaterialApp>(find.byType(MaterialApp)).routerConfig!
+              as GoRouter;
+      expect(router.canPop(), isTrue, reason: '可信初始路由也应保留首页作为返回落点');
+      final route =
+          ModalRoute.of(tester.element(find.byType(TimetablePage)))!
+              as PageRoute;
+      expect(route.transitionDuration, Duration.zero);
+      expect(route.animation!.value, 1);
+      expect(route.popGestureEnabled, isTrue);
+
+      launch.complete('/apps/timetable');
+      await tester.pumpAndSettle();
+      expect(
+        router.routerDelegate.currentConfiguration.matches
+            .whereType<ImperativeRouteMatch>(),
+        hasLength(1),
+        reason: '迟到的平台回执不能重复压入课表',
+      );
+      router.pop();
+      await tester.pumpAndSettle();
+      expect(router.routerDelegate.currentConfiguration.uri.path, '/');
+      await tester.pumpWidget(const SizedBox.shrink());
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+    testWidgets('冷启动取走小组件路由直接显示，${theme.name} 取消返回保留课程且宫格仍有动画', (tester) async {
+      AppThemeMode.instance.value = theme;
+      addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
+      TimetableNotifyBridge.debugIsAndroid = true;
+      const channel = MethodChannel('dev.duohuo.nuist_sta_app/notify_widget');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      var launches = 0;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'takeLaunchRoute') {
+          launches++;
+          return '/apps/timetable';
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      load(TimetableParser.parseKbRows([row(1, 2)]).courses);
+      await tester.pumpWidget(const NuistApp());
+      await tester.pumpAndSettle();
+      expect(launches, 1);
+      final router =
+          tester.widget<MaterialApp>(find.byType(MaterialApp)).routerConfig!
+              as GoRouter;
+      final context = tester.element(find.byType(TimetablePage));
+      final route = ModalRoute.of(context)! as PageRoute;
+      expect(route.transitionDuration, Duration.zero);
+      expect(route.animation!.value, 1);
+      expect(route.popGestureEnabled, isTrue);
+      expect(
+        router.routerDelegate.currentConfiguration.matches
+            .whereType<ImperativeRouteMatch>(),
+        hasLength(1),
+      );
+      Future<void> gesture(String method, [double progress = 0]) async {
+        await messenger.handlePlatformMessage(
+          'flutter/backgesture',
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall(method, {
+              'touchOffset': [5.0, 300.0],
+              'progress': progress,
+              'swipeEdge': 0,
+            }),
+          ),
+          (_) {},
+        );
+        await tester.pump();
+      }
+
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', .4);
+      expect(route.animation!.value, closeTo(.6, .001));
+      await gesture('cancelBackGesture');
+      await tester.pumpAndSettle();
+      expect(route.isCurrent, isTrue);
+      expect(find.byType(TimetablePage), findsOneWidget);
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', .4);
+      await gesture('commitBackGesture');
+      await tester.pumpAndSettle();
+      expect(router.routerDelegate.currentConfiguration.uri.path, '/');
+      await tester.ensureVisible(find.text('课表'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('课表'));
+      await tester.pumpAndSettle();
+      final ordinary =
+          ModalRoute.of(tester.element(find.byType(TimetablePage)))!
+              as PageRoute;
+      expect(ordinary.transitionDuration, isNot(Duration.zero));
+      expect(ordinary.popGestureEnabled, isTrue);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+    testWidgets('小组件直接进入课表不播放入场动画，${theme.name} 仍支持返回取消和完成', (tester) async {
+      AppThemeMode.instance.value = theme;
+      addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
+      load(TimetableParser.parseKbRows([row(1, 2)]).courses);
+      await tester.pumpWidget(const NuistApp());
+      await tester.pumpAndSettle();
+      final messenger = tester.binding.defaultBinaryMessenger;
+      await messenger.handlePlatformMessage(
+        'dev.duohuo.nuist_sta_app/notify_widget',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('openRoute', '/apps/timetable'),
+        ),
+        (_) {},
+      );
+      await tester.pump();
+      await tester.pump();
+      final context = tester.element(find.byType(TimetablePage));
+      final route = ModalRoute.of(context)! as PageRoute;
+      expect(route.transitionDuration, Duration.zero);
+      expect(route.animation!.value, 1);
+      expect(route.popGestureEnabled, isTrue);
+      Future<void> gesture(String method, [double progress = 0]) async {
+        await messenger.handlePlatformMessage(
+          'flutter/backgesture',
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall(method, {
+              'touchOffset': [5.0, 300.0],
+              'progress': progress,
+              'swipeEdge': 0,
+            }),
+          ),
+          (_) {},
+        );
+        await tester.pump();
+      }
+
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', 0.4);
+      expect(route.animation!.value, closeTo(0.6, 0.001));
+      await gesture('cancelBackGesture');
+      await tester.pumpAndSettle();
+      expect(route.isCurrent, isTrue);
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', 0.4);
+      await gesture('commitBackGesture');
+      await tester.pumpAndSettle();
+      expect(find.byType(TimetablePage), findsNothing);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+  }
 
   final samplePath =
       Platform.environment['TIMETABLE_REAL_SAMPLE'] ??

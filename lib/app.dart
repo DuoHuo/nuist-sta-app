@@ -37,7 +37,11 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   static final _log = AppLog.logger('app.lifecycle');
   late final _updates = widget.updates ?? UpdateController.instance;
   late final _updateBridge = widget.updateBridge ?? AppUpdateBridge.instance;
-  late final GoRouter _router = buildRouter(updateController: _updates);
+  late final String? _systemTimetableRoute = _initialTimetableRoute();
+  late final GoRouter _router = buildRouter(
+    updateController: _updates,
+    ignorePlatformInitialRoute: _systemTimetableRoute != null,
+  );
   bool _openingUpdate = false;
 
   bool get _listenForUpdates =>
@@ -54,9 +58,27 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   StreamSubscription<List<ConnectivityResult>>? _networkSubscription;
   String? _network;
 
+  String? _initialTimetableRoute() {
+    final route = WidgetsBinding.instance.platformDispatcher.defaultRouteName;
+    final uri = Uri.tryParse(route);
+    return uri != null &&
+            !uri.hasScheme &&
+            !uri.hasAuthority &&
+            uri.path == '/apps/timetable'
+        ? route
+        : null;
+  }
+
   @override
   void initState() {
     super.initState();
+    if (_systemTimetableRoute case final route?) {
+      // Navigator挂载前建立首页匹配，push才能保留返回栈，不先绘制首页。
+      _router.routerDelegate.setNewRoutePath(
+        _router.configuration.findMatch(Uri.parse('/')),
+      );
+      _router.push(route, extra: timetableDirectLaunch);
+    }
     // 校园地图等通过 core 接口读本周课程，由壳把课表的实现登记进去。
     WeeklyClasses.source ??= const TimetableWeeklyClasses();
     AppThemeMode.instance.load();
@@ -141,11 +163,11 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     if (_router.routerDelegate.currentConfiguration.uri.path ==
         '/apps/timetable') {
       if (_router.routerDelegate.currentConfiguration.uri.toString() != route) {
-        _router.replace(route);
+        _router.replace(route, extra: timetableDirectLaunch);
       }
       return;
     }
-    _router.push(route);
+    _router.push(route, extra: timetableDirectLaunch);
   }
 
   /// 冷启动等待任务与导航器就绪，通知和页面入口共用更新详情。
