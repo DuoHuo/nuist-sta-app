@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:asn1lib/asn1lib.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/aia_trust.dart';
 import 'package:nuist_sta_app/core/auth/portal_http.dart';
@@ -31,6 +32,78 @@ class LocalConnector implements VpnConnector {
     if (fail) throw const SocketException('模拟 VPN 连接失败');
     return Socket.startConnect(InternetAddress.loopbackIPv4, uri.port);
   }
+}
+
+class _SyntheticAiaCertificate implements X509Certificate {
+  _SyntheticAiaCertificate(this.der);
+  @override
+  final Uint8List der;
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _RepairCounterTrust extends AiaTrust {
+  int repairs = 0;
+  @override
+  Future<bool> tryRepair(
+    String host, {
+    FutureOr<HttpClient> Function()? createFetchClient,
+  }) async {
+    repairs++;
+    return true;
+  }
+}
+
+Uint8List _aiaCertificate(
+  Uint8List original, {
+  String? issuerUrl,
+  DateTime? expires,
+}) {
+  final certificate = ASN1Parser(original).nextObject() as ASN1Sequence;
+  final parsed = certificate.elements.first as ASN1Sequence;
+  final tbs = ASN1Sequence();
+  for (final element in parsed.elements) {
+    tbs.add(element);
+  }
+  final offset = tbs.elements.first.tag == 0xa0 ? 1 : 0;
+  // 合成非自签证书的名称，仅供缓存/拒绝路径测试，不用于建立真实信任。
+  tbs.elements[offset + 4] = ASN1Sequence()
+    ..add(
+      ASN1Set()..add(
+        ASN1Sequence()
+          ..add(ASN1ObjectIdentifier.fromComponentString('2.5.4.3'))
+          ..add(ASN1UTF8String('Synthetic Intermediate')),
+      ),
+    );
+  if (expires != null) {
+    tbs.elements[offset + 3] = ASN1Sequence()
+      ..add(ASN1UtcTime(DateTime.utc(2020)))
+      ..add(ASN1UtcTime(expires));
+  }
+  if (issuerUrl != null) {
+    final extension = ASN1Sequence()
+      ..add(ASN1ObjectIdentifier.fromComponentString('1.3.6.1.5.5.7.1.1'))
+      ..add(
+        ASN1OctetString(
+          (ASN1Sequence()..add(
+                ASN1Sequence()
+                  ..add(
+                    ASN1ObjectIdentifier.fromComponentString(
+                      '1.3.6.1.5.5.7.48.2',
+                    ),
+                  )
+                  ..add(ASN1OctetString(ascii.encode(issuerUrl), tag: 0x86)),
+              ))
+              .encodedBytes,
+        ),
+      );
+    tbs.add(ASN1Sequence(tag: 0xa3)..add(ASN1Sequence()..add(extension)));
+  }
+  return (ASN1Sequence()
+        ..add(tbs)
+        ..add(certificate.elements[1])
+        ..add(certificate.elements[2]))
+      .encodedBytes;
 }
 
 class LocalSessionConnector extends LocalConnector
@@ -120,6 +193,198 @@ List<int> pem(String label, List<int> bytes) => utf8.encode(
 );
 
 void main() {
+  group('AIA 缓存与预补链', () {
+    test('补链成功仍握手失败时同一请求最多重试一次，不重放更多POST', () async {
+      final trust = _RepairCounterTrust();
+      var requests = 0;
+      final dio = Dio()
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              requests++;
+              handler.reject(
+                DioException(
+                  requestOptions: options,
+                  error: const HandshakeException('合成不完整链仍验证失败'),
+                  type: DioExceptionType.connectionError,
+                ),
+              );
+            },
+          ),
+        );
+      try {
+        await expectLater(
+          PortalHttp(
+            dio,
+            trust: trust,
+          ).post(Uri.parse('https://synthetic.test/'), data: 'read-only-query'),
+          throwsA(isA<PortalNetworkError>()),
+        );
+        expect(requests, 2);
+        expect(trust.repairs, 1);
+      } finally {
+        dio.close(force: true);
+      }
+    });
+    test('坏AIA长度字段安全拒绝，合法URI仍可解析', () {
+      final prefix = [
+        0x06,
+        0x08,
+        0x2b,
+        0x06,
+        0x01,
+        0x05,
+        0x05,
+        0x07,
+        0x30,
+        0x02,
+        0x86,
+      ];
+      for (final suffix in [
+        [0x84],
+        [0x80],
+        [0x85, 1, 2, 3, 4, 5],
+        [0x82, 0xff],
+      ]) {
+        expect(
+          AiaTrust.caIssuersUrlForTesting(
+            Uint8List.fromList([...prefix, ...suffix]),
+          ),
+          isNull,
+        );
+      }
+      final uri = ascii.encode('http://127.0.0.1/issuer.der');
+      expect(
+        AiaTrust.caIssuersUrlForTesting(
+          Uint8List.fromList([...prefix, uri.length, ...uri]),
+        ),
+        'http://127.0.0.1/issuer.der',
+      );
+    });
+
+    test('同主机并发补链合流，同叶子新握手失败可重新取证书，过期issuer不加入信任', () async {
+      final original = await File('test/fixtures/vpn/certificate.der')
+          .readAsBytes();
+      final issuer = _aiaCertificate(original, expires: DateTime.utc(2021));
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      var requests = 0;
+      final gate = Completer<void>();
+      server.listen((request) async {
+        requests++;
+        await gate.future;
+        request.response.add(issuer);
+        await request.response.close();
+      });
+      final leaf = _SyntheticAiaCertificate(
+        _aiaCertificate(
+          original,
+          issuerUrl: 'http://127.0.0.1:${server.port}/issuer.der',
+        ),
+      );
+      final trust = AiaTrust(withTrustedRoots: false);
+      try {
+        expect(trust.onBadCertificate(leaf, 'synthetic.test', 443), isFalse);
+        final first = trust.tryRepair(
+          'synthetic.test',
+          createFetchClient: () => HttpClient()..findProxy = (_) => 'DIRECT',
+        );
+        final second = trust.tryRepair('synthetic.test');
+        expect(second, same(first));
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        gate.complete();
+        expect(await first, isFalse, reason: '过期证书不可加入信任');
+        expect(requests, 1);
+        trust.onBadCertificate(leaf, 'synthetic.test', 443);
+        expect(
+          await trust.tryRepair(
+            'synthetic.test',
+            createFetchClient: () => HttpClient()..findProxy = (_) => 'DIRECT',
+          ),
+          isFalse,
+        );
+        expect(requests, 2, reason: '下一次同叶子失败允许重新下载');
+      } finally {
+        if (!gate.isCompleted) gate.complete();
+        await server.close(force: true);
+      }
+    });
+
+    test('缓存证书到期重建上下文，根证书缓存不导入；预探测不发送HTTP正文', () async {
+      final original = await File('test/fixtures/vpn/certificate.der')
+          .readAsBytes();
+      final key = await File('test/fixtures/vpn/private_key.der').readAsBytes();
+      final directory = await Directory.systemTemp.createTemp('aia_test');
+      var now = DateTime.utc(2026, 11, 17);
+      final intermediate = _aiaCertificate(
+        original,
+        expires: DateTime.utc(2027),
+      );
+      await File('${directory.path}/issuer.der').writeAsBytes(intermediate);
+      final trust = AiaTrust(
+        withTrustedRoots: false,
+        now: () => now,
+        resolveCacheDir: () async => directory,
+      );
+      final before = trust.context;
+      await trust.preload();
+      expect(trust.context, same(before));
+      now = DateTime.utc(2028);
+      await trust.preload();
+      expect(trust.context, isNot(same(before)));
+      expect(await File('${directory.path}/issuer.der').exists(), isFalse);
+      await File('${directory.path}/root.der').writeAsBytes(original);
+      final cold = AiaTrust(
+        withTrustedRoots: false,
+        resolveCacheDir: () async => directory,
+      );
+      await cold.preload();
+      expect(await File('${directory.path}/root.der').exists(), isFalse);
+      final https = await HttpServer.bindSecure(
+        InternetAddress.loopbackIPv4,
+        0,
+        SecurityContext()
+          ..useCertificateChainBytes(pem('CERTIFICATE', original))
+          ..usePrivateKeyBytes(pem('PRIVATE KEY', key)),
+      );
+      var requests = 0;
+      https.listen((request) async {
+        requests++;
+        await request.response.close();
+      }, onError: (_) {});
+      try {
+        final probe = AiaTrust(withTrustedRoots: false);
+        expect(
+          await probe.prepareHost(
+            Uri.parse('https://127.0.0.1:${https.port}/'),
+          ),
+          isFalse,
+        );
+        expect(requests, 0, reason: '预探测不能发送业务HTTP或凭据');
+        final localConnector = LocalConnector();
+        final routed = VpnHttpClientAdapter(
+          connector: localConnector,
+          detectCampusNetwork: () async => CampusNetworkState.offCampus,
+          securityContextProvider: () => probe.context,
+          createHttpClient: probe.createHttpClient,
+          onBadCertificate: probe.onBadCertificate,
+        );
+        try {
+          await probe.prepareHost(
+            Uri.parse('https://campus.test:${https.port}/'),
+            createProbeClient: routed.createPreparationClient,
+            createFetchClient: routed.createPreparationClient,
+          );
+          expect(localConnector.connections, 1, reason: '未知/校外预补仍走原VPN连接工厂');
+          expect(requests, 0);
+        } finally {
+          routed.close(force: true);
+        }
+      } finally {
+        await https.close(force: true);
+        await directory.delete(recursive: true);
+      }
+    });
+  });
   test('原生错误保留阶段、系统类别和底层原因且兼容 SocketException', () {
     final error = VpnNativeException.fromResponse({
       'ok': false,

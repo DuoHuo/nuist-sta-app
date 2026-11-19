@@ -524,6 +524,7 @@ class PortalSession {
               },
             ),
             securityContext: trust.context,
+            securityContextProvider: () => trust.context,
             onBadCertificate: trust.onBadCertificate,
           )
           ..interceptors.add(

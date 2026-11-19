@@ -35,6 +35,7 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
     this.detectCampusNetwork,
     this.forceVpn = false,
     this.securityContext,
+    this.securityContextProvider,
     this.onBadCertificate,
     HttpClient Function()? createHttpClient,
   }) : _createHttpClient = createHttpClient ?? HttpClient.new;
@@ -43,6 +44,9 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
   final CampusNetworkDetector? detectCampusNetwork;
   final bool forceVpn;
   final SecurityContext? securityContext;
+
+  /// 证书缓存到期重建时取得最新上下文，不捕获过期对象。
+  final SecurityContext Function()? securityContextProvider;
   final bool Function(X509Certificate, String, int)? onBadCertificate;
   final HttpClient Function() _createHttpClient;
   IOHttpClientAdapter? _direct;
@@ -69,6 +73,10 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
     }
     return client;
   }
+
+  /// TLS 预补链沿用与普通请求相同的选路策略，不试探业务接口。
+  Future<HttpClient> createPreparationClient() async =>
+      createRoutedClient(useVpn: forceVpn || await _selectRoute());
 
   IOHttpClientAdapter _adapter(bool vpn) {
     if (!vpn) {
@@ -110,7 +118,7 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
         final secure = await SecureSocket.secure(
           raw,
           host: uri.host,
-          context: securityContext,
+          context: securityContextProvider?.call() ?? securityContext,
           onBadCertificate: (certificate) =>
               onBadCertificate?.call(certificate, uri.host, uri.port) ?? false,
         );

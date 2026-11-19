@@ -5,6 +5,7 @@ import 'package:dio/io.dart';
 
 import '../logging/http_diagnostics.dart';
 import '../logging/diagnostic_error.dart';
+import '../config/campus_config.dart';
 import '../network/vpn_http_adapter.dart';
 import '../network/vpn_log.dart';
 import 'aia_trust.dart';
@@ -98,13 +99,16 @@ class PortalHttp {
     Map<String, String>? headers,
     ResponseType responseType = ResponseType.plain,
     CancelToken? cancelToken,
-  }) => send(
-    () => dio.getUri<dynamic>(
-      uri,
-      options: options(headers: headers, responseType: responseType),
-      cancelToken: cancelToken,
-    ),
-  );
+  }) async {
+    if (uri.host == CampusHosts.icard) await _prepareTrust(uri);
+    return send(
+      () => dio.getUri<dynamic>(
+        uri,
+        options: options(headers: headers, responseType: responseType),
+        cancelToken: cancelToken,
+      ),
+    );
+  }
 
   Future<Response<dynamic>> post(
     Uri uri, {
@@ -112,17 +116,20 @@ class PortalHttp {
     Map<String, String>? headers,
     String? contentType,
     ResponseType responseType = ResponseType.plain,
-  }) => send(
-    () => dio.postUri<dynamic>(
-      uri,
-      data: data,
-      options: options(
-        headers: headers,
-        contentType: contentType,
-        responseType: responseType,
+  }) async {
+    if (uri.host == CampusHosts.icard) await _prepareTrust(uri);
+    return send(
+      () => dio.postUri<dynamic>(
+        uri,
+        data: data,
+        options: options(
+          headers: headers,
+          contentType: contentType,
+          responseType: responseType,
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   /// 把传输异常归为 [PortalNetworkError]，HTTP 状态与转换错误保留为诊断异常。
   ///
@@ -130,7 +137,45 @@ class PortalHttp {
   /// 凭据失效，否则用户在地铁里打开 APP 就会被告知需要重新绑定。
   Future<Response<dynamic>> send(
     Future<Response<dynamic>> Function() request,
-  ) async {
+  ) => _send(request, repairedChain: false);
+
+  Future<void> _prepareTrust(Uri uri) async {
+    final trust = this.trust;
+    if (trust == null) return;
+    final previous = trust.context;
+    await trust.preload();
+    final adapter = unwrapHttpDiagnostics(dio.httpClientAdapter);
+    // 预补沿用适配器的校园网络检测和强制选路，不另开网络出口。
+    final repaired = adapter is VpnHttpClientAdapter
+        ? await trust.prepareHost(
+            uri,
+            createProbeClient: adapter.createPreparationClient,
+            createFetchClient: adapter.createPreparationClient,
+          )
+        : adapter is IOHttpClientAdapter
+        ? await trust.prepareHost(uri)
+        : false;
+    if (repaired || !identical(previous, trust.context)) _resetTrustClients();
+  }
+
+  void _resetTrustClients() {
+    final trust = this.trust!;
+    final adapter = unwrapHttpDiagnostics(dio.httpClientAdapter);
+    if (adapter is VpnHttpClientAdapter) {
+      adapter.resetClients();
+    } else {
+      adapter.close(force: true);
+      dio.httpClientAdapter = IOHttpClientAdapter(
+        createHttpClient: trust.createHttpClient,
+      );
+    }
+    installHttpDiagnostics(dio);
+  }
+
+  Future<Response<dynamic>> _send(
+    Future<Response<dynamic>> Function() request, {
+    required bool repairedChain,
+  }) async {
     try {
       final response = await request();
       final location = response.headers.value('location');
@@ -163,7 +208,9 @@ class PortalHttp {
           },
         );
       }
-      if (await _repairedChain(e)) return send(request);
+      if (!repairedChain && await _repairedChain(e)) {
+        return _send(request, repairedChain: true);
+      }
       // 自定义连接工厂的 TLS 异常可能被 Dio 归为 unknown，仍属于网络错误。
       final context = <String, Object?>{
         'endpoint': 'portal.http',
@@ -260,15 +307,7 @@ class PortalHttp {
       return false;
     }
     // SecurityContext 变了，旧 HttpClient 的连接池还带着旧上下文，必须换新。
-    if (adapter is VpnHttpClientAdapter) {
-      adapter.resetClients();
-    } else {
-      adapter.close(force: true);
-      dio.httpClientAdapter = IOHttpClientAdapter(
-        createHttpClient: trust.createHttpClient,
-      );
-    }
-    installHttpDiagnostics(dio);
+    _resetTrustClients();
     portalLog('certificate.repaired_retry', fields: {'host': host});
     return true;
   }

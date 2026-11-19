@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:asn1lib/asn1lib.dart';
 import 'package:pointycastle/digests/sha256.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../logging/app_log.dart';
 import 'portal_http.dart';
@@ -24,10 +25,17 @@ import 'portal_http.dart';
 /// 首次握手失败 + 一次网络往返。缓存文件出于同样的理由不需要防篡改。
 class AiaTrust {
   static final _log = AppLog.logger('core.auth.certificate');
-  AiaTrust({bool withTrustedRoots = true, this.resolveCacheDir})
-    : context = SecurityContext(withTrustedRoots: withTrustedRoots);
+  AiaTrust({
+    bool withTrustedRoots = true,
+    this.resolveCacheDir,
+    DateTime Function()? now,
+  }) : _withTrustedRoots = withTrustedRoots,
+       _now = now ?? DateTime.now,
+       context = SecurityContext(withTrustedRoots: withTrustedRoots);
 
-  final SecurityContext context;
+  SecurityContext context;
+  final bool _withTrustedRoots;
+  final DateTime Function() _now;
 
   /// 取中间证书的磁盘缓存目录；不给或返回 null 表示不缓存。做成回调是因为
   /// 目录要问平台（path_provider），而本类要保持纯 Dart 可在桌面直接跑。
@@ -51,27 +59,100 @@ class AiaTrust {
   /// 最近一次握手失败时各主机收到的叶子证书。
   final Map<String, Uint8List> _badLeaf = {};
 
-  /// 已经尝试过补链的主机，避免同一主机反复拉取。
-  final Set<String> _attempted = {};
+  final Map<String, String> _lastLeafFingerprint = {};
+  final Map<String, Future<bool>> _repairs = {};
+  final Map<String, Uint8List> _memoryIssuers = {};
+  DateTime? _cacheValidUntil;
+  final Map<String, Uint8List> _issuersByUrl = {};
+  final Map<String, DateTime> _preparedHosts = {};
+  final Map<String, Future<bool>> _preparations = {};
+
+  /// 一卡通请求前只探测 TLS 叶子，不发送业务 HTTP、Cookie，也不放行坏证书。
+  Future<bool> prepareHost(
+    Uri uri, {
+    FutureOr<HttpClient> Function()? createProbeClient,
+    FutureOr<HttpClient> Function()? createFetchClient,
+  }) {
+    final key = '${uri.host}:${uri.port}';
+    final until = _preparedHosts[key];
+    if (until != null && until.isAfter(_now())) return Future.value(false);
+    return _preparations[key] ??=
+        _prepareHost(
+          uri,
+          createProbeClient: createProbeClient,
+          createFetchClient: createFetchClient,
+        ).whenComplete(() {
+          _preparations.remove(key);
+        });
+  }
+
+  Future<bool> _prepareHost(
+    Uri uri, {
+    FutureOr<HttpClient> Function()? createProbeClient,
+    FutureOr<HttpClient> Function()? createFetchClient,
+  }) async {
+    await preload();
+    final HttpClient client;
+    try {
+      client = await (createProbeClient?.call() ?? createHttpClient());
+    } catch (_) {
+      // 选路/原生准备失败仍由真实业务请求报告，预补不能取代业务诊断。
+      return false;
+    }
+    client.badCertificateCallback = onBadCertificate;
+    client.connectionTimeout = _fetchTimeout;
+    var repaired = false;
+    try {
+      // getUrl 只建立连接；不 close/send，不发业务 HTTP 或认证信息。
+      final request = await client.getUrl(uri).timeout(_fetchTimeout);
+      request.abort();
+    } catch (_) {
+      if (_badLeaf.containsKey(uri.host)) {
+        repaired = await tryRepair(
+          uri.host,
+          createFetchClient: createFetchClient,
+        );
+      }
+    } finally {
+      client.close(force: true);
+    }
+    _preparedHosts['${uri.host}:${uri.port}'] =
+        _cacheValidUntil ?? _now().add(const Duration(minutes: 5));
+    return repaired;
+  }
 
   static const _fetchTimeout = Duration(seconds: 10);
   static const _maxDepth = 3;
 
   /// 把缓存目录里的中间证书全部加进 [context]。应在首个 TLS 请求前调用；
   /// 多次调用只生效一次。
-  Future<void> preload() => _preloading ??= _preload().timeout(
-    const Duration(seconds: 5),
-    onTimeout: () {
-      _log.warning(
-        'certificate.preload_timeout',
-        fields: {
-          'stage': 'certificate.preload',
-          'timeout_ms': 5000,
-          'outcome': 'cache_fallback',
-        },
-      );
-    },
-  );
+  Future<void> preload() {
+    if (_cacheValidUntil case final until? when !until.isAfter(_now())) {
+      _memoryIssuers.removeWhere((_, der) => !_isCurrentlyValid(der));
+      _issuersByUrl.removeWhere((_, der) => !_isCurrentlyValid(der));
+      context = SecurityContext(withTrustedRoots: _withTrustedRoots);
+      _cacheValidUntil = null;
+      for (final der in _memoryIssuers.values.toList()) {
+        context.setTrustedCertificatesBytes(_toPem(der));
+        _rememberIssuer(der);
+      }
+      _preloading = null;
+    }
+    return _preloading ??= _preload().timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        _log.warning(
+          'certificate.preload_timeout',
+          fields: {
+            'stage': 'certificate.preload',
+            'timeout_ms': 5000,
+            'outcome': 'cache_fallback',
+          },
+        );
+      },
+    );
+  }
+
   Future<void>? _preloading;
 
   Future<void> _preload() async {
@@ -83,12 +164,13 @@ class AiaTrust {
         if (entry is! File || !entry.path.endsWith('.der')) continue;
         final der = await entry.readAsBytes();
         // 过期或根证书都是无效缓存，顺手清掉，免得越积越多。
-        if (_isSelfSigned(der) || _isExpired(der)) {
+        if (_isSelfSigned(der) || !_isCurrentlyValid(der)) {
           await entry.delete();
           continue;
         }
         try {
           context.setTrustedCertificatesBytes(_toPem(der));
+          _rememberIssuer(der);
           portalLog('certificate.cache_loaded');
         } catch (error, stackTrace) {
           _log.warning(
@@ -114,6 +196,7 @@ class AiaTrust {
   }
 
   Future<void> _cache(Uint8List der) async {
+    _rememberIssuer(der);
     final dir = await _dir();
     if (dir == null) return;
     try {
@@ -139,6 +222,15 @@ class AiaTrust {
 
   /// 记录需要补链的证书，始终拒绝本次握手；也供 VPN 内层 TLS 使用。
   bool onBadCertificate(X509Certificate cert, String host, int port) {
+    final fingerprint = _fingerprint(cert.der);
+    if (_lastLeafFingerprint[host] == fingerprint &&
+        !_repairs.containsKey(host)) {
+      // 有效缓存仍未能补完整链：本次新失败允许失效重取，不能终身跳过主机。
+      final issuer = _caIssuersUrl(cert.der);
+      if (issuer != null) _issuersByUrl.remove(issuer);
+    }
+    _preparedHosts.removeWhere((key, _) => key.startsWith('$host:'));
+    _lastLeafFingerprint[host] = fingerprint;
     _badLeaf[host] = Uint8List.fromList(cert.der);
     return false;
   }
@@ -148,18 +240,16 @@ class AiaTrust {
   /// 为 [host] 补链。返回 true 表示往 [context] 里加了新证书，值得重试。
   Future<bool> tryRepair(
     String host, {
-    HttpClient Function()? createFetchClient,
+    FutureOr<HttpClient> Function()? createFetchClient,
+  }) => _repairs[host] ??= _repair(host, createFetchClient: createFetchClient)
+      .whenComplete(() {
+        _repairs.remove(host);
+      });
+
+  Future<bool> _repair(
+    String host, {
+    FutureOr<HttpClient> Function()? createFetchClient,
   }) async {
-    if (!_attempted.add(host)) {
-      _log.debug(
-        'repair.skipped',
-        fields: {
-          'host': host,
-          'reason_code': 'certificate_repair_already_attempted',
-        },
-      );
-      return false;
-    }
     final leaf = _badLeaf.remove(host);
     if (leaf == null) {
       _log.debug(
@@ -170,13 +260,18 @@ class AiaTrust {
     }
 
     var added = 0;
+    await preload();
     var current = leaf;
+    final visited = <String>{};
     for (var depth = 0; depth < _maxDepth; depth++) {
       final url = _caIssuersUrl(current);
-      if (url == null) break;
+      if (url == null || !visited.add(url)) break;
       final Uint8List issuer;
       try {
-        issuer = await _fetch(url, createFetchClient: createFetchClient);
+        final cached = _issuersByUrl[url];
+        issuer = cached != null && _isCurrentlyValid(cached)
+            ? cached
+            : await _fetch(url, createFetchClient: createFetchClient);
       } catch (error, stackTrace) {
         _log.warning(
           'certificate.fetch_failed',
@@ -190,12 +285,13 @@ class AiaTrust {
         );
         break;
       }
-      if (_isSelfSigned(issuer)) {
+      if (_isSelfSigned(issuer) || !_isCurrentlyValid(issuer)) {
         // 根证书必须来自系统信任库，网上拉来的一律不加。
         break;
       }
       try {
         context.setTrustedCertificatesBytes(_toPem(issuer));
+        _issuersByUrl[url] = issuer;
         added++;
         portalLog('certificate.chain_extended');
       } catch (error, stackTrace) {
@@ -252,6 +348,7 @@ class AiaTrust {
       p += 2;
       if (len & 0x80 != 0) {
         final n = len & 0x7F;
+        if (n == 0 || n > 4 || p + n > der.length) continue;
         len = 0;
         for (var k = 0; k < n; k++) {
           len = (len << 8) | der[p + k];
@@ -289,21 +386,43 @@ class AiaTrust {
     }
   }
 
-  /// notAfter 已过则为 true；解析不了按未过期处理，交给 TLS 校验去拒绝。
-  static bool _isExpired(Uint8List der) {
+  bool _isCurrentlyValid(Uint8List der) {
+    final validity = _validity(der);
+    return validity != null &&
+        !validity.start.isAfter(_now()) &&
+        validity.end.isAfter(_now());
+  }
+
+  void _rememberIssuer(Uint8List der) {
+    _memoryIssuers[_fingerprint(der)] = der;
+    final expires = _expiresAt(der);
+    if (expires != null &&
+        (_cacheValidUntil == null || expires.isBefore(_cacheValidUntil!))) {
+      _cacheValidUntil = expires;
+    }
+  }
+
+  static ({DateTime start, DateTime end})? _validity(Uint8List der) {
     try {
       final tbs = _tbs(der);
       final validity = tbs.elements[_tbsOffset(tbs) + 3] as ASN1Sequence;
-      final notAfter = switch (validity.elements[1]) {
+      DateTime? time(ASN1Object element) => switch (element) {
         ASN1UtcTime t => t.dateTimeValue,
         ASN1GeneralizedTime t => t.dateTimeValue,
         _ => null,
       };
-      return notAfter != null && DateTime.now().isAfter(notAfter);
+      final start = time(validity.elements[0]);
+      final end = time(validity.elements[1]);
+      return start == null || end == null ? null : (start: start, end: end);
     } catch (_) {
-      return false;
+      return null;
     }
   }
+
+  static DateTime? _expiresAt(Uint8List der) => _validity(der)?.end;
+
+  @visibleForTesting
+  static String? caIssuersUrlForTesting(Uint8List der) => _caIssuersUrl(der);
 
   static ASN1Sequence _tbs(Uint8List der) {
     final cert = ASN1Parser(der).nextObject() as ASN1Sequence;
@@ -339,9 +458,9 @@ class AiaTrust {
   /// 拉取证书并统一成 DER（AIA 地址给的可能是 DER 也可能是 PEM）。
   static Future<Uint8List> _fetch(
     String url, {
-    HttpClient Function()? createFetchClient,
+    FutureOr<HttpClient> Function()? createFetchClient,
   }) async {
-    final client = (createFetchClient?.call() ?? HttpClient())
+    final client = (await (createFetchClient?.call() ?? HttpClient()))
       ..connectionTimeout = _fetchTimeout
       ..maxConnectionsPerHost = 2;
     final watch = Stopwatch()..start();

@@ -20,6 +20,7 @@ Dio vpnDio({
   VpnConnector? connector,
   CampusNetworkDetector? detectCampusNetwork,
   SecurityContext? securityContext,
+  SecurityContext Function()? securityContextProvider,
   bool Function(X509Certificate, String, int)? onBadCertificate,
 }) {
   final dio = Dio(options);
@@ -32,9 +33,10 @@ Dio vpnDio({
             await VpnGateway.campusNetworkDetector?.call() ??
             CampusNetworkState.unknown,
     securityContext: securityContext,
+    securityContextProvider: securityContextProvider,
     onBadCertificate: onBadCertificate,
     createHttpClient: () =>
-        HttpClient(context: securityContext)
+        HttpClient(context: securityContextProvider?.call() ?? securityContext)
           ..badCertificateCallback = onBadCertificate,
   );
   installHttpDiagnostics(dio);
