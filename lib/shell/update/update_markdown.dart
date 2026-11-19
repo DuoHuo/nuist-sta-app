@@ -3,8 +3,10 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
+import '../../core/network/owned_api_client.dart';
 import '../announcement/announcement_models.dart';
 import '../announcement/announcement_web_page.dart';
+import '../profile/about/contributor_avatar.dart';
 
 /// 更新日志的 Markdown 正文；独立于下载进度，只在正文或主题变化时重建。
 class UpdateChangelog extends StatelessWidget {
@@ -69,8 +71,28 @@ class UpdateChangelog extends StatelessWidget {
         ),
         textScaler: MediaQuery.textScalerOf(context),
       ),
-      // 日志图片只展示替代文本，不因阅读更新日志请求新的网络出口。
-      imageBuilder: (_, _, alt) => Text(alt ?? '', style: body),
+      // 只加载自有服务下发的头像图片；其他图片只展示替代文本，不请求新的网络出口。
+      imageBuilder: (uri, _, alt) {
+        final label = Text(alt ?? '', style: body);
+        if (!isOwnedApiUri(uri)) return label;
+        final initial = (alt ?? '').isEmpty
+            ? '?'
+            : alt!.substring(0, 1).toUpperCase();
+        return Semantics(
+          label: alt,
+          child: ClipOval(
+            child: SizedBox.square(
+              dimension: 28,
+              child: ContributorAvatar(
+                url: uri.toString(),
+                fallback: Center(
+                  child: Text(initial, style: body.copyWith(fontSize: 13)),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
       onTapLink: (text, href, title) {
         final link = AnnouncementLink.tryParse({
           'label': title.isNotEmpty ? title : text,
