@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/logging/app_log.dart';
@@ -20,12 +21,8 @@ class CampusMapCache {
   Future<CampusMapSnapshot?> read(String key) => _log.inSpan(() async {
     try {
       final file = await _file(key);
-      if (!file.existsSync()) return null;
-      final raw = jsonDecode(await file.readAsString());
-      if (raw is! Map || raw['version'] != _version) return null;
-      final data = raw['data'];
-      if (data is! Map) return null;
-      return CampusMapSnapshot.fromJson(Map<String, dynamic>.from(data));
+      if (!await file.exists()) return null;
+      return await compute(_decodeSnapshot, await file.readAsString());
     } catch (error, stackTrace) {
       _log.warning(
         'snapshot.read_failed',
@@ -40,13 +37,9 @@ class CampusMapCache {
       _log.inSpan(() async {
         try {
           final file = await _file(key);
-          await file.writeAsString(
-            jsonEncode({
-              'version': _version,
-              'cachedAt': DateTime.now().toIso8601String(),
-              'data': snapshot.toJson(),
-            }),
-          );
+          // 几何可达数 MB，模型遍历和 JSON 编码都在后台完成，不阻塞地图首帧。
+          final raw = await compute(_encodeSnapshot, snapshot);
+          await file.writeAsString(raw);
         } catch (error, stackTrace) {
           _log.warning(
             'snapshot.write_failed',
@@ -57,3 +50,17 @@ class CampusMapCache {
         }
       });
 }
+
+CampusMapSnapshot? _decodeSnapshot(String contents) {
+  final raw = jsonDecode(contents);
+  if (raw is! Map || raw['version'] != CampusMapCache._version) return null;
+  final data = raw['data'];
+  if (data is! Map) return null;
+  return CampusMapSnapshot.fromJson(Map<String, dynamic>.from(data));
+}
+
+String _encodeSnapshot(CampusMapSnapshot snapshot) => jsonEncode({
+  'version': CampusMapCache._version,
+  'cachedAt': DateTime.now().toIso8601String(),
+  'data': snapshot.toJson(),
+});

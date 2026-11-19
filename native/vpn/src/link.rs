@@ -13,6 +13,11 @@ pub struct IpLink {
 }
 
 impl IpLink {
+    /// 可接收的数据包数量，用于在读取 TLS 明文前施加背压。
+    pub fn receive_capacity(&self) -> usize {
+        CAPACITY.saturating_sub(self.incoming.len())
+    }
+
     pub fn inject(&mut self, packet: Vec<u8>) {
         // 接收拥塞时丢包，交给 TCP 重传，避免无限占用内存。
         if self.incoming.len() < CAPACITY {

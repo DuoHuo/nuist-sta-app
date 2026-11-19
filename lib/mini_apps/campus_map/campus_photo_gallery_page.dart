@@ -285,33 +285,51 @@ class _PhotoImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MapPalette.of(context);
-    return Image.network(
-      photo.url,
-      fit: fit,
-      width: double.infinity,
-      height: double.infinity,
-      loadingBuilder: (context, child, progress) => progress == null
-          ? child
-          : ColoredBox(
-              color: colors.field,
-              child: const Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        ImageProvider provider = NetworkImage(photo.url);
+        if (fit == BoxFit.cover &&
+            constraints.hasBoundedWidth &&
+            constraints.hasBoundedHeight) {
+          // 缩略图按物理展示尺寸解码，避免网格中的每张相机原图占用数十 MB。
+          // 留两倍余量给 cover 裁切，大图浏览继续保留原始分辨率用于缩放。
+          final ratio = MediaQuery.devicePixelRatioOf(context);
+          provider = ResizeImage(
+            provider,
+            width: (constraints.maxWidth * ratio * 2).ceil().clamp(1, 1024),
+            height: (constraints.maxHeight * ratio * 2).ceil().clamp(1, 1024),
+            policy: ResizeImagePolicy.fit,
+          );
+        }
+        return Image(
+          image: provider,
+          fit: fit,
+          width: double.infinity,
+          height: double.infinity,
+          loadingBuilder: (context, child, progress) => progress == null
+              ? child
+              : ColoredBox(
+                  color: colors.field,
+                  child: const Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
                 ),
+          errorBuilder: (context, error, stack) => ColoredBox(
+            color: colors.field,
+            child: Center(
+              child: Icon(
+                Icons.broken_image_outlined,
+                color: colors.secondary,
+                size: 26,
               ),
             ),
-      errorBuilder: (context, error, stack) => ColoredBox(
-        color: colors.field,
-        child: Center(
-          child: Icon(
-            Icons.broken_image_outlined,
-            color: colors.secondary,
-            size: 26,
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

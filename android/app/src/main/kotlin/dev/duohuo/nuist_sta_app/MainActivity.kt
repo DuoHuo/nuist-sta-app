@@ -96,21 +96,26 @@ class MainActivity : FlutterActivity() {
                         if (args == null) {
                             result.error("arguments", "缺少明日提醒配置", null)
                         } else {
-                            try {
+                            val context = applicationContext
+                            TimetableNativeWork.reply(result, "schedule", "明日提醒暂不可用", "next_day.update", action = {
                                 val diagnostics = mutableListOf<Map<String, Any?>>()
-                                if (NextDayReminder.update(this, args, diagnostics)) {
-                                    // 默认开：首次有可用缓存时申请一次，不在每次启动重复询问。
-                                    val prefs = getSharedPreferences("timetable_next_day", MODE_PRIVATE)
-                                    if (args["enabled"] == true && !prefs.getBoolean("permissionAsked", false)) {
+                                val saved = NextDayReminder.update(context, args, diagnostics)
+                                val permissionAsked = context.getSharedPreferences("timetable_next_day", MODE_PRIVATE)
+                                    .getBoolean("permissionAsked", false)
+                                Triple(saved, permissionAsked, diagnostics)
+                            }, onSuccess = { value ->
+                                @Suppress("UNCHECKED_CAST")
+                                val (saved, permissionAsked, diagnostics) = value as Triple<Boolean, Boolean, MutableList<Map<String, Any?>>>
+                                if (saved) {
+                                    // Activity 权限交互仍在主线程；完成后台存储后才尝试提示。
+                                    if (args["enabled"] == true && !permissionAsked && !isFinishing && !isDestroyed) {
                                         try { requestReminderPermission(null) } catch (error: RuntimeException) {
                                             diagnostics.add(notifyFailureDetails(error, "next_day.permission") + ("reason_code" to "notification_permission_request_failed"))
                                         }
                                     }
                                     result.success(mapOf("diagnostics" to diagnostics))
                                 } else result.error("storage", "明日提醒配置保存失败", null)
-                            } catch (error: RuntimeException) {
-                                result.error("schedule", "明日提醒暂不可用", notifyFailureDetails(error, "next_day.update"))
-                            }
+                            })
                         }
                     }
                     "requestPermission" -> requestReminderPermission(result)
@@ -142,7 +147,10 @@ class MainActivity : FlutterActivity() {
     // 明暗切换（configChanges 含 uiMode，Activity 不重建）：桌面小组件按新配色重绘。
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        TimetableWidgetProvider.refreshIfNightChanged(applicationContext)
+        val context = applicationContext
+        TimetableNativeWork.background(context, "widget.configuration", "widget_configuration_refresh_failed") {
+            TimetableWidgetProvider.refreshIfNightChanged(context)
+        }
     }
 
     private fun requestReminderPermission(result: MethodChannel.Result?) {
@@ -170,7 +178,12 @@ class MainActivity : FlutterActivity() {
             permissionResult?.success(granted)
             permissionResult = null
             permissionRequestInFlight = false
-            if (granted) NextDayReminder.reschedule(this)
+            if (granted) {
+                val context = applicationContext
+                TimetableNativeWork.background(context, "next_day.permission_reschedule", "next_day_dispatch_failed") {
+                    NextDayReminder.reschedule(context, it)
+                }
+            }
         }
     }
 

@@ -305,6 +305,53 @@ void main() {
       expect(tmp.listSync().length, 2);
     });
 
+    test('批次刷盘让出事件循环，重叠批次拒绝过时内容且不共用临时文件', () async {
+      TimetableStore.debugPrepareBatchInBackground = true;
+      addTearDown(() => TimetableStore.debugPrepareBatchInBackground = false);
+      await seedFiles();
+      var completed = false;
+      var eventRanBeforeCompletion = false;
+      await TimetableStore.writeBatch(() async {
+        await stageSettings();
+        Timer.run(() => eventRanBeforeCompletion = !completed);
+      });
+      completed = true;
+      await pumpEventQueue();
+      expect(eventRanBeforeCompletion, isTrue, reason: '临时文件和备份刷盘不阻塞 UI');
+
+      final staged = [Completer<void>(), Completer<void>()];
+      final proceed = Completer<void>();
+      Future<void> batch(int index) => TimetableStore.writeBatch(() async {
+        await TimetableStore.writeRawSettings({'winner': index});
+        staged[index].complete();
+        await proceed.future;
+      });
+      final first = batch(0);
+      final second = batch(1);
+      final results = Future.wait(
+        [first, second].map((work) async {
+          try {
+            await work;
+            return true;
+          } on TimetablePersistenceException {
+            return false;
+          }
+        }),
+      );
+      await Future.wait(staged.map((gate) => gate.future));
+      proceed.complete();
+      expect(await results, [true, false]);
+      expect((await TimetableStore.readRawSettings())['winner'], 0);
+      expect(
+        tmp.listSync().where((file) => file.path.contains('.tmp')),
+        isEmpty,
+      );
+      expect(
+        tmp.listSync().where((file) => file.path.contains('.rollback')),
+        isEmpty,
+      );
+    });
+
     test('后一个临时文件准备失败时，所有原文件仍保持不变', () async {
       final originals = await seedFiles();
       Directory('${tmp.path}/snapshot.json.tmp').createSync();

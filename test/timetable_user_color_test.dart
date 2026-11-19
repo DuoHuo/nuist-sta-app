@@ -132,6 +132,87 @@ Map<String, dynamic> _colorsFile(Directory dir) => jsonDecode(
 ) as Map<String, dynamic>;
 
 void main() {
+  testWidgets('21门课程真实入口首次色号键盘逐帧保持背景课表与详情绘制稳定', (tester) async {
+    tester.view.physicalSize = const Size(400, 812);
+    tester.view.devicePixelRatio = 1;
+    // 真机键盘升起时，系统导航栏内边距会随键盘高度逐帧归零。
+    tester.view.padding = const FakeViewPadding(bottom: 48);
+    tester.view.viewPadding = const FakeViewPadding(bottom: 48);
+    addTearDown(tester.view.reset);
+    _c.debugSetSnapshot(
+      TimetableSnapshot(
+        settings: TimetableSettings(
+          termStartDate: _termStart,
+          termCode: '2026-2027-1',
+        ),
+        periods: TimetableController.defaultPeriods(),
+        courses: [
+          for (var index = 0; index < 21; index++)
+            Course(
+              id: 'keyboard-$index',
+              name: '合成课程名称$index',
+              slots: [
+                CourseSlot(
+                  day: index % 7 + 1,
+                  startNode: (index ~/ 7) * 3 + 1,
+                  endNode: (index ~/ 7) * 3 + 2,
+                  weeks: '1' * 20,
+                  teacher: '合成教师',
+                  location: '合成教室',
+                ),
+              ],
+            ),
+        ],
+        syncedAt: DateTime.now(),
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
+    );
+    await _settleIo(tester);
+    await _openColorPicker(tester, '合成课程名称0');
+    final grid = tester.widget(find.byType(WeekGrid).first);
+    final size = tester.getSize(find.byType(WeekGrid).first);
+    final backgroundTitle = tester.renderObject<RenderParagraph>(
+      find.descendant(
+        of: find.byType(CourseDetailSheet),
+        matching: find.text('合成课程名称0'),
+      ),
+    );
+    final panel = tester.widget(find.byKey(const Key('tt_color_sv_panel')));
+    final detail = tester.widget(find.byType(CourseDetailSheet));
+    final paints = <RenderObject>[];
+    final previous = debugOnProfilePaint;
+    await tester.ensureVisible(find.byKey(const Key('tt_color_hex')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_color_hex')));
+    await tester.pump();
+    try {
+      debugOnProfilePaint = paints.add;
+      for (var step = 0; step <= 12; step++) {
+        tester.view.viewInsets = FakeViewPadding(bottom: step * 25.0);
+        tester.view.padding = FakeViewPadding(
+          bottom: (48 - step * 25.0).clamp(0, 48).toDouble(),
+        );
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(tester.widget(find.byType(WeekGrid).first), same(grid));
+        expect(tester.widget(find.byType(CourseDetailSheet)), same(detail));
+        expect(tester.getSize(find.byType(WeekGrid).first), size);
+        expect(
+          tester.widget(find.byKey(const Key('tt_color_sv_panel'))),
+          same(panel),
+        );
+      }
+    } finally {
+      debugOnProfilePaint = previous;
+    }
+    expect(
+      paints.where((item) => identical(item, backgroundTitle)),
+      isEmpty,
+      reason: '底层21课页面与详情不应随色号键盘每帧重绘',
+    );
+    expect(tester.takeException(), isNull);
+  });
   late Directory tmp;
   final origClock = TimetableController.clock;
   final origBinding = TimetableController.bindingCheck;

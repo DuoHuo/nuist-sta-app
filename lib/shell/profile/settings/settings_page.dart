@@ -280,7 +280,7 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
     });
     try {
       final preview = await _log.operation('preview.read', () async {
-        final snapshot = await AppLog.snapshot();
+        final snapshot = await AppLog.snapshot(expandAttachments: false);
         final records = await compute(_parseLogPreview, snapshot.content);
         return (records: records, stats: snapshot.stats);
       }, successLevel: AppLogLevel.debug);
@@ -575,6 +575,37 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
   late LogStoreStats _stats = widget.stats;
   late List<String> _scopes = _collectScopes(_records);
   bool _refreshing = false;
+  final _loadingDetails = <String>{};
+  final _loadedDetails = <String, String>{};
+
+  Future<void> _loadAttachment(
+    Map<String, Object?> record,
+    String identity,
+  ) async {
+    if (_loadingDetails.contains(identity) ||
+        _loadedDetails.containsKey(identity)) {
+      return;
+    }
+    setState(() => _loadingDetails.add(identity));
+    try {
+      final full = await AppLog.readRecord({
+        'session_id': record['session_id'],
+        'seq': record['seq'],
+      }, timeout: const Duration(seconds: 30));
+      final details = full == null
+          ? '完整详情已过期或不可读取；导出会明确标记缺失的内容。'
+          : await compute(AppLog.formatDetails, full);
+      if (mounted && _expanded.contains(identity)) {
+        setState(() => _loadedDetails[identity] = details);
+      }
+    } catch (_) {
+      if (mounted && _expanded.contains(identity)) {
+        setState(() => _loadedDetails[identity] = '附件暂不可读取，可重试读取或导出诊断。');
+      }
+    } finally {
+      if (mounted) setState(() => _loadingDetails.remove(identity));
+    }
+  }
 
   static List<String> _collectScopes(List<Map<String, Object?>> records) =>
       records.map((record) => record['scope']! as String).toSet().toList()
@@ -585,7 +616,7 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
     setState(() => _refreshing = true);
     try {
       final preview = await _log.operation('preview.refresh', () async {
-        final snapshot = await AppLog.snapshot();
+        final snapshot = await AppLog.snapshot(expandAttachments: false);
         final records = await compute(_parseLogPreview, snapshot.content);
         return (records: records, stats: snapshot.stats);
       }, successLevel: AppLogLevel.debug);
@@ -734,13 +765,19 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
                   return ExpansionTile(
                     key: PageStorageKey(identity),
                     initiallyExpanded: _expanded.contains(identity),
-                    onExpansionChanged: (expanded) => setState(() {
-                      if (expanded) {
-                        _expanded.add(identity);
-                      } else {
-                        _expanded.remove(identity);
+                    onExpansionChanged: (expanded) {
+                      setState(() {
+                        if (expanded) {
+                          _expanded.add(identity);
+                        } else {
+                          _expanded.remove(identity);
+                          _loadedDetails.remove(identity);
+                        }
+                      });
+                      if (expanded && record['record_attachment'] is String) {
+                        unawaited(_loadAttachment(record, identity));
                       }
-                    }),
+                    },
                     title: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -782,11 +819,17 @@ class _LogPreviewPageState extends State<_LogPreviewPage> {
                             label: const Text('查看关联操作'),
                           ),
                         _LogDetailText(
-                          AppLog.formatDetails(record),
+                          _loadedDetails[identity] ??
+                              AppLog.formatDetails(record),
                           key: PageStorageKey(
                             '${record['session_id']}:${record['seq']}:summary',
                           ),
                         ),
+                        if (_loadingDetails.contains(identity))
+                          const Padding(
+                            padding: EdgeInsets.only(top: 8),
+                            child: Text('正在读取完整附件…'),
+                          ),
                         if (stack != null) ...[
                           const SizedBox(height: 12),
                           const Text('调用堆栈'),

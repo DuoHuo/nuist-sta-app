@@ -863,6 +863,7 @@ void main() {
       ),
     );
     expect(find.text('添加备注…'), findsOneWidget);
+    final detail = tester.widget(find.byType(CourseDetailSheet));
     await tester.tap(find.byKey(const Key('course_detail_note')));
     await tester.pumpAndSettle();
     final note = tester.widget<EditableText>(
@@ -873,5 +874,16 @@ void main() {
     );
     expect(note.focusNode.hasFocus, isTrue);
     expect(note.controller.text, isEmpty);
+    for (var step = 0; step <= 12; step++) {
+      tester.view.viewInsets = FakeViewPadding(bottom: step * 25.0);
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(
+        tester.widget(find.byType(CourseDetailSheet, skipOffstage: false)),
+        same(detail),
+        reason: '从备注入口打开键盘不逐帧重新构建底层课程详情',
+      );
+    }
+    tester.view.resetViewInsets();
+    await tester.pumpAndSettle();
   });
 }

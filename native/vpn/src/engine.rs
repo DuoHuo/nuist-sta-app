@@ -7,7 +7,7 @@ use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::{dns, tcp};
 use smoltcp::time::{Duration as NetDuration, Instant as NetInstant};
 use smoltcp::wire::{DnsQueryType, HardwareAddress, IpAddress, IpCidr};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -24,6 +24,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(30);
 const PROGRESS_TIMEOUT: Duration = Duration::from_secs(5);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(10);
+const TERMINAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 const START_TIMEOUT: Duration = Duration::from_secs(25);
 static RESOLVERS: AtomicUsize = AtomicUsize::new(0);
 
@@ -154,6 +155,11 @@ fn resolve(
     control: &StartControl,
     deadline: Instant,
 ) -> io::Result<Vec<std::net::SocketAddr>> {
+    // 数字地址无需系统解析线程，避免无意义占用不可取消 getaddrinfo 保护槽。
+    if let Ok(address) = host.parse::<std::net::IpAddr>() {
+        control.check(deadline)?;
+        return Ok(vec![std::net::SocketAddr::new(address, port)]);
+    }
     // 系统 getaddrinfo 本身不能取消；限制残留解析线程数量，调用方仍有期限。
     RESOLVERS
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
@@ -192,6 +198,7 @@ struct Health {
     recovering: bool,
     dns_timeouts: u64,
     tcp_timeouts: u64,
+    loop_iterations: u64,
 }
 
 fn error(kind: io::ErrorKind, message: &str) -> io::Error {
@@ -213,9 +220,20 @@ pub struct Bridge {
 }
 
 enum Command {
-    Open(String, u16, SyncSender<io::Result<Bridge>>),
+    Open(
+        String,
+        u16,
+        Arc<OpenControl>,
+        SyncSender<io::Result<Bridge>>,
+    ),
+    Probe(String, SyncSender<io::Result<()>>),
     #[cfg(test)]
     SimulateSuspend(SyncSender<()>),
+}
+
+struct OpenControl {
+    cancelled: AtomicBool,
+    created: Instant,
 }
 
 #[derive(Clone)]
@@ -225,6 +243,8 @@ pub struct Handle {
     exit_reason: Arc<Mutex<Option<String>>>,
     health: Arc<Mutex<Health>>,
     socket: Arc<TcpStream>,
+    opens: Arc<Mutex<HashMap<u64, Arc<OpenControl>>>>,
+    next_open: Arc<AtomicUsize>,
 }
 
 impl Handle {
@@ -249,13 +269,67 @@ impl Handle {
         let alive = self.alive();
         json!({"alive": alive, "healthy": alive && health.progress.elapsed() < PROGRESS_TIMEOUT
             && health.received.elapsed() < RECEIVE_TIMEOUT && !health.recovering,
+            "needsProbe": alive && (health.received.elapsed() >= RECEIVE_TIMEOUT || health.recovering
+                || health.progress.elapsed() >= PROGRESS_TIMEOUT),
             "exitReason": self.exit_reason(), "loopIdleMs": health.progress.elapsed().as_millis(),
             "rxIdleMs": health.received.elapsed().as_millis(), "heartbeats": health.heartbeats,
             "receivedBytes": health.received_bytes, "recovering": health.recovering,
-            "dnsTimeouts": health.dns_timeouts, "tcpTimeouts": health.tcp_timeouts})
+            "dnsTimeouts": health.dns_timeouts, "tcpTimeouts": health.tcp_timeouts,
+            "loopIterations": health.loop_iterations})
+    }
+
+    pub fn probe(&self, host: String) -> io::Result<()> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::Probe(host, sender))
+            .map_err(|_| error(io::ErrorKind::WouldBlock, "VPN 探测队列不可用"))?;
+        receiver
+            .recv_timeout(Duration::from_secs(4))
+            .map_err(|_| error(io::ErrorKind::TimedOut, "VPN 恢复探测超时"))?
+    }
+
+    pub fn prepare_open(&self) -> io::Result<u64> {
+        let mut opens = self.opens.lock().unwrap();
+        opens.retain(|_, control| {
+            if control.created.elapsed() < Duration::from_secs(30) {
+                return true;
+            }
+            control.cancelled.store(true, Ordering::Release);
+            false
+        });
+        if opens.len() >= MAX_CONNECTIONS {
+            return Err(error(io::ErrorKind::WouldBlock, "VPN 目标连接登记已达上限"));
+        }
+        let id = self.next_open.fetch_add(1, Ordering::Relaxed) as u64;
+        opens.insert(
+            id,
+            Arc::new(OpenControl {
+                cancelled: AtomicBool::new(false),
+                created: Instant::now(),
+            }),
+        );
+        Ok(id)
+    }
+
+    pub fn cancel_open(&self, id: u64) {
+        if let Some(control) = self.opens.lock().unwrap().remove(&id) {
+            control.cancelled.store(true, Ordering::Release);
+        }
+    }
+
+    pub fn release_open(&self, id: u64) {
+        self.opens.lock().unwrap().remove(&id);
     }
 
     pub fn open(&self, host: String, port: u16) -> io::Result<Bridge> {
+        let id = self.prepare_open()?;
+        let result = self.open_reserved(host, port, id);
+        // 旧 ABI 不暴露取消编号，Flow 自行保留控制token，注册表不保留孤立编号。
+        self.opens.lock().unwrap().remove(&id);
+        result
+    }
+
+    pub fn open_reserved(&self, host: String, port: u16, id: u64) -> io::Result<Bridge> {
         if !self.alive() {
             return Err(error(io::ErrorKind::NotConnected, "VPN 隧道已断开"));
         }
@@ -265,13 +339,33 @@ impl Handle {
                 "VPN 仅支持 IPv4 地址和 ASCII 域名",
             ));
         }
+        let control = self
+            .opens
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| error(io::ErrorKind::ConnectionAborted, "VPN 目标连接已取消"))?;
+        if control.cancelled.load(Ordering::Acquire) {
+            return Err(error(
+                io::ErrorKind::ConnectionAborted,
+                "VPN 目标连接已取消",
+            ));
+        }
         let (sender, receiver) = mpsc::sync_channel(1);
         self.commands
-            .try_send(Command::Open(host, port, sender))
+            .try_send(Command::Open(host, port, control, sender))
             .map_err(|_| error(io::ErrorKind::WouldBlock, "VPN 连接队列已满或隧道已关闭"))?;
         receiver
             .recv_timeout(OPEN_TIMEOUT + Duration::from_secs(1))
-            .map_err(|_| error(io::ErrorKind::TimedOut, "VPN 建立目标连接超时"))?
+            .map_err(|failure| match failure {
+                mpsc::RecvTimeoutError::Timeout => {
+                    error(io::ErrorKind::TimedOut, "VPN 建立目标连接超时")
+                }
+                mpsc::RecvTimeoutError::Disconnected => {
+                    error(io::ErrorKind::ConnectionAborted, "VPN 隧道已断开")
+                }
+            })?
     }
 }
 
@@ -288,6 +382,8 @@ pub fn start_controlled(
 
 #[cfg(test)]
 fn start_with_roots(value: &Value, roots: RootCertStore) -> io::Result<(Handle, frame::AuthInfo)> {
+    static START_TEST: Mutex<()> = Mutex::new(());
+    let _starting = START_TEST.lock().unwrap_or_else(|error| error.into_inner());
     start_with_control(value, roots, Arc::new(StartControl::new()))
 }
 
@@ -393,6 +489,7 @@ fn start_with_deadline(
         recovering: false,
         dns_timeouts: 0,
         tcp_timeouts: 0,
+        loop_iterations: 0,
     }));
     let handle = Handle {
         commands: sender,
@@ -400,6 +497,8 @@ fn start_with_deadline(
         exit_reason: exit_reason.clone(),
         health: health.clone(),
         socket: Arc::new(tunnel.sock.try_clone()?),
+        opens: Arc::new(Mutex::new(HashMap::new())),
+        next_open: Arc::new(AtomicUsize::new(1)),
     };
     let mut runner = Runner::new(tunnel, &info, receiver, running.clone(), health)?;
     thread::Builder::new()
@@ -420,6 +519,7 @@ fn start_with_deadline(
 }
 
 struct Flow {
+    control: Arc<OpenControl>,
     query: Option<dns::QueryHandle>,
     tcp: Option<SocketHandle>,
     port: u16,
@@ -456,6 +556,10 @@ struct Runner {
     health: Arc<Mutex<Health>>,
     last_progress: Instant,
     recovery_deadline: Option<Instant>,
+    io_progress: u64,
+    terminal: Option<io::Error>,
+    drain_deadline: Option<Instant>,
+    probe: Option<(dns::QueryHandle, Instant, u64, SyncSender<io::Result<()>>)>,
 }
 
 impl Runner {
@@ -507,6 +611,10 @@ impl Runner {
             health,
             last_progress: now,
             recovery_deadline: None,
+            io_progress: 0,
+            terminal: None,
+            drain_deadline: None,
+            probe: None,
         })
     }
 
@@ -539,6 +647,7 @@ impl Runner {
         &mut self,
         host: String,
         port: u16,
+        control: Arc<OpenControl>,
         reply: SyncSender<io::Result<Bridge>>,
     ) -> io::Result<()> {
         if self.flows.len() >= MAX_CONNECTIONS {
@@ -549,6 +658,7 @@ impl Runner {
             return Ok(());
         }
         let mut flow = Flow {
+            control,
             query: None,
             tcp: None,
             port,
@@ -594,6 +704,15 @@ impl Runner {
 
     fn advance(&mut self, flow: &mut Flow) -> io::Result<bool> {
         let now = Instant::now();
+        if !flow.authenticated && flow.control.cancelled.load(Ordering::Acquire) {
+            return Err(error(
+                io::ErrorKind::ConnectionAborted,
+                "VPN 目标连接已取消",
+            ));
+        }
+        if self.terminal.is_some() && !flow.authenticated {
+            return Ok(false);
+        }
         if !flow.authenticated && now >= flow.deadline {
             let mut health = self.health.lock().unwrap();
             let stage = if flow.query.is_some() {
@@ -628,7 +747,7 @@ impl Runner {
             }
         }
         let socket = self.sockets.get_mut::<tcp::Socket>(flow.tcp.unwrap());
-        if socket.state() == tcp::State::Closed {
+        if socket.state() == tcp::State::Closed && self.terminal.is_none() {
             return Err(error(
                 io::ErrorKind::ConnectionAborted,
                 "隧道内 TCP 连接已关闭",
@@ -707,7 +826,7 @@ impl Runner {
                 return Ok(true);
             }
         }
-        if !flow.local_eof && socket.can_send() {
+        if self.terminal.is_none() && !flow.local_eof && socket.can_send() {
             let mut bytes = [0; 16 * 1024];
             let capacity = (socket.send_capacity() - socket.send_queue()).min(bytes.len());
             match local.read(&mut bytes[..capacity]) {
@@ -723,6 +842,7 @@ impl Runner {
                         return Err(error(io::ErrorKind::WriteZero, "隧道发送缓冲不足"));
                     }
                     flow.touched = now;
+                    self.io_progress = self.io_progress.wrapping_add(1);
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
                 Err(e) => return Err(e),
@@ -738,11 +858,17 @@ impl Runner {
                 .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道读取失败"))??;
             if written > 0 {
                 flow.touched = now;
+                self.io_progress = self.io_progress.wrapping_add(1);
             }
         }
         if !socket.may_recv() && !flow.remote_eof {
             let _ = local.shutdown(Shutdown::Write);
             flow.remote_eof = true;
+        }
+        if self.terminal.is_some() && !socket.can_recv() {
+            // 所有已收的尾字节交付后关闭回环，不能在外层 TLS 已断时等待远端 FIN。
+            let _ = local.shutdown(Shutdown::Write);
+            return Ok(false);
         }
         // 保留 socket 到 FIN 握手完成；过早 abort/remove 会丢掉尚未发出的 FIN/ACK。
         Ok(now.duration_since(flow.touched) < Duration::from_secs(180))
@@ -766,32 +892,64 @@ impl Runner {
     }
 
     fn pump_tls(&mut self) -> io::Result<()> {
+        if self.terminal.is_some() {
+            return Ok(());
+        }
         // 每轮设上限，防止一条大下载饿死连接命令和心跳。
         for _ in 0..16 {
             // 先消耗已解密的数据：握手读取可能已把后续报文一并收进 rustls。
             let mut bytes = [0; 16 * 1024];
             loop {
-                match self.tunnel.conn.reader().read(&mut bytes) {
-                    Ok(0) => break,
+                // 最小 IPv4 帧为 8 字节头 + 20 字节包。为 Decoder 中可能
+                // 已有的半帧预留一个槽，不从可靠 TLS 流主动读出随后要丢弃的包。
+                let capacity = self.device.receive_capacity();
+                if capacity < 2 {
+                    break;
+                }
+                let limit = bytes.len().min((capacity - 1) * 28);
+                match self.tunnel.conn.reader().read(&mut bytes[..limit]) {
+                    // 非空缓冲读到 0 表示已收到 close_notify；即使 TCP 仍保持
+                    // 打开，TLS 也不会再有数据，不能继续把它报告为健康隧道。
+                    Ok(0) => {
+                        self.receive_terminal(error(
+                            io::ErrorKind::UnexpectedEof,
+                            "VPN 网关已关闭 TLS",
+                        ));
+                        return Ok(());
+                    }
                     Ok(count) => {
-                        self.last_received = Instant::now();
-                        let mut health = self.health.lock().unwrap();
-                        health.received = self.last_received;
-                        health.received_bytes += count as u64;
-                        health.recovering = false;
-                        self.recovery_deadline = None;
-                        drop(health);
+                        self.io_progress = self.io_progress.wrapping_add(1);
+                        let completed = self.decoder.completed_frames();
                         for packet in self.decoder.push(&bytes[..count])? {
                             self.device.inject(packet);
                         }
+                        let mut health = self.health.lock().unwrap();
+                        health.received_bytes += count as u64;
+                        if completed != self.decoder.completed_frames() {
+                            self.last_received = Instant::now();
+                            health.received = self.last_received;
+                            health.recovering = false;
+                            self.recovery_deadline = None;
+                        }
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                        self.receive_terminal(e);
+                        return Ok(());
+                    }
                     Err(e) => return Err(e),
                 }
             }
+            if self.device.receive_capacity() < 2 {
+                break;
+            }
             match self.tunnel.conn.read_tls(&mut self.tunnel.sock) {
-                Ok(0) => return Err(error(io::ErrorKind::UnexpectedEof, "VPN 网关已断开")),
+                Ok(0) => {
+                    self.receive_terminal(error(io::ErrorKind::UnexpectedEof, "VPN 网关已断开"));
+                    return Ok(());
+                }
                 Ok(_) => {
+                    self.io_progress = self.io_progress.wrapping_add(1);
                     self.tunnel
                         .conn
                         .process_new_packets()
@@ -801,15 +959,8 @@ impl Runner {
                 Err(e) => return Err(e),
             }
         }
-        if self.last_received.elapsed() > RECEIVE_TIMEOUT && self.recovery_deadline.is_none() {
-            return Err(error(io::ErrorKind::TimedOut, "VPN 心跳响应超时"));
-        }
-        if self
-            .recovery_deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            return Err(error(io::ErrorKind::TimedOut, "VPN 恢复心跳探测超时"));
-        }
+        // 部分合法网关不回复保活帧；空闲无数据不等于关闭，留待请求/前台
+        // 发起一次有界 DNS 探测。真正 TLS/TCP EOF 仍走终态清理。
         if self.last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL && self.output.len() < 256 {
             self.heartbeat = self.heartbeat.wrapping_add(1);
             self.health.lock().unwrap().heartbeats = self.heartbeat;
@@ -844,12 +995,18 @@ impl Runner {
             }
             match self.tunnel.conn.write_tls(&mut self.tunnel.sock) {
                 Ok(0) => return Err(error(io::ErrorKind::WriteZero, "VPN 写入中断")),
-                Ok(_) => {}
+                Ok(_) => self.io_progress = self.io_progress.wrapping_add(1),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) => return Err(e),
             }
         }
         Ok(())
+    }
+
+    fn receive_terminal(&mut self, error: io::Error) {
+        self.terminal = Some(error);
+        self.drain_deadline = Some(Instant::now() + TERMINAL_DRAIN_TIMEOUT);
+        self.health.lock().unwrap().recovering = true;
     }
 
     fn update_progress(&mut self) {
@@ -863,49 +1020,149 @@ impl Runner {
             self.health.lock().unwrap().recovering = true;
         }
         self.last_progress = now;
-        self.health.lock().unwrap().progress = now;
+        let mut health = self.health.lock().unwrap();
+        health.progress = now;
+        health.loop_iterations = health.loop_iterations.saturating_add(1);
+    }
+
+    fn command(&mut self, command: Command) -> io::Result<()> {
+        match command {
+            Command::Open(host, port, control, reply) => {
+                self.accept_command(host, port, control, reply)
+            }
+            Command::Probe(host, reply) => {
+                if self.terminal.is_some() || self.probe.is_some() {
+                    let _ = reply.send(Err(error(io::ErrorKind::WouldBlock, "VPN 探测不可用")));
+                    return Ok(());
+                }
+                match self.sockets.get_mut::<dns::Socket>(self.dns).start_query(
+                    self.interface.context(),
+                    &host,
+                    DnsQueryType::A,
+                ) {
+                    Ok(query) => {
+                        self.probe = Some((
+                            query,
+                            Instant::now() + Duration::from_secs(3),
+                            self.decoder.completed_frames(),
+                            reply,
+                        ));
+                    }
+                    Err(_) => {
+                        let _ = reply.send(Err(error(
+                            io::ErrorKind::InvalidInput,
+                            "VPN 探测主机不合法",
+                        )));
+                    }
+                }
+                Ok(())
+            }
+            #[cfg(test)]
+            Command::SimulateSuspend(reply) => {
+                self.last_received = Instant::now() - Duration::from_secs(40);
+                self.last_progress = self.last_received;
+                self.health.lock().unwrap().received = self.last_received;
+                self.update_progress();
+                let _ = reply.send(());
+                Ok(())
+            }
+        }
     }
 
     fn run(&mut self) -> io::Result<()> {
+        let mut idle_rounds = 0u32;
+        let mut pending_command = None;
         while self.running.load(Ordering::Acquire) {
             self.update_progress();
+            let progress = self.io_progress;
+            if let Some(command) = pending_command.take() {
+                match command {
+                    Command::Open(_, _, _, reply) if self.terminal.is_some() => {
+                        let _ = reply.send(Err(error(
+                            io::ErrorKind::ConnectionAborted,
+                            "VPN 隧道已断开",
+                        )));
+                    }
+                    command => self.command(command)?,
+                }
+            }
             for _ in 0..MAX_CONNECTIONS {
                 match self.commands.try_recv() {
-                    Ok(Command::Open(host, port, reply)) => {
-                        self.accept_command(host, port, reply)?
+                    Ok(Command::Open(_, _, _, reply)) if self.terminal.is_some() => {
+                        let _ = reply.send(Err(error(
+                            io::ErrorKind::ConnectionAborted,
+                            "VPN 隧道已断开",
+                        )));
                     }
-                    #[cfg(test)]
-                    Ok(Command::SimulateSuspend(reply)) => {
-                        self.last_received = Instant::now() - Duration::from_secs(40);
-                        self.last_progress = self.last_received;
-                        self.health.lock().unwrap().received = self.last_received;
-                        self.update_progress();
-                        let _ = reply.send(());
-                    }
+                    Ok(command) => self.command(command)?,
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
                 }
             }
             self.pump_tls()?;
+            if let Some((query, deadline, completed, _)) = self.probe.as_ref() {
+                let success = self.decoder.completed_frames() != *completed;
+                if success || Instant::now() >= *deadline || self.terminal.is_some() {
+                    let query = *query;
+                    let (_, _, _, reply) = self.probe.take().unwrap();
+                    self.sockets
+                        .get_mut::<dns::Socket>(self.dns)
+                        .cancel_query(query);
+                    let _ = reply.send(if success {
+                        Ok(())
+                    } else {
+                        Err(error(io::ErrorKind::TimedOut, "VPN DNS 恢复探测超时"))
+                    });
+                }
+            }
             let timestamp = NetInstant::from_millis(self.started.elapsed().as_millis() as i64);
             self.interface
                 .poll(timestamp, &mut self.device, &mut self.sockets);
-            let flows = std::mem::take(&mut self.flows);
-            for mut flow in flows {
-                match self.advance(&mut flow) {
-                    Ok(true) => self.flows.push(flow),
-                    Ok(false) => self.remove(flow, None),
-                    Err(e) => self.remove(flow, Some(e)),
+            let mut flows = std::mem::take(&mut self.flows);
+            // 倒序删除保留原有 Vec 容量，避免每轮重建所有存活连接的数组。
+            for index in (0..flows.len()).rev() {
+                match self.advance(&mut flows[index]) {
+                    Ok(true) => {}
+                    Ok(false) => self.remove(flows.swap_remove(index), None),
+                    Err(e) => self.remove(flows.swap_remove(index), Some(e)),
                 }
             }
+            self.flows = flows;
             self.interface
                 .poll(timestamp, &mut self.device, &mut self.sockets);
             self.pump_tls()?;
-            thread::sleep(if self.flows.is_empty() {
-                Duration::from_millis(50)
-            } else {
-                Duration::from_millis(5)
-            });
+            if self.terminal.is_some()
+                && (self.flows.is_empty()
+                    || self
+                        .drain_deadline
+                        .is_some_and(|deadline| Instant::now() >= deadline))
+            {
+                return Err(self.terminal.take().unwrap());
+            }
+            if self.io_progress != progress {
+                idle_rounds = 0;
+                // 有数据进展时继续搬运，协议栈和 TLS 的缓冲负责背压。
+                // 每轮已限制工作量；让出调度机会，避免固定休眠限制上传吞吐。
+                thread::yield_now();
+                continue;
+            }
+            idle_rounds = idle_rounds.saturating_add(1).min(6);
+            let ceiling = if self.flows.is_empty() { 50 } else { 25 };
+            let mut wait = Duration::from_millis((1u64 << idle_rounds).min(ceiling));
+            let now = NetInstant::from_millis(self.started.elapsed().as_millis() as i64);
+            if let Some(delay) = self.interface.poll_delay(now, &self.sockets) {
+                // poll_at 为 Now 却无法推进时，链路可能正在背压，继续退避。
+                // 正数期限仍需准时处理，避免延迟 ACK、重传与 keepalive。
+                if delay.total_millis() > 0 {
+                    wait = wait.min(Duration::from_millis(delay.total_millis()));
+                }
+            }
+            // 连接命令直接唤醒等待，无需等下一次轮询。
+            match self.commands.recv_timeout(wait) {
+                Ok(command) => pending_command = Some(command),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            }
         }
         Ok(())
     }

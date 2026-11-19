@@ -286,6 +286,10 @@ class TimetableController extends ChangeNotifier {
 
   bool _started = false;
   Future<void>? _starting;
+  bool _initialized = false;
+
+  /// 本地启动已成功完成，重复进入页面可直接构建现有课程。
+  bool get isInitialized => _initialized;
 
   TimetableSnapshot _snapshot = const TimetableSnapshot();
   int _viewingWeek = 1;
@@ -379,15 +383,103 @@ class TimetableController extends ChangeNotifier {
     if (_isPrimaryHost) unawaited(updateNextDayReminder());
   }
 
+  Future<void>? _nextDayReminderWork;
+  int _nextDayReminderGeneration = 0;
+  Timer? _nextDayReminderYieldTimer;
+  Completer<void>? _nextDayReminderYieldDone;
+  Object? _nextDayReminderConfigurationInputs;
+  Map<String, Object?>? _nextDayReminderConfiguration;
+  Object? _sentNextDayReminderInputs;
+  Object? _sendingNextDayReminderInputs;
+
+  /// 导入的主课表没有门户绑定，也按已登录生成提醒内容。
+  bool get _loggedInForReminder =>
+      _portalBound || primaryScheduleMeta?.isImportedSchedule == true;
+
+  Object _nextDayReminderInputs() {
+    final now = syncClock();
+    return (
+      _snapshot.courses,
+      _snapshot.periods,
+      _manualCourses,
+      _overrides,
+      _courseEdits,
+      _daySwaps,
+      _dateEdits,
+      settings.termStartDate,
+      _loggedInForReminder,
+      settings.nextDayReminderEnabled,
+      settings.nextDayReminderMinute,
+      _snapshot.syncedAt != null,
+      DateTime(now.year, now.month, now.day),
+    );
+  }
+
   /// 将套用调课、单日修改后的课程生成通知缓存，覆盖未来 400 个本机自然日。
   /// 只排明日提醒，不读取 reminderEnabled（课前提醒开关）。
-  Future<void> updateNextDayReminder() async {
-    if (!_isPrimaryHost) return;
-    final primaryIsImported = primaryScheduleMeta?.isImportedSchedule == true;
-    final loggedInForReminder = _portalBound || primaryIsImported;
+  ///
+  /// 合并并发调用；相同课程、提醒偏好和自然日不重复生成。每七天让出
+  /// 一次事件循环，避免后台排程连续占用 UI；计算期间变化时重新取最新状态。
+  Future<void> updateNextDayReminder() {
+    if (!_isPrimaryHost) return Future.value();
+    if (_nextDayReminderWork case final work?) return work;
+    final generation = _nextDayReminderGeneration;
+    return _nextDayReminderWork = _updateNextDayReminder(generation)
+        .whenComplete(() {
+          if (generation == _nextDayReminderGeneration) {
+            _nextDayReminderWork = null;
+          }
+        });
+  }
+
+  Future<void> _updateNextDayReminder(int generation) async {
+    // 先让同一批状态变更合并，再计算；不引入长期防抖定时器。
+    await Future<void>.value();
+    while (generation == _nextDayReminderGeneration) {
+      final inputs = _nextDayReminderInputs();
+      if (_sentNextDayReminderInputs == inputs ||
+          _sendingNextDayReminderInputs == inputs) {
+        return;
+      }
+      final configuration = _nextDayReminderConfigurationInputs == inputs
+          ? _nextDayReminderConfiguration
+          : await _buildNextDayReminderConfiguration(inputs, generation);
+      if (generation != _nextDayReminderGeneration) return;
+      if (configuration == null || inputs != _nextDayReminderInputs()) {
+        continue;
+      }
+      // 已关闭的配置不需要持有旧课程，避免解绑后由缓存延长课程对象寿命。
+      if (configuration['enabled'] == true) {
+        _nextDayReminderConfigurationInputs = inputs;
+        _nextDayReminderConfiguration = configuration;
+      } else {
+        _nextDayReminderConfigurationInputs = null;
+        _nextDayReminderConfiguration = null;
+      }
+      _sendingNextDayReminderInputs = inputs;
+      await NextDayReminderChannel.update(
+        configuration,
+        onCompleted: (saved) {
+          if (generation != _nextDayReminderGeneration) return;
+          if (_sendingNextDayReminderInputs == inputs) {
+            _sendingNextDayReminderInputs = null;
+          }
+          if (saved && inputs == _nextDayReminderInputs()) {
+            _sentNextDayReminderInputs = inputs;
+          }
+        },
+      );
+      if (inputs == _nextDayReminderInputs()) return;
+    }
+  }
+
+  Future<Map<String, Object?>?> _buildNextDayReminderConfiguration(
+    Object inputs,
+    int generation,
+  ) async {
     final enabled =
         settings.nextDayReminderEnabled &&
-        loggedInForReminder &&
+        _loggedInForReminder &&
         settings.termStartDate != null &&
         (_snapshot.syncedAt != null || hasCourses);
     final payloads = <String, Object?>{};
@@ -395,36 +487,62 @@ class TimetableController extends ChangeNotifier {
       // 用 syncClock（测试可注入），覆盖未来 400 个本机自然日。
       final now = syncClock();
       final today = DateTime(now.year, now.month, now.day);
-      for (var offset = 0; offset < 400; offset++) {
-        final eve = today.add(Duration(days: offset));
-        final tomorrow = eve.add(const Duration(days: 1));
-        final week = actualWeek(tomorrow);
-        // 无开学日时 actualWeek 为 null，停止；有开学日则始终有周次（可超出学期）。
-        if (week == null) break;
-        final outsideTerm = week < 1 || week > totalWeeks;
-        final payload = buildNextDayReminder(
-          tomorrow: tomorrow,
-          // 假期文案不读取课程；跳过查询也避免 400 天空结果挤掉网格的近期缓存。
-          courses: outsideTerm ? const [] : coursesOnDate(tomorrow),
-          periods: periods,
-          startTimeOf: (item) =>
-              timeForSlot(item.course, item.slot, date: tomorrow).start,
-          loggedIn: loggedInForReminder,
-          hasCache: true,
-          outsideTerm: outsideTerm,
-        );
-        if (payload != null) {
-          payloads[nextDayReminderDateKey(eve)] = payload.toJson();
+      for (var first = 0; first < 400; first += 7) {
+        // 每个同步批次结束即恢复，不能在 await 后覆盖界面新读入的缓存。
+        final savedDayCells = Map<(int, int), List<GridCell>>.from(_dayCells);
+        final savedDayCellSources = _dayCellSources;
+        try {
+          for (
+            var offset = first;
+            offset < first + 7 && offset < 400;
+            offset++
+          ) {
+            final eve = DateTime(today.year, today.month, today.day + offset);
+            final tomorrow = DateTime(eve.year, eve.month, eve.day + 1);
+            final week = actualWeek(tomorrow);
+            if (week == null) break;
+            final outsideTerm = week < 1 || week > totalWeeks;
+            final payload = buildNextDayReminder(
+              tomorrow: tomorrow,
+              courses: outsideTerm ? const [] : coursesOnDate(tomorrow),
+              periods: periods,
+              startTimeOf: (item) =>
+                  timeForSlot(item.course, item.slot, date: tomorrow).start,
+              loggedIn: _loggedInForReminder,
+              hasCache: true,
+              outsideTerm: outsideTerm,
+            );
+            if (payload != null) {
+              payloads[nextDayReminderDateKey(eve)] = payload.toJson();
+            }
+          }
+        } finally {
+          _dayCells
+            ..clear()
+            ..addAll(savedDayCells);
+          _dayCellSources = savedDayCellSources;
+        }
+        final done = Completer<void>();
+        _nextDayReminderYieldDone = done;
+        _nextDayReminderYieldTimer = Timer(Duration.zero, done.complete);
+        await done.future;
+        if (identical(_nextDayReminderYieldDone, done)) {
+          _nextDayReminderYieldDone = null;
+          _nextDayReminderYieldTimer = null;
+        }
+        if (generation != _nextDayReminderGeneration ||
+            inputs != _nextDayReminderInputs()) {
+          return null;
         }
       }
     }
-    await NextDayReminderChannel.update({
+    return {
       'enabled': enabled,
       'minuteOfDay': TimetableSettings.sanitizeNextDayMinute(
         settings.nextDayReminderMinute,
       ),
       'payloads': payloads,
-    });
+    };
   }
 
   final StreamController<TimetableSyncOutcome> _syncOutcomes =
@@ -510,6 +628,7 @@ class TimetableController extends ChangeNotifier {
   Future<void> _appearanceWrites = Future.value();
   TimetableSettings? _pendingSettings;
   int _settingsWriteRevision = 0;
+  final _settingsWriteKeyRevisions = <String, int>{};
 
   Future<void> _serializeAppearance(Future<void> Function() action) {
     final result = _appearanceWrites.then((_) => action());
@@ -997,11 +1116,28 @@ class TimetableController extends ChangeNotifier {
   Future<void> ensureStarted() {
     if (_started) return _starting ?? Future.value();
     _started = true;
+    final local = _localReady = Completer<void>();
+    // 只有课表页等待本地阶段；其他调用方等待完整启动，失败不能成为未处理错误。
+    local.future.ignore();
     return _starting = _start().catchError((Object error, StackTrace stack) {
       _started = false;
       _starting = null;
+      _initialized = false;
+      if (!local.isCompleted) local.completeError(error, stack);
+      if (identical(_localReady, local)) _localReady = null;
       Error.throwWithStackTrace(error, stack);
     });
+  }
+
+  /// 本地课表、调课与配色已读入；门户绑定状态可能仍在读取。
+  Completer<void>? _localReady;
+
+  /// 启动并等待本地课表可展示。门户绑定读取依赖安全存储，冷启动可能需要
+  /// 数百毫秒，有课时课表页不必等它；需要绑定状态的调用方仍用 [ensureStarted]。
+  Future<void> ensureLocalReady() {
+    final started = ensureStarted();
+    final local = _localReady;
+    return local == null || _initialized ? started : local.future;
   }
 
   /// 只读本地磁盘刷新：从 [TimetableStore] / [ScheduleStore] 重新载入快照、手动课程、
@@ -1058,13 +1194,25 @@ class TimetableController extends ChangeNotifier {
         await _inScope(() => TimetableChangeLogStore.readUnnotified()),
       );
     }
+    final local = _localReady;
+    if (local != null && !local.isCompleted) local.complete();
     if (_isPrimaryHost) {
       _portalBound = await bindingCheck();
-      await updateNextDayReminder();
     } else {
       _portalBound = _manager!._portalBound;
     }
+    _initialized = true;
     notifyListeners();
+    // 本地数据已可展示；400天通知排程是后台职责，不阻塞首页或小组件入口。
+    unawaited(
+      updateNextDayReminder().catchError((Object error, StackTrace stackTrace) {
+        _log.warning(
+          'next_day_reminder.startup_failed',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }),
+    );
   }
 
   /// 从磁盘重载全部本地数据（快照、手动课程、调课 / 编辑 / 日程记录、同步状态）。
@@ -1225,13 +1373,22 @@ class TimetableController extends ChangeNotifier {
     };
     if (changedKeys.isEmpty) return Future.value();
     final revision = ++_settingsWriteRevision;
+    for (final key in changedKeys) {
+      _settingsWriteKeyRevisions[key] = revision;
+    }
     _pendingSettings = next;
     return _serializeAppearance(() async {
+      // 保存队列只写每个键最新请求；滑杆中间值被新值替代时不再落盘。
+      final activeKeys = {
+        for (final key in changedKeys)
+          if (_settingsWriteKeyRevisions[key] == revision) key,
+      };
+      if (activeKeys.isEmpty) return;
       try {
         final previous = _snapshot.settings;
         final raw = previous.toJson();
         // 排队期间其他开关可能已保存，仅合并这次操作涉及的字段。
-        for (final key in changedKeys) {
+        for (final key in activeKeys) {
           if (requested.containsKey(key)) {
             raw[key] = requested[key];
           } else {
@@ -1900,6 +2057,7 @@ class TimetableController extends ChangeNotifier {
     if (manualCourses != null) _manualCourses = List.of(manualCourses);
     _colorMap = null;
     _started = true;
+    _initialized = true;
     _viewingWeek = viewingWeek ?? _defaultViewingWeek;
     _lastSeenCurrentWeek = currentWeek;
     notifyListeners();
@@ -1914,6 +2072,8 @@ class TimetableController extends ChangeNotifier {
     _lastSeenCurrentWeek = null;
     _started = false;
     _starting = null;
+    _localReady = null;
+    _initialized = false;
     _snapshot = const TimetableSnapshot();
     _manualCourses = const [];
     _overrides = const [];
@@ -1948,6 +2108,7 @@ class TimetableController extends ChangeNotifier {
     _appearanceWrites = Future.value();
     _pendingSettings = null;
     _settingsWriteRevision = 0;
+    _settingsWriteKeyRevisions.clear();
     _loading = false;
     _statusMessage = null;
     _syncStatus = TimetableSyncStatus.idle;
@@ -1965,6 +2126,19 @@ class TimetableController extends ChangeNotifier {
     _importSeq = 0;
     _historicalDiscoveryAttempted = false;
     _historicalDiscoveryInFlight = null;
+    _nextDayReminderConfigurationInputs = null;
+    _nextDayReminderConfiguration = null;
+    _sentNextDayReminderInputs = null;
+    _sendingNextDayReminderInputs = null;
+    _nextDayReminderGeneration++;
+    _nextDayReminderYieldTimer?.cancel();
+    _nextDayReminderYieldTimer = null;
+    final reminderYield = _nextDayReminderYieldDone;
+    if (reminderYield != null && !reminderYield.isCompleted) {
+      reminderYield.complete();
+    }
+    _nextDayReminderYieldDone = null;
+    _nextDayReminderWork = null;
   }
 
   /// 清空教务课程与 snapshot 磁盘缓存，并清除教务写入的学期元数据；

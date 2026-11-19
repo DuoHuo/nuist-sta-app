@@ -173,6 +173,11 @@ Widget 测试可通过 `flutter/backgesture` 通道验证手势进度、取消�
 注册表本身不启动 Controller 或请求网络。学习卡片仍在挂载时调用 `ensureStarted()`，
 详情页与卡片继续共享各模块的单例状态。
 
+首页卡片与学习卡片由壳的 `DeferredWhileHidden`（`lib/shell/deferred_while_hidden.dart`）
+包裹：所在页面可见时与直接构建一致；不可见时（小组件直达课表时位于下层的首页、
+后台预加载的「学习」页签）延后一段时间再逐张构建，避免卡片的读盘与刷新和前台页面的
+首帧、转场同时占用界面线程。「学习」分支设置了 `preload: true`，首次切换只需绘制。
+
 ## 依赖方向
 
 **约定**（目的：任何小程序都能独立增删）：
@@ -211,7 +216,9 @@ Future<void> ensureStarted() {
 }
 ```
 
-UI 侧用 `ListenableBuilder(listenable: controller, builder: …)` 订阅。跨页面共享靠单例
+UI 侧用 `ListenableBuilder(listenable: controller, builder: …)` 订阅。
+课表另有 `ensureLocalReady()`：本地课表读完即完成，不等待依赖安全存储的门户绑定读取；
+课表页有课时只等它，空课表仍等完整启动以确定登录引导。跨页面共享靠单例
 （首页的电费卡片和电费详情页共用同一个 `ElectricityController.instance`，刷新两边同步）。
 
 **Store 管落盘**（`*_store.dart`）

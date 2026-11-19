@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_api.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_photos.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_photo_gallery_page.dart';
 
 import 'campus_map_api_test.dart' show FakeAdapter, ok, response;
 
@@ -21,6 +23,41 @@ void main() {
   tearDown(() {
     api.close();
     dio.close();
+  });
+
+  testWidgets('实拍缩略图限制解码像素，大图查看保留原分辨率', (tester) async {
+    // 保持与同文件其余用例一致的 API 清理。
+    setup((_) => ok({'photos': <Object>[], 'count': 0}));
+    tester.view.physicalSize = const Size(1170, 2532);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const photos = [CampusPhoto(id: 1, url: 'https://example.test/photo.jpg')];
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: CampusPhotoGalleryPage(
+          source: null,
+          buildingId: 'synthetic',
+          buildingName: '测试建筑',
+          initialPhotos: photos,
+        ),
+      ),
+    );
+    final thumbnail =
+        tester.widget<Image>(find.byType(Image)).image as ResizeImage;
+    expect(thumbnail.width, 700);
+    expect(thumbnail.height, 700);
+    expect(thumbnail.policy, ResizeImagePolicy.fit);
+    // 4000×3000 原图原先约 48 MB；该窗口至多 700×700×4，约 2 MB。
+    expect(thumbnail.width! * thumbnail.height! * 4, lessThan(2 * 1024 * 1024));
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: CampusPhotoViewerPage(photos: photos, buildingName: '测试建筑'),
+      ),
+    );
+    expect(tester.widget<Image>(find.byType(Image)).image, isA<NetworkImage>());
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(tester.takeException(), isNull);
   });
 
   test('parses photo list and resolves relative file urls', () async {

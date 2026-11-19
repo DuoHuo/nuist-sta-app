@@ -121,6 +121,10 @@ class _CampusMapPageState extends State<CampusMapPage>
   double? _userAccuracy;
   // 地图打开期间的持续定位订阅（有权限才开）。
   StreamSubscription<LocationFix>? _locationSub;
+  int _locationRevision = 0;
+  int? _locationStarting;
+  bool _routeActive = false;
+  bool _mapActive = false;
   // 朝向订阅与当前朝向（度，0 = 正北）。
   StreamSubscription<double>? _headingSub;
   final _userHeading = ValueNotifier<double?>(null);
@@ -165,8 +169,14 @@ class _CampusMapPageState extends State<CampusMapPage>
     _sheet.addListener(_sheetChanged);
     unawaited(_loadCampus());
     unawaited(_loadWeekClasses());
-    // 已经授过权就直接显示蓝点，不弹权限框、不挪相机。
-    unawaited(_startLiveLocation());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 被照片、模型等页面覆盖时，路由会停用 TickerMode；后台定位也一起释放。
+    _routeActive = TickerMode.valuesOf(context).enabled;
+    _syncMapLifecycle();
   }
 
   /// 随机去一栋有名字、有坐标的建筑（骰子按钮）。
@@ -198,19 +208,23 @@ class _CampusMapPageState extends State<CampusMapPage>
 
   /// 订阅手机朝向；没有传感器（或测试环境）时静默不画光束。
   void _startHeading() {
-    if (_headingSub != null) return;
+    if (!_mapActive || _headingSub != null) return;
+    final revision = _locationRevision;
     try {
       _headingSub = widget.heading.watch().listen(
         (degrees) {
           final current = _userHeading.value;
           // 转动 3° 以上只更新地图，避免重建面板并重算附近楼宇与课程。
           if (!mounted ||
+              !_mapActive ||
+              revision != _locationRevision ||
               (current != null && headingDelta(current, degrees).abs() < 3)) {
             return;
           }
           _userHeading.value = degrees;
         },
         onError: (Object _) {
+          if (revision != _locationRevision) return;
           unawaited(_headingSub?.cancel());
           _headingSub = null;
           if (mounted) _userHeading.value = null;
@@ -244,21 +258,30 @@ class _CampusMapPageState extends State<CampusMapPage>
   /// 有权限时订阅持续定位；[requireReady] 为 false 表示刚刚已确认过权限。
   Future<void> _startLiveLocation({bool requireReady = true}) async {
     final live = _live;
-    if (live == null || _locationSub != null) return;
+    if (!_mapActive ||
+        live == null ||
+        _locationSub != null ||
+        _locationStarting != null) {
+      return;
+    }
+    final revision = ++_locationRevision;
+    _locationStarting = revision;
+    bool active() => mounted && _mapActive && revision == _locationRevision;
     try {
       if (requireReady && !await live.ready()) return;
-      if (!mounted || _locationSub != null) return;
+      if (!active() || _locationSub != null) return;
       if (_userPoint == null) {
         final last = await live.lastKnown();
-        if (mounted && last != null && _userPoint == null) _applyFix(last);
+        if (active() && last != null && _userPoint == null) _applyFix(last);
       }
-      if (!mounted || _locationSub != null) return;
+      if (!active() || _locationSub != null) return;
       _locationSub = live.watch().listen(
         (fix) {
-          if (mounted) _applyFix(fix);
+          if (active()) _applyFix(fix);
         },
         // 中途出错（如关掉了定位服务）就停掉，下次点定位再开。
         onError: (Object _) {
+          if (!active()) return;
           unawaited(_locationSub?.cancel());
           unawaited(_headingSub?.cancel());
           _locationSub = null;
@@ -270,7 +293,21 @@ class _CampusMapPageState extends State<CampusMapPage>
       _startHeading();
     } catch (_) {
       // 测试环境没有定位插件，或系统定位异常：静默跳过，点定位按钮时再提示。
+    } finally {
+      if (_locationStarting == revision) _locationStarting = null;
     }
+  }
+
+  void _stopLiveLocation({bool clearHeading = true}) {
+    _locationRevision++;
+    _locationStarting = null;
+    final location = _locationSub;
+    final heading = _headingSub;
+    _locationSub = null;
+    _headingSub = null;
+    unawaited(location?.cancel());
+    unawaited(heading?.cancel());
+    if (clearHeading) _userHeading.value = null;
   }
 
   /// 读本周课程（课表没登记或读取失败时当作没有课，不打扰用户）。
@@ -346,16 +383,29 @@ class _CampusMapPageState extends State<CampusMapPage>
   }
 
   void _syncShuttleLifecycle() {
+    _shuttle.setActive(_mapActive && _layer == CampusMapLayer.transit);
+  }
+
+  void _syncMapLifecycle() {
     final lifecycle = WidgetsBinding.instance.lifecycleState;
-    _shuttle.setActive(
-      _layer == CampusMapLayer.transit &&
-          (lifecycle == null || lifecycle == AppLifecycleState.resumed),
-    );
+    final active =
+        _routeActive &&
+        (lifecycle == null || lifecycle == AppLifecycleState.resumed);
+    if (_mapActive != active) {
+      _mapActive = active;
+      if (active) {
+        // 已经授过权就显示蓝点，不弹权限框、不挪相机。
+        unawaited(_startLiveLocation());
+      } else {
+        _stopLiveLocation();
+      }
+    }
+    _syncShuttleLifecycle();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) =>
-      _syncShuttleLifecycle();
+      _syncMapLifecycle();
 
   void _showShuttleToast() {
     if (!mounted) return;
@@ -476,8 +526,8 @@ class _CampusMapPageState extends State<CampusMapPage>
     _simTimer?.cancel();
     _searchTimer?.cancel();
     _sheetTimer?.cancel();
-    unawaited(_locationSub?.cancel());
-    unawaited(_headingSub?.cancel());
+    _mapActive = false;
+    _stopLiveLocation(clearHeading: false);
     _userHeading.dispose();
     _searchRevision++;
     _sheet.removeListener(_sheetChanged);

@@ -89,12 +89,16 @@ Future<void> showScheduleEventDetailSheet(
   required ScheduleEvent event,
   required TimetableController controller,
 }) {
+  // 编辑页键盘升降会更新底部路由约束，复用底层详情而非每帧重新构建。
+  final detail = ScheduleEventDetailSheet(
+    eventId: event.id,
+    controller: controller,
+  );
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) =>
-        ScheduleEventDetailSheet(eventId: event.id, controller: controller),
+    builder: (_) => detail,
   );
 }
 

@@ -141,7 +141,7 @@ fn dispatch(request: Value) -> Result<Value, NativeFailure> {
             }
             Ok(json!({}))
         }
-        "status" | "open" => {
+        "status" | "open" | "probe" | "prepareOpen" | "cancelOpen" | "releaseOpen" => {
             let id = request["id"].as_u64().ok_or("缺少 VPN 实例")?;
             let handle = engines
                 .lock()
@@ -152,14 +152,38 @@ fn dispatch(request: Value) -> Result<Value, NativeFailure> {
             if method == "status" {
                 return Ok(handle.status());
             }
+            if method == "prepareOpen" {
+                let open_id = handle.prepare_open().map_err(|e| {
+                    NativeFailure::io(e, "native_open_prepare_failed", "native.open")
+                })?;
+                return Ok(json!({"openId": open_id}));
+            }
+            if method == "cancelOpen" || method == "releaseOpen" {
+                let open_id = request["openId"].as_u64().ok_or("缺少目标连接编号")?;
+                if method == "cancelOpen" {
+                    handle.cancel_open(open_id);
+                } else {
+                    handle.release_open(open_id);
+                }
+                return Ok(json!({}));
+            }
             let host = request["host"].as_str().ok_or("缺少目标主机")?;
+            if method == "probe" {
+                handle
+                    .probe(host.to_owned())
+                    .map_err(|e| NativeFailure::io(e, "native_probe_failed", "native.probe"))?;
+                return Ok(handle.status());
+            }
             let port = request["port"]
                 .as_u64()
                 .filter(|p| (1..=65535).contains(p))
                 .ok_or("目标端口不合法")? as u16;
-            let bridge = handle
-                .open(host.to_owned(), port)
-                .map_err(|e| NativeFailure::io(e, "native_open_failed", "native.open"))?;
+            let result = match request["openId"].as_u64() {
+                Some(open_id) => handle.open_reserved(host.to_owned(), port, open_id),
+                None => handle.open(host.to_owned(), port),
+            };
+            let bridge =
+                result.map_err(|e| NativeFailure::io(e, "native_open_failed", "native.open"))?;
             Ok(json!({"port": bridge.port, "secret": bridge.secret}))
         }
         _ => Err("未知 VPN 操作".into()),

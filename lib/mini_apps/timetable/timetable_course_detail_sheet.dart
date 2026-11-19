@@ -20,12 +20,14 @@ Future<void> showCourseDetailSheet(
   required GridCell cell,
   required TimetableController controller,
 }) {
+  // 叠加选色/备注入口时键盘每帧更新弹层约束，复用详情避免重建底层文字。
+  final detail = CourseDetailSheet(cell: cell, controller: controller);
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     constraints: const BoxConstraints(maxWidth: 560),
-    builder: (context) => CourseDetailSheet(cell: cell, controller: controller),
+    builder: (_) => detail,
   );
 }
 
@@ -104,8 +106,10 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
           top: Radius.circular(TimetableTheme.sheetTopRadius),
         ),
         clipBehavior: Clip.antiAlias,
+        // 叠加的选色面板唤起键盘时，详情保持原高度，不随底部内边距归零而重排。
         child: SafeArea(
           top: false,
+          maintainBottomViewPadding: true,
           child: SingleChildScrollView(
             key: const Key('course_detail_scroll'),
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),

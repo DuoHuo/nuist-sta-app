@@ -121,6 +121,40 @@ double _contrast(Color a, Color b) {
 }
 
 void main() {
+  testWidgets('冷首屏不布局屏外夜课，滚动后完整显示且返回顶部恢复早课', (tester) async {
+    tester.view.physicalSize = const Size(360, 320);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    _c.debugReset();
+    addTearDown(_c.debugReset);
+    _c.debugSetSnapshot(
+      TimetableSnapshot(
+        settings: TimetableSettings(
+          termStartDate: _termStart,
+          showTeacher: false,
+        ),
+        periods: TimetableController.defaultPeriods(),
+        courses: [
+          _course('morning', '首屏早课', start: 1, end: 2),
+          _course('night', '完整屏外夜课', start: 9, end: 11),
+        ],
+      ),
+    );
+    await _pumpGrid(tester);
+    expect(_cell('首屏早课'), findsOneWidget);
+    expect(_cell('完整屏外夜课'), findsNothing);
+    await tester.drag(
+      find.byType(SingleChildScrollView),
+      const Offset(0, -650),
+    );
+    await tester.pumpAndSettle();
+    expect(_cell('完整屏外夜课'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.drag(find.byType(SingleChildScrollView), const Offset(0, 650));
+    await tester.pumpAndSettle();
+    expect(_cell('首屏早课'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
   late Directory tmp;
   final origClock = TimetableController.clock;
   final origBinding = TimetableController.bindingCheck;

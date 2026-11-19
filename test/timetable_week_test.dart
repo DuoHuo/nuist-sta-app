@@ -375,6 +375,13 @@ void main() {
           },
         };
       }
+      if (url.pathSegments.last == 'xswpkc.do') {
+        return {
+          'datas': {
+            'xswpkc': {'rows': <Object?>[]},
+          },
+        };
+      }
       throw Exception('403');
     };
     addTearDown(() {

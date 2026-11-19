@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 桌面小组件颜色 token（深色，widget-4x2-dark.png） -->
 <resources>
+    <!-- 启动窗口与 Flutter 首帧前底色，对应 AppColorsDark.pageBg。 -->
+    <color name="launch_background">#FF121316</color>
     <color name="wg_bg">#FF1C1D21</color>
     <color name="wg_chip">#FF26282D</color>
     <color name="wg_t1">#FFF2F3F5</color>

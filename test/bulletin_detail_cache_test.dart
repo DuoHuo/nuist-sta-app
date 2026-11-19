@@ -295,6 +295,42 @@ void main() {
     });
   }
 
+  testWidgets('正文扫描图保持比例并按阅读宽度限制解码尺寸', (tester) async {
+    tester.view.physicalSize = const Size(1170, 2532);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final api = _FakeApi()
+      ..respond = (_) async => const BulletinDetailDocument(
+        blocks: [
+          BulletinDetailBlock(
+            kind: BulletinDetailBlockKind.image,
+            url: 'https://bulletin.campus.invalid/scan.jpg',
+            altText: '扫描图',
+          ),
+        ],
+        attachments: [],
+      );
+    final repository = BulletinDetailRepository(api: api);
+    final bulletin = _bulletin(1);
+    await repository.refresh(bulletin);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BulletinDetailPage(bulletin: bulletin, repository: repository),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final provider =
+        tester.widget<Image>(find.byType(Image)).image as ResizeImage;
+    expect(provider.width, 1074);
+    expect(provider.height, 4096);
+    expect(provider.policy, ResizeImagePolicy.fit);
+    expect(provider.allowUpscaling, isFalse);
+    expect(find.text('扫描图'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('新鲜缓存打开时不请求，手动刷新仍可读到新版', (tester) async {
     final api = _FakeApi()..respond = (_) async => _document('已缓存正文');
     final repository = BulletinDetailRepository(api: api);

@@ -91,6 +91,13 @@ void main() {
           },
         };
       }
+      if (uri.pathSegments.last == 'xswpkc.do') {
+        return {
+          'datas': {
+            'xswpkc': {'rows': <Object?>[]},
+          },
+        };
+      }
       throw TimeoutException('合成可选接口超时');
     };
     final automatic = c.syncFromJwxt();

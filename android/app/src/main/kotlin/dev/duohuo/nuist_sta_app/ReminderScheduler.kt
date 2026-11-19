@@ -144,27 +144,29 @@ object ReminderScheduler {
 /** 提醒闹钟到点。 */
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val diagnostics = mutableListOf<Map<String, Any?>>()
-        try { ReminderScheduler.show(context, intent, diagnostics) } catch (error: Exception) {
-            diagnostics.add(notifyFailureDetails(error, "reminder.dispatch") + ("reason_code" to "reminder_dispatch_failed"))
+        val pending = goAsync()
+        val app = context.applicationContext
+        TimetableNativeWork.background(app, "reminder.dispatch", "reminder_dispatch_failed", pending::finish) {
+            ReminderScheduler.show(app, intent, it)
         }
-        NativeBackgroundDiagnostics.enqueue(context, diagnostics)
     }
 }
 
 /** 开机 / 升级 / 改时间 / 改时区 / 精确闹钟权限变化：重排提醒并刷新小组件。 */
 class NotifySystemEventReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val diagnostics = mutableListOf<Map<String, Any?>>()
-        try {
-            @Suppress("UNCHECKED_CAST")
-            diagnostics.addAll(ReminderScheduler.reschedule(context)["diagnostics"] as? List<Map<String, Any?>> ?: emptyList())
-        } catch (error: Exception) {
-            diagnostics.add(notifyFailureDetails(error, "reminder.system_reschedule") + ("reason_code" to "reminder_reschedule_failed"))
+        val pending = goAsync()
+        val app = context.applicationContext
+        TimetableNativeWork.background(app, "reminder.system_dispatch", "reminder_reschedule_failed", pending::finish) { diagnostics ->
+            try {
+                @Suppress("UNCHECKED_CAST")
+                diagnostics.addAll(ReminderScheduler.reschedule(app)["diagnostics"] as? List<Map<String, Any?>> ?: emptyList())
+            } catch (error: Exception) {
+                diagnostics.add(notifyFailureDetails(error, "reminder.system_reschedule") + ("reason_code" to "reminder_reschedule_failed"))
+            }
+            try { TimetableWidgetProvider.refreshAll(app) } catch (error: Exception) {
+                diagnostics.add(notifyFailureDetails(error, "widget.system_refresh") + ("reason_code" to "widget_refresh_failed"))
+            }
         }
-        try { TimetableWidgetProvider.refreshAll(context) } catch (error: Exception) {
-            diagnostics.add(notifyFailureDetails(error, "widget.system_refresh") + ("reason_code" to "widget_refresh_failed"))
-        }
-        NativeBackgroundDiagnostics.enqueue(context, diagnostics)
     }
 }

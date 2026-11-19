@@ -137,7 +137,18 @@ class _TimetablePageState extends State<TimetablePage> {
   bool get _termEnded => _controller.currentWeek > _totalWeeks;
 
   Future<void> _bootstrap() async {
-    await _host.ensureStarted();
+    if (!_host.isInitialized ||
+        widget.focusEvent != null ||
+        widget.focusTomorrow ||
+        _controller.viewingWeek !=
+            _controller.currentWeek.clamp(1, _totalWeeks)) {
+      // 定位其他周会通知仍在栈底的页面，在首个挂载build中不能同步发通知。
+      // 有课时读完本地数据即可显示；门户绑定只决定空课表的登录引导。
+      await _host.ensureLocalReady();
+      if (!_controller.hasCourses && _controller.scheduleEvents.isEmpty) {
+        await _host.ensureStarted();
+      }
+    }
     if (!mounted || _viewingWeekCleared) return;
     // 退出时已清除浏览周；离开期间跨周或修改系统日期时，再对齐到本周。
     _controller.followCurrentWeekIfChanged();
@@ -541,7 +552,9 @@ class _TimetablePageState extends State<TimetablePage> {
       // 输入只出现在弹层，键盘升降时保持背景课表的尺寸，避免重排整个周视图。
       resizeToAvoidBottomInset: false,
       backgroundColor: colors.pageBg,
+      // 键盘升起时系统底部内边距逐帧归零；保持导航栏占位，弹层输入不重排周视图。
       body: SafeArea(
+        maintainBottomViewPadding: true,
         child: ListenableBuilder(
           listenable: _host,
           builder: (context, _) {

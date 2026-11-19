@@ -9,11 +9,17 @@ import 'package:nuist_sta_app/core/config/campus_config.dart';
 import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/logging/log_store.dart';
+import 'package:nuist_sta_app/core/logging/diagnostic_redactor.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_controller.dart';
 import 'package:nuist_sta_app/shell/profile/about/about_page.dart';
 import 'package:nuist_sta_app/shell/profile/settings/settings_page.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+
+Map<String, Object?>? _redactStoredRecord(Map<String, Object?> record) => {
+  ...record,
+  'attrs': DiagnosticRedactor.value(record['attrs']),
+};
 
 void main() {
   setUp(() async => AppLog.resetForTesting());
@@ -81,6 +87,111 @@ void main() {
         const LineSplitter().convert(await export.readAsString()).first,
       );
       expect(metadata['recovered_files'], 0);
+    });
+
+    test('大正文只进入附件，不占索引容量；预览只读摘要、精确读取及导出保留全文', () async {
+      final store = create(budget: 8 * 1024 * 1024, fileBytes: 4096);
+      await store.initialize();
+      for (var i = 1; i <= 3; i++) {
+        await store.append(record(i, 'b' * 32, size: 1024 * 1024));
+      }
+      final preview = await store.snapshot(expandAttachments: false);
+      expect(preview.stats.bytes, lessThan(4096));
+      expect(decode(preview), hasLength(3));
+      expect(preview.content, isNot(contains('x' * 1024)));
+      expect(
+        decode(preview).every((row) => row['record_attachment'] is String),
+        isTrue,
+      );
+      final full = await store.findRecord('a' * 16, 2);
+      expect((full!['attrs'] as Map)['details']['body'].length, 1024 * 1024);
+      final export = await store.createExport({});
+      final exported = const LineSplitter()
+          .convert(await export.readAsString())
+          .skip(1)
+          .map(jsonDecode)
+          .toList();
+      expect(exported, hasLength(3));
+      expect(
+        exported.every(
+          (row) => row['attrs']['details']['body'].length == 1024 * 1024,
+        ),
+        isTrue,
+      );
+    });
+
+    test('后台结构化写入仍按调用顺序快照、导出和清除', () async {
+      final store = create(budget: 8 * 1024 * 1024);
+      await store.initialize();
+      final first = store.appendRecord(
+        jsonDecode(record(1, 'b' * 32, size: 2 * 1024 * 1024))
+            as Map<String, Object?>,
+        background: true,
+      );
+      final second = store.appendRecord(
+        jsonDecode(record(2, 'c' * 32)) as Map<String, Object?>,
+      );
+      final snapshot = store.snapshot();
+      final cleared = store.clear();
+      final third = store.appendRecord(
+        jsonDecode(record(3, 'd' * 32, size: 70000)) as Map<String, Object?>,
+      );
+      final exported = store.createExport({'record_type': 'metadata'});
+      await Future.wait([first, second, cleared, third]);
+      final captured = decode(await snapshot);
+      expect(captured.map((item) => item['seq']), [1, 2]);
+      expect(
+        (captured.first['attrs']['details']['body'] as String).length,
+        2 * 1024 * 1024,
+      );
+      final rows = const LineSplitter()
+          .convert(await (await exported).readAsString())
+          .map((line) => jsonDecode(line) as Map<String, dynamic>)
+          .toList();
+      expect(rows.skip(1).map((item) => item['seq']), [3]);
+      expect((rows.last['attrs']['details']['body'] as String).length, 70000);
+    });
+
+    test('后台水合重新脱敏旧附件，附件丢失仍声明内容不完整', () async {
+      final store = RotatingLogStore(
+        temp,
+        exportDirectory: Directory('${temp.path}/exports'),
+        maxFileBytes: 4096,
+        sanitizeRecord: _redactStoredRecord,
+      );
+      await store.initialize();
+      final legacy =
+          jsonDecode(record(1, 'b' * 32, size: 100000)) as Map<String, Object?>;
+      final details = ((legacy['attrs'] as Map)['details'] as Map);
+      details['request'] = {
+        'headers': {
+          'Authorization': 'Bearer legacy-private',
+          'Cookie': 'session=private-cookie',
+        },
+        'body_text': '{"student_id":"202512340001","value":"safe"}',
+      };
+      await store.appendRecord(legacy, background: true);
+      final snapshot = await store.snapshot();
+      expect(snapshot.content, isNot(contains('legacy-private')));
+      expect(snapshot.content, isNot(contains('private-cookie')));
+      expect(snapshot.content, isNot(contains('202512340001')));
+      expect(snapshot.content, contains('safe'));
+      expect(
+        (decode(snapshot).single['attrs']['details']['body'] as String).length,
+        100000,
+      );
+      expect(snapshot.stats.recoveredFileCount, 1);
+      final attachment = await Directory('${temp.path}/records')
+          .list()
+          .where((entry) => entry is File)
+          .single;
+      await attachment.delete();
+      final missing = decode(await store.snapshot()).single;
+      expect(missing['attrs']['details']['complete'], isFalse);
+      expect(
+        missing['attrs']['details']['incomplete_reason'],
+        'diagnostic_attachment_unavailable',
+      );
     });
 
     test('附件预算按解压长度整组淘汰，清空后新附件不继承旧占用', () async {
@@ -281,6 +392,56 @@ void main() {
     expect('${outer['trace_id']}', hasLength(32));
     expect('${outer['span_id']}', hasLength(16));
     expect(records.any((record) => record['event'] == 'outer.started'), isTrue);
+  });
+
+  test('日志初始化前的事件按序保留，初始化不丢首帧诊断', () async {
+    final temp = await Directory.systemTemp.createTemp('log_startup_queue_');
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await temp.delete(recursive: true);
+    });
+    AppLog.logger('test.startup').info('first');
+    AppLog.logger('test.startup').info(
+      'second',
+      fields: {
+        'details': {'token': 'synthetic-startup-secret', 'message': '首帧诊断'},
+      },
+    );
+    await AppLog.initialize(directory: temp);
+    final snapshot = await AppLog.snapshot();
+    final startup = const LineSplitter()
+        .convert(snapshot.content)
+        .map(jsonDecode)
+        .where((row) => row['scope'] == 'test.startup')
+        .toList();
+    expect(startup.map((row) => row['event']), ['first', 'second']);
+    expect(snapshot.content, contains('首帧诊断'));
+    expect(snapshot.content, isNot(contains('synthetic-startup-secret')));
+  });
+
+  test('初始化前大正文旁路保存附件，不挤掉普通首帧事件', () async {
+    final temp = await Directory.systemTemp.createTemp('large_startup_queue_');
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await temp.delete(recursive: true);
+    });
+    final starting = AppLog.initialize(directory: temp);
+    final body = '${'x' * (3 * 1024 * 1024)}启动末尾';
+    final evidence = AppLog.recordHttpExchange('test.startup.large', {
+      'response': {'body': body},
+    });
+    AppLog.logger('test.startup.small').info('after');
+    await starting;
+    final snapshot = await AppLog.snapshot();
+    expect(snapshot.content, contains('启动末尾'));
+    expect(snapshot.content, contains('test.startup.small'));
+    final preview = await AppLog.snapshot(expandAttachments: false);
+    expect(preview.content.length, lessThan(4096));
+    final full = await AppLog.readRecord(
+      evidence!['record_ref'] as Map<String, Object?>,
+    );
+    expect(full, isNotNull, reason: '初始化后必须保留原始记录引用，不能重建新 seq');
+    expect((full!['attrs'] as Map)['details']['response']['body'], body);
   });
 
   test('开发控制台使用便于 Flutter 面板与 logcat 阅读的单行格式', () {

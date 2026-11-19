@@ -80,12 +80,14 @@ void main() {
     directory = await Directory.systemTemp.createTemp('tt_persistence_failure');
     TimetableStore.debugDirectory = directory;
     TimetableStore.debugBeforeBatchReplace = null;
+    TimetableStore.debugPrepareBatchInBackground = true;
     TimetableController.bindingCheck = () async => false;
     c.debugReset();
   });
 
   tearDown(() async {
     TimetableStore.debugBeforeBatchReplace = null;
+    TimetableStore.debugPrepareBatchInBackground = false;
     TimetableStore.debugDirectory = null;
     TimetableController.bindingCheck = originalBinding;
     c.debugReset();

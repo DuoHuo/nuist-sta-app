@@ -155,6 +155,10 @@ void main() {
     await tester.showKeyboard(note);
     await tester.pumpAndSettle();
     final section = tester.renderObject<RenderParagraph>(find.text('上课安排'));
+    final startField = find.byKey(const Key('manual_course_start'));
+    final endField = find.byKey(const Key('manual_course_end_1'));
+    final startWidget = tester.widget(startField);
+    final endWidget = tester.widget(endField);
     final paints = <RenderObject>[];
     final previousPaint = debugOnProfilePaint;
     try {
@@ -162,6 +166,12 @@ void main() {
       for (var inset = 25; inset <= 300; inset += 25) {
         tester.view.viewInsets = FakeViewPadding(bottom: inset.toDouble());
         await tester.pump(const Duration(milliseconds: 16));
+        expect(
+          tester.widget(startField),
+          same(startWidget),
+          reason: '键盘高度变化不重新生成节次选项或重复测量其文字',
+        );
+        expect(tester.widget(endField), same(endWidget));
       }
     } finally {
       debugOnProfilePaint = previousPaint;

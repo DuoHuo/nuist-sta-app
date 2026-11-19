@@ -19,6 +19,7 @@ class TimetableStore {
   static final _log = AppLog.logger('timetable.store');
   static final _batchZoneKey = Object();
   static final _scheduleZoneKey = Object();
+  static Future<void> _batchCommits = Future.value();
 
   static _TimetableWriteBatch? get _currentBatch =>
       Zone.current[_batchZoneKey] as _TimetableWriteBatch?;
@@ -50,7 +51,14 @@ class TimetableStore {
     final batch = _TimetableWriteBatch();
     try {
       await runZoned(stageWrites, zoneValues: {_batchZoneKey: batch});
-      batch.commit();
+      if (Platform.environment.containsKey('FLUTTER_TEST') &&
+          !debugPrepareBatchInBackground) {
+        await batch.commit();
+      } else {
+        final commit = _batchCommits.then((_) => batch.commit());
+        _batchCommits = commit.then<void>((_) {}, onError: (Object _) {});
+        await commit;
+      }
     } on TimetablePersistenceException {
       rethrow;
     } catch (error, stackTrace) {
@@ -140,6 +148,10 @@ class TimetableStore {
   /// 测试用：在批次替换第 [index] 个文件前模拟故障，验证已替换文件的回退。
   @visibleForTesting
   static void Function(int index)? debugBeforeBatchReplace;
+
+  /// widget 测试的 FakeAsync 不推进后台 IO；专门的存储回归可开启生产后台路径。
+  @visibleForTesting
+  static bool debugPrepareBatchInBackground = false;
 
   static Future<Directory?> _dir() async {
     try {
@@ -862,22 +874,17 @@ class _TimetableWriteBatch {
     if (closed) throw const TimetablePersistenceException();
   }
 
-  void commit() {
+  Future<void> commit() async {
     _checkOpen();
     final files = _files.values.where((f) => f.encoded != null).toList();
     try {
-      // 暂存期间如有批次外写入，拒绝覆盖更新后的文件。
-      for (final pending in files) {
-        if (!listEquals(
-          pending.original,
-          _PendingTimetableJson.readOriginal(pending.file),
-        )) {
-          throw const TimetablePersistenceException();
-        }
-      }
-      // 全部新内容与旧内容备份先准备好，再开始替换任何原文件。
-      for (final pending in files) {
-        pending.temporary.writeAsStringSync(pending.encoded!, flush: true);
+      // 刷盘留在后台 isolate；其返回后再同步校验并完成短暂的原子替换。
+      // 校验与替换之间不 await，批次外更新仍不能被旧数据覆盖。
+      for (var index = 0; index < files.length; index++) {
+        final pending = files[index];
+        pending.temporary = File(
+          '${pending.file.path}.tmp.${DateTime.now().microsecondsSinceEpoch}.$index',
+        );
       }
       for (final pending in files) {
         if (pending.original == null) continue;
@@ -890,8 +897,36 @@ class _TimetableWriteBatch {
           );
         }
         pending.backup = backup;
-        backup.writeAsBytesSync(pending.original!, flush: true);
-        pending.backupReady = true;
+      }
+      if (files.isNotEmpty) {
+        final preparation = [
+          for (final pending in files)
+            (
+              temporary: pending.temporary.path,
+              reserved: '${pending.file.path}.tmp',
+              encoded: pending.encoded!,
+              backup: pending.backup?.path,
+              original: pending.original,
+            ),
+        ];
+        if (Platform.environment.containsKey('FLUTTER_TEST') &&
+            !TimetableStore.debugPrepareBatchInBackground) {
+          _prepareBatchFiles(preparation);
+        } else {
+          await compute(_prepareBatchFiles, preparation);
+        }
+        for (final pending in files) {
+          pending.backupReady = pending.backup != null;
+        }
+      }
+      // 准备期间其他操作可能已保存新内容，只校验原文件；不覆盖更新。
+      for (final pending in files) {
+        if (!listEquals(
+          pending.original,
+          _PendingTimetableJson.readOriginal(pending.file),
+        )) {
+          throw const TimetablePersistenceException();
+        }
       }
       for (var index = 0; index < files.length; index++) {
         final pending = files[index];
@@ -961,7 +996,7 @@ class _PendingTimetableJson {
 
   final File file;
   final List<int>? original;
-  final File temporary;
+  File temporary;
   String? encoded;
   File? backup;
   bool preserveBackup = false;
@@ -976,6 +1011,33 @@ class _PendingTimetableJson {
       throw const TimetablePersistenceException();
     }
     return file.readAsBytesSync();
+  }
+}
+
+void _prepareBatchFiles(
+  List<
+    ({
+      String temporary,
+      String reserved,
+      String encoded,
+      String? backup,
+      List<int>? original,
+    })
+  >
+  files,
+) {
+  for (final file in files) {
+    // 旧版临时路径被目录占用时仍反馈存储故障，不绕开既有坏存储判定。
+    if (FileSystemEntity.typeSync(file.reserved, followLinks: false) ==
+        FileSystemEntityType.directory) {
+      throw const FileSystemException('课表临时存储不可用');
+    }
+    File(file.temporary).writeAsStringSync(file.encoded, flush: true);
+  }
+  for (final file in files) {
+    if (file.backup != null && file.original != null) {
+      File(file.backup!).writeAsBytesSync(file.original!, flush: true);
+    }
   }
 }
 

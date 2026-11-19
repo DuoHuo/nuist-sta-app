@@ -86,14 +86,13 @@ class CourseCell extends StatelessWidget {
         .copyWith(fontSize: sizes.subSize);
     double textHeight(String text, TextStyle style) {
       if (text.isEmpty) return 0;
-      final painter = TextPainter(
-        text: TextSpan(text: text, style: style),
-        textDirection: direction,
-        textScaler: scaler,
-      )..layout(maxWidth: contentWidth);
-      final height = painter.height;
-      painter.dispose();
-      return height;
+      return TimetableTheme.measureText(
+        text,
+        style,
+        maxWidth: contentWidth,
+        scaler: scaler,
+        direction: direction,
+      ).height;
     }
 
     final name = layoutCellCourseName(
@@ -653,23 +652,99 @@ CellContentPlan planCellContent({
   TextScaler textScaler = TextScaler.noScaling,
   TextDirection textDirection = TextDirection.ltr,
 }) {
-  final w = maxWidth.isFinite && maxWidth > 0 ? maxWidth : 1e9;
-  TextPainter painter(String text, TextStyle st) => TextPainter(
-    text: TextSpan(text: text, style: st),
-    textDirection: textDirection,
+  _startCellTextCache();
+  nameStyle = TimetableTheme.measurementStyle(nameStyle);
+  subStyle = TimetableTheme.measurementStyle(subStyle);
+  if (locationStyle != null) {
+    locationStyle = TimetableTheme.measurementStyle(locationStyle);
+  }
+  final key = (
+    name,
+    location,
+    teacher,
+    nameStyle,
+    subStyle,
+    locationStyle,
+    nameSize,
+    subSize,
+    maxWidth,
+    maxHeight,
+    textScaler,
+    textDirection,
+  );
+  final cached = _cellContentPlans.remove(key);
+  if (cached != null) {
+    _cellContentPlans[key] = cached;
+    return cached;
+  }
+  final result = _planCellContent(
+    name: name,
+    location: location,
+    teacher: teacher,
+    nameStyle: nameStyle,
+    subStyle: subStyle,
+    locationStyle: locationStyle,
+    nameSize: nameSize,
+    subSize: subSize,
+    maxWidth: maxWidth,
+    maxHeight: maxHeight,
     textScaler: textScaler,
-  )..layout(maxWidth: w);
+    textDirection: textDirection,
+  );
+  if (_cellContentPlans.length >= 256) {
+    _cellContentPlans.remove(_cellContentPlans.keys.first);
+  }
+  _cellContentPlans[key] = result;
+  return result;
+}
+
+// 翻周、拖动浮层与预览会多次排版相同文本；只保留有限的完整输入组合。
+final _cellContentPlans = <Object, CellContentPlan>{};
+final _cellCourseNames = <Object, String>{};
+bool _cellTextCacheStarted = false;
+
+void _startCellTextCache() {
+  if (_cellTextCacheStarted) return;
+  _cellTextCacheStarted = true;
+  PaintingBinding.instance.systemFonts.addListener(() {
+    _cellContentPlans.clear();
+    _cellCourseNames.clear();
+  });
+}
+
+CellContentPlan _planCellContent({
+  required String name,
+  required String location,
+  required String teacher,
+  required TextStyle nameStyle,
+  required TextStyle subStyle,
+  TextStyle? locationStyle,
+  required double nameSize,
+  required double subSize,
+  required double maxWidth,
+  required double maxHeight,
+  required TextScaler textScaler,
+  required TextDirection textDirection,
+}) {
+  final w = maxWidth.isFinite && maxWidth > 0 ? maxWidth : 1e9;
   double heightOf(String text, TextStyle st) {
-    final p = painter(text, st);
-    final h = p.height;
-    p.dispose();
-    return h;
+    return TimetableTheme.measureText(
+      text,
+      st,
+      maxWidth: w,
+      scaler: textScaler,
+      direction: textDirection,
+    ).height;
   }
 
   int linesOf(String text, TextStyle st) {
-    final p = painter(text, st);
-    final n = p.computeLineMetrics().length;
-    p.dispose();
+    final n = TimetableTheme.measureText(
+      text,
+      st,
+      maxWidth: w,
+      scaler: textScaler,
+      direction: textDirection,
+    ).lines;
     return n < 1 ? 1 : n;
   }
 
@@ -810,9 +885,40 @@ String layoutCellCourseName(
   TextScaler textScaler = TextScaler.noScaling,
   TextDirection textDirection = TextDirection.ltr,
 }) {
+  style = TimetableTheme.measurementStyle(style);
   final plain = normalizeCourseName(name);
   final m = _trailingParen.firstMatch(plain);
   if (m == null || !maxWidth.isFinite || maxWidth <= 0) return plain;
+
+  _startCellTextCache();
+  final key = (plain, style, maxWidth, textScaler, textDirection);
+  final cached = _cellCourseNames.remove(key);
+  if (cached != null) {
+    _cellCourseNames[key] = cached;
+    return cached;
+  }
+  final result = _layoutCellCourseName(
+    plain,
+    style: style,
+    maxWidth: maxWidth,
+    textScaler: textScaler,
+    textDirection: textDirection,
+  );
+  if (_cellCourseNames.length >= 256) {
+    _cellCourseNames.remove(_cellCourseNames.keys.first);
+  }
+  _cellCourseNames[key] = result;
+  return result;
+}
+
+String _layoutCellCourseName(
+  String plain, {
+  required TextStyle style,
+  required double maxWidth,
+  required TextScaler textScaler,
+  required TextDirection textDirection,
+}) {
+  final m = _trailingParen.firstMatch(plain)!;
 
   TextPainter painterFor(String text, {double? width}) => TextPainter(
     text: TextSpan(text: text, style: style),

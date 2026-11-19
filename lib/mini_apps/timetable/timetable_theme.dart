@@ -633,6 +633,17 @@ abstract final class TimetableTheme {
     TextScaler textScaler = TextScaler.noScaling,
     TextDirection textDirection = TextDirection.ltr,
   }) {
+    nameStyle = measurementStyle(nameStyle);
+    if (!_cellFontCacheStarted) {
+      _cellFontCacheStarted = true;
+      PaintingBinding.instance.systemFonts.addListener(_cellFontSizes.clear);
+    }
+    final key = (maxWidth, nameStyle, factor, textScaler, textDirection);
+    final cached = _cellFontSizes.remove(key);
+    if (cached != null) {
+      _cellFontSizes[key] = cached;
+      return cached;
+    }
     final initialSize = cellFontSize(cellSize, factor, textScaler);
     var nameSize = initialSize;
     if (maxWidth.isFinite && maxWidth > 0) {
@@ -655,7 +666,7 @@ abstract final class TimetableTheme {
         if (fits || nameSize <= minimum + 0.01) break;
       }
     }
-    return (
+    final sizes = (
       nameSize: nameSize,
       subSize: cellFontSize(
         cellSubSize,
@@ -663,6 +674,74 @@ abstract final class TimetableTheme {
         textScaler,
       ),
     );
+    // 课程与日程在同列使用相同字号，只保存有限的尺寸/样式组合。
+    if (_cellFontSizes.length >= 128) {
+      _cellFontSizes.remove(_cellFontSizes.keys.first);
+    }
+    _cellFontSizes[key] = sizes;
+    return sizes;
+  }
+
+  static bool _cellFontCacheStarted = false;
+  static final _cellFontSizes = <Object, ({double nameSize, double subSize})>{};
+
+  /// 排版只依赖字体与行高，颜色/背景不影响度量，避免每个配色重复整形。
+  static TextStyle measurementStyle(TextStyle style) => TextStyle(
+    inherit: style.inherit,
+    fontFamily: style.fontFamily,
+    fontFamilyFallback: style.fontFamilyFallback,
+    fontSize: style.fontSize,
+    fontWeight: style.fontWeight,
+    fontStyle: style.fontStyle,
+    fontVariations: style.fontVariations,
+    fontFeatures: style.fontFeatures,
+    letterSpacing: style.letterSpacing,
+    wordSpacing: style.wordSpacing,
+    textBaseline: style.textBaseline,
+    height: style.height,
+    leadingDistribution: style.leadingDistribution,
+    locale: style.locale,
+  );
+
+  static bool _textMetricsStarted = false;
+  static final _textMetrics = <Object, ({double height, int lines})>{};
+
+  /// 网格行高与格内排版共用纯文本度量，最多保留512个输入组合。
+  static ({double height, int lines}) measureText(
+    String text,
+    TextStyle style, {
+    required double maxWidth,
+    required TextScaler scaler,
+    required TextDirection direction,
+    int? maxLines,
+  }) {
+    if (!_textMetricsStarted) {
+      _textMetricsStarted = true;
+      PaintingBinding.instance.systemFonts.addListener(_textMetrics.clear);
+    }
+    final clean = measurementStyle(style);
+    final key = (text, clean, maxWidth, scaler, direction, maxLines);
+    final cached = _textMetrics.remove(key);
+    if (cached != null) {
+      _textMetrics[key] = cached;
+      return cached;
+    }
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: clean),
+      textScaler: scaler,
+      textDirection: direction,
+      maxLines: maxLines,
+    )..layout(maxWidth: maxWidth);
+    final result = (
+      height: painter.height,
+      lines: painter.computeLineMetrics().length,
+    );
+    painter.dispose();
+    if (_textMetrics.length >= 512) {
+      _textMetrics.remove(_textMetrics.keys.first);
+    }
+    _textMetrics[key] = result;
+    return result;
   }
 
   static const double periodHeight = 64;

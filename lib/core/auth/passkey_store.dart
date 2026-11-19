@@ -21,14 +21,27 @@ class PasskeyStore {
   static PasskeyBundle? _cached;
   static bool _loaded = false;
 
+  /// 冷启动时各模块几乎同时询问绑定状态；共享同一次读取，避免重复解密和解析。
+  static Future<PasskeyBundle?>? _reading;
+
+  /// 保存或删除后递增；此前发起的读取不再覆盖缓存。
+  static int _generation = 0;
+
   /// 读取已绑定的凭据；未绑定或存储不可用（如 widget 测试环境）时返回 null。
-  static Future<PasskeyBundle?> read() async {
-    if (_loaded) return _cached;
+  static Future<PasskeyBundle?> read() {
+    if (_loaded) return Future.value(_cached);
+    return _reading ??= _read().whenComplete(() => _reading = null);
+  }
+
+  static Future<PasskeyBundle?> _read() async {
+    final generation = _generation;
     try {
       final raw = await _storage.read(key: _key);
-      _cached = raw == null || raw.isEmpty
+      final bundle = raw == null || raw.isEmpty
           ? null
           : PasskeyBundle.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      if (generation != _generation) return _cached;
+      _cached = bundle;
       _loaded = true;
       return _cached;
     } catch (error, stackTrace) {
@@ -41,6 +54,7 @@ class PasskeyStore {
   static Future<void> save(PasskeyBundle bundle) async {
     try {
       await _storage.write(key: _key, value: jsonEncode(bundle.toJson()));
+      _generation++;
       _cached = bundle;
       _loaded = true;
       _log.info('save.completed');
@@ -53,6 +67,7 @@ class PasskeyStore {
   static Future<void> delete() async {
     try {
       await _storage.delete(key: _key);
+      _generation++;
       _cached = null;
       _loaded = true;
       _log.info('delete.completed');

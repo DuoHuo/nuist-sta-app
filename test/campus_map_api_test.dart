@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_api.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_cache.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_source.dart';
 
@@ -158,6 +160,89 @@ void main() {
   tearDown(() {
     api.close();
     dio.close();
+  });
+
+  test('大地图 JSON 完整解析，格式错误仍按原类型报告', () async {
+    final description = List.filled(20000, '地图内容').join();
+    setup(
+      (_) => ok({
+        'photos': [
+          {'photo_id': 1, 'url': '/photo.jpg', 'caption': description},
+        ],
+      }),
+    );
+    final photos = await api.loadBuildingPhotos('synthetic');
+    expect(photos.single.caption, description);
+
+    setup(
+      (_) => ResponseBody.fromString(
+        '{"invalid":${' ' * (70 * 1024)}',
+        200,
+        headers: {
+          Headers.contentTypeHeader: ['application/json'],
+        },
+      ),
+    );
+    await expectLater(
+      api.loadBuildingPhotos('synthetic'),
+      throwsA(isA<CampusMapApiException>()),
+    );
+  });
+
+  test('大地图快照缓存完整往返，损坏和旧版缓存仍降级为空', () async {
+    setup((_) => ok(const <String, Object>{}));
+    final binding = TestWidgetsFlutterBinding.ensureInitialized();
+    const channel = MethodChannel('plugins.flutter.io/path_provider');
+    final directory = await Directory.systemTemp.createTemp(
+      'campus-cache-test-',
+    );
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (call) async => call.method == 'getApplicationDocumentsDirectory'
+          ? directory.path
+          : null,
+    );
+    addTearDown(() async {
+      binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+      await directory.delete(recursive: true);
+    });
+    final geometry = fc(
+      List.generate(
+        248,
+        (index) => {
+          'type': 'Feature',
+          'properties': {'building_id': 'synthetic-$index'},
+          'geometry': {
+            'type': 'Polygon',
+            'coordinates': [
+              List.generate(
+                512,
+                (j) => [118.7 + j / 100000, 32.2 + j / 100000],
+              ),
+            ],
+          },
+        },
+      ),
+    );
+    final snapshot = CampusMapSnapshot(
+      places: List.generate(
+        248,
+        (index) => CampusPlace(id: 'synthetic-$index', name: '测试建筑'),
+      ),
+      buildingGeoJson: geometry,
+      styleString: bundledStyle,
+    );
+    final cache = CampusMapCache();
+    await cache.write('synthetic', snapshot);
+    final restored = await cache.read('synthetic');
+    expect(restored!.toJson(), snapshot.toJson());
+    final file = File('${directory.path}/campus_map_snapshot_synthetic.json');
+    await file.writeAsString('{');
+    expect(await cache.read('synthetic'), isNull);
+    await file.writeAsString(
+      jsonEncode({'version': 0, 'data': snapshot.toJson()}),
+    );
+    expect(await cache.read('synthetic'), isNull);
   });
 
   group('building models', () {

@@ -13,6 +13,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -21,6 +23,45 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
+import java.util.concurrent.Executors
+
+/** 提醒与小组件的本机存储/系统调度共用串行队列，避免阻塞主线程和交错覆盖。 */
+internal object TimetableNativeWork {
+    private val worker = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "timetable-native").apply { isDaemon = true }
+    }
+    private val main = Handler(Looper.getMainLooper())
+
+    fun reply(result: MethodChannel.Result, code: String, message: String, stage: String,
+              action: () -> Any?, onSuccess: (Any?) -> Unit = result::success) {
+        worker.execute {
+            try {
+                val value = action()
+                main.post {
+                    try { onSuccess(value) } catch (error: Exception) {
+                        result.error(code, message, notifyFailureDetails(error, stage))
+                    }
+                }
+            } catch (error: Exception) {
+                val details = notifyFailureDetails(error, stage)
+                main.post { result.error(code, message, details) }
+            }
+        }
+    }
+
+    fun background(context: Context, stage: String, reason: String,
+                   finish: () -> Unit = {}, action: (MutableList<Map<String, Any?>>) -> Unit) {
+        val app = context.applicationContext
+        worker.execute {
+            val diagnostics = mutableListOf<Map<String, Any?>>()
+            try { action(diagnostics) } catch (error: Exception) {
+                diagnostics.add(notifyFailureDetails(error, stage) + ("reason_code" to reason))
+            } finally {
+                try { NativeBackgroundDiagnostics.enqueue(app, diagnostics) } finally { finish() }
+            }
+        }
+    }
+}
 
 /** 只经现有平台回执交给 Dart 脱敏，不在原生侧打印或保存异常正文。 */
 internal fun notifyFailureDetails(error: Throwable, stage: String): Map<String, Any?> {
@@ -51,9 +92,10 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
      */
     private val configReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            try { TimetableWidgetProvider.refreshIfNightChanged(context) } catch (error: Exception) {
-                NativeBackgroundDiagnostics.enqueue(context, listOf(
-                    notifyFailureDetails(error, "widget.configuration") + ("reason_code" to "widget_configuration_refresh_failed")))
+            val pending = goAsync()
+            val appContext = context.applicationContext
+            TimetableNativeWork.background(appContext, "widget.configuration", "widget_configuration_refresh_failed", pending::finish) {
+                TimetableWidgetProvider.refreshIfNightChanged(appContext)
             }
         }
     }
@@ -80,14 +122,23 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
         try {
             when (call.method) {
                 "scheduleReminders" -> {
-                    result.success(ReminderScheduler.replace(app, call.argument<String>("alarms") ?: "[]"))
+                    val json = call.argument<String>("alarms") ?: "[]"
+                    val context = app
+                    TimetableNativeWork.reply(result, "notify_failed", "操作失败", "notify.scheduleReminders",
+                        action = { ReminderScheduler.replace(context, json) })
                 }
                 "cancelReminders" -> {
-                    result.success(ReminderScheduler.cancelAll(app))
+                    val context = app
+                    TimetableNativeWork.reply(result, "notify_failed", "操作失败", "notify.cancelReminders",
+                        action = { ReminderScheduler.cancelAll(context) })
                 }
                 "updateWidget" -> {
-                    TimetableWidgetProvider.savePayload(app, call.argument<String>("payload") ?: "")
-                    result.success(null)
+                    val json = call.argument<String>("payload") ?: ""
+                    val context = app
+                    TimetableNativeWork.reply(result, "notify_failed", "操作失败", "notify.updateWidget", action = {
+                        TimetableWidgetProvider.savePayload(context, json)
+                        null
+                    })
                 }
                 "permissionStatus" -> result.success(status())
                 "requestNotificationPermission" -> requestNotification(result)

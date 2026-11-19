@@ -275,9 +275,6 @@ class TimetableNotifyService {
           scheme: coursePaletteSchemeFor(_ctl),
         ).bg;
 
-  NotifyClass? _tomorrowFirst(DateTime date) =>
-      widgetItemsOn(DateTime(date.year, date.month, date.day + 1)).firstOrNull;
-
   static DateTime? _at(DateTime day, String? hhmm) {
     if (hhmm == null) return null;
     final p = hhmm.split(':');
@@ -317,16 +314,22 @@ class TimetableNotifyService {
     final state = needsUpdate
         ? WidgetDataState.needsUpdate
         : (_lastSyncFailed ? WidgetDataState.loadFailed : WidgetDataState.ok);
+    // 每天的安排既用于当天列表，又作为前一天的“明天首节”；同一次生成只算一遍。
+    final itemsByDate = <DateTime, List<NotifyClass>>{};
+    List<NotifyClass> itemsOn(DateTime date) =>
+        itemsByDate[date] ??= widgetItemsOn(date);
+    NotifyClass? tomorrowFirst(DateTime date) =>
+        itemsOn(DateTime(date.year, date.month, date.day + 1)).firstOrNull;
     return buildWidgetPayload(
       now: now,
-      classesOn: widgetItemsOn,
+      classesOn: itemsOn,
       weekOf: _ctl.actualWeek,
       state: state,
       hasCache: hasCache,
       lastSyncedAt: synced,
       prefs: widgetPrefs(),
-      tomorrowFirst: _tomorrowFirst(now),
-      tomorrowFirstOn: _tomorrowFirst,
+      tomorrowFirst: tomorrowFirst(now),
+      tomorrowFirstOn: tomorrowFirst,
     );
   }
 

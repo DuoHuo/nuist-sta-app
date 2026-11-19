@@ -33,8 +33,12 @@ class AppThemeMode extends ValueNotifier<ThemeMode> {
     }
   }
 
-  /// 冷启动读一次本地选择；读不到保持跟随系统。
-  Future<void> load() async {
+  Future<void>? _loading;
+
+  /// 冷启动读一次本地选择；读不到保持跟随系统。重复调用共用同一次读取。
+  Future<void> load() => _loading ??= _load();
+
+  Future<void> _load() async {
     final file = await _file();
     if (file == null || !await file.exists()) return;
     try {

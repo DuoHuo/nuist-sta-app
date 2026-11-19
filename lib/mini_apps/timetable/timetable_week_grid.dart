@@ -155,12 +155,18 @@ class _DragState {
 class _WeekGridState extends State<WeekGrid> {
   _DragState? _drag;
   final _dragUpdates = ValueNotifier<int>(0);
+  final _gridScroll = ScrollController();
+  double _viewportHeight = 0;
 
   /// 松手后格子滑进落点 / 滑回原位的时长。
   static const Duration _settleDuration = Duration(milliseconds: 150);
 
   /// 浮动格阴影（约 Material elevation 6）。
   static final List<BoxShadow> _dragShadow = kElevationToShadow[6]!;
+
+  // 拖起/放下课程只改变浮层；内容、尺寸和字体不变时复用整周的行高测量。
+  Object? _periodHeightInputs;
+  double? _measuredPeriodHeight;
 
   TimetableController get controller => widget.controller;
   int get week => widget.week;
@@ -186,7 +192,12 @@ class _WeekGridState extends State<WeekGrid> {
   @override
   void initState() {
     super.initState();
+    PaintingBinding.instance.systemFonts.addListener(_onFontsChanged);
     _revealUnplacedEvent();
+  }
+
+  void _onFontsChanged() {
+    if (mounted) setState(() => _periodHeightInputs = null);
   }
 
   @override
@@ -199,7 +210,9 @@ class _WeekGridState extends State<WeekGrid> {
 
   @override
   void dispose() {
+    PaintingBinding.instance.systemFonts.removeListener(_onFontsChanged);
     _dragUpdates.dispose();
+    _gridScroll.dispose();
     super.dispose();
   }
 
@@ -268,6 +281,10 @@ class _WeekGridState extends State<WeekGrid> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
+        _viewportHeight = math.max(
+          0,
+          constraints.maxHeight - TimetableTheme.weekHeaderHeight,
+        );
         final periodW = TimetableTheme.periodColumnWidth;
         final dayW = (constraints.maxWidth - periodW) / days.length;
         final dpr = MediaQuery.devicePixelRatioOf(context);
@@ -405,6 +422,7 @@ class _WeekGridState extends State<WeekGrid> {
             ),
             Expanded(
               child: SingleChildScrollView(
+                controller: _gridScroll,
                 child: Column(
                   children: [
                     SizedBox(
@@ -534,6 +552,44 @@ class _WeekGridState extends State<WeekGrid> {
 
   /// 根据可见格内的完整内容增加统一节次行高，不回写用户的高度设置。
   double _preferredPeriodHeight(
+    BuildContext context, {
+    required List<int> days,
+    required double dayW,
+    required double basePeriodH,
+    required double radius,
+    required int nodes,
+    required double dpr,
+  }) {
+    final inputs = (
+      controller.weekGridContentKey,
+      week,
+      days.join(','),
+      dayW,
+      _fontReferenceWidth,
+      basePeriodH,
+      radius,
+      nodes,
+      dpr,
+      _focusedEvent,
+      DefaultTextStyle.of(context).style,
+      MediaQuery.textScalerOf(context),
+      Directionality.of(context),
+    );
+    if (_periodHeightInputs == inputs) return _measuredPeriodHeight!;
+    final result = _measurePreferredPeriodHeight(
+      context,
+      days: days,
+      dayW: dayW,
+      basePeriodH: basePeriodH,
+      radius: radius,
+      nodes: nodes,
+      dpr: dpr,
+    );
+    _periodHeightInputs = inputs;
+    return _measuredPeriodHeight = result;
+  }
+
+  double _measurePreferredPeriodHeight(
     BuildContext context, {
     required List<int> days,
     required double dayW,
@@ -701,60 +757,67 @@ class _WeekGridState extends State<WeekGrid> {
           width: width,
           height: height,
           // 拖走后原位隐藏：用 Visibility 保布局，避免 Opacity 造成整格半透明栅格化发虚。
-          child: Visibility(
-            visible: !hidden,
-            maintainState: true,
-            maintainAnimation: true,
-            maintainSize: true,
-            child: focusedItem != null
-                ? _FocusedScheduleTarget(
-                    eventId: focusedItem.event.id,
-                    reveal: widget.revealFocusedEvent,
-                    onRevealed: widget.onFocusedEventRevealed,
-                    radius: radius,
-                    child: ScheduleEventCell(
+          child: _ViewportCell(
+            scroll: _gridScroll,
+            top: top,
+            height: height,
+            viewport: _viewportHeight,
+            alwaysVisible: focusedItem != null || group.cells.any(_isDragged),
+            child: Visibility(
+              visible: !hidden,
+              maintainState: true,
+              maintainAnimation: true,
+              maintainSize: true,
+              child: focusedItem != null
+                  ? _FocusedScheduleTarget(
+                      eventId: focusedItem.event.id,
+                      reveal: widget.revealFocusedEvent,
+                      onRevealed: widget.onFocusedEventRevealed,
+                      radius: radius,
+                      child: ScheduleEventCell(
+                        controller: controller,
+                        event: focusedItem.event,
+                        width: width,
+                        fontReferenceWidth: _fontReferenceWidth,
+                        height: height,
+                        radius: radius,
+                        stackCount: stack,
+                        onTap: () => _showStackSheet(
+                          context,
+                          group.active,
+                          events: [
+                            focusedItem.event,
+                            for (final e in extra)
+                              if (e.event.id != focusedItem.event.id) e.event,
+                          ],
+                        ),
+                      ),
+                    )
+                  : CourseCell(
                       controller: controller,
-                      event: focusedItem.event,
+                      cell: cell,
                       width: width,
                       fontReferenceWidth: _fontReferenceWidth,
                       height: height,
                       radius: radius,
                       stackCount: stack,
-                      onTap: () => _showStackSheet(
-                        context,
-                        group.active,
-                        events: [
-                          focusedItem.event,
-                          for (final e in extra)
-                            if (e.event.id != focusedItem.event.id) e.event,
-                        ],
-                      ),
+                      onTap: widget.onCourseTap == null
+                          ? null
+                          : stack > 1
+                          ? () => _showStackSheet(
+                              context,
+                              group.active,
+                              events: [for (final e in extra) e.event],
+                            )
+                          : () => widget.onCourseTap!(cell),
+                      onDragStart: draggable
+                          ? (_) => _onDragStart(dragCell)
+                          : null,
+                      onDragUpdate: draggable ? _onDragUpdate : null,
+                      onDragEnd: draggable ? _onDragEnd : null,
+                      onDragCancel: draggable ? _onDragCancel : null,
                     ),
-                  )
-                : CourseCell(
-                    controller: controller,
-                    cell: cell,
-                    width: width,
-                    fontReferenceWidth: _fontReferenceWidth,
-                    height: height,
-                    radius: radius,
-                    stackCount: stack,
-                    onTap: widget.onCourseTap == null
-                        ? null
-                        : stack > 1
-                        ? () => _showStackSheet(
-                            context,
-                            group.active,
-                            events: [for (final e in extra) e.event],
-                          )
-                        : () => widget.onCourseTap!(cell),
-                    onDragStart: draggable
-                        ? (_) => _onDragStart(dragCell)
-                        : null,
-                    onDragUpdate: draggable ? _onDragUpdate : null,
-                    onDragEnd: draggable ? _onDragEnd : null,
-                    onDragCancel: draggable ? _onDragCancel : null,
-                  ),
+            ),
           ),
         ),
       );
@@ -914,15 +977,22 @@ class _WeekGridState extends State<WeekGrid> {
             top: box.top,
             width: width,
             height: height,
-            child: primary.id == _focusedEvent?.id
-                ? _FocusedScheduleTarget(
-                    eventId: primary.id,
-                    reveal: widget.revealFocusedEvent,
-                    onRevealed: widget.onFocusedEventRevealed,
-                    radius: radius,
-                    child: cell,
-                  )
-                : cell,
+            child: _ViewportCell(
+              scroll: _gridScroll,
+              top: box.top,
+              height: height,
+              viewport: _viewportHeight,
+              alwaysVisible: primary.id == _focusedEvent?.id,
+              child: primary.id == _focusedEvent?.id
+                  ? _FocusedScheduleTarget(
+                      eventId: primary.id,
+                      reveal: widget.revealFocusedEvent,
+                      onRevealed: widget.onFocusedEventRevealed,
+                      radius: radius,
+                      child: cell,
+                    )
+                  : cell,
+            ),
           );
         }(),
     ];
@@ -1762,6 +1832,70 @@ class _FocusedScheduleTargetState extends State<_FocusedScheduleTarget> {
       ),
     );
   }
+}
+
+/// 网格保持全周几何，仅挂载视口附近文字；滚动中可见性不变不重建课程。
+class _ViewportCell extends StatefulWidget {
+  const _ViewportCell({
+    required this.scroll,
+    required this.top,
+    required this.height,
+    required this.viewport,
+    required this.child,
+    this.alwaysVisible = false,
+  });
+  final ScrollController scroll;
+  final double top;
+  final double height;
+  final double viewport;
+  final bool alwaysVisible;
+  final Widget child;
+  @override
+  State<_ViewportCell> createState() => _ViewportCellState();
+}
+
+class _ViewportCellState extends State<_ViewportCell> {
+  late bool _visible;
+  bool _isVisible() {
+    if (widget.alwaysVisible) return true;
+    final offset = widget.scroll.hasClients ? widget.scroll.offset : 0.0;
+    // 提前半屏准备，正常滑动/甩动进入视口时已有完整内容。
+    final padding = widget.viewport / 2;
+    return widget.top + widget.height >= offset - padding &&
+        widget.top <= offset + widget.viewport + padding;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _visible = _isVisible();
+    widget.scroll.addListener(_update);
+  }
+
+  void _update() {
+    final visible = _isVisible();
+    if (_visible != visible && mounted) setState(() => _visible = visible);
+  }
+
+  @override
+  void didUpdateWidget(_ViewportCell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.scroll != widget.scroll) {
+      oldWidget.scroll.removeListener(_update);
+      widget.scroll.addListener(_update);
+    }
+    _visible = _isVisible();
+  }
+
+  @override
+  void dispose() {
+    widget.scroll.removeListener(_update);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      _visible ? widget.child : const SizedBox.shrink();
 }
 
 class _DayHeader extends StatelessWidget {

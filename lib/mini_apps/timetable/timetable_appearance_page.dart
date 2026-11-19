@@ -181,8 +181,10 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
               .clamp(kHeaderTextSizeMin, kHeaderTextSizeMax)
               .toDouble();
           final total = _totalWeeks;
+          // 选色键盘升起时保持底部占位，预览与设置列表不随键盘逐帧重排。
           return SafeArea(
             top: false,
+            maintainBottomViewPadding: true,
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final textScale =
@@ -267,22 +269,20 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                             clipBehavior: Clip.antiAlias,
                             child: pc == null
                                 ? const SizedBox.shrink()
-                                : PageView.builder(
-                                    key: const Key(
-                                      'tt_appearance_preview_pager',
-                                    ),
-                                    controller: pc,
-                                    itemCount: total,
-                                    onPageChanged: _onPreviewPageChanged,
-                                    itemBuilder: (context, index) {
-                                      final week = index + 1;
-                                      return MediaQuery(
-                                        data: MediaQuery.of(context).copyWith(
-                                          textScaler: MediaQuery.textScalerOf(
-                                            context,
-                                          ).clamp(maxScaleFactor: 1.3),
-                                        ),
-                                        child: WeekGrid(
+                                // 只在外层限制字号：选色键盘逐帧改变视图内边距时，
+                                // 仅重建这层 MediaQuery，不重建预览周网格。
+                                : MediaQuery.withClampedTextScaling(
+                                    maxScaleFactor: 1.3,
+                                    child: PageView.builder(
+                                      key: const Key(
+                                        'tt_appearance_preview_pager',
+                                      ),
+                                      controller: pc,
+                                      itemCount: total,
+                                      onPageChanged: _onPreviewPageChanged,
+                                      itemBuilder: (context, index) {
+                                        final week = index + 1;
+                                        return WeekGrid(
                                           key: week == _previewWeek
                                               ? const Key(
                                                   'tt_appearance_preview_grid',
@@ -294,9 +294,9 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                           controller: c,
                                           enableDrag: false,
                                           previewMode: true,
-                                        ),
-                                      );
-                                    },
+                                        );
+                                      },
+                                    ),
                                   ),
                           ),
                         ),

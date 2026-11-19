@@ -172,6 +172,36 @@ Positioned _positionedOf(WidgetTester tester, Finder f) => tester.widget(
 );
 
 void main() {
+  testWidgets('日程详情进入编辑后键盘高度变化复用底层详情实例', (tester) async {
+    _load();
+    late ScheduleEvent event;
+    await tester.runAsync(() async {
+      event = await _c.addScheduleEvent(_event(''));
+    });
+    await _pumpLauncher(
+      tester,
+      (context) =>
+          showScheduleEventDetailSheet(context, event: event, controller: _c),
+    );
+    final detail = tester.widget(find.byType(ScheduleEventDetailSheet));
+    await tester.tap(find.byKey(const Key('schedule_detail_edit')));
+    await tester.pumpAndSettle();
+    await tester.showKeyboard(find.byKey(const Key('schedule_form_note')));
+    await tester.pump();
+    for (var step = 0; step <= 12; step++) {
+      tester.view.viewInsets = FakeViewPadding(bottom: step * 25.0);
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(
+        tester.widget(
+          find.byType(ScheduleEventDetailSheet, skipOffstage: false),
+        ),
+        same(detail),
+      );
+    }
+    tester.view.resetViewInsets();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
   late Directory tmp;
   final origClock = TimetableController.clock;
   final origBinding = TimetableController.bindingCheck;

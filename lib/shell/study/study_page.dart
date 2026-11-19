@@ -5,6 +5,7 @@ import '../../core/app_registry.dart';
 import '../../core/pull_to_refresh.dart';
 import '../../core/refresh/silent_refresh.dart';
 import '../../mini_apps/registry.dart';
+import '../deferred_while_hidden.dart';
 
 /// 按注册表排列学习卡片，并在下拉时并发刷新这些卡片。
 /// 各卡自己负责启动及未绑定、加载、失败等状态的展示。
@@ -32,7 +33,12 @@ class StudyPage extends StatelessWidget {
           children: [
             for (final (index, app) in apps.indexed) ...[
               if (index > 0) const SizedBox(height: 12),
-              Builder(key: ValueKey(app.id), builder: app.studyCard!.builder),
+              // 页签在后台预加载：卡片空闲时逐张构建，首次切换只需绘制。
+              DeferredWhileHidden(
+                key: ValueKey(app.id),
+                delay: Duration(milliseconds: 2000 + index * 200),
+                builder: app.studyCard!.builder,
+              ),
             ],
           ],
         ),

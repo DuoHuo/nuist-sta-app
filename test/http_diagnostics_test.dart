@@ -781,6 +781,325 @@ void main() {
     expect((await AppLog.snapshot()).content, isEmpty);
   });
 
+  test('大响应后台脱敏后才交付业务，解析失败仍包含完整证据', () async {
+    final directory = await Directory.systemTemp.createTemp('http-spool-test-');
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    final body = jsonEncode({
+      'rows': List.generate(
+        1200,
+        (i) => {
+          'id': i,
+          'message': '完整非敏感正文',
+          'token': 'synthetic-large-secret',
+        },
+      ),
+      'tail': '后台处理末尾标记',
+    });
+    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+    dio.httpClientAdapter = _Adapter(
+      (_, _) async => ResponseBody.fromString(
+        body,
+        200,
+        headers: {
+          Headers.contentTypeHeader: ['application/json'],
+        },
+      ),
+    );
+    installHttpDiagnostics(dio);
+    addTearDown(() => dio.close(force: true));
+    await expectLater(
+      AppLog.logger('test.large').operation<void>('parse', () async {
+        final response = await dio.get<String>('https://service.example/large');
+        expect(response.data, body);
+        final evidence = httpDiagnosticEvidence(response.requestOptions);
+        expect(
+          (evidence!['exchange'] as Map)['response']['body_attachment'],
+          isTrue,
+        );
+        final full = await AppLog.readRecord(
+          evidence['record_ref'] as Map<String, Object?>,
+        );
+        expect(
+          records.where((r) => r['event'] == 'capture.attachment_failed'),
+          isEmpty,
+          reason: jsonEncode(
+            records
+                .where((r) => r['event'] == 'attachment.write_failed')
+                .toList(),
+          ),
+        );
+        expect(jsonEncode(full), contains('后台处理末尾标记'));
+        expect(jsonEncode(evidence), isNot(contains('synthetic-large-secret')));
+        throw const DiagnosticException('合成解析失败', code: 'schema_changed');
+      }),
+      throwsA(isA<DiagnosticException>()),
+    );
+    final failed = failedOperation('parse');
+    expect(jsonEncode(evidenceOf(failed)), contains('body_attachment'));
+    expect(
+      jsonEncode(evidenceOf(failed)),
+      isNot(contains('synthetic-large-secret')),
+    );
+  });
+
+  test('大流式响应读完后立即失败也保留完整后台诊断', () async {
+    final directory = await Directory.systemTemp.createTemp('http-spool-test-');
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    final body = '${'合成诊断正文' * 6000}流式末尾标记';
+    final dio = Dio(BaseOptions(responseType: ResponseType.stream));
+    dio.httpClientAdapter = _Adapter(
+      (_, _) async => ResponseBody.fromString(body, 200),
+    );
+    installHttpDiagnostics(dio);
+    addTearDown(() => dio.close(force: true));
+    await expectLater(
+      AppLog.logger('test.stream').operation<void>('stream_parse', () async {
+        final response = await dio.get<ResponseBody>(
+          'https://service.example/stream',
+        );
+        await response.data!.stream.drain<void>();
+        final evidence = httpDiagnosticEvidence(response.requestOptions)!;
+        final full = await AppLog.readRecord(
+          evidence['record_ref'] as Map<String, Object?>,
+        );
+        expect(jsonEncode(full), contains('流式末尾标记'));
+        throw const DiagnosticException('合成解析失败', code: 'schema_changed');
+      }),
+      throwsA(isA<DiagnosticException>()),
+    );
+    expect(
+      jsonEncode(evidenceOf(failedOperation('stream_parse'))),
+      contains('body_attachment'),
+    );
+  });
+
+  test('大响应报错后源流立即关闭，后台诊断不产生关闭后写入异常', () async {
+    final directory = await Directory.systemTemp.createTemp('http-spool-test-');
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    final source = StreamController<Uint8List>();
+    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+    dio.httpClientAdapter = _Adapter(
+      (_, _) async => ResponseBody(source.stream, 200),
+    );
+    installHttpDiagnostics(dio);
+    addTearDown(() => dio.close(force: true));
+    final request = dio.get<String>('https://service.example/broken');
+    final failure = expectLater(request, throwsA(isA<DioException>()));
+    await Future<void>.delayed(Duration.zero);
+    source.add(Uint8List.fromList(utf8.encode('合成中断正文' * 6000)));
+    source.addError(const SocketException('synthetic connection reset'));
+    await source.close();
+    await failure;
+    final body = exchange()['response'] as Map;
+    expect(body['complete'], isFalse);
+    final record = records.singleWhere(
+      (r) => r['event'] == 'http.exchange_failed',
+    );
+    final full = await AppLog.readRecord({
+      'session_id': record['session_id'],
+      'seq': record['seq'],
+    });
+    expect(jsonEncode(full), contains('合成中断正文'));
+  });
+
+  test('后台诊断无法跨 isolate 复制时明确记录缺口且业务调用正常结束', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    final result = await AppLog.recordHttpExchangeAsync('test.capture', {
+      'response': {'body': 'x' * 20000},
+      'invalid_test_value': server,
+    });
+    expect(result, isNull);
+    expect(records.last['event'], 'capture.failed');
+    expect(jsonEncode(records.last), contains('diagnostic_processing_failed'));
+  });
+
+  test('可信大二进制文件直接作为附件保存，正文不进入索引且所有字节可导出', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'native-body-test-',
+    );
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    final bytes = Uint8List.fromList(
+      List.generate(2 * 1024 * 1024, (i) => i % 256),
+    );
+    final file = File('${directory.path}/synthetic.bin');
+    await file.writeAsBytes(bytes);
+    await AppLog.recordHttpFileExchange('test.native.file', {
+      'response': {'status': 200},
+    }, file);
+    final summary = records.singleWhere(
+      (r) => r['scope'] == 'test.native.file',
+    );
+    expect(jsonEncode(summary), isNot(contains('body_base64')));
+    final preview = await AppLog.snapshot(expandAttachments: false);
+    expect(preview.content.length, lessThan(4096));
+    final full = await AppLog.readRecord({
+      'session_id': summary['session_id'],
+      'seq': summary['seq'],
+    }, timeout: const Duration(seconds: 30));
+    final response =
+        ((full!['attrs'] as Map)['details'] as Map)['response'] as Map;
+    expect(base64Decode(response['body_base64'] as String), bytes);
+    final exported = await AppLog.createExport({});
+    expect(await exported.length(), greaterThan(bytes.length));
+    expect(await file.exists(), isTrue);
+  });
+
+  test('大请求和响应双附件，取消后仍保留已收正文并释放采集临时文件', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'cancel-spool-test-',
+    );
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    final source = StreamController<Uint8List>();
+    final dio = Dio(BaseOptions(responseType: ResponseType.stream));
+    dio.httpClientAdapter = _Adapter((_, request) async {
+      await request!.drain<void>();
+      return ResponseBody(source.stream, 200);
+    });
+    installHttpDiagnostics(dio);
+    addTearDown(() => dio.close(force: true));
+    final response = await dio.post<ResponseBody>(
+      'https://service.example/cancel',
+      data: '${'请求正文' * 10000}请求末尾',
+    );
+    final got = Completer<void>();
+    final reading = response.data!.stream.listen((_) => got.complete());
+    source.add(Uint8List.fromList(utf8.encode('${'响应正文' * 10000}取消末尾')));
+    await got.future;
+    await reading.cancel();
+    // 直接订阅适配器外侧流；Dio 自身包装流在 cancel 时不传递源订阅关闭。
+    source.addError(const SocketException('synthetic cancelled capture'));
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    final evidence = httpDiagnosticEvidence(response.requestOptions);
+    expect(evidence, isNotNull, reason: jsonEncode(records));
+    final full = await AppLog.readRecord(
+      evidence!['record_ref'] as Map<String, Object?>,
+    );
+    final detail = (full!['attrs'] as Map)['details'] as Map;
+    expect(detail['request']['body'], contains('请求末尾'));
+    expect(detail['response']['body'], contains('取消末尾'));
+    expect(detail['response']['complete'], isFalse);
+    await source.close();
+  });
+
+  test('大认证正文按整个端点上下文脱敏，不落入附件凭据', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'credential-spool-test-',
+    );
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    final body = jsonEncode({
+      'id': 'synthetic-credential-id',
+      'padding': '正常诊断' * 20000,
+    });
+    final file = File('${directory.path}/synthetic.json');
+    await file.writeAsString(body);
+    await AppLog.recordHttpFileExchange('test.credential.file', {
+      'request': {'url': 'https://service.example/authserver/startassertion'},
+      'response': {'status': 200},
+    }, file);
+    final record = records.singleWhere(
+      (r) => r['scope'] == 'test.credential.file',
+    );
+    final full = await AppLog.readRecord({
+      'session_id': record['session_id'],
+      'seq': record['seq'],
+    });
+    expect(jsonEncode(full), isNot(contains('synthetic-credential-id')));
+    expect(jsonEncode(full), contains('正常诊断'));
+  });
+
+  test('写入大块正文途中取消等待当前块结束，不并发关闭后台回执', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'inflight-spool-test-',
+    );
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    final source = StreamController<Uint8List>();
+    final dio = Dio(BaseOptions(responseType: ResponseType.stream));
+    final token = CancelToken();
+    dio.httpClientAdapter = _Adapter(
+      (_, _) async => ResponseBody(source.stream, 200),
+    );
+    installHttpDiagnostics(dio);
+    addTearDown(() => dio.close(force: true));
+    final response = await dio.get<ResponseBody>(
+      'https://service.example/inflight',
+      cancelToken: token,
+    );
+    final error = expectLater(
+      response.data!.stream.drain<void>(),
+      throwsA(isA<DioException>()),
+    );
+    source.add(Uint8List(512 * 1024));
+    await Future<void>.delayed(Duration.zero);
+    token.cancel('synthetic cancellation');
+    await error;
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    await source.close();
+    expect(records.any((r) => r['event'] == 'capture.failed'), isFalse);
+  });
+
+  test('诊断副本半途写入失败仍保留已写前缀，业务正文完整且标识不完整', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'partial-spool-test-',
+    );
+    addTearDown(() async {
+      diagnosticSpoolWriteForTesting = null;
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    diagnosticSpoolWriteForTesting = (written) async {
+      if (written >= 64 * 1024) {
+        throw const FileSystemException('synthetic disk unavailable');
+      }
+    };
+    final body = '${'A' * (64 * 1024)}正文末尾${'B' * (64 * 1024)}';
+    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+    dio.httpClientAdapter = _Adapter(
+      (_, _) async => ResponseBody.fromString(body, 200),
+    );
+    installHttpDiagnostics(dio);
+    addTearDown(() => dio.close(force: true));
+    final response = await dio.get<String>('https://service.example/partial');
+    expect(response.data, body);
+    final reference =
+        httpDiagnosticEvidence(response.requestOptions)!['record_ref']
+            as Map<String, Object?>;
+    final full = await AppLog.readRecord(reference);
+    final captured = (full!['attrs'] as Map)['details']['response'] as Map;
+    expect(captured['body'], 'A' * (64 * 1024));
+    expect(captured['complete'], isFalse);
+    expect(captured['incomplete_reason'], 'capture_spool_write_failed');
+  });
+
   group('独立审查：脱敏边界', () {
     test('HTML控件名保留语义且隐藏token值', () {
       const raw = '<input name="token" value="synthetic-hidden-token">';

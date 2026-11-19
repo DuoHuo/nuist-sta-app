@@ -608,20 +608,32 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
           padding: const EdgeInsets.only(bottom: 12),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: Image.network(
-              block.url!,
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) =>
-                  block.altText.isEmpty
-                  ? const SizedBox.shrink()
-                  : Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Text(
-                        block.altText,
-                        textAlign: alignment,
-                        style: TextStyle(color: palette.hint),
+            child: LayoutBuilder(
+              builder: (context, constraints) => Image(
+                // 正文里的相机照片、扫描图按阅读宽度解码，避免每项保留原图位图。
+                image: ResizeImage(
+                  NetworkImage(block.url!),
+                  width:
+                      (constraints.maxWidth *
+                              MediaQuery.devicePixelRatioOf(context))
+                          .ceil()
+                          .clamp(1, 2048),
+                  height: 4096,
+                  policy: ResizeImagePolicy.fit,
+                ),
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) =>
+                    block.altText.isEmpty
+                    ? const SizedBox.shrink()
+                    : Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          block.altText,
+                          textAlign: alignment,
+                          style: TextStyle(color: palette.hint),
+                        ),
                       ),
-                    ),
+              ),
             ),
           ),
         );

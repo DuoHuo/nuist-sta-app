@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -93,6 +94,9 @@ class AppLog {
   static bool _initialized = false;
   static bool _writingFallback = false;
   static bool _nativeConsoleAvailable = true;
+  static final _startupRecords = <Map<String, Object?>>[];
+  static int _startupRecordBytes = 0;
+  static int _startupDropped = 0;
   static const _consoleChannel = MethodChannel('nuist/diagnostic_logging');
   static final bool _inFlutterTest = Platform.environment.containsKey(
     'FLUTTER_TEST',
@@ -126,6 +130,15 @@ class AppLog {
       );
       await store.initialize();
       _store = store;
+      for (final record in _startupRecords) {
+        unawaited(
+          store
+              .appendRecord(record, background: _hasLargeDiagnostic(record))
+              .catchError(_handleWriteError),
+        );
+      }
+      _startupRecords.clear();
+      _startupRecordBytes = 0;
       storageAvailable.value = true;
       if (kDebugMode) {
         verboseEnabled.value = false;
@@ -139,6 +152,22 @@ class AppLog {
         }
       }
       _initialized = true;
+      if (_startupDropped > 0) {
+        final dropped = _startupDropped;
+        _startupDropped = 0;
+        logger('app.logging').warning(
+          'startup.records_evicted',
+          fields: {
+            'count': dropped,
+            'details': {
+              'capture': {
+                'complete': false,
+                'reason': 'startup_buffer_capacity',
+              },
+            },
+          },
+        );
+      }
       if (!_inFlutterTest) {
         _maintenanceTimer = Timer.periodic(const Duration(hours: 1), (_) {
           unawaited(store.maintain().catchError(_handleWriteError));
@@ -394,12 +423,120 @@ class AppLog {
     return chain;
   }
 
+  /// 大正文在后台脱敏；完成后才交付证据，避免解析失败时丢失原始交流。
+  static Future<Map<String, Object?>?> recordHttpExchangeAsync(
+    String scope,
+    Map<String, Object?> exchange, {
+    Object? error,
+    StackTrace? stackTrace,
+    Map<String, DiagnosticBodyFile>? bodyFiles,
+  }) async {
+    try {
+      // 门户跳转页、JSON 接口逐条脱敏要跑十余轮正则，几 KiB 的正文在手机上
+      // 也会占用数帧；真机除极小交流外都在后台处理。widget 测试的 FakeAsync
+      // 不推进 isolate，仍按原阈值同步处理。
+      final background = _inFlutterTest
+          ? _hasLargeDiagnostic(exchange)
+          : _diagnosticSize(exchange, limit: 1024) >= 1024;
+      final cleaned = background
+          ? await Isolate.run(
+              () => DiagnosticRedactor.value(exchange) as Map<String, Object?>,
+            )
+          : DiagnosticRedactor.value(exchange) as Map<String, Object?>;
+      // 文件正文必须先持久化附件，返回时才允许采集器释放临时文件。
+      if (bodyFiles != null) await initialize();
+      final persisted = bodyFiles == null ? null : Completer<bool>();
+      final result = _recordHttpExchange(
+        scope,
+        cleaned,
+        error: error,
+        stackTrace: stackTrace,
+        sanitized: true,
+        bodyFiles: bodyFiles,
+        persistence: persisted,
+      );
+      final saved = await persisted?.future;
+      if (bodyFiles != null && saved != true) {
+        logger(scope).warning(
+          'capture.attachment_failed',
+          fields: {
+            'details': {
+              'capture': {
+                'complete': false,
+                'reason': 'body_attachment_storage_failed',
+              },
+            },
+          },
+        );
+      }
+      return result;
+    } catch (captureError, captureStack) {
+      // 不能把采集故障变成业务失败，也不能把未脱敏原文交给备用出口。
+      logger(scope).warning(
+        'capture.failed',
+        error: captureError,
+        stackTrace: captureStack,
+        fields: {
+          'details': {
+            'capture': {
+              'complete': false,
+              'reason': 'diagnostic_processing_failed',
+            },
+          },
+        },
+      );
+      return null;
+    }
+  }
+
+  // 只计到阈值，判断过程不复制正文或提前进行 JSON 编码。
+  static bool _hasLargeDiagnostic(Object? value) =>
+      _diagnosticSize(value) >= 16 * 1024;
+
+  static int _diagnosticSize(Object? value, {int limit = 16 * 1024}) {
+    var remaining = limit;
+    bool visit(Object? item) {
+      if (item is String) {
+        remaining -= item.length;
+      } else if (item is Map) {
+        for (final entry in item.entries) {
+          if (visit(entry.key) || visit(entry.value)) return true;
+        }
+      } else if (item is Iterable) {
+        for (final child in item) {
+          if (visit(child)) return true;
+        }
+      } else {
+        remaining -= 8;
+      }
+      return remaining <= 0;
+    }
+
+    visit(value);
+    return limit - remaining;
+  }
+
   /// 保存网络交流的完整脱敏内容；解码前采集器、WebView 与原生桥共用。
   static Map<String, Object?>? recordHttpExchange(
     String scope,
     Map<String, Object?> exchange, {
     Object? error,
     StackTrace? stackTrace,
+  }) => _recordHttpExchange(
+    scope,
+    exchange,
+    error: error,
+    stackTrace: stackTrace,
+  );
+
+  static Map<String, Object?>? _recordHttpExchange(
+    String scope,
+    Map<String, Object?> exchange, {
+    Object? error,
+    StackTrace? stackTrace,
+    bool sanitized = false,
+    Map<String, DiagnosticBodyFile>? bodyFiles,
+    Completer<bool>? persistence,
   }) {
     Map<String, Object?>? evidence;
     _write(
@@ -419,6 +556,9 @@ class AppLog {
       },
       error: error,
       stackTrace: stackTrace,
+      sanitizedDetails: sanitized,
+      bodyFiles: bodyFiles,
+      persistence: persistence,
       onRecord: (record) {
         final reference = <String, Object?>{
           'session_id': record['session_id'],
@@ -427,7 +567,10 @@ class AppLog {
         final details =
             (record['attrs'] as Map)['details'] as Map<String, Object?>;
         evidence = {'record_ref': reference, 'exchange': details};
-        addEvidence('http.exchange', {'record_ref': reference, ...details});
+        _addEvidence('http.exchange', {
+          'record_ref': reference,
+          ...details,
+        }, sanitized: true);
       },
     );
     return evidence;
@@ -435,14 +578,24 @@ class AppLog {
 
   /// 将实际输入或缓存/网络证据挂到当前操作，保留不可变的脱敏快照。
   static void addEvidence(String label, Map<String, Object?> details) {
+    _addEvidence(label, details);
+  }
+
+  static void _addEvidence(
+    String label,
+    Map<String, Object?> details, {
+    bool sanitized = false,
+  }) {
     final context = Zone.current[_contextKey] as _LogContext?;
     final collection = context?.evidence;
     if (context == null || collection == null) return;
-    final sanitized = DiagnosticRedactor.value(details) as Map<String, Object?>;
-    final reference = sanitized['record_ref'];
+    final cleaned = sanitized
+        ? details
+        : DiagnosticRedactor.value(details) as Map<String, Object?>;
+    final reference = cleaned['record_ref'];
     final responseEntity =
         label == 'http.exchange' ||
-        sanitized.keys.every((key) => key == 'record_ref' || key == 'exchange');
+        cleaned.keys.every((key) => key == 'record_ref' || key == 'exchange');
     final identity =
         reference is Map &&
             reference['session_id'] != null &&
@@ -452,14 +605,15 @@ class AppLog {
     collection.add(identity, context, {
       'id': identity,
       'label': _sanitizeName(label),
-      'details': sanitized,
+      'details': cleaned,
     });
   }
 
   /// 只按确切记录引用恢复历史证据，不用“最近一次响应”猜测缓存来源。
   static Future<Map<String, Object?>?> readRecord(
-    Map<String, Object?> reference,
-  ) async {
+    Map<String, Object?> reference, {
+    Duration timeout = const Duration(seconds: 2),
+  }) async {
     final session = reference['session_id'];
     final sequence = reference['seq'];
     if (session is! String ||
@@ -468,9 +622,7 @@ class AppLog {
         sequence < 0) {
       return null;
     }
-    return _store
-        ?.findRecord(session, sequence)
-        .timeout(const Duration(seconds: 2));
+    return _store?.findRecord(session, sequence).timeout(timeout);
   }
 
   /// 从可信原生下载结果保留文件快照；网页消息不能触发本机文件读取。
@@ -486,11 +638,37 @@ class AppLog {
     try {
       final length = await file.length();
       final expected = capturedBytes ?? length;
+      if (expected > 64 * 1024) {
+        await recordHttpExchangeAsync(
+          scope,
+          {
+            ...exchange,
+            'response': {
+              ...?(exchange['response'] as Map?),
+              'body_attachment': true,
+              'captured_bytes': min(expected, length),
+              'complete': complete && expected == length,
+              if (expected != length)
+                'incomplete_reason': 'source_file_size_changed',
+            },
+          },
+          error: error,
+          stackTrace: stackTrace,
+          bodyFiles: {
+            'response': DiagnosticBodyFile(
+              path: file.path,
+              length: min(expected, length),
+              complete: complete && expected == length,
+            ),
+          },
+        );
+        return;
+      }
       final bytes = BytesBuilder(copy: false);
       await for (final chunk in file.openRead(0, min(expected, length))) {
         bytes.add(chunk);
       }
-      recordHttpExchange(
+      await recordHttpExchangeAsync(
         scope,
         {
           ...exchange,
@@ -508,7 +686,7 @@ class AppLog {
         stackTrace: stackTrace,
       );
     } catch (captureError, captureStack) {
-      recordHttpExchange(
+      await recordHttpExchangeAsync(
         scope,
         {
           ...exchange,
@@ -564,9 +742,9 @@ class AppLog {
       (await _store?.stats()) ?? const LogStoreStats(bytes: 0, fileCount: 0);
 
   /// 生成一致的日志快照。
-  static Future<LogSnapshot> snapshot() async {
+  static Future<LogSnapshot> snapshot({bool expandAttachments = true}) async {
     await collectNativeDiagnostics();
-    return await _store?.snapshot() ??
+    return await _store?.snapshot(expandAttachments: expandAttachments) ??
         const LogSnapshot(
           content: '',
           stats: LogStoreStats(bytes: 0, fileCount: 0),
@@ -745,6 +923,8 @@ class AppLog {
     DateTime? recordedAt,
     Completer<bool>? persistence,
     void Function(Map<String, Object?> record)? onRecord,
+    bool sanitizedDetails = false,
+    Map<String, DiagnosticBodyFile>? bodyFiles,
   }) {
     if (!_isEnabled(level)) return;
     try {
@@ -772,7 +952,7 @@ class AppLog {
             secretContext: fields?['secret_context'] == true,
           ),
         'error_kind': ?errorKind,
-      });
+      }, sanitizedDetails: sanitizedDetails);
       if (level.index >= AppLogLevel.warning.index &&
           !event.startsWith('http.exchange')) {
         final evidence =
@@ -806,7 +986,6 @@ class AppLog {
       };
       recordListenerForTesting?.call(Map.unmodifiable(record));
       onRecord?.call(record);
-      final line = jsonEncode(record);
       if ((!kReleaseMode || verboseEnabled.value) &&
           (level != AppLogLevel.debug || verboseEnabled.value) &&
           (!_inFlutterTest || consoleEnabledForTesting)) {
@@ -820,18 +999,56 @@ class AppLog {
       const shouldPersist = true;
       if (shouldPersist) {
         if (_store == null) {
+          // 启动日志只短暂留存；主界面不等待磁盘维护，仍有明确容量和缺口记录。
+          final size = _diagnosticSize(record, limit: 64 * 1024);
+          if (size >= 64 * 1024) {
+            unawaited(
+              () async {
+                await initialize();
+                final store = _store;
+                if (store == null) {
+                  _startupDropped++;
+                  return;
+                }
+                // 复用已经脱敏的原始记录及 seq，已有证据引用才能精确找到正文。
+                await store.appendRecord(record, background: true);
+              }().catchError(_handleWriteError),
+            );
+            persistence?.complete(false);
+            return;
+          }
+          while (_startupRecords.isNotEmpty &&
+              (_startupRecords.length >= 128 ||
+                  _startupRecordBytes + size > 2 * 1024 * 1024)) {
+            final removed = _startupRecords.removeAt(0);
+            _startupRecordBytes -= _diagnosticSize(removed, limit: 64 * 1024);
+            _startupDropped++;
+          }
+          _startupRecords.add(record);
+          _startupRecordBytes += size;
           persistence?.complete(false);
           return;
         }
         unawaited(
           _store
-                  ?.append(line)
+                  ?.appendRecord(
+                    record,
+                    background: _hasLargeDiagnostic(record),
+                    bodyFiles: bodyFiles,
+                  )
                   .then((_) {
                     storageAvailable.value = true;
                     persistence?.complete(true);
                   })
-                  .catchError((Object error) {
+                  .catchError((Object error, StackTrace stack) {
                     _handleWriteError(error);
+                    if (bodyFiles != null) {
+                      logger('app.logging').warning(
+                        'attachment.write_failed',
+                        error: error,
+                        stackTrace: stack,
+                      );
+                    }
                     persistence?.complete(false);
                   }) ??
               Future.value(),
@@ -853,9 +1070,11 @@ class AppLog {
     AppLogLevel level,
     Map<String, Object?> record,
   ) {
+    final large = _hasLargeDiagnostic(record);
+    final consoleRecord = large ? _consoleAttachmentReference(record) : record;
     if ((!_inFlutterTest || consoleEnabledForTesting) && !kReleaseMode) {
       developer.log(
-        formatConsoleMessage(record),
+        formatConsoleMessage(consoleRecord),
         name: record['scope']! as String,
         level: switch (level) {
           AppLogLevel.debug => 500,
@@ -869,7 +1088,7 @@ class AppLog {
     }
     if (level.index >= AppLogLevel.warning.index) {
       message = formatConsoleMessage(
-        record,
+        consoleRecord,
         includeScope: true,
         includeLevel: true,
       );
@@ -890,6 +1109,39 @@ class AppLog {
     } else {
       debugPrint(message, wrapWidth: 1024);
     }
+  }
+
+  static Map<String, Object?> _consoleAttachmentReference(
+    Map<String, Object?> record,
+  ) {
+    final attrs = record['attrs'] as Map?;
+    return {
+      ...record,
+      'attrs': {
+        if (attrs != null)
+          for (final key in [
+            'request_id',
+            'service',
+            'method',
+            'status_code',
+            'duration_ms',
+            'error_type',
+            'error_kind',
+            'reason_code',
+            'stage',
+            'outcome',
+            'stack_trace',
+          ])
+            if (attrs[key] != null) key: attrs[key],
+        'details': {
+          'record_ref': {
+            'session_id': record['session_id'],
+            'seq': record['seq'],
+          },
+          'content': '完整脱敏正文保存在本机诊断附件，可在诊断页展开或导出',
+        },
+      },
+    };
   }
 
   static void _consoleFallback(String message, Object error) {
@@ -1228,6 +1480,7 @@ class AppLog {
     'native.stop': '停止 VPN 原生隧道',
     'native.open': 'VPN 目标连接',
     'native.status': '查询 VPN 原生状态',
+    'native.probe': '检查 VPN 空闲连接活性',
     'config': '读取配置',
     'dns': 'DNS 查询',
     'protocol_auth': '协议鉴权',
@@ -1435,13 +1688,18 @@ class AppLog {
     return cleaned.length <= 80 ? cleaned : cleaned.substring(0, 80);
   }
 
-  static Map<String, Object?> _sanitizeFields(Map<String, Object?>? fields) {
+  static Map<String, Object?> _sanitizeFields(
+    Map<String, Object?>? fields, {
+    bool sanitizedDetails = false,
+  }) {
     if (fields == null || fields.isEmpty) return <String, Object?>{};
     final result = <String, Object?>{};
     final discarded = <String>[];
     for (final entry in fields.entries) {
       final key = _sanitizeName(entry.key);
-      final value = _sanitizeField(key, entry.value);
+      final value = key == 'details' && sanitizedDetails
+          ? entry.value
+          : _sanitizeField(key, entry.value);
       if (value != null) result[key] = value;
       if (value == null && entry.value != null) {
         discarded.add(key.replaceAll(RegExp(r'\d{6,20}'), 'id'));
@@ -1648,6 +1906,10 @@ class AppLog {
       'stop',
       'open',
       'status',
+      'probe',
+      'prepareOpen',
+      'cancelOpen',
+      'releaseOpen',
     },
     'dio_type': {
       'connectionTimeout',
@@ -1727,6 +1989,10 @@ class AppLog {
       'native.stop',
       'native.open',
       'native.status',
+      'native.probe',
+      'native.prepareOpen',
+      'native.cancelOpen',
+      'native.releaseOpen',
     },
     'native_stage': {
       'config',
@@ -2087,6 +2353,9 @@ class AppLog {
     _nativeCollection = null;
     _clearingLogs = false;
     _nativeConsoleAvailable = true;
+    _startupRecords.clear();
+    _startupRecordBytes = 0;
+    _startupDropped = 0;
     recordListenerForTesting = null;
     consoleEnabledForTesting = false;
   }

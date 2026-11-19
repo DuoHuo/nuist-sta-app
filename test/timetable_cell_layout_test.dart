@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -22,6 +23,73 @@ double _cellWidthFor(double screenDp) =>
     TimetableTheme.cellMargin * 2;
 
 void main() {
+  test('冷网格行高与实际内容复用排版，文字颜色变化不产生新度量', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    const style = TextStyle(fontSize: 12, height: 1.1, color: Colors.black);
+    final first = TimetableTheme.measureText(
+      '完整课程名称（1）',
+      style,
+      maxWidth: 45,
+      scaler: TextScaler.noScaling,
+      direction: TextDirection.ltr,
+    );
+    final colored = TimetableTheme.measureText(
+      '完整课程名称（1）',
+      style.copyWith(color: Colors.white),
+      maxWidth: 45,
+      scaler: TextScaler.noScaling,
+      direction: TextDirection.ltr,
+    );
+    expect(colored, same(first), reason: '不同课程底色上的文字布局完全相同');
+    expect(first.height, greaterThan(0));
+    expect(first.lines, greaterThan(1));
+    final larger = TimetableTheme.measureText(
+      '完整课程名称（1）',
+      style,
+      maxWidth: 45,
+      scaler: const TextScaler.linear(1.5),
+      direction: TextDirection.ltr,
+    );
+    expect(larger, isNot(same(first)));
+  });
+  test('课程排版重复输入复用，尺寸/字体/内容变化及系统字体更新立即失效', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    const nameStyle = TextStyle(fontSize: 12);
+    const subStyle = TextStyle(fontSize: 10);
+    CellContentPlan plan({
+      String teacher = '合成教师',
+      double width = 48,
+      TextScaler scaler = TextScaler.noScaling,
+    }) => planCellContent(
+      name: '合成课程（1）',
+      location: '@合成教室',
+      teacher: teacher,
+      nameStyle: nameStyle,
+      subStyle: subStyle,
+      nameSize: 12,
+      subSize: 10,
+      maxWidth: width,
+      maxHeight: 144,
+      textScaler: scaler,
+    );
+    final original = plan();
+    expect(plan(), same(original), reason: '翻周及拖动复用已测量的相同内容');
+    expect(plan(teacher: ''), isNot(same(original)));
+    expect(plan(teacher: '').showTeacher, isFalse);
+    expect(plan(width: 60), isNot(same(original)));
+    expect(plan(scaler: const TextScaler.linear(1.5)), isNot(same(original)));
+
+    final fontsChanged = Completer<void>();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .handlePlatformMessage(
+          'flutter/system',
+          const JSONMessageCodec().encodeMessage({'type': 'fontsChange'}),
+          (_) => fontsChanged.complete(),
+        );
+    await fontsChanged.future;
+    expect(plan(), isNot(same(original)), reason: '系统字体更新后不能使用旧测量');
+  });
+
   testWidgets('体育项目在周课表格子共用显示名，有项目去序号、无项目保留原名', (tester) async {
     _c.debugReset();
     addTearDown(_c.debugReset);

@@ -103,6 +103,8 @@ GoRouter buildRouter({
           ],
         ),
         StatefulShellBranch(
+          // 后台预建学习页；卡片在页面不可见时延后构建，首次切换不再整页现建。
+          preload: true,
           routes: [
             GoRoute(
               path: '/study',

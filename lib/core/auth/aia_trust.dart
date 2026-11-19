@@ -510,45 +510,48 @@ class AiaTrust {
       rethrow;
     } finally {
       final captured = bytes ?? builder.takeBytes();
-      AppLog.recordHttpExchange(
-        'core.auth.certificate',
-        {
-          'method': 'GET',
-          'service': AppLog.serviceForHost(Uri.tryParse(url)?.host ?? ''),
-          'status_code': response?.statusCode,
-          'duration_ms': watch.elapsedMilliseconds,
-          'capture_source': 'dart_http_client',
-          'request': {
-            'url': url,
-            'headers': requestHeaders,
-            'body': '',
-            'complete': true,
+      try {
+        await AppLog.recordHttpExchangeAsync(
+          'core.auth.certificate',
+          {
+            'method': 'GET',
+            'service': AppLog.serviceForHost(Uri.tryParse(url)?.host ?? ''),
+            'status_code': response?.statusCode,
+            'duration_ms': watch.elapsedMilliseconds,
+            'capture_source': 'dart_http_client',
+            'request': {
+              'url': url,
+              'headers': requestHeaders,
+              'body': '',
+              'complete': true,
+            },
+            'response': {
+              'status': response?.statusCode,
+              'headers': responseHeaders,
+              'body_base64': base64Encode(captured),
+              'encoding': 'base64',
+              'captured_bytes': captured.length,
+              'complete': bytes != null,
+              if (bytes == null)
+                'incomplete_reason': response == null
+                    ? 'response_unavailable'
+                    : 'response_not_fully_consumed',
+              'redirects': [
+                for (final redirect in response?.redirects ?? <RedirectInfo>[])
+                  {
+                    'status': redirect.statusCode,
+                    'method': redirect.method,
+                    'url': redirect.location.toString(),
+                  },
+              ],
+            },
           },
-          'response': {
-            'status': response?.statusCode,
-            'headers': responseHeaders,
-            'body_base64': base64Encode(captured),
-            'encoding': 'base64',
-            'captured_bytes': captured.length,
-            'complete': bytes != null,
-            if (bytes == null)
-              'incomplete_reason': response == null
-                  ? 'response_unavailable'
-                  : 'response_not_fully_consumed',
-            'redirects': [
-              for (final redirect in response?.redirects ?? <RedirectInfo>[])
-                {
-                  'status': redirect.statusCode,
-                  'method': redirect.method,
-                  'url': redirect.location.toString(),
-                },
-            ],
-          },
-        },
-        error: failure,
-        stackTrace: failureStack,
-      );
-      client.close(force: true);
+          error: failure,
+          stackTrace: failureStack,
+        );
+      } finally {
+        client.close(force: true);
+      }
     }
     return _toDer(bytes);
   }

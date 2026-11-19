@@ -17,10 +17,37 @@ void main() {
   });
 
   tearDown(() async {
+    TimetableStore.debugBeforeBatchReplace = null;
     TimetableController.bindingCheck = () async => false;
     TimetableStore.debugDirectory = null;
     c.debugReset();
     if (await tmp.exists()) await tmp.delete(recursive: true);
+  });
+
+  test('连续滑杆调整只保存最新值，其他设置键和恢复原值均保留', () async {
+    c.debugSetSnapshot(const TimetableSnapshot(settings: TimetableSettings()));
+    var replacements = 0;
+    TimetableStore.debugBeforeBatchReplace = (_) => replacements++;
+    final changes = [
+      for (var index = 0; index < 40; index++)
+        c.updateSettings(
+          c.settingsForEditing.copyWith(periodHeight: 52 + index % 38),
+        ),
+      c.updateSettings(c.settingsForEditing.copyWith(showTeacher: false)),
+      c.updateSettings(c.settingsForEditing.copyWith(periodHeight: 64)),
+    ];
+    await Future.wait(changes);
+    expect(
+      replacements,
+      lessThanOrEqualTo(4),
+      reason: '中间高度均不落盘；恢复原值无变化的文件也不重写',
+    );
+    expect(c.settings.periodHeight, 64);
+    expect(c.settings.showTeacher, isFalse);
+    c.debugReset();
+    await c.ensureStarted();
+    expect(c.settings.periodHeight, 64);
+    expect(c.settings.showTeacher, isFalse);
   });
 
   test(

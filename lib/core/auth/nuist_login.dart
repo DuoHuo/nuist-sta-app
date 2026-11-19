@@ -384,7 +384,9 @@ class NuistLogin {
   }
 
   /// 用本机私钥离线完成 WebAuthn 断言签名。
-  Map<String, dynamic> _makeAssertion(Map<String, dynamic> request) {
+  Future<Map<String, dynamic>> _makeAssertion(
+    Map<String, dynamic> request,
+  ) async {
     final options = _asMap(request['publicKeyCredentialRequestOptions']) ?? {};
     final challenge = options['challenge'] as String?;
     final rpId = (options['rpId'] as String?) ?? bundle.rpId;
@@ -434,12 +436,14 @@ class NuistLogin {
       0,
     ]);
 
-    final signature = Es256Key.fromPkcs8Pem(bundle.privateKeyPkcs8Pem).sign(
-      Uint8List.fromList([
-        ...authenticatorData,
-        ...sha256Bytes(clientDataJson),
-      ]),
-    );
+    // 私钥在此同步解析校验，错误类型不变；椭圆曲线签名在后台 isolate 计算。
+    final signature = await Es256Key.fromPkcs8Pem(bundle.privateKeyPkcs8Pem)
+        .signInBackground(
+          Uint8List.fromList([
+            ...authenticatorData,
+            ...sha256Bytes(clientDataJson),
+          ]),
+        );
 
     return {
       'type': 'public-key',

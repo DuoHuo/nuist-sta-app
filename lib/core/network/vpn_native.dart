@@ -95,6 +95,7 @@ class VpnNative {
     final timeout = switch (method) {
       'start' => const Duration(seconds: 30),
       'open' => const Duration(seconds: 24),
+      'probe' => const Duration(seconds: 5),
       _ => const Duration(seconds: 3),
     };
     final stage = 'native.$method';
@@ -120,6 +121,17 @@ class VpnNative {
                   await call({
                     'method': 'cancelStart',
                     'startId': result['startId'],
+                  });
+                } catch (_) {}
+              }
+              if (expired &&
+                  method == 'prepareOpen' &&
+                  result['openId'] is int) {
+                try {
+                  await call({
+                    'method': 'cancelOpen',
+                    'id': request['id'],
+                    'openId': result['openId'],
                   });
                 } catch (_) {}
               }

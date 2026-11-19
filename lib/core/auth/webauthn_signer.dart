@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:asn1lib/asn1lib.dart';
@@ -119,15 +120,12 @@ class Es256Key {
   ///
   /// k 走 RFC 6979 确定性算法（构造函数第二个参数传 HMAC-SHA256 即启用），
   /// 这样不依赖需要播种的 SecureRandom —— 移动端上少一个能悄悄出错的环节。
-  Uint8List sign(Uint8List message) {
-    final signer = ECDSASigner(SHA256Digest(), HMac(SHA256Digest(), 64))
-      ..init(true, PrivateKeyParameter<ECPrivateKey>(_key));
-    final signature = signer.generateSignature(message) as ECSignature;
-    return (ASN1Sequence()
-          ..add(ASN1Integer(signature.r))
-          ..add(ASN1Integer(signature.s)))
-        .encodedBytes;
-  }
+  Uint8List sign(Uint8List message) => _signWithScalar(_key.d!, message);
+
+  /// 与 [sign] 结果相同；纯 Dart 椭圆曲线运算在后台 isolate 执行，
+  /// 冷启动自动刷新触发登录时不占用界面线程。
+  Future<Uint8List> signInBackground(Uint8List message) =>
+      _signInBackground(_key.d!, message);
 
   static String _stripPemArmor(String pem) => pem
       .replaceAll(RegExp(r'-----(BEGIN|END)[^-]*-----'), '')
@@ -141,6 +139,23 @@ class Es256Key {
     }
     return value;
   }
+}
+
+/// 只把私钥标量与消息带入 isolate，不捕获其他对象。
+Future<Uint8List> _signInBackground(BigInt d, Uint8List message) =>
+    Isolate.run(() => _signWithScalar(d, message));
+
+Uint8List _signWithScalar(BigInt d, Uint8List message) {
+  final signer = ECDSASigner(SHA256Digest(), HMac(SHA256Digest(), 64))
+    ..init(
+      true,
+      PrivateKeyParameter<ECPrivateKey>(ECPrivateKey(d, ECCurve_secp256r1())),
+    );
+  final signature = signer.generateSignature(message) as ECSignature;
+  return (ASN1Sequence()
+        ..add(ASN1Integer(signature.r))
+        ..add(ASN1Integer(signature.s)))
+      .encodedBytes;
 }
 
 /// SHA-256 摘要。复用 pointycastle，省掉一个只为算哈希而引入的依赖。

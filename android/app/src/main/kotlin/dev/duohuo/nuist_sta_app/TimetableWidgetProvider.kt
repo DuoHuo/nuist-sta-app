@@ -15,15 +15,29 @@ open class TimetableWidgetProvider : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = TimetableGlanceWidget(square = false)
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ACTION_SCHEDULE) {
+            val pending = goAsync()
+            val app = context.applicationContext
+            TimetableNativeWork.background(app, "widget.schedule", "widget_broadcast_failed", pending::finish) {
+                TimetableWidgetData.invalidate(app)
+                TimetableWidgetUpdates.schedule(app)
+            }
+            return
+        }
+        if (intent.action == TimetableWidgetUpdates.ACTION_TICK) {
+            val pending = goAsync()
+            val app = context.applicationContext
+            TimetableNativeWork.background(app, "widget.tick", "widget_broadcast_failed", pending::finish) {
+                TimetableWidgetUpdates.refresh(app)
+            }
+            return
+        }
         try {
             super.onReceive(context, intent)
-            when (intent.action) {
-                TimetableWidgetUpdates.ACTION_TICK -> TimetableWidgetUpdates.refresh(context)
-                TimetableWidgetUpdates.ACTION_REFRESH -> {
-                    val manager = AppWidgetManager.getInstance(context)
-                    val ids = manager.getAppWidgetIds(ComponentName(context, javaClass))
-                    if (ids.isNotEmpty()) onUpdate(context, manager, ids)
-                }
+            if (intent.action == TimetableWidgetUpdates.ACTION_REFRESH) {
+                val manager = AppWidgetManager.getInstance(context)
+                val ids = manager.getAppWidgetIds(ComponentName(context, javaClass))
+                if (ids.isNotEmpty()) onUpdate(context, manager, ids)
             }
         } catch (error: Exception) {
             recordBackgroundFailure(context, "widget.receive", error)
@@ -32,9 +46,8 @@ open class TimetableWidgetProvider : GlanceAppWidgetReceiver() {
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         try {
-            TimetableWidgetData.invalidate(context)
             super.onUpdate(context, appWidgetManager, appWidgetIds)
-            TimetableWidgetUpdates.schedule(context)
+            requestSchedule(context)
         } catch (error: Exception) {
             recordBackgroundFailure(context, "widget.update", error)
         }
@@ -43,18 +56,26 @@ open class TimetableWidgetProvider : GlanceAppWidgetReceiver() {
     override fun onDisabled(context: Context) {
         try {
             super.onDisabled(context)
-            TimetableWidgetUpdates.schedule(context)
+            requestSchedule(context)
         } catch (error: Exception) {
             recordBackgroundFailure(context, "widget.disabled", error)
         }
     }
 
     private fun recordBackgroundFailure(context: Context, stage: String, error: Exception) {
-        NativeBackgroundDiagnostics.enqueue(context, listOf(
-            notifyFailureDetails(error, stage) + ("reason_code" to "widget_broadcast_failed")))
+        TimetableNativeWork.background(context, stage, "widget_broadcast_failed") {
+            it.add(notifyFailureDetails(error, stage) + ("reason_code" to "widget_broadcast_failed"))
+        }
+    }
+
+    private fun requestSchedule(context: Context) {
+        // Glance 自己持有当前广播的 goAsync/Worker；排程使用独立广播持有生命周期，
+        // 不能在同一接收回调第二次 goAsync，也不能依赖 daemon 线程保活。
+        context.sendBroadcast(Intent(ACTION_SCHEDULE).setComponent(ComponentName(context, javaClass)))
     }
 
     companion object {
+        private const val ACTION_SCHEDULE = "dev.duohuo.nuist_sta_app.WIDGET_SCHEDULE"
         /** 接收 Flutter 现有 payload，并通知两种尺寸重新组合。 */
         fun savePayload(context: Context, json: String) = TimetableWidgetUpdates.save(context, json)
 

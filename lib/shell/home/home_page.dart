@@ -9,6 +9,7 @@ import '../../core/refresh/silent_refresh.dart';
 import '../../mini_apps/registry.dart';
 import '../announcement/announcement_overlay.dart';
 import '../announcement/announcement_controller.dart';
+import '../deferred_while_hidden.dart';
 import '../update/update_controller.dart';
 import 'app_grid_item.dart';
 
@@ -25,6 +26,11 @@ class HomePage extends StatelessWidget {
   ///
   /// 走 [SilentRefresh.runAll]：单个模块失败自动重试且只写诊断日志，不打断其他
   /// 卡片，界面上也不出现「更新中 / 更新失败」的动画与文案（issue #31）。
+  static final _homeCardApps = [
+    for (final app in appRegistry.apps)
+      if (app.homeCard != null) app,
+  ];
+
   static Future<void> _refreshAll() => SilentRefresh.runAll('shell.home', {
     for (final app in appRegistry.apps) app.id: ?app.onHomeRefresh,
   });
@@ -52,12 +58,16 @@ class HomePage extends StatelessWidget {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             children: [
-              for (final app in appRegistry.apps)
-                if (app.homeCard != null) ...[
-                  Builder(builder: app.homeCard!),
-                  // 设计师 10/20：首页卡片间距 12→8。
-                  const SizedBox(height: 8),
-                ],
+              for (final (index, app) in _homeCardApps.indexed) ...[
+                // 小组件直达课表时首页在下层：卡片稍后逐张构建，不与课表首屏抢帧。
+                DeferredWhileHidden(
+                  key: ValueKey(app.id),
+                  delay: Duration(milliseconds: 1200 + index * 150),
+                  builder: app.homeCard!,
+                ),
+                // 设计师 10/20：首页卡片间距 12→8。
+                const SizedBox(height: 8),
+              ],
               Container(
                 padding: const EdgeInsets.symmetric(
                   vertical: 18,

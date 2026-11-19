@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 启动窗口与 Flutter 首帧前底色，对应 AppColors.pageBg，避免冷启动白闪。 -->
+    <color name="launch_background">#FFF5F6F8</color>
     <color name="ic_launcher_background">#FFFFFF</color>
     <!-- 桌面小组件颜色 token（spec-widget-4x2 §4，浅色；深色见 values-night/colors.xml） -->
     <color name="wg_bg">#FFFFFFFF</color>

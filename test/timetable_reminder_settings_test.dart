@@ -23,6 +23,15 @@ class _FakeActions extends ReminderActions {
   WidgetPinResult pinResult = WidgetPinResult.requested;
   Completer<WidgetPinResult>? pendingPin;
   bool shortcutSettingsOpened = true;
+  Future<void>? pendingSave;
+  bool saving = false;
+
+  Future<void> _saveSettings(TimetableSettings settings) {
+    saving = true;
+    return pendingSave = _c
+        .updateSettings(settings)
+        .whenComplete(() => saving = false);
+  }
 
   @override
   Future<bool> openWidgetShortcutSettings() async {
@@ -39,14 +48,14 @@ class _FakeActions extends ReminderActions {
   @override
   Future<NotifyPermissionStatus> setReminderEnabled(bool enabled) async {
     calls.add('enabled:$enabled');
-    await _c.updateSettings(_c.settings.copyWith(reminderEnabled: enabled));
+    await _saveSettings(_c.settings.copyWith(reminderEnabled: enabled));
     return perm;
   }
 
   @override
   Future<void> setReminderLeadMinutes(int minutes) async {
     calls.add('lead:$minutes');
-    await _c.updateSettings(_c.settings.copyWith(reminderLeadMinutes: minutes));
+    await _saveSettings(_c.settings.copyWith(reminderLeadMinutes: minutes));
   }
 
   @override
@@ -122,6 +131,20 @@ void main() {
     }
   }
 
+  Future<void> waitSaved(WidgetTester tester, _FakeActions actions) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    do {
+      await tester.pump(const Duration(milliseconds: 50));
+      // Windows磁盘操作在真实事件循环推进，不能只用FakeAsync的pump时间猜完成。
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+    } while (actions.saving && DateTime.now().isBefore(deadline));
+    expect(actions.saving, isFalse, reason: '必须等到真实设置保存回执');
+    await actions.pendingSave;
+    await tester.pump();
+  }
+
   bool sw(WidgetTester tester, String key) => tester
       .widget<Switch>(
         find.descendant(
@@ -143,7 +166,7 @@ void main() {
       expect(find.text(TtSettingsText.reminderIntro), findsNothing);
       expect(sw(tester, 'tt_settings_reminder'), isFalse);
       await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-      await settleIo(tester);
+      await waitSaved(tester, a);
       expect(a.calls, ['enabled:true']);
       expect(sw(tester, 'tt_settings_reminder'), isTrue);
       final lead = find.byKey(const Key('tt_settings_reminder_lead'));
@@ -165,6 +188,7 @@ void main() {
         ui.Tristate.isTrue,
       );
       await tester.tap(seg(30));
+      await waitSaved(tester, a);
       await tester.pumpAndSettle();
       expect(a.calls.last, 'lead:30');
       await settleIo(tester);

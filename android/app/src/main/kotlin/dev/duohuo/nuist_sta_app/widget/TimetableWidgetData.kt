@@ -4,9 +4,12 @@ import android.content.Context
 import android.content.SharedPreferences
 import dev.duohuo.nuist_sta_app.NotifyStore
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -160,17 +163,18 @@ internal object TimetableWidgetData {
         }
     }
 
-    fun observe(context: Context): Flow<WidgetSnapshot> = callbackFlow {
+    fun observe(context: Context): Flow<WidgetSnapshot> = callbackFlow<Unit> {
         val preferences = try { NotifyStore.prefs(context) } catch (_: Exception) { null }
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == NotifyStore.KEY_WIDGET || key == REVISION || key == null) {
-                trySend(read(context))
+                // SharedPreferences listener 在主线程回调，仅发送失效信号。
+                trySend(Unit)
             }
         }
         preferences?.registerOnSharedPreferenceChangeListener(listener)
-        trySend(read(context))
+        trySend(Unit)
         awaitClose { preferences?.unregisterOnSharedPreferenceChangeListener(listener) }
-    }.conflate()
+    }.conflate().map { read(context) }.flowOn(Dispatchers.IO)
 
     fun invalidate(context: Context) {
         try {

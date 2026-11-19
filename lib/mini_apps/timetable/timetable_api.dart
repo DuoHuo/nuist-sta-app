@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -184,12 +185,14 @@ class TimetableApi {
       );
     }
     merge(weekRaw);
-    merge(
-      await _optional(
-        'xswpkc',
-        () => _post(_unscheduledUrl, {'XNXQDM': termCode}),
-      ),
+    // 主课表请求已建立应用会话；其余只读请求互不依赖，避免逐个等待超时。
+    // 未排课也是课程全集的一部分，失败不能发布只有周网格的部分快照。
+    final unscheduled = _requiredSection(
+      _post(_unscheduledUrl, {'XNXQDM': termCode}),
+      section: 'xswpkc',
     );
+    // 角色预调用在聚合等待前执行，提前消费必需请求错误以避免无人处理。
+    unawaited(unscheduled.then<void>((_) {}, onError: (Object _) {}));
 
     // 可选（默认关闭）：角色预调用
     final roleId = rolePreCallRoleId;
@@ -201,17 +204,20 @@ class TimetableApi {
     }
 
     // 可选：学期 / 节次 / 周次
-    merge(await _optional('dqxnxq', () => _post(_dqxnxqUrl, const {})));
-    merge(await _optional('jc', () => _post(_jcUrl, const {})));
     final parts = splitTermCode(termCode);
-    if (parts != null) {
-      merge(
-        await _optional('dqzc', () {
+    final optionalSections = await Future.wait([
+      unscheduled,
+      _optional('dqxnxq', () => _post(_dqxnxqUrl, const {})),
+      _optional('jc', () => _post(_jcUrl, const {})),
+      if (parts != null)
+        _optional('dqzc', () {
           final form = dqzcForm(parts, now ?? shanghaiToday());
           logDqzcForm(form);
           return _post(_dqzcUrl, form);
         }),
-      );
+    ]);
+    for (final section in optionalSections) {
+      merge(section);
     }
 
     final snapshot = TimetableParser.parseImportJson({
@@ -349,6 +355,24 @@ class TimetableApi {
       );
       return null;
     }
+  }
+
+  static Future<Map<String, dynamic>> _requiredSection(
+    Future<Map<String, dynamic>?> response, {
+    required String section,
+  }) async {
+    final raw = await response;
+    final datas = raw?['datas'];
+    final rows = datas is Map ? datas[section] : null;
+    if (rows is! Map || rows['rows'] is! List) {
+      throw DiagnosticException(
+        '教务课程响应缺少完整课程列表',
+        code: raw == null ? 'response_empty' : 'response_rows_missing',
+        stage: 'response.validate',
+        context: {'endpoint': 'timetable.$section', 'service': 'jwxt'},
+      );
+    }
+    return raw!;
   }
 
   /// dqzc 表单参数（XN 学年 / XQ 学期 / RQ 日期）。
@@ -507,6 +531,8 @@ class TimetableApi {
 
   /// 一次同步内最多强制重登一次。
   static bool _reloginUsed = false;
+  static Future<void>? _reloginPending;
+  static int _loginRevision = 0;
 
   static Future<Map<String, dynamic>?> _post(
     Uri url,
@@ -516,14 +542,41 @@ class TimetableApi {
     final hook = debugPost;
     if (hook != null) return hook(url, form);
 
+    final revision = _loginRevision;
     var result = await _postOnce(url, form, force: false, app: app);
     if (result is _SessionExpired) {
-      if (_reloginUsed) {
+      final pending = _reloginPending;
+      if (pending != null) {
+        await pending;
+        // 并发请求共用恢复后的会话；每个请求仅重试自己一次。
+        result = await _postOnce(url, form, force: false, app: app);
+      } else if (revision != _loginRevision) {
+        result = await _postOnce(url, form, force: false, app: app);
+      } else if (_reloginUsed) {
         throw const JwxtSessionExpiredError('教务会话失效且本次同步已重登过，请稍后再试');
+      } else {
+        _reloginUsed = true;
+        final restored = Completer<void>();
+        _reloginPending = restored.future;
+        // 消费共享失败，生产者与等待者仍分别收到原异常。
+        unawaited(restored.future.catchError((Object _) {}));
+        portalLog('session.expired', fields: {'service': 'jwxt'});
+        try {
+          result = await _postOnce(url, form, force: true, app: app);
+          if (result is _SessionExpired) {
+            throw const JwxtSessionExpiredError('重新登录后教务仍要求登录，请稍后再试');
+          }
+          _loginRevision++;
+          restored.complete();
+        } catch (error, stackTrace) {
+          restored.completeError(error, stackTrace);
+          rethrow;
+        } finally {
+          if (identical(_reloginPending, restored.future)) {
+            _reloginPending = null;
+          }
+        }
       }
-      _reloginUsed = true;
-      portalLog('session.expired', fields: {'service': 'jwxt'});
-      result = await _postOnce(url, form, force: true, app: app);
       if (result is _SessionExpired) {
         throw const JwxtSessionExpiredError('重新登录后教务仍要求登录，请稍后再试');
       }
@@ -651,6 +704,22 @@ class TimetableApi {
             session.clientFor(PortalServices.jwxt, force: force);
     final http = await clientFor(force: force);
     if (a.ready && !force) return http;
+    if (!force && a.preparing != null) return a.preparing!;
+    final preparing = _prepareAppClient(a, http, force, clientFor);
+    a.preparing = preparing;
+    try {
+      return await preparing;
+    } finally {
+      if (identical(a.preparing, preparing)) a.preparing = null;
+    }
+  }
+
+  static Future<PortalHttp> _prepareAppClient(
+    _JwxtApp a,
+    PortalHttp http,
+    bool force,
+    Future<PortalHttp> Function({required bool force}) clientFor,
+  ) async {
     final response = await http.followRedirects(
       await http.get(
         a.indexUrl,
@@ -790,4 +859,5 @@ class _JwxtApp {
 
   /// 本进程已进过应用首页（会话失效时置回 false）。
   bool ready = false;
+  Future<PortalHttp>? preparing;
 }

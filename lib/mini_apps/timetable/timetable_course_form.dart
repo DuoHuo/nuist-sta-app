@@ -778,8 +778,11 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
             icon: const Icon(Icons.close),
           ),
         ),
+        // 选色面板唤起键盘时表单在面板下方，保持底部占位，不随键盘逐帧重排；
+        // 编辑表单自身输入框时仍按键盘避让。
         body: SafeArea(
           top: false,
+          maintainBottomViewPadding: _pickingColor,
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 640),

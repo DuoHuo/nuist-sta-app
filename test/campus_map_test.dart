@@ -112,6 +112,30 @@ void main() {
     await tester.pump();
   }
 
+  testWidgets('键盘十二帧变化不重复构建地图画布', (tester) async {
+    await mount(
+      tester,
+      source: TestSource(),
+      styleUrl: '{"version":8,"sources":{},"layers":[]}',
+    );
+    final builds = <String, int>{};
+    final previous = debugOnRebuildDirtyWidget;
+    addTearDown(() => debugOnRebuildDirtyWidget = previous);
+    debugOnRebuildDirtyWidget = (element, builtOnce) {
+      previous?.call(element, builtOnce);
+      final name = element.widget.runtimeType.toString();
+      if (name == 'CampusMapCanvas' || name == 'CampusMapPage') {
+        builds[name] = (builds[name] ?? 0) + 1;
+      }
+    };
+    for (var frame = 1; frame <= 12; frame++) {
+      tester.view.viewInsets = FakeViewPadding(bottom: frame * 20.0);
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(builds, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
   setUpAll(() async {
     if (const bool.fromEnvironment('MAP_CAPTURE')) {
       final icons = File(
@@ -133,6 +157,56 @@ void main() {
   });
 
   for (final dark in [false, true]) {
+    testWidgets('地图后台和路由覆盖时释放定位，恢复后只订阅一次（深色：$dark）', (tester) async {
+      final location = _TrackingLocation();
+      final heading = _TestHeading();
+      addTearDown(location.values.close);
+      addTearDown(heading.values.close);
+      await mount(
+        tester,
+        source: TestSource(),
+        location: location,
+        heading: heading,
+        theme: dark ? appDarkTheme() : appLightTheme(),
+      );
+      expect(location.watches, 1);
+      expect(location.values.hasListener, isTrue);
+      expect(heading.values.hasListener, isTrue);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pumpAndSettle();
+      expect(location.values.hasListener, isFalse);
+      expect(heading.values.hasListener, isFalse);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(location.watches, 2);
+      expect(location.values.hasListener, isTrue);
+      expect(heading.values.hasListener, isTrue);
+
+      // 从地图真实的街景入口覆盖地图，而不是另造路由模拟隐藏。
+      await tester.enterText(find.byType(TextField), '测试楼宇');
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('测试楼宇').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('查看街景'));
+      await tester.pumpAndSettle();
+      expect(location.values.hasListener, isFalse);
+      expect(heading.values.hasListener, isFalse);
+      await tester.tap(find.byTooltip('返回地图'));
+      await tester.pumpAndSettle();
+      expect(location.watches, 3);
+      expect(location.values.hasListener, isTrue);
+      expect(heading.values.hasListener, isTrue);
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(location.values.hasListener, isFalse);
+      expect(heading.values.hasListener, isFalse);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('朝向变化仅更新画布且退出停止传感器（深色：$dark）', (tester) async {
       final heading = _TestHeading();
       addTearDown(heading.values.close);
@@ -163,6 +237,30 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('后台期间返回的权限检查不能重新启动传感器', (tester) async {
+    final ready = Completer<bool>();
+    final location = _TrackingLocation(ready.future);
+    final heading = _TestHeading();
+    addTearDown(location.values.close);
+    addTearDown(heading.values.close);
+    await mount(tester, location: location, heading: heading);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    ready.complete(true);
+    await tester.pumpAndSettle();
+    expect(location.watches, 0);
+    expect(heading.values.hasListener, isFalse);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(location.watches, 1);
+    expect(location.values.hasListener, isTrue);
+    expect(heading.values.hasListener, isTrue);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets('unconfigured UI has no invented places and exposes layers', (
     tester,
@@ -235,6 +333,10 @@ void main() {
   testWidgets('route preview and navigation bars show Baidu-style guidance', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     // 东行 100 米后左转，再北行 100 米。
     List<double> at(double east, double north) => [
       118.7 + east / (111320 * 0.8462),
@@ -412,7 +514,7 @@ class _FixedLocation implements UserLocationSource {
 }
 
 class _TestHeading implements HeadingSource {
-  final values = StreamController<double>();
+  final values = StreamController<double>.broadcast();
 
   @override
   Stream<double> watch() => values.stream;
@@ -438,4 +540,20 @@ class _LiveLocation implements LiveUserLocationSource {
 
   @override
   Stream<LocationFix> watch() => const Stream.empty();
+}
+
+class _TrackingLocation extends _LiveLocation {
+  _TrackingLocation([this._ready]);
+  final Future<bool>? _ready;
+  final values = StreamController<LocationFix>.broadcast();
+  int watches = 0;
+
+  @override
+  Future<bool> ready() => _ready ?? Future.value(true);
+
+  @override
+  Stream<LocationFix> watch() {
+    watches++;
+    return values.stream;
+  }
 }

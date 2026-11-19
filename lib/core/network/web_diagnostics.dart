@@ -242,23 +242,25 @@ class WebDiagnostics {
       part['content_type'] = type;
       exchange.data[entry.key] = part;
     }
-    exchange.span.run(
-      () => AppLog.recordHttpExchange(
-        scope,
-        {
-          ...exchange.data,
-          'exchange_id': id,
-          'source': 'javascript',
-          if (incomplete != null)
-            'capture': {'complete': false, 'reason': incomplete},
-        },
-        error: error == null
-            ? null
-            : DiagnosticException(
-                error,
-                code: 'web_request_failed',
-                stage: 'webview.javascript',
-              ),
+    unawaited(
+      exchange.span.run(
+        () => AppLog.recordHttpExchangeAsync(
+          scope,
+          {
+            ...exchange.data,
+            'exchange_id': id,
+            'source': 'javascript',
+            if (incomplete != null)
+              'capture': {'complete': false, 'reason': incomplete},
+          },
+          error: error == null
+              ? null
+              : DiagnosticException(
+                  error,
+                  code: 'web_request_failed',
+                  stage: 'webview.javascript',
+                ),
+        ),
       ),
     );
   }

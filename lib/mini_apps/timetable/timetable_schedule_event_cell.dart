@@ -82,15 +82,14 @@ class ScheduleEventCell extends StatelessWidget {
     final base = DefaultTextStyle.of(context).style;
     double textHeight(String text, TextStyle style, {int? maxLines}) {
       if (text.isEmpty) return 0;
-      final painter = TextPainter(
-        text: TextSpan(text: text, style: base.merge(style)),
-        textDirection: Directionality.of(context),
-        textScaler: MediaQuery.textScalerOf(context),
+      return TimetableTheme.measureText(
+        text,
+        base.merge(style),
+        maxWidth: contentWidth,
+        direction: Directionality.of(context),
+        scaler: MediaQuery.textScalerOf(context),
         maxLines: maxLines,
-      )..layout(maxWidth: contentWidth);
-      final height = painter.height;
-      painter.dispose();
-      return height;
+      ).height;
     }
 
     return 8 +

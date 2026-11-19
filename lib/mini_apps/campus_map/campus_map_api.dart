@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../core/config/campus_config.dart';
@@ -185,7 +186,7 @@ class CampusMapApi
           receiveTimeout: const Duration(seconds: 30),
         ),
       );
-      final body = _object(response.data);
+      final body = await _responseObject(response.data);
       final code = _text(body['code']);
       if (code != null && code != 'ok') {
         throw CampusMapApiException(
@@ -214,7 +215,7 @@ class CampusMapApi
     } on DioException catch (error, stackTrace) {
       Map<String, dynamic>? body;
       try {
-        body = _object(error.response?.data);
+        body = await _responseObject(error.response?.data);
       } on CampusMapApiException {
         // A proxy or transport failure need not have a JSON response.
       }
@@ -779,6 +780,14 @@ class CampusMapApi
     }
     if (value is Map<String, dynamic>) return Map<String, dynamic>.from(value);
     throw const CampusMapApiException('地图服务返回的数据格式不正确');
+  }
+
+  static Future<Map<String, dynamic>> _responseObject(dynamic value) {
+    // 校园整批 GeoJSON 的解析可跨多帧，小响应继续使用当前 isolate。
+    if (value is String && value.length > 64 * 1024) {
+      return compute(_object, value);
+    }
+    return Future.value(_object(value));
   }
 
   static List<Map<String, dynamic>> _objects(dynamic value) {

@@ -203,6 +203,54 @@ void main() {
   });
 
   group('classification via raw response (relogin path)', () {
+    test('并发可选段 403 共用一次重登，随后分别取得新会话结果', () async {
+      final freshReady = Completer<void>();
+      final restoring = Completer<void>();
+      final optionalStarted = <String>{};
+      var forced = 0;
+      var recovered = false;
+      TimetableApi.debugPostResponse = (uri, form, {required force}) async {
+        final endpoint = uri.pathSegments.last;
+        if (endpoint == 'cxxszhxqkb.do') {
+          return _resp(
+            uri,
+            data: {
+              'code': '0',
+              'datas': {
+                'cxxszhxqkb': {'rows': <Object?>[]},
+              },
+            },
+          );
+        }
+        optionalStarted.add(endpoint);
+        if (force) {
+          forced++;
+          if (!restoring.isCompleted) restoring.complete();
+          await freshReady.future;
+          recovered = true;
+        } else if (!recovered) {
+          return _resp(uri, status: 403);
+        }
+        return _resp(
+          uri,
+          data: {
+            'code': '0',
+            'datas': <String, dynamic>{
+              if (endpoint == 'xswpkc.do') 'xswpkc': {'rows': <Object?>[]},
+            },
+          },
+        );
+      };
+      final snapshot = TimetableApi.fetchTermSnapshot('2026-2027-1');
+      await restoring.future;
+      await pumpEventQueue();
+      expect(optionalStarted, hasLength(4));
+      expect(forced, 1);
+      freshReady.complete();
+      expect((await snapshot).courses, isEmpty);
+      expect(forced, 1, reason: '四个失效响应只进行一次共享恢复');
+    });
+
     test('login_redirect_mock.html after relogin → sessionExpired', () async {
       var calls = 0;
       TimetableApi.debugPostResponse = (u, f, {required force}) async {
@@ -288,7 +336,7 @@ void main() {
       });
     }
 
-    test('403 后强制重登成功，同一次同步后续 403 不再重登', () async {
+    test('主课程重登成功但必需未排课仍 403，只重登一次并保留完整缓存', () async {
       final attempts = <String, List<bool>>{};
       TimetableApi.debugPostResponse = (url, form, {required force}) async {
         final endpoint = url.pathSegments.last;
@@ -307,10 +355,48 @@ void main() {
         attempts.values.expand((values) => values).where((force) => force),
         hasLength(1),
       );
-      expect(c.syncStatus, TimetableSyncStatus.success);
-      expect(c.portalSessionExpired, isFalse);
-      expect(c.jwxtCourses.single.name, '更新后的课程');
+      expect(c.syncStatus, TimetableSyncStatus.failure);
+      expect(c.portalSessionExpired, isTrue);
+      expect(c.jwxtCourses.single.id, 'cached');
+      expect(
+        (await TimetableStore.readSnapshot())!.courses.single.id,
+        'cached',
+      );
     });
+
+    for (final malformed in [false, true]) {
+      test(
+        malformed ? '必需未排课缺 rows 保留完整缓存并反馈响应错误' : '必需未排课超时保留完整缓存并反馈网络错误',
+        () async {
+          TimetableApi.debugPost = (uri, form) async {
+            if (uri.pathSegments.last == 'cxxszhxqkb.do') return freshJson;
+            if (uri.pathSegments.last == 'xswpkc.do') {
+              if (malformed) {
+                return {
+                  'code': '0',
+                  'datas': {'xswpkc': {}},
+                };
+              }
+              throw TimeoutException('合成未排课超时');
+            }
+            return {'code': '0', 'datas': <String, dynamic>{}};
+          };
+          expect(await c.manualSync(), isTrue);
+          expect(c.syncStatus, TimetableSyncStatus.failure);
+          expect(
+            c.syncFailure,
+            malformed
+                ? TimetableSyncFailure.unknown
+                : TimetableSyncFailure.network,
+          );
+          expect(c.jwxtCourses.single.id, 'cached');
+          expect(
+            (await TimetableStore.readSnapshot())!.courses.single.id,
+            'cached',
+          );
+        },
+      );
+    }
 
     test('连续 403 仅重登一次并保留缓存，下次手动同步可重新恢复', () async {
       final attempts = <bool>[];
@@ -324,7 +410,16 @@ void main() {
             data: freshJson,
           );
         }
-        return _resp(url, data: {'code': '0', 'datas': <String, dynamic>{}});
+        return _resp(
+          url,
+          data: {
+            'code': '0',
+            'datas': <String, dynamic>{
+              if (url.pathSegments.last == 'xswpkc.do')
+                'xswpkc': {'rows': <Object?>[]},
+            },
+          },
+        );
       };
 
       expect(await c.manualSync(), isTrue);

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -26,6 +27,44 @@ Map<String, dynamic> _json(String name) =>
 Future<Map<String, dynamic>> _loadRaw(String name) async => _json(name);
 
 void main() {
+  test('主课程确认后四个只读段并发，缓慢可选段不阻止其他段启动', () async {
+    final gates = <String, Completer<Map<String, dynamic>>>{};
+    final entered = <String>[];
+    TimetableApi.debugPost = (uri, form) {
+      final endpoint = uri.pathSegments.last;
+      entered.add(endpoint);
+      if (endpoint == 'cxxszhxqkb.do') {
+        return Future.value({
+          'code': '0',
+          'datas': {
+            'cxxszhxqkb': {'rows': <Object?>[]},
+          },
+        });
+      }
+      return gates
+          .putIfAbsent(endpoint, Completer<Map<String, dynamic>>.new)
+          .future;
+    };
+    addTearDown(() => TimetableApi.debugPost = null);
+    final snapshot = TimetableApi.fetchTermSnapshot('2026-2027-1');
+    await pumpEventQueue();
+    expect(entered.first, 'cxxszhxqkb.do');
+    expect(
+      gates.keys,
+      containsAll(['xswpkc.do', 'dqxnxq.do', 'jc.do', 'dqzc.do']),
+    );
+    expect(gates, hasLength(4));
+    for (final entry in gates.entries) {
+      entry.value.complete({
+        'code': '0',
+        'datas': <String, dynamic>{
+          if (entry.key == 'xswpkc.do') 'xswpkc': {'rows': <Object?>[]},
+        },
+      });
+    }
+    expect((await snapshot).courses, isEmpty);
+  });
+
   test('theme defaults match spec v0.2', () {
     expect(TimetableTheme.periodHeight, 64);
     expect(TimetableTheme.cellRadius, 4);

@@ -129,9 +129,15 @@ pub fn heartbeat(counter: u32) -> [u8; 16] {
 #[derive(Default)]
 pub struct Decoder {
     bytes: Vec<u8>,
+    completed: u64,
 }
 
 impl Decoder {
+    /// 已完成且通过协议头校验的帧数，半帧不能作为隧道活性依据。
+    pub fn completed_frames(&self) -> u64 {
+        self.completed
+    }
+
     pub fn push(&mut self, bytes: &[u8]) -> io::Result<Vec<Vec<u8>>> {
         if self.bytes.len() + bytes.len() > MAX_FRAME * 2 {
             return Err(invalid("VPN 接收缓冲超限"));
@@ -156,6 +162,7 @@ impl Decoder {
                 packets.push(packet.to_vec());
             }
             // 当前仅启用 IPv4，控制帧和 IPv6 帧都不注入协议栈。
+            self.completed = self.completed.wrapping_add(1);
             offset += length;
         }
         self.bytes.drain(..offset);

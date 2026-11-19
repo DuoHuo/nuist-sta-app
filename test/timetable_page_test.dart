@@ -15,6 +15,36 @@ Future<void> _pumpPage(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('已加载课程再次打开不经过空白加载帧', (tester) async {
+    final c = TimetableController.instance;
+    final binding = TimetableController.bindingCheck;
+    TimetableController.bindingCheck = () async => false;
+    addTearDown(() {
+      c.debugReset();
+      TimetableController.bindingCheck = binding;
+    });
+    c.debugReset();
+    c.debugSetSnapshot(
+      TimetableSnapshot(
+        courses: [
+          Course(
+            id: 'first-frame',
+            name: '首帧本地课',
+            slots: [
+              CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1' * 20),
+            ],
+          ),
+        ],
+        periods: TimetableController.defaultPeriods(),
+        settings: TimetableSettings(termStartDate: DateTime(2026, 9, 7)),
+      ),
+    );
+    // bootstrap原先无条件await已完成Future，第一帧仍只有全页进度指示。
+    await tester.pumpWidget(const MaterialApp(home: TimetablePage()));
+    expect(find.byType(WeekGrid), findsOneWidget);
+    expect(find.text('首帧本地课'), findsWidgets);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
   testWidgets('空课表显示空状态与登录/同步入口', (tester) async {
     TimetableController.instance.debugSetSnapshot(
       TimetableSnapshot(

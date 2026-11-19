@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -25,6 +26,105 @@ TodayCourseItem course(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('冷启动本地课程先就绪，400天排程与未回执原生任务不阻塞数据入口', () async {
+    final c = TimetableController.instance;
+    final tmp = await Directory.systemTemp.createTemp('tt_start_ready');
+    final originalBinding = TimetableController.bindingCheck;
+    final originalClock = TimetableController.syncClock;
+    const channel = MethodChannel('nuist/timetable_next_day');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final nativeDone = Completer<void>();
+    var channelCalls = 0;
+    final readyCalls = <int>[];
+    messenger.setMockMethodCallHandler(channel, (_) async {
+      channelCalls++;
+      await nativeDone.future;
+      return {'diagnostics': <Object?>[]};
+    });
+    void ready() {
+      if (c.hasCourses) readyCalls.add(channelCalls);
+    }
+
+    addTearDown(() async {
+      c.removeListener(ready);
+      c.debugReset();
+      if (!nativeDone.isCompleted) nativeDone.complete();
+      messenger.setMockMethodCallHandler(channel, null);
+      TimetableController.bindingCheck = originalBinding;
+      TimetableController.syncClock = originalClock;
+      TimetableStore.debugDirectory = null;
+      await tmp.delete(recursive: true);
+    });
+    TimetableStore.debugDirectory = tmp;
+    TimetableController.bindingCheck = () async => true;
+    TimetableController.syncClock = () => DateTime(2026, 8, 31);
+    c.debugReset();
+    expect(c.isInitialized, isFalse);
+    await TimetableStore.saveSnapshot(
+      TimetableSnapshot(
+        courses: [
+          Course(
+            id: 'local',
+            name: '本地合成课',
+            slots: [
+              CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1' * 20),
+            ],
+          ),
+        ],
+        periods: TimetableController.defaultPeriods(),
+        settings: TimetableSettings(termStartDate: DateTime(2026, 8, 31)),
+        syncedAt: DateTime(2026, 8, 31),
+      ),
+    );
+    c.addListener(ready);
+    await c.ensureStarted();
+    expect(c.isInitialized, isTrue);
+    expect(c.hasCourses, isTrue);
+    expect(readyCalls, [0], reason: '本地课程不能等到长周期提醒任务才发布');
+    expect(channelCalls, 0, reason: 'ensureStarted不等待400天排程完成');
+    await c.updateNextDayReminder();
+    expect(channelCalls, 1, reason: '后台排程仍执行，多个入口共用任务');
+    expect(nativeDone.isCompleted, isFalse, reason: '平台回执等待不阻塞启动');
+    nativeDone.complete();
+    await pumpEventQueue();
+    await c.updateNextDayReminder();
+    expect(channelCalls, 1, reason: '成功回执后相同配置不重发');
+  });
+
+  test('启动未完成时保持未初始化，绑定准备失败不会把冷数据当成可直接展示', () async {
+    final c = TimetableController.instance;
+    final tmp = await Directory.systemTemp.createTemp('tt_init_gate');
+    final originalBinding = TimetableController.bindingCheck;
+    final reached = Completer<void>();
+    final gate = Completer<bool>();
+    TimetableStore.debugDirectory = tmp;
+    c.debugReset();
+    TimetableController.bindingCheck = () {
+      reached.complete();
+      return gate.future;
+    };
+    addTearDown(() async {
+      c.debugReset();
+      TimetableController.bindingCheck = originalBinding;
+      TimetableStore.debugDirectory = null;
+      if (!gate.isCompleted) gate.complete(false);
+      await tmp.delete(recursive: true);
+    });
+    final startup = c.ensureStarted();
+    final failed = expectLater(startup, throwsA(isA<StateError>()));
+    await reached.future;
+    expect(c.isInitialized, isFalse);
+    gate.completeError(StateError('合成绑定读取失败'));
+    await failed;
+    expect(c.isInitialized, isFalse);
+    TimetableController.bindingCheck = () async => false;
+    await c.ensureStarted();
+    expect(c.isInitialized, isTrue);
+    c.debugReset();
+    expect(c.isInitialized, isFalse);
+  });
   const periods = [
     PeriodTime(node: 1, start: '08:00', end: '08:45'),
     PeriodTime(node: 3, start: '10:10', end: '10:55'),
@@ -280,5 +380,124 @@ void main() {
     expect(holiday['title'], '明天没课');
     expect(holiday['body'], '假期模式');
     expect(c.cellsForDay(20, 7), same(lastDayCells));
+  });
+
+  test('提醒排程分批让出 UI、合并变更并保留缓存，次日和关闭及时更新', () async {
+    final c = TimetableController.instance;
+    final tmp = await Directory.systemTemp.createTemp('tt_reminder_batch');
+    final originalBindingCheck = TimetableController.bindingCheck;
+    final originalClock = TimetableController.syncClock;
+    var now = DateTime(2026, 8, 31);
+    const channel = MethodChannel('nuist/timetable_next_day');
+    final configurations = <Map<Object?, Object?>>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'update') {
+        configurations.add(call.arguments as Map<Object?, Object?>);
+      }
+      return {'diagnostics': <Object?>[]};
+    });
+    addTearDown(() async {
+      c.debugReset();
+      messenger.setMockMethodCallHandler(channel, null);
+      TimetableController.bindingCheck = originalBindingCheck;
+      TimetableController.syncClock = originalClock;
+      TimetableStore.debugDirectory = null;
+      await tmp.delete(recursive: true);
+    });
+    TimetableStore.debugDirectory = tmp;
+    TimetableController.bindingCheck = () async => true;
+    TimetableController.syncClock = () => now;
+    c.debugReset();
+    TimetableSnapshot snapshot(String name) => TimetableSnapshot(
+      courses: [
+        Course(
+          id: 'batch-course',
+          name: name,
+          slots: [
+            CourseSlot(day: 2, startNode: 1, endNode: 2, weeks: '1' * 20),
+          ],
+        ),
+      ],
+      periods: TimetableController.defaultPeriods(),
+      settings: TimetableSettings(termStartDate: now),
+    );
+    c.debugSetSnapshot(snapshot('更新前的课程'));
+    await c.refreshPortalBound();
+    final initial = c.updateNextDayReminder();
+    expect(c.updateNextDayReminder(), same(initial));
+    var yielded = false;
+    await Future<void>.delayed(Duration.zero, () {
+      yielded = true;
+      c.debugSetSnapshot(snapshot('更新后的课程'));
+    });
+    await initial;
+    await pumpEventQueue();
+    expect(yielded, isTrue);
+    expect(configurations, hasLength(1));
+    final payloads = configurations.single['payloads'] as Map;
+    expect(payloads, hasLength(400));
+    expect((payloads['2026-08-31'] as Map)['body'], contains('更新后的课程'));
+    final visibleCells = c.cellsForDay(1, 2);
+    await c.updateNextDayReminder();
+    await c.updateSettings(c.settingsForEditing.copyWith(showTeacher: false));
+    await c.updateNextDayReminder();
+    await pumpEventQueue();
+    expect(
+      configurations.last['payloads'],
+      equals(payloads),
+      reason: '纯显示偏好不更改已成功发送的提醒内容',
+    );
+    expect(configurations, hasLength(1));
+    expect(c.cellsForDay(1, 2), same(visibleCells));
+
+    now = DateTime(2026, 9, 1);
+    final beforeDateChange = configurations.length;
+    await c.updateNextDayReminder();
+    await pumpEventQueue();
+    expect(configurations, hasLength(beforeDateChange + 1));
+    expect((configurations.last['payloads'] as Map).keys.first, '2026-09-01');
+    expect(c.cellsForDay(1, 2), same(visibleCells), reason: '全学期排程保留近期网格缓存');
+
+    final beforeDisable = configurations.length;
+    await c.updateSettings(
+      c.settingsForEditing.copyWith(nextDayReminderEnabled: false),
+    );
+    await c.updateNextDayReminder();
+    await pumpEventQueue();
+    expect(configurations, hasLength(beforeDisable + 1));
+    expect(configurations.last['enabled'], isFalse);
+    expect(configurations.last['payloads'], isEmpty);
+  });
+
+  test('提醒原生失败后可重试，成功后相同配置不再重复发送', () async {
+    final c = TimetableController.instance;
+    const channel = MethodChannel('nuist/timetable_next_day');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var calls = 0;
+    messenger.setMockMethodCallHandler(channel, (_) async {
+      calls++;
+      if (calls == 1) {
+        throw PlatformException(code: 'storage', message: '合成保存失败');
+      }
+      return {'diagnostics': <Object?>[]};
+    });
+    addTearDown(() {
+      c.debugReset();
+      messenger.setMockMethodCallHandler(channel, null);
+    });
+    c.debugReset();
+    c.debugSetSnapshot(const TimetableSnapshot());
+    await c.updateNextDayReminder();
+    await pumpEventQueue();
+    expect(calls, 1);
+    await c.updateNextDayReminder();
+    await pumpEventQueue();
+    expect(calls, 2);
+    await c.updateNextDayReminder();
+    await pumpEventQueue();
+    expect(calls, 2);
   });
 }

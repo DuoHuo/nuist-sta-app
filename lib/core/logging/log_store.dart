@@ -1,5 +1,632 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
+import 'dart:typed_data';
+
+import 'package:pointycastle/api.dart';
+import 'package:pointycastle/block/aes.dart';
+import 'package:pointycastle/stream/sic.dart';
+
+import 'diagnostic_redactor.dart';
+
+/// 尚未进入日志附件的正文文件；临时采集只写密文，密钥仅存在于进程内。
+class DiagnosticBodyFile {
+  const DiagnosticBodyFile({
+    required this.path,
+    required this.length,
+    required this.complete,
+    this.contentType,
+    this.key,
+    this.iv,
+    this.deleteAfterRead = false,
+    this.incompleteReason,
+  });
+  final String path;
+  final int length;
+  final bool complete;
+  final String? contentType;
+  final Uint8List? key;
+  final Uint8List? iv;
+  final bool deleteAfterRead;
+  final String? incompleteReason;
+}
+
+Iterable<Uint8List> _bodyChunks(DiagnosticBodyFile body) sync* {
+  final file = File(body.path).openSync();
+  final cipher = body.key == null
+      ? null
+      : (SICStreamCipher(AESEngine())
+          ..init(false, ParametersWithIV(KeyParameter(body.key!), body.iv!)));
+  var remaining = body.length;
+  try {
+    while (remaining > 0) {
+      final bytes = file.readSync(
+        remaining < 64 * 1024 ? remaining : 64 * 1024,
+      );
+      if (bytes.isEmpty) throw const FormatException('诊断正文文件被截断');
+      remaining -= bytes.length;
+      if (cipher == null) {
+        yield bytes;
+      } else {
+        final plain = Uint8List(bytes.length);
+        cipher.processBytes(bytes, 0, bytes.length, plain, 0);
+        yield plain;
+      }
+    }
+  } finally {
+    file.closeSync();
+  }
+}
+
+class _AttachmentSink implements Sink<List<int>> {
+  _AttachmentSink(this.file);
+  final RandomAccessFile file;
+  @override
+  void add(List<int> bytes) => file.writeFromSync(bytes);
+  @override
+  void close() {}
+}
+
+class _CountingSink implements Sink<List<int>> {
+  _CountingSink(this.output);
+  final Sink<List<int>> output;
+  int length = 0;
+  @override
+  void add(List<int> bytes) {
+    length += bytes.length;
+    output.add(bytes);
+  }
+
+  @override
+  void close() => output.close();
+}
+
+class _BodyEncodingSink implements Sink<List<int>> {
+  _BodyEncodingSink(this.output);
+  final Sink<List<int>> output;
+  @override
+  void add(List<int> bytes) => output.add(bytes);
+  @override
+  void close() {}
+}
+
+String? _bodyTextEncoding(DiagnosticBodyFile body) {
+  var printable = 0;
+  var controls = 0;
+  var units = 0;
+  var validUtf8 = true;
+  final decoder = utf8.decoder.startChunkedConversion(
+    StringConversionSink.fromStringSink(
+      _TextCounter((text) {
+        units += text.length;
+        controls += text.codeUnits
+            .where((u) => u < 32 && u != 9 && u != 10 && u != 13 || u == 127)
+            .length;
+      }),
+    ),
+  );
+  for (final bytes in _bodyChunks(body)) {
+    printable += bytes
+        .where((b) => b >= 32 && b <= 126 || b == 9 || b == 10 || b == 13)
+        .length;
+    if (validUtf8) {
+      try {
+        decoder.add(bytes);
+      } on FormatException {
+        validUtf8 = false;
+      }
+    }
+  }
+  if (validUtf8) {
+    try {
+      decoder.close();
+    } on FormatException {
+      validUtf8 = false;
+    }
+  }
+  if (validUtf8 && (units == 0 || controls / units < .05)) return 'utf-8';
+  if (body.length == 0 || printable / body.length >= .85) return 'latin1';
+  return null;
+}
+
+class _TextCounter implements StringSink {
+  _TextCounter(this.consume);
+  final void Function(String) consume;
+  @override
+  void write(Object? object) => consume('$object');
+  @override
+  void writeAll(Iterable objects, [String separator = '']) =>
+      write(objects.join(separator));
+  @override
+  void writeCharCode(int charCode) => write(String.fromCharCode(charCode));
+  @override
+  void writeln([Object? object = '']) => write('$object\n');
+}
+
+Future<int> _writeBodyAttachment(
+  String path,
+  Map<String, Object?> record,
+  Map<String, DiagnosticBodyFile> bodies,
+) => Isolate.run(() {
+  final output = File(path).openSync(mode: FileMode.write);
+  final compressed = gzip.encoder.startChunkedConversion(
+    _AttachmentSink(output),
+  );
+  final sink = _CountingSink(compressed);
+  final attrs = record['attrs'];
+  final details = attrs is Map ? attrs['details'] : null;
+  final request = details is Map ? details['request'] : null;
+  final url = request is Map ? request['url'] : null;
+  final requestPath = url is String
+      ? Uri.tryParse(url)?.path.toLowerCase()
+      : null;
+  final credentials = const {
+    '/authserver/startassertion',
+    '/authserver/finishassertion',
+    '/authserver/startregister',
+    '/authserver/finishregister',
+  }.contains(requestPath);
+  void write(String value) => sink.add(utf8.encode(value));
+  void json(Object? value, List<String> route) {
+    final part =
+        route.length == 3 && route[0] == 'attrs' && route[1] == 'details'
+        ? bodies[route[2]]
+        : null;
+    if (part != null && value is Map) {
+      final encoding = _bodyTextEncoding(part);
+      final metadata = Map<String, Object?>.from(value)
+        ..remove('body_attachment');
+      metadata['encoding'] = encoding ?? 'base64';
+      metadata['captured_bytes'] = part.length;
+      metadata['complete'] = part.complete;
+      final prefix = jsonEncode(metadata);
+      write(prefix.substring(0, prefix.length - 1));
+      write(',');
+      if (encoding != null) {
+        final buffer = StringBuffer();
+        final converter = (encoding == 'utf-8' ? utf8.decoder : latin1.decoder)
+            .startChunkedConversion(
+              StringConversionSink.fromStringSink(buffer),
+            );
+        for (final chunk in _bodyChunks(part)) {
+          converter.add(chunk);
+        }
+        converter.close();
+        final text = DiagnosticRedactor.text(
+          buffer.toString(),
+          credentialContext: credentials,
+        );
+        write('"body":${jsonEncode(text)}}');
+      } else {
+        write('"body_base64":"');
+        final encoder = base64.encoder
+            .fuse(ascii.encoder)
+            .startChunkedConversion(_BodyEncodingSink(sink));
+        for (final chunk in _bodyChunks(part)) {
+          encoder.add(chunk);
+        }
+        // 使用不关闭总输出的 sink，正文结束后还要写 JSON 的其余字段。
+        encoder.close();
+        write('"}');
+      }
+    } else if (value is Map) {
+      write('{');
+      var first = true;
+      for (final entry in value.entries) {
+        if (!first) write(',');
+        first = false;
+        write('${jsonEncode(entry.key.toString())}:');
+        json(entry.value, [...route, entry.key.toString()]);
+      }
+      write('}');
+    } else if (value is Iterable) {
+      write('[');
+      var first = true;
+      for (final item in value) {
+        if (!first) write(',');
+        first = false;
+        json(item, const []);
+      }
+      write(']');
+    } else {
+      write(jsonEncode(value));
+    }
+  }
+
+  try {
+    json(record, const []);
+    write('\n');
+    sink.close();
+    output.flushSync();
+    return sink.length;
+  } finally {
+    output.closeSync();
+    for (final body in bodies.values) {
+      if (body.deleteAfterRead) {
+        try {
+          File(body.path).deleteSync();
+        } catch (_) {}
+      }
+      body.key?.fillRange(0, body.key!.length, 0);
+    }
+  }
+});
+
+// 独立作用域避免闭包把存储队列及其 Future 一并带入 isolate。
+class _PreparedRecord {
+  const _PreparedRecord(this.record, this.bytes, this.compressed);
+  final Map<String, dynamic>? record;
+  final List<int> bytes;
+  final List<int>? compressed;
+}
+
+typedef _IndexLine = ({
+  String line,
+  Map<String, Object?>? record,
+  DateTime? at,
+});
+typedef _IndexRead = ({
+  String original,
+  List<_IndexLine> lines,
+  bool recovered,
+});
+
+_IndexRead _readIndex(
+  List<int> bytes,
+  Map<String, Object?>? Function(Map<String, Object?>)? sanitizer,
+  DateTime modified,
+  DateTime cutoff,
+) {
+  final original = utf8.decode(bytes, allowMalformed: true);
+  final lines = const LineSplitter().convert(original);
+  final retained = <_IndexLine>[];
+  var recovered = false;
+  for (var index = 0; index < lines.length; index++) {
+    var line = lines[index];
+    if (line.isEmpty) continue;
+    if (line.contains('\uFFFD')) {
+      recovered = true;
+      continue;
+    }
+    Map<String, Object?>? record;
+    try {
+      final decoded = jsonDecode(line);
+      if (sanitizer != null) {
+        if (decoded is! Map<String, dynamic>) {
+          recovered = true;
+          continue;
+        }
+        record = sanitizer(decoded);
+        if (record == null) {
+          recovered = true;
+          continue;
+        }
+        final sanitized = jsonEncode(record);
+        recovered |= sanitized != line;
+        line = sanitized;
+      } else if (decoded is Map<String, Object?>) {
+        record = decoded;
+      }
+    } catch (_) {
+      if (sanitizer != null ||
+          index == lines.length - 1 && !original.endsWith('\n')) {
+        recovered = true;
+        continue;
+      }
+    }
+    final at = record?['ts'] is String
+        ? DateTime.tryParse(record!['ts'] as String)
+        : null;
+    if (!(at ?? modified).isBefore(cutoff)) {
+      retained.add((line: line, record: record, at: at));
+    }
+  }
+  return (original: original, lines: retained, recovered: recovered);
+}
+
+Future<_IndexRead> _readIndexInBackground(
+  List<int> bytes,
+  Map<String, Object?>? Function(Map<String, Object?>)? sanitizer,
+  DateTime modified,
+  DateTime cutoff,
+) => Isolate.run(() => _readIndex(bytes, sanitizer, modified, cutoff));
+
+_PreparedRecord _prepareRecord(
+  String? line,
+  Map<String, Object?>? input,
+  Set<String> evictedTraces,
+  bool attachmentsEnabled,
+) {
+  Map<String, dynamic>? record;
+  if (input != null) {
+    record = Map<String, dynamic>.from(input);
+  } else {
+    try {
+      final decoded = jsonDecode(line!);
+      if (decoded is Map<String, dynamic>) record = decoded;
+    } catch (_) {
+      /* 兼容无结构化清洗器的普通行存储。 */
+    }
+  }
+  if (record != null &&
+      evictedTraces.contains(RotatingLogStore._traceGroup(record))) {
+    record = RotatingLogStore._markStorage(record, {
+      'history_missing': true,
+      'reason': 'operation_history_evicted',
+    });
+    line = null;
+  }
+  final encoded = utf8.encode('${line ?? jsonEncode(record)}\n');
+  final compressed = attachmentsEnabled && encoded.length > 64 * 1024
+      ? gzip.encode(encoded)
+      : null;
+  return _PreparedRecord(record, encoded, compressed);
+}
+
+Future<_PreparedRecord> _prepareRecordInBackground(
+  String? line,
+  Map<String, Object?>? record,
+  Set<String> evictedTraces,
+  bool attachmentsEnabled,
+) => Isolate.run(
+  () => _prepareRecord(line, record, evictedTraces, attachmentsEnabled),
+);
+
+Future<({String line, bool recovered, DateTime? at})> _hydrateAttachment(
+  List<int> bytes,
+  Map<String, Object?>? Function(Map<String, Object?>) sanitizer,
+  Map<String, Object?> reference,
+) => Isolate.run(() {
+  final full = jsonDecode(utf8.decode(gzip.decode(bytes)));
+  if (full is! Map<String, dynamic>) {
+    throw const FormatException('诊断附件结构无效');
+  }
+  final expanded = sanitizer(full);
+  if (expanded == null) throw const FormatException('诊断附件记录无效');
+  final recovered = jsonEncode(expanded) != jsonEncode(full);
+  final attrs = reference['attrs'];
+  final details = attrs is Map ? attrs['details'] : null;
+  final storage = details is Map ? details['storage'] : null;
+  final record = storage is Map
+      ? RotatingLogStore._markStorage(
+          Map<String, dynamic>.from(expanded),
+          Map<String, Object?>.from(storage),
+        )
+      : expanded;
+  return (
+    line: jsonEncode(record),
+    recovered: recovered,
+    at: record['ts'] is String
+        ? DateTime.tryParse(record['ts'] as String)
+        : null,
+  );
+});
+
+Future<int> _uncompressedLength(List<int> bytes) =>
+    Isolate.run(() => gzip.decode(bytes).length);
+
+/// 超过此规模的索引扫描放到后台 isolate；冷启动维护和轮转不再占住界面线程。
+const _backgroundScanBytes = 16 * 1024;
+
+int _indexLength(Iterable<List<String>> indexes) {
+  var length = 0;
+  for (final lines in indexes) {
+    for (final line in lines) {
+      length += line.length;
+    }
+  }
+  return length;
+}
+
+/// 小索引同步计算（测试的 FakeAsync 不推进 isolate），大索引在后台计算。
+Future<T> _scanIndex<T>(int length, T Function() scan) =>
+    length > _backgroundScanBytes ? Isolate.run(scan) : Future.value(scan());
+
+// 以下包装在顶层创建闭包，只把参数带入 isolate，不捕获存储实例及其队列。
+Future<List<String>> _decodeIndexLines(List<int> bytes) => _scanIndex(
+  bytes.length,
+  () => const LineSplitter().convert(utf8.decode(bytes, allowMalformed: true)),
+);
+
+Future<Set<String>> _expiredTraceGroupsAsync(
+  Map<int, List<String>> indexes,
+  DateTime cutoff,
+) => _scanIndex(
+  _indexLength(indexes.values),
+  () => _expiredTraceGroups(indexes, cutoff),
+);
+
+Future<String?> _contentWithoutGroupsAsync(
+  String content,
+  Set<String> groups,
+) => _scanIndex(content.length, () => _contentWithoutGroups(content, groups));
+
+Future<({Set<String> groups, Map<int, String?> contents})> _rotationPlanAsync(
+  Map<int, List<String>> indexes,
+  int maxFiles,
+) => _scanIndex(
+  _indexLength(indexes.values),
+  () => _rotationPlan(indexes, maxFiles),
+);
+
+Future<
+  ({
+    Map<String, Map<String, dynamic>> references,
+    Map<String, int> lengths,
+    Map<int, List<Map<String, dynamic>>> recordsByFile,
+    int? unreadableIndex,
+  })
+>
+_scanAttachmentIndexAsync(
+  Map<int, List<String>> indexes,
+  int maxFiles,
+  bool strict,
+) => _scanIndex(
+  _indexLength(indexes.values),
+  () => _scanAttachmentIndex(indexes, maxFiles, strict),
+);
+
+/// 过期记录所属的操作；同一操作的其余记录随之淘汰。
+Set<String> _expiredTraceGroups(
+  Map<int, List<String>> indexes,
+  DateTime cutoff,
+) {
+  final groups = <String>{};
+  for (final lines in indexes.values) {
+    for (final line in lines) {
+      try {
+        final record = jsonDecode(line);
+        if (record is! Map || record['ts'] is! String) continue;
+        final at = DateTime.tryParse(record['ts'] as String);
+        if (at == null || !at.isBefore(cutoff)) continue;
+        if (RotatingLogStore._traceGroup(record) case final String group) {
+          groups.add(group);
+        }
+      } catch (_) {
+        // 无法解析的行没有时间，沿用原先“不视为过期”的处理。
+      }
+    }
+  }
+  return groups;
+}
+
+/// 移除属于 [groups] 的行，并保持原有的换行规范化。
+String? _contentWithoutGroups(String content, Set<String> groups) =>
+    RotatingLogStore._joinLines(
+      const LineSplitter()
+          .convert(content)
+          .where(
+            (line) =>
+                groups.isEmpty ||
+                !groups.contains(RotatingLogStore._traceGroupOfLine(line)),
+          ),
+    );
+
+/// 轮转时淘汰最旧文件中的操作，并计算其余文件后移后的内容。
+({Set<String> groups, Map<int, String?> contents}) _rotationPlan(
+  Map<int, List<String>> indexes,
+  int maxFiles,
+) {
+  final groups = <String>{
+    for (final line in indexes[maxFiles - 1] ?? const <String>[])
+      if (RotatingLogStore._traceGroupOfLine(line) case final String group)
+        group,
+  };
+  final contents = <int, String?>{};
+  for (var index = maxFiles - 2; index >= 0; index--) {
+    contents[index + 1] = RotatingLogStore._joinLines(
+      (indexes[index] ?? const <String>[]).where(
+        (line) =>
+            groups.isEmpty ||
+            !groups.contains(RotatingLogStore._traceGroupOfLine(line)),
+      ),
+    );
+  }
+  return (groups: groups, contents: contents);
+}
+
+/// 附件维护所需的索引记录；严格模式下遇到坏行返回其文件序号。
+({
+  Map<String, Map<String, dynamic>> references,
+  Map<String, int> lengths,
+  Map<int, List<Map<String, dynamic>>> recordsByFile,
+  int? unreadableIndex,
+})
+_scanAttachmentIndex(
+  Map<int, List<String>> indexes,
+  int maxFiles,
+  bool strict,
+) {
+  final references = <String, Map<String, dynamic>>{};
+  final lengths = <String, int>{};
+  final recordsByFile = <int, List<Map<String, dynamic>>>{};
+  for (var index = maxFiles - 1; index >= 0; index--) {
+    final records = <Map<String, dynamic>>[];
+    for (final line in indexes[index] ?? const <String>[]) {
+      try {
+        final decoded = jsonDecode(line);
+        if (decoded is! Map<String, dynamic>) continue;
+        records.add(decoded);
+        if (decoded['record_attachment'] case final String name) {
+          references[name] = decoded;
+          final length = decoded['record_attachment_bytes'];
+          if (length is int && length > 0) lengths[name] = length;
+        }
+      } catch (_) {
+        if (strict) {
+          return (
+            references: references,
+            lengths: lengths,
+            recordsByFile: recordsByFile,
+            unreadableIndex: index,
+          );
+        }
+      }
+    }
+    recordsByFile[index] = records;
+  }
+  return (
+    references: references,
+    lengths: lengths,
+    recordsByFile: recordsByFile,
+    unreadableIndex: null,
+  );
+}
+
+bool _recordNeedsBackground(Object? input) {
+  var remaining = 16 * 1024;
+  bool visit(Object? value) {
+    if (value is String) {
+      remaining -= value.length;
+    } else if (value is Map) {
+      for (final entry in value.entries) {
+        if (visit(entry.key) || visit(entry.value)) return true;
+      }
+    } else if (value is Iterable) {
+      for (final item in value) {
+        if (visit(item)) return true;
+      }
+    } else {
+      remaining -= 8;
+    }
+    return remaining <= 0;
+  }
+
+  return visit(input);
+}
+
+Future<List<int>> _encodeExport(
+  Map<String, Object?> metadata,
+  String content,
+) => Isolate.run(() => utf8.encode('${jsonEncode(metadata)}\n$content'));
+
+Future<Map<String, Object?>?> _findRecordInContent(
+  String content,
+  String sessionId,
+  int sequence,
+) => Isolate.run(() {
+  for (final line in const LineSplitter().convert(content)) {
+    final record = jsonDecode(line);
+    if (record is Map<String, dynamic> &&
+        record['session_id'] == sessionId &&
+        record['seq'] == sequence) {
+      return record;
+    }
+  }
+  return null;
+});
+
+Future<({String content, int bytes, DateTime? oldest})> _assembleSnapshot(
+  List<String> contents,
+) => Isolate.run(() {
+  final content = contents.join();
+  DateTime? oldest;
+  for (final line in const LineSplitter().convert(content)) {
+    final at = RotatingLogStore._recordTime(line);
+    if (at != null && (oldest == null || at.isBefore(oldest))) oldest = at;
+  }
+  return (content: content, bytes: utf8.encode(content).length, oldest: oldest);
+});
 
 /// 本地日志占用与时间范围。
 class LogStoreStats {
@@ -91,34 +718,54 @@ class RotatingLogStore {
   /// 追加一行日志。调用方无需等待；内部会保证写入顺序。
   Future<void> append(String line) => _enqueue(() => _appendNow(line));
 
-  Future<void> _appendNow(String line) async {
+  /// 将已脱敏记录按调用顺序入队，大正文的编码和压缩交由后台执行。
+  Future<void> appendRecord(
+    Map<String, Object?> record, {
+    bool background = false,
+    Map<String, DiagnosticBodyFile>? bodyFiles,
+  }) => _enqueue(
+    () => _appendNow(
+      null,
+      record: record,
+      background: background,
+      bodyFiles: bodyFiles,
+    ),
+  );
+
+  Future<void> _appendNow(
+    String? line, {
+    Map<String, Object?>? record,
+    bool background = false,
+    Map<String, DiagnosticBodyFile>? bodyFiles,
+  }) async {
     await directory.create(recursive: true);
     if (_nextPruneAt == null || DateTime.now().isAfter(_nextPruneAt!)) {
       await _pruneExpired();
       await _pruneExports();
     }
     final active = _file(0);
-    Map<String, dynamic>? parsed;
-    try {
-      final decoded = jsonDecode(line);
-      if (decoded is Map<String, dynamic>) parsed = decoded;
-    } catch (_) {
-      /* 兼容无结构化清洗器的普通行存储。 */
-    }
-    if (parsed != null && _hasHistoryGap(parsed)) {
-      line = jsonEncode(
-        _markStorage(parsed, {
-          'history_missing': true,
-          'reason': 'operation_history_evicted',
-        }),
-      );
-    }
-    var encoded = utf8.encode('$line\n');
+    final evictedTraces = _evictedTraces.keys.toSet();
+    // 结构化记录复用原有 Map，不再编码后解析两次；UTF-8 与 gzip 也同次后台处理。
+    final prepared =
+        background ||
+            (line?.length ?? 0) > 16 * 1024 ||
+            record != null && _recordNeedsBackground(record)
+        ? await _prepareRecordInBackground(
+            line,
+            record,
+            evictedTraces,
+            sanitizeRecord != null,
+          )
+        : _prepareRecord(line, record, evictedTraces, sanitizeRecord != null);
+    final parsed = prepared.record;
+    Map<String, dynamic>? indexRecord = parsed;
+    var encoded = prepared.bytes;
     File? createdAttachment;
     bool attemptedIndexWrite = false;
     try {
-      if (sanitizeRecord != null && encoded.length > 64 * 1024) {
-        final record = jsonDecode(line) as Map<String, dynamic>;
+      if (sanitizeRecord != null &&
+          (encoded.length > 64 * 1024 || bodyFiles != null)) {
+        final record = parsed!;
         final name =
             '${record['session_id']}-${record['seq'].toRadixString(16)}-'
             '${DateTime.now().microsecondsSinceEpoch.toRadixString(16)}.json.gz';
@@ -128,10 +775,19 @@ class RotatingLogStore {
         );
         createdAttachment = attachment;
         // 日志入口已先脱敏；附件只保存这一份脱敏原文，保留完整内容而非截断。
-        await attachment.writeAsBytes(gzip.encode(encoded), flush: true);
+        final attachmentLength = bodyFiles == null
+            ? encoded.length
+            : await _writeBodyAttachment(
+                attachment.path,
+                Map<String, Object?>.from(record),
+                bodyFiles,
+              );
+        if (bodyFiles == null) {
+          await attachment.writeAsBytes(prepared.compressed!, flush: true);
+        }
         final previousAttachmentBytes = _attachmentBytes;
         if (previousAttachmentBytes != null) {
-          _attachmentBytes = previousAttachmentBytes + encoded.length;
+          _attachmentBytes = previousAttachmentBytes + attachmentLength;
         }
         if (_attachmentBytes == null ||
             _attachmentBytes! > maxAttachmentBytes) {
@@ -141,7 +797,7 @@ class RotatingLogStore {
         final reference = {
           ...record,
           'record_attachment': name,
-          'record_attachment_bytes': encoded.length,
+          'record_attachment_bytes': attachmentLength,
           'attrs': {
             if (attrs is Map)
               for (final key in [
@@ -163,6 +819,7 @@ class RotatingLogStore {
               'details': {'storage': (attrs['details'] as Map)['storage']},
           },
         };
+        indexRecord = reference;
         encoded = utf8.encode('${jsonEncode(reference)}\n');
       }
       if (encoded.length > maxFileBytes) {
@@ -175,10 +832,8 @@ class RotatingLogStore {
         await _rotate();
         // 轮转可能刚淘汰仍在进行的操作；新记录必须标明之前的历史不再完整。
         if (parsed != null && _hasHistoryGap(parsed)) {
-          final reference =
-              jsonDecode(utf8.decode(encoded)) as Map<String, dynamic>;
           encoded = utf8.encode(
-            '${jsonEncode(_markStorage(reference, {'history_missing': true, 'reason': 'operation_history_evicted'}))}\n',
+            '${jsonEncode(_markStorage(indexRecord!, {'history_missing': true, 'reason': 'operation_history_evicted'}))}\n',
           );
         }
       }
@@ -208,10 +863,9 @@ class RotatingLogStore {
 
   Future<void> _rotate() async {
     final indexes = await _loadIndexes();
-    final groups = <String>{
-      for (final line in indexes[maxFiles - 1] ?? const <String>[])
-        if (_traceGroupOfLine(line) case final String group) group,
-    };
+    // 每写满一个索引文件就轮转一次；逐行解析约 2MiB 索引不能占住界面线程。
+    final plan = await _rotationPlanAsync(indexes, maxFiles);
+    final groups = plan.groups;
     final previousHistory = Map<String, DateTime>.from(_evictedTraces);
     for (final group in groups) {
       _evictedTraces[group] = DateTime.now().toUtc();
@@ -219,13 +873,8 @@ class RotatingLogStore {
     final replacements = <File, String?>{
       _file(0): null,
       _historyFile: _historyContent(),
+      for (final entry in plan.contents.entries) _file(entry.key): entry.value,
     };
-    for (var index = maxFiles - 2; index >= 0; index--) {
-      final retained = (indexes[index] ?? const <String>[])
-          .where((line) => !groups.contains(_traceGroupOfLine(line)))
-          .toList();
-      replacements[_file(index + 1)] = _joinLines(retained);
-    }
     try {
       await _replaceFiles(replacements);
     } catch (_) {
@@ -320,9 +969,7 @@ class RotatingLogStore {
         if (type != FileSystemEntityType.file) {
           throw FileSystemException('日志索引不是普通文件', file.path);
         }
-        indexes[index] = const LineSplitter().convert(
-          utf8.decode(await file.readAsBytes(), allowMalformed: true),
-        );
+        indexes[index] = await _decodeIndexLines(await file.readAsBytes());
       } catch (_) {
         _unreadableFiles.add(file.path);
         rethrow;
@@ -428,24 +1075,17 @@ class RotatingLogStore {
       return;
     }
     final cutoff = DateTime.now().subtract(retention);
-    final expiredGroups = <String>{
-      for (final lines in indexes.values)
-        for (final line in lines)
-          if (_recordTime(line) case final DateTime at when at.isBefore(cutoff))
-            if (_traceGroupOfLine(line) case final String group) group,
-    };
+    // 冷启动和每小时维护都会扫描全部索引，逐行解析放到后台执行。
+    final expiredGroups = await _expiredTraceGroupsAsync(indexes, cutoff);
     final replacements = <File, String?>{};
     for (var index = 0; index < maxFiles; index++) {
       final file = _file(index);
       try {
         final read = await _readContent(file);
         if (read == null) continue;
-        final content = _joinLines(
-          const LineSplitter()
-              .convert(read.content)
-              .where(
-                (line) => !expiredGroups.contains(_traceGroupOfLine(line)),
-              ),
+        final content = await _contentWithoutGroupsAsync(
+          read.content,
+          expiredGroups,
         );
         if ((content ?? '') != read.original) replacements[file] = content;
       } catch (_) {
@@ -486,30 +1126,18 @@ class RotatingLogStore {
     } catch (_) {
       return;
     }
-    final references = <String, Map<String, dynamic>>{};
-    final lengths = <String, int>{};
-    final recordsByFile = <int, List<Map<String, dynamic>>>{};
-    for (var index = maxFiles - 1; index >= 0; index--) {
-      final records = <Map<String, dynamic>>[];
-      for (final line in indexes[index] ?? const <String>[]) {
-        try {
-          final decoded = jsonDecode(line);
-          if (decoded is! Map<String, dynamic>) continue;
-          records.add(decoded);
-          if (decoded['record_attachment'] case final String name) {
-            references[name] = decoded;
-            final length = decoded['record_attachment_bytes'];
-            if (length is int && length > 0) lengths[name] = length;
-          }
-        } catch (_) {
-          if (sanitizeRecord != null) {
-            _unreadableFiles.add(_file(index).path);
-            return;
-          }
-        }
-      }
-      recordsByFile[index] = records;
+    final scanned = await _scanAttachmentIndexAsync(
+      indexes,
+      maxFiles,
+      sanitizeRecord != null,
+    );
+    if (scanned.unreadableIndex case final int index) {
+      _unreadableFiles.add(_file(index).path);
+      return;
     }
+    final references = scanned.references;
+    final lengths = scanned.lengths;
+    final recordsByFile = scanned.recordsByFile;
     final attachments = <String, File>{};
     final orphaned = <File>[];
     var bytes = 0;
@@ -522,7 +1150,9 @@ class RotatingLogStore {
         } else {
           attachments[name] = entry;
           // 旧索引缺少长度时解压计量，不能拿 gzip 体积冒充未压缩预算。
-          lengths[name] ??= gzip.decode(await entry.readAsBytes()).length;
+          lengths[name] ??= await _uncompressedLength(
+            await entry.readAsBytes(),
+          );
           bytes += lengths[name]!;
         }
       }
@@ -653,35 +1283,21 @@ class RotatingLogStore {
     try {
       if (!await file.exists()) return null;
       final bytes = await file.readAsBytes();
-      final original = utf8.decode(bytes, allowMalformed: true);
       final modified = await file.lastModified();
       final cutoff = DateTime.now().subtract(retention);
-      final lines = const LineSplitter().convert(original);
+      final sanitizer = sanitizeRecord;
+      final parsed = bytes.length > 16 * 1024
+          ? await _readIndexInBackground(bytes, sanitizer, modified, cutoff)
+          : _readIndex(bytes, sanitizer, modified, cutoff);
       final retained = <String>[];
-      var recovered = false;
-      for (var index = 0; index < lines.length; index++) {
-        var line = lines[index];
-        if (line.isEmpty) continue;
-        // 截断的多字节字符与 JSON 尾行只影响这一条，前面的有效记录继续保留。
-        if (line.contains('\uFFFD')) {
-          recovered = true;
-          continue;
-        }
+      var recovered = parsed.recovered;
+      for (final entry in parsed.lines) {
+        var line = entry.line;
+        final recordAt = entry.at;
         try {
-          final decoded = jsonDecode(line);
-          if (sanitizeRecord case final sanitizer?) {
-            if (decoded is! Map<String, dynamic>) {
-              recovered = true;
-              continue;
-            }
-            var record = sanitizer(decoded);
-            if (record == null) {
-              recovered = true;
-              continue;
-            }
+          var record = entry.record;
+          if (sanitizer != null && record != null) {
             if (select != null && !select(record)) continue;
-            // 水合附件不是损坏恢复；只有索引本身被清洗或修复才计数。
-            recovered |= jsonEncode(record) != line;
             final name = record['record_attachment'];
             if (expandAttachments && name is String) {
               final reference = record;
@@ -689,28 +1305,17 @@ class RotatingLogStore {
                 final attachment = File(
                   '${_attachments.path}${Platform.pathSeparator}$name',
                 );
-                final full = jsonDecode(
-                  utf8.decode(gzip.decode(await attachment.readAsBytes())),
+                // 解压、旧正文重脱敏、历史缺口合并及编码都在同一后台 isolate。
+                final hydrated = await _hydrateAttachment(
+                  await attachment.readAsBytes(),
+                  sanitizer,
+                  reference,
                 );
-                if (full is! Map<String, dynamic>) {
-                  throw const FormatException('诊断附件结构无效');
-                }
-                final expanded = sanitizer(full);
-                if (expanded == null) throw const FormatException('诊断附件记录无效');
-                recovered |= jsonEncode(expanded) != jsonEncode(full);
-                final referenceAttrs = reference['attrs'];
-                final referenceDetails = referenceAttrs is Map
-                    ? referenceAttrs['details']
-                    : null;
-                final storage = referenceDetails is Map
-                    ? referenceDetails['storage']
-                    : null;
-                record = storage is Map
-                    ? _markStorage(
-                        Map<String, dynamic>.from(expanded),
-                        Map<String, Object?>.from(storage),
-                      )
-                    : expanded;
+                recovered |= hydrated.recovered;
+                line = hydrated.line;
+                final at = hydrated.at ?? modified;
+                if (!at.isBefore(cutoff)) retained.add(line);
+                continue;
               } catch (_) {
                 _unreadableFiles.add(name);
                 record = {
@@ -728,22 +1333,20 @@ class RotatingLogStore {
                 };
               }
             }
-            final sanitized = jsonEncode(record);
-            line = sanitized;
+            if (record != entry.record) line = jsonEncode(record);
           }
         } catch (_) {
-          if (sanitizeRecord != null ||
-              index == lines.length - 1 && !original.endsWith('\n')) {
+          if (sanitizer != null) {
             recovered = true;
             continue;
           }
         }
-        final at = _recordTime(line) ?? modified;
+        final at = recordAt ?? _recordTime(line) ?? modified;
         if (!at.isBefore(cutoff)) retained.add(line);
       }
       if (recovered) _recoveredFiles.add(file.path);
       return (
-        original: original,
+        original: parsed.original,
         content: retained.isEmpty ? '' : '${retained.join('\n')}\n',
       );
     } catch (_) {
@@ -773,10 +1376,11 @@ class RotatingLogStore {
   Future<void> flush() => _enqueue(() async {});
 
   /// 等待在途写入完成，按从旧到新的顺序生成快照。
-  Future<LogSnapshot> snapshot() => _enqueue(() async {
-    await _pruneExpired();
-    return _snapshotNow();
-  });
+  Future<LogSnapshot> snapshot({bool expandAttachments = true}) =>
+      _enqueue(() async {
+        await _pruneExpired();
+        return _snapshotNow(expandAttachments: expandAttachments);
+      });
 
   /// 精确恢复缓存引用的原始诊断，仅展开命中的附件。
   Future<Map<String, Object?>?> findRecord(String sessionId, int sequence) =>
@@ -790,49 +1394,41 @@ class RotatingLogStore {
                 record['session_id'] == sessionId && record['seq'] == sequence,
           );
           if (content == null || content.content.isEmpty) continue;
-          for (final line in const LineSplitter().convert(content.content)) {
-            final record = jsonDecode(line);
-            if (record is Map<String, dynamic> &&
-                record['session_id'] == sessionId &&
-                record['seq'] == sequence) {
-              return record;
-            }
-          }
+          // 内容已水合完整附件，最终 Map 的恢复也不能再同步解析大正文。
+          final record = await _findRecordInContent(
+            content.content,
+            sessionId,
+            sequence,
+          );
+          if (record != null) return record;
         }
         return null;
       });
 
-  Future<LogSnapshot> _snapshotNow() async {
-    final buffer = StringBuffer();
-    var bytes = 0;
-    var count = 0;
-    DateTime? oldest;
+  Future<LogSnapshot> _snapshotNow({bool expandAttachments = true}) async {
+    final contents = <String>[];
     for (var index = maxFiles - 1; index >= 0; index--) {
       final file = _file(index);
       try {
-        final read = await _readContent(file, expandAttachments: true);
+        final read = await _readContent(
+          file,
+          expandAttachments: expandAttachments,
+        );
         if (read == null || read.content.isEmpty) continue;
-        final content = read.content;
-        buffer.write(content);
-        bytes += utf8.encode(content).length;
-        count++;
-        for (final line in const LineSplitter().convert(content)) {
-          final at = _recordTime(line);
-          if (at != null && (oldest == null || at.isBefore(oldest))) {
-            oldest = at;
-          }
-        }
+        contents.add(read.content);
       } catch (_) {
         _unreadableFiles.add(file.path);
         // 单个轮转文件损坏时跳过，其余日志仍可导出。
       }
     }
+    // 完整正文的拼接、计量和最早时间解析不能再次占住 UI isolate。
+    final assembled = await _assembleSnapshot(contents);
     return LogSnapshot(
-      content: buffer.toString(),
+      content: assembled.content,
       stats: LogStoreStats(
-        bytes: bytes,
-        fileCount: count,
-        oldestRecordAt: oldest,
+        bytes: assembled.bytes,
+        fileCount: contents.length,
+        oldestRecordAt: assembled.oldest,
         unreadableFileCount: _unreadableFiles.length,
         recoveredFileCount: _recoveredFiles.length,
       ),
@@ -898,11 +1494,14 @@ class RotatingLogStore {
       '${exports.path}${Platform.pathSeparator}'
       'nuistpp-diagnostics-${DateTime.now().toUtc().microsecondsSinceEpoch}.log',
     );
-    await file.writeAsString(
-      '${jsonEncode({...metadata, 'log_bytes': snapshot.stats.bytes, 'log_files': snapshot.stats.fileCount, 'unreadable_files': snapshot.stats.unreadableFileCount, 'recovered_files': snapshot.stats.recoveredFileCount})}\n'
-      '${snapshot.content}',
-      flush: true,
-    );
+    final bytes = await _encodeExport({
+      ...metadata,
+      'log_bytes': snapshot.stats.bytes,
+      'log_files': snapshot.stats.fileCount,
+      'unreadable_files': snapshot.stats.unreadableFileCount,
+      'recovered_files': snapshot.stats.recoveredFileCount,
+    }, snapshot.content);
+    await file.writeAsBytes(bytes, flush: true);
     return file;
   });
 

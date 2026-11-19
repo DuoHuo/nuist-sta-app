@@ -13,11 +13,14 @@ class NextDayReminderChannel {
   ///
   /// 不等待平台回执：测试里未 mock 的 [MethodChannel] 会挂起 Future，
   /// 若在同步路径上 await 会吞掉 SnackBar；原生侧仍是 best-effort。
-  static Future<void> update(Map<String, Object?> configuration) async {
+  static Future<void> update(
+    Map<String, Object?> configuration, {
+    void Function(bool saved)? onCompleted,
+  }) async {
     try {
       unawaited(
         _log
-            .operation<void>(
+            .operation<bool>(
               'schedule',
               () async {
                 final result = await _channel.invokeMethod<Object?>(
@@ -40,6 +43,8 @@ class NextDayReminderChannel {
                     );
                   }
                 }
+                // 原生成功回执才确认持久化；空/未知回执不能阻止后续恢复。
+                return result is Map && result['diagnostics'] is List;
               },
               fields: {'stage': 'reminder.schedule'},
               successLevel: AppLogLevel.debug,
@@ -47,14 +52,22 @@ class NextDayReminderChannel {
                   ? AppLogLevel.debug
                   : AppLogLevel.warning,
             )
-            .catchError((_) {}),
+            .then<void>(
+              (saved) => onCompleted?.call(saved),
+              onError: (Object _) {
+                onCompleted?.call(false);
+              },
+            ),
       );
     } on MissingPluginException {
+      onCompleted?.call(false);
       // 非 Android 平台没有原生实现。
     } on PlatformException catch (error, stackTrace) {
+      onCompleted?.call(false);
       _log.warning('schedule.failed', error: error, stackTrace: stackTrace);
       // 通知不可用不影响课表和设置落盘。
     } catch (error, stackTrace) {
+      onCompleted?.call(false);
       _log.debug('schedule.unavailable', error: error, stackTrace: stackTrace);
       // 纯 controller 测试可能尚未初始化 Flutter 平台绑定。
     }

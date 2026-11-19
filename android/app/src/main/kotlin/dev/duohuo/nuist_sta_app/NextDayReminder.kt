@@ -166,10 +166,10 @@ object NextDayReminder {
 /** 闹钟、开机、校时、时区变化和升级后恢复下一次本地调度。 */
 class NextDayReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val diagnostics = mutableListOf<Map<String, Any?>>()
-        try { NextDayReminder.reschedule(context, diagnostics) } catch (error: Exception) {
-            diagnostics.add(notifyFailureDetails(error, "next_day.dispatch") + ("reason_code" to "next_day_dispatch_failed"))
+        val pending = goAsync()
+        val app = context.applicationContext
+        TimetableNativeWork.background(app, "next_day.dispatch", "next_day_dispatch_failed", pending::finish) {
+            NextDayReminder.reschedule(app, it)
         }
-        NativeBackgroundDiagnostics.enqueue(context, diagnostics)
     }
 }
