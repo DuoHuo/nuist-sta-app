@@ -11,8 +11,10 @@ import 'package:pointycastle/api.dart';
 import 'package:pointycastle/block/aes.dart';
 import 'package:pointycastle/stream/sic.dart';
 
+import '../config/campus_config.dart';
 import 'app_log.dart';
 import 'diagnostic_error.dart';
+import 'diagnostic_redactor.dart';
 import 'log_store.dart';
 
 void _spoolWorker((SendPort, String, Uint8List, Uint8List) configuration) {
@@ -51,6 +53,10 @@ void _spoolWorker((SendPort, String, Uint8List, Uint8List) configuration) {
 
 // 大正文旁路写入本机临时密文，避免完整字节与 base64 长期占住 UI 堆。
 class _BodyCapture {
+  _BodyCapture({this.privateBufferLimit});
+
+  static const inlineLimit = 64 * 1024;
+  final int? privateBufferLimit;
   final _bytes = BytesBuilder(copy: false);
   File? _file;
   Isolate? _worker;
@@ -70,7 +76,16 @@ class _BodyCapture {
   Future<void> _add(Uint8List bytes) async {
     length += bytes.length;
     if (error != null) return;
-    if (_file == null && _bytes.length + bytes.length <= 64 * 1024) {
+    // 需整段遮蔽的原文不进入后台附件；检索请求仅暂存在有上限的内存中。
+    if (privateBufferLimit case final limit?) {
+      if (length <= limit) {
+        _bytes.add(Uint8List.fromList(bytes));
+      } else {
+        _bytes.clear();
+      }
+      return;
+    }
+    if (_file == null && _bytes.length + bytes.length <= inlineLimit) {
       _bytes.add(Uint8List.fromList(bytes));
       return;
     }
@@ -325,8 +340,19 @@ class _HttpExchange {
   final int requestId;
   final AppLogSpan span;
   final Stopwatch watch = Stopwatch()..start();
-  final requestBytes = _BodyCapture();
-  final responseBytes = _BodyCapture();
+  late final _librarySearch =
+      options.uri.host == CampusHosts.library &&
+      options.method == 'POST' &&
+      options.uri.path == '/meta-local/opac/search/';
+  late final _libraryReader =
+      options.uri.host == CampusHosts.library &&
+      options.uri.path.startsWith('/meta-local/opac/users/');
+  late final requestBytes = _BodyCapture(
+    privateBufferLimit: _librarySearch ? _BodyCapture.inlineLimit : null,
+  );
+  late final responseBytes = _BodyCapture(
+    privateBufferLimit: _libraryReader ? 0 : null,
+  );
   final _bodyFiles = <String, DiagnosticBodyFile>{};
   Map<String, Object?> requestHeaders = {};
   Map<String, List<String>> responseHeaders = {};
@@ -482,6 +508,47 @@ class _HttpExchange {
     };
   }
 
+  Map<String, Object?> _privateLibraryBody(
+    _BodyCapture capture,
+    bool complete, {
+    Object? logicalBody,
+    bool search = false,
+  }) {
+    final bytes = capture.takeBytes();
+    final metadata = {
+      'captured_bytes': capture.length,
+      'complete': complete && captureError == null,
+    };
+    if (capture.length == 0 && logicalBody == null) return metadata;
+    if (search && (bytes.isNotEmpty || capture.length == 0)) {
+      try {
+        final source = bytes.isEmpty ? logicalBody : utf8.decode(bytes);
+        final json = source is String ? jsonDecode(source) : source;
+        if (json is Map && json['queryFieldList'] is List) {
+          final queryFields = json['queryFieldList'] as List;
+          return {
+            ...metadata,
+            'body': jsonEncode({
+              ...json,
+              'queryFieldList': [
+                for (final query in queryFields.cast<Map>())
+                  {...query, 'values': DiagnosticRedactor.personal},
+              ],
+            }),
+            'encoding': 'utf-8',
+          };
+        }
+      } catch (_) {
+        // 请求截断或变更格式时继续遮蔽原文。
+      }
+    }
+    return {
+      ...metadata,
+      'body': DiagnosticRedactor.personal,
+      'redaction_reason': search ? 'library_search_terms' : 'library_loans',
+    };
+  }
+
   Future<void> finish({Object? error, StackTrace? stackTrace}) =>
       _finishing ??= _finish(error: error, stackTrace: stackTrace);
 
@@ -489,16 +556,29 @@ class _HttpExchange {
     finished = true;
     watch.stop();
     try {
-      final requestBody = await _bodyAsync(
-        requestBytes,
-        options.contentType,
-        requestComplete,
-      );
-      final responseBody = await _bodyAsync(
-        responseBytes,
-        responseHeaders[Headers.contentTypeHeader]?.firstOrNull,
-        responseComplete,
-      );
+      final requestBody = _librarySearch
+          ? _privateLibraryBody(
+              requestBytes,
+              requestComplete,
+              logicalBody: options.data,
+              search: true,
+            )
+          : await _bodyAsync(
+              requestBytes,
+              options.contentType,
+              requestComplete,
+            );
+      final responseBody = _libraryReader
+          ? _privateLibraryBody(
+              responseBytes,
+              responseComplete,
+              logicalBody: interceptedResponse,
+            )
+          : await _bodyAsync(
+              responseBytes,
+              responseHeaders[Headers.contentTypeHeader]?.firstOrNull,
+              responseComplete,
+            );
       final exchange = <String, Object?>{
         'request_id': requestId,
         'method': options.method,
@@ -511,7 +591,7 @@ class _HttpExchange {
         'request': {
           'url': options.uri.toString(),
           'headers': requestHeaders,
-          if (!requestComplete && options.data != null)
+          if (!_librarySearch && !requestComplete && options.data != null)
             'logical_body': switch (options.data) {
               String() || Map() || List() => options.data,
               FormData data => {
@@ -535,7 +615,8 @@ class _HttpExchange {
           'status': status,
           'status_message': statusMessage,
           'headers': responseHeaders,
-          if (!adapterReached) 'logical_body': interceptedResponse,
+          if (!_libraryReader && !adapterReached)
+            'logical_body': interceptedResponse,
           ...responseBody,
           if (!responseComplete)
             'incomplete_reason': !adapterReached

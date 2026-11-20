@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
+import 'package:nuist_sta_app/core/config/campus_config.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/logging/diagnostic_error.dart';
 import 'package:nuist_sta_app/core/logging/diagnostic_redactor.dart';
@@ -844,6 +845,35 @@ void main() {
       jsonEncode(evidenceOf(failed)),
       isNot(contains('synthetic-large-secret')),
     );
+  });
+
+  test('图书馆的大借阅响应不进入诊断附件且完整交付给业务', () async {
+    final body = jsonEncode({
+      'items': ['synthetic-library-loan' * 4000],
+    });
+    var spoolWrites = 0;
+    diagnosticSpoolWriteForTesting = (_) async {
+      spoolWrites++;
+    };
+    addTearDown(() => diagnosticSpoolWriteForTesting = null);
+    final dio = Dio(BaseOptions(responseType: ResponseType.plain))
+      ..httpClientAdapter = _Adapter(
+        (_, _) async => ResponseBody.fromString(body, 200),
+      );
+    installHttpDiagnostics(dio);
+    addTearDown(() => dio.close(force: true));
+
+    final response = await dio.getUri<String>(
+      Uri.https(CampusHosts.library, '/meta-local/opac/users/loans'),
+    );
+    expect(response.data, body);
+    expect(spoolWrites, 0);
+    final logged = exchange()['response'] as Map;
+    expect(logged['body'], DiagnosticRedactor.personal);
+    expect(logged['captured_bytes'], utf8.encode(body).length);
+    expect(logged['complete'], isTrue);
+    expect(logged, isNot(contains('body_attachment')));
+    expect(jsonEncode(records), isNot(contains('synthetic-library-loan')));
   });
 
   test('大流式响应读完后立即失败也保留完整后台诊断', () async {

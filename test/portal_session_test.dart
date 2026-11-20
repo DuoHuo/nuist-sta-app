@@ -20,6 +20,7 @@ import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/network/vpn_auth.dart';
 import 'package:nuist_sta_app/mini_apps/electricity/electricity_api.dart';
 import 'package:nuist_sta_app/mini_apps/electricity/electricity_models.dart';
+import 'package:nuist_sta_app/mini_apps/library/library_api.dart';
 // 与现有 WebView 测试一致，仅使用已安装插件的平台接口模拟 Cookie 写入。
 // ignore: depend_on_referenced_packages
 import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
@@ -308,6 +309,81 @@ class _Campus {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('图书馆请求遇到 401 时重新建立业务会话，且不记录借阅详情', () async {
+    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
+    final host = CampusHosts.library;
+    const opac = '/meta-local/opac';
+    final visited = <String>[];
+    int loginCount = 0;
+    final portal = PortalSession.forTesting(
+      cas: campus.cas,
+      createHttp: (jar) => _http(jar, (options) {
+        final uri = options.uri;
+        visited.add(uri.path);
+        expect(uri.host, host);
+        expect(options.method, 'GET');
+        if (uri.path == '$opac/cas/rosetta') {
+          expect(uri.queryParameters['ticket'], 'synthetic-ticket');
+          loginCount++;
+          return _redirect(
+            'https://$host/mspace/',
+            cookies: [
+              'LIBRARY=valid; Path=/; Secure; HttpOnly',
+              'CSRF-TOKEN=synthetic%2Btoken; Path=/; Secure',
+            ],
+          );
+        }
+        if (uri.path == '/mspace/') return ResponseBody.fromString('', 200);
+        expect(uri.path, '$opac/users/loans');
+        expect(uri.queryParameters, {'page': '2', 'pageSize': '20'});
+        expect(
+          options.headers[HttpHeaders.cookieHeader],
+          contains('LIBRARY=valid'),
+        );
+        expect(options.headers['X-CSRF-TOKEN'], 'synthetic+token');
+        if (loginCount == 1) return ResponseBody.fromString('', 401);
+        return _json({
+          'code': 0,
+          'data': {
+            'total': 21,
+            'items': [
+              {
+                'bibId': 'synthetic-book',
+                'bibAttrs': {'title': '私有测试借阅书名', 'author': '测试作者'},
+                'loanDate': '2026-10-20 12:00:00',
+                'dueDate': '2026-11-20',
+                'loanStatus': 'soon',
+              },
+            ],
+          },
+        });
+      }),
+    );
+
+    final loans = await LibraryApi(portal: portal).fetchLoans(2);
+    expect(loginCount, 2);
+    expect(visited, [
+      '$opac/cas/rosetta',
+      '/mspace/',
+      '$opac/users/loans',
+      '$opac/cas/rosetta',
+      '/mspace/',
+      '$opac/users/loans',
+    ]);
+    expect(loans.total, 21);
+    expect(loans.items.single.borrowedOn, '2026-10-20');
+    expect(loans.items.single.dueOn, '2026-11-20');
+    expect(loans.items.single.status, '即将到期');
+    expect(loans.items.single.title, '私有测试借阅书名');
+    final diagnostics = jsonEncode(records);
+    expect(diagnostics, contains('library_loans'));
+    expect(diagnostics, isNot(contains('私有测试借阅书名')));
+    expect(diagnostics, isNot(contains('synthetic+token')));
+  });
 
   const evidenceRoom = ElecRoom(
     campus: ElecOption(name: '测试校区', value: 'campus'),

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 
+import '../config/campus_config.dart';
 import '../logging/app_log.dart';
 import '../network/vpn_log.dart';
 import 'portal_exceptions.dart';
@@ -55,7 +56,32 @@ class PortalCookieManager extends CookieManager {
             checkSession?.call();
             await beforeRequest?.call();
             checkSession?.call();
-            return loadCookies(options);
+            final cookies = await loadCookies(options);
+            final uri = options.uri;
+            if (uri.scheme == 'https' &&
+                uri.host == CampusHosts.library &&
+                uri.port == 443 &&
+                uri.path.startsWith('/meta-local/opac/users/')) {
+              // 移动站从 Cookie 读取同名令牌，并随读者接口请求发送。
+              final mobileCookies = await cookieJar.loadForRequest(
+                uri.resolve('/mspace/'),
+              );
+              for (final cookie in mobileCookies) {
+                if (cookie.name == 'CSRF-TOKEN') {
+                  try {
+                    options.headers['X-CSRF-TOKEN'] = Uri.decodeComponent(
+                      cookie.value,
+                    );
+                  } on ArgumentError {
+                    // 浏览器同样忽略无法解码的 Cookie。
+                  } on FormatException {
+                    // 例如百分号编码不是合法的 UTF-8。
+                  }
+                  break;
+                }
+              }
+            }
+            return cookies;
           },
           timeout: preparationTimeout,
           fields: log.requestFields,

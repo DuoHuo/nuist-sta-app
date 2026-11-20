@@ -140,7 +140,7 @@ void main() {
         'innovation-credit',
         'labor-score',
       ]);
-      expect(appRegistry.homeGridApps, hasLength(6));
+      expect(appRegistry.homeGridApps, hasLength(7));
       expect(appRegistry.byId.containsKey('student-info'), isFalse);
       expect(appRegistry.byId.containsKey('academic'), isFalse);
       for (final id in ['scores', 'innovation-credit', 'labor-score']) {

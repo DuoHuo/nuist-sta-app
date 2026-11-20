@@ -287,6 +287,7 @@ class AppLog {
     CampusHosts.jwxt: 'jwxt',
     CampusHosts.icard: 'icard',
     CampusHosts.iportal: 'portal',
+    CampusHosts.library: 'library',
     CampusHosts.bulletin: 'bulletin',
     CampusHosts.labor: 'labor',
     CampusHosts.cxcyjy: 'innovation',

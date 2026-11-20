@@ -58,6 +58,7 @@ abstract final class CampusHosts {
   static final jwxt = 'jwxt.$kCampusRootDomain';
   static final icard = 'icard.$kCampusRootDomain';
   static final iportal = 'i.$kCampusRootDomain';
+  static final library = 'elib.$kCampusRootDomain';
   static final bulletin = 'bulletin.$kCampusRootDomain';
   static final labor = 'labor.$kCampusRootDomain';
   static final cxcyjy = 'cxcyjy.$kCampusRootDomain';

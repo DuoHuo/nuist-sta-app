@@ -439,6 +439,8 @@ void main() {
     expect(preview.content.length, lessThan(4096));
     final full = await AppLog.readRecord(
       evidence!['record_ref'] as Map<String, Object?>,
+      // 回读须还原 3 MiB 附件；此处验证完整性，不考核并行测试期间的读取速度。
+      timeout: const Duration(seconds: 15),
     );
     expect(full, isNotNull, reason: '初始化后必须保留原始记录引用，不能重建新 seq');
     expect((full!['attrs'] as Map)['details']['response']['body'], body);

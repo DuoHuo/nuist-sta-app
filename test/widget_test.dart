@@ -33,7 +33,7 @@ void main() {
     expect(find.text('空教室'), findsOneWidget);
     expect(find.text('首页'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);
-    expect(find.byType(AppGridItem), findsNWidgets(6));
+    expect(find.byType(AppGridItem), findsNWidgets(7));
     expect(
       tester
           .widgetList<AppGridItem>(find.byType(AppGridItem))
@@ -45,6 +45,7 @@ void main() {
         'campus-map',
         'timetable',
         'exam-schedule',
+        'library',
       ],
     );
   });
@@ -149,6 +150,60 @@ void main() {
   });
 
   for (final mode in [ThemeMode.light, ThemeMode.dark]) {
+    testWidgets('${mode.name} 下从首页打开图书馆并取消、完成预测性返回', (tester) async {
+      addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
+      tester.view.physicalSize = const Size(400, 850);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      AppThemeMode.instance.value = mode;
+      await tester.pumpWidget(const NuistApp());
+      await tester.ensureVisible(find.text('图书馆'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('图书馆'));
+      await tester.pumpAndSettle();
+
+      final context = tester.element(find.text('馆藏查询'));
+      final route = ModalRoute.of(context)! as PageRoute;
+      expect(
+        Theme.of(context).brightness,
+        mode == ThemeMode.dark ? Brightness.dark : Brightness.light,
+      );
+      expect(find.text('我的借阅'), findsOneWidget);
+      Future<void> gesture(String method, [double progress = 0]) async {
+        ByteData? response;
+        const codec = StandardMethodCodec();
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'flutter/backgesture',
+          codec.encodeMethodCall(
+            MethodCall(method, {
+              'touchOffset': [5.0, 300.0],
+              'progress': progress,
+              'swipeEdge': 0,
+            }),
+          ),
+          (data) => response = data,
+        );
+        if (method == 'startBackGesture') {
+          expect(codec.decodeEnvelope(response!), isTrue);
+        }
+        await tester.pumpAndSettle();
+      }
+
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', 0.4);
+      expect(route.animation!.value, closeTo(0.6, 0.001));
+      await gesture('cancelBackGesture');
+      expect(route.isCurrent, isTrue);
+      expect(find.text('馆藏查询'), findsOneWidget);
+
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', 0.4);
+      await gesture('commitBackGesture');
+      expect(find.text('馆藏查询'), findsNothing);
+      expect(find.text('NUIST++'), findsOneWidget);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
     testWidgets('${mode.name} 下路由和直接推入的页面支持预测性返回及取消', (tester) async {
       addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
       AppThemeMode.instance.value = mode;
