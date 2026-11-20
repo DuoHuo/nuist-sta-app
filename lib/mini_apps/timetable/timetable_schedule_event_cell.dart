@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'timetable_course_cell.dart' show kCellMinFontSize;
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_layout.dart';
 import 'timetable_controller.dart';
@@ -49,7 +50,7 @@ class ScheduleEventCell extends StatelessWidget {
   double _badgeReserveFor(BuildContext context) {
     final available = math.max(1.0, width);
     final labels = stackCount > 1
-        ? ['$stackCount 门']
+        ? ['$stackCount 项']
         : [
             schedulePillLabel(event),
             if (event.isExam && !activeThisWeek) offWeekLabel,
@@ -129,11 +130,96 @@ class ScheduleEventCell extends StatelessWidget {
     textDirection: Directionality.of(context),
   );
 
-  Widget _content(BuildContext context, double contentWidth, Color fg) {
-    if (fontReferenceWidth != null) {
-      contentWidth = fontReferenceWidth! > 8 ? fontReferenceWidth! - 8 : 1.0;
-    }
+  ({double nameSize, double subSize, int? titleMaxLines}) _planContent(
+    BuildContext context, {
+    required double contentWidth,
+    required double maxHeight,
+    required String timeText,
+    required String locText,
+  }) {
     final sizes = _textSizes(context, contentWidth);
+    if (!maxHeight.isFinite) {
+      return (
+        nameSize: sizes.nameSize,
+        subSize: sizes.subSize,
+        titleMaxLines: null,
+      );
+    }
+    final base = DefaultTextStyle.of(context).style;
+    final scaler = MediaQuery.textScalerOf(context);
+    final direction = Directionality.of(context);
+    final nameBase = base.merge(TimetableTheme.cellStyle());
+    final subBase = base.merge(TimetableTheme.cellSubStyle());
+    final locBase = base.merge(TimetableTheme.cellLocationStyle());
+    final scale = scaler.scale(1);
+    final unit = scale > 0 ? 1 / scale : 1.0;
+    final minSize = scale > 0
+        ? (kCellMinFontSize / scale).ceilToDouble()
+        : kCellMinFontSize;
+    const eps = 0.01;
+
+    ({double height, int lines}) measure(
+      String text,
+      TextStyle style, {
+      int? maxLines,
+    }) => TimetableTheme.measureText(
+      text,
+      style,
+      maxWidth: contentWidth,
+      scaler: scaler,
+      direction: direction,
+      maxLines: maxLines,
+    );
+
+    // 与课程格一致：优先保留完整时间与地点（考场），高度不够先截断标题至 ≥1 行，
+    // 再按 1sp 步长逐级缩小字号至 10sp。
+    for (var i = 0; ; i++) {
+      final ns = TimetableTheme.snapFontSp(
+        math.max(minSize, sizes.nameSize - i * unit),
+      );
+      final ss = TimetableTheme.snapFontSp(
+        math.max(minSize, sizes.subSize - i * unit),
+      );
+      final nSt = nameBase.copyWith(fontSize: ns);
+      final sSt = subBase.copyWith(fontSize: ss);
+      final lSt = locBase.copyWith(fontSize: ss);
+      final titleM = measure(event.title, nSt);
+      final lineH = measure('课', nSt).height;
+      final timeH = measure(timeText, sSt, maxLines: 2).height;
+      final locH = locText.isEmpty ? 0.0 : measure(locText, lSt).height;
+      final secondaryH = timeH + locH;
+      if (titleM.height + secondaryH <= maxHeight + eps) {
+        return (nameSize: ns, subSize: ss, titleMaxLines: null);
+      }
+      if (lineH + secondaryH <= maxHeight + eps) {
+        final lines = ((maxHeight - secondaryH + eps) / lineH)
+            .floor()
+            .clamp(1, math.max(1, titleM.lines))
+            .toInt();
+        return (nameSize: ns, subSize: ss, titleMaxLines: lines);
+      }
+      if (ns <= minSize + 1e-6 && ss <= minSize + 1e-6) {
+        return (nameSize: ns, subSize: ss, titleMaxLines: 1);
+      }
+    }
+  }
+
+  Widget _content(BuildContext context, BoxConstraints box, Color fg) {
+    final contentWidth = fontReferenceWidth != null
+        ? (fontReferenceWidth! > 8 ? fontReferenceWidth! - 8 : 1.0)
+        : box.maxWidth;
+    final timeText = scheduleTimeText(event);
+    final locText =
+        controller.settings.showLocation && event.location.isNotEmpty
+        ? '@${event.location}'
+        : '';
+    final plan = _planContent(
+      context,
+      contentWidth: contentWidth,
+      maxHeight: box.maxHeight,
+      timeText: timeText,
+      locText: locText,
+    );
     return OverflowBox(
       alignment: AlignmentDirectional.topStart,
       minWidth: contentWidth,
@@ -146,20 +232,22 @@ class ScheduleEventCell extends StatelessWidget {
         children: [
           Text(
             event.title,
+            maxLines: plan.titleMaxLines,
+            overflow: plan.titleMaxLines == null ? null : TextOverflow.ellipsis,
             style: TimetableTheme.cellStyle(color: fg)
-                .copyWith(fontSize: sizes.nameSize),
+                .copyWith(fontSize: plan.nameSize),
           ),
           Text(
-            scheduleTimeText(event),
+            timeText,
             maxLines: 2,
             style: TimetableTheme.cellSubStyle(color: fg)
-                .copyWith(fontSize: sizes.subSize),
+                .copyWith(fontSize: plan.subSize),
           ),
-          if (controller.settings.showLocation && event.location.isNotEmpty)
+          if (locText.isNotEmpty)
             Text(
-              '@${event.location}',
+              locText,
               style: TimetableTheme.cellLocationStyle(color: fg)
-                  .copyWith(fontSize: sizes.subSize),
+                  .copyWith(fontSize: plan.subSize),
             ),
         ],
       ),
@@ -184,15 +272,13 @@ class ScheduleEventCell extends StatelessWidget {
       activeThisWeek: activeThisWeek,
     );
     final readableFg = TimetableTheme.readableCellText(bg, autoFg);
-    // item 14：考试格也受「文字颜色」白字 / 黑字强制；非本周灰显仍用 offWeekText。
+    // item 14：考试与其他日程格统一受「文字颜色」白字 / 黑字强制；非本周灰显仍用 offWeekText。
     final fg = offWeek
         ? autoFg
-        : event.isExam
-        ? TimetableTheme.cellTextFor(
+        : TimetableTheme.cellTextFor(
             readableFg,
             controller.settings.cellTextColor,
-          )
-        : readableFg;
+          );
     final stacked = stackCount > 1;
     final badgeReserve = _badgeReserveFor(context);
     return Semantics(
@@ -241,8 +327,7 @@ class ScheduleEventCell extends StatelessWidget {
                   padding: EdgeInsets.fromLTRB(4, 4, 4, 4 + badgeReserve),
                   child: ClipRect(
                     child: LayoutBuilder(
-                      builder: (context, box) =>
-                          _content(context, box.maxWidth, fg),
+                      builder: (context, box) => _content(context, box, fg),
                     ),
                   ),
                 ),
@@ -268,7 +353,7 @@ class ScheduleEventCell extends StatelessWidget {
                     child: stacked
                         ? SchedulePill(
                             key: const Key('schedule_cell_stack_badge'),
-                            text: '$stackCount 门',
+                            text: '$stackCount 项',
                             color: fg,
                           )
                         : Wrap(

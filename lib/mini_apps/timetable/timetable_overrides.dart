@@ -221,6 +221,7 @@ class SlotOrigin {
     required this.courseId,
     required this.original,
     required this.moved,
+    this.weeksEdited = false,
   });
   final String courseId;
 
@@ -229,6 +230,9 @@ class SlotOrigin {
 
   /// true = 被调到新位置的时段；false = 原位置剩下的周。
   final bool moved;
+
+  /// true = 用户通过课程编辑主动修改了周次，单/双周展示应以修改后时段为准。
+  final bool weeksEdited;
 }
 
 final Expando<SlotOrigin> _origins = Expando<SlotOrigin>('slotOrigin');
@@ -864,6 +868,7 @@ List<Course> applyCourseEdits(
               courseId: c.id,
               original: original,
               moved: replacement.ref != original.ref,
+              weeksEdited: replacement.weeks != original.weeks,
             ),
           );
           slots.add(replacement);

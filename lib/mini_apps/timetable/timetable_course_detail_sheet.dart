@@ -218,11 +218,15 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                       ),
                     if (course.isManual) const _DetailTag(label: '手动添加'),
                     if (courseKindOf(course: course, slot: slot) ==
-                            CourseKind.lab &&
-                        (slot.kind != null || !course.isPe))
+                        CourseKind.lab)
                       const _DetailTag(
                         key: Key('course_detail_lab_label'),
                         label: '实验课',
+                      ),
+                    if (cell.swappedFrom case final swappedFrom?)
+                      _DetailTag(
+                        key: const Key('course_detail_swapped_from'),
+                        label: '由 ${swappedFrom.month}月${swappedFrom.day}日 调入',
                       ),
                     if (cell.dateEdit != null)
                       _DetailTag(

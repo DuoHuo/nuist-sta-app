@@ -652,16 +652,23 @@ void main() {
       );
     });
 
-    testWidgets('EV10/EX06 与课程重叠显示冲突圆点和「2 门」；考试隐藏时不计冲突', (tester) async {
+    testWidgets('EV10/EX06 与课程重叠优先显示考试格、冲突圆点和「2 项」；考试隐藏时不计冲突', (tester) async {
       _load(manual: [_course('m1', '测试课甲', day: 2, start: 1, end: 2)]);
       await tester.runAsync(() => _c.addScheduleEvent(_event('')));
       await _pumpGrid(tester);
-      expect(find.text('2 门'), findsOneWidget);
-      expect(find.byKey(const Key('course_cell_conflict_dot')), findsOneWidget);
+      expect(_eventCell('测试考试甲'), findsOneWidget);
+      expect(find.text('2 项'), findsOneWidget);
+      expect(
+        find.byKey(const Key('schedule_cell_conflict_dot')),
+        findsOneWidget,
+      );
 
       _setShowExams(false);
       await _pumpGrid(tester);
+      expect(_eventCell('测试考试甲'), findsNothing);
+      expect(find.text('2 项'), findsNothing);
       expect(find.text('2 门'), findsNothing);
+      expect(find.byKey(const Key('schedule_cell_conflict_dot')), findsNothing);
       expect(find.byKey(const Key('course_cell_conflict_dot')), findsNothing);
     });
 

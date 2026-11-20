@@ -6,7 +6,6 @@ import 'timetable_remaining_weeks.dart';
 import 'timetable_models.dart';
 import 'timetable_theme.dart';
 import 'timetable_week_layout.dart';
-import 'timetable_course_color.dart';
 
 /// 日程（考试 / 其他）在周视图、详情、首页卡片共用的纯逻辑与样式（spec §14.2–§14.4）。
 
@@ -199,11 +198,7 @@ Color scheduleCellBg(
     return TimetableTheme.examCellBg(Color(c.settings.examColor), dark: dark);
   }
   return TimetableTheme.blendCellBg(
-    TimetableTheme.coursePair(
-      scheduleOtherColorIndex(c, e),
-      scheme: coursePaletteSchemeFor(c),
-      dark: dark,
-    ).bg,
+    TimetableTheme.autoCoursePair(scheduleOtherColorIndex(c, e), dark: dark).bg,
     c.settings.cellOpacity,
     dark: dark,
   );
@@ -221,9 +216,8 @@ Color scheduleCellFg(
     return dark ? TimetableTheme.offWeekTextDark : TimetableTheme.offWeekText;
   }
   if (e.isExam) return TimetableTheme.examText;
-  return TimetableTheme.coursePair(
+  return TimetableTheme.autoCoursePair(
     scheduleOtherColorIndex(c, e),
-    scheme: coursePaletteSchemeFor(c),
     dark: dark,
   ).fg;
 }

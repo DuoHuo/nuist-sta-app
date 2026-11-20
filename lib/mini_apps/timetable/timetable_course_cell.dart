@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import 'timetable_controller.dart';
+import 'timetable_date_edits.dart';
 import 'timetable_models.dart';
 import 'timetable_overrides.dart';
 import 'timetable_theme.dart';
@@ -21,6 +22,8 @@ class CourseCell extends StatelessWidget {
     this.onLongPress,
     this.controller,
     this.stackCount = 1,
+    this.stackLabel,
+    this.displaySpan,
     this.onDragStart,
     this.onDragUpdate,
     this.onDragEnd,
@@ -45,8 +48,15 @@ class CourseCell extends StatelessWidget {
   /// 为空时用 [TimetableController.instance]。
   final TimetableController? controller;
 
-  /// 本周该时段同时有课的门数（由 WeekGrid 聚合）；>1 时显示「N 门」胶囊与冲突点。
+  /// 本周该时段同时冲突的项数（由 WeekGrid 聚合，仅统计本周活跃项）；
+  /// >1 时显示冲突胶囊与右上角冲突圆点。
   final int stackCount;
+
+  /// 冲突胶囊文案（缺省「N 门」，含日程/考试时可传「N 项」）。
+  final String? stackLabel;
+
+  /// 格子实际渲染的节次跨度；为空时取 `cell.slot.span`。
+  final int? displaySpan;
 
   /// 长按满 [dragHoldDuration] 时回调（此时不给任何视觉/震动反馈，由 WeekGrid
   /// 等到手指真正移动后才拖起格子）。三个回调都为空时不挂长按识别器。
@@ -108,16 +118,18 @@ class CourseCell extends StatelessWidget {
     final teacher = settings.showTeacher
         ? cellTeacherText(cell.slot.teacher)
         : '';
-    final source = slotOriginOf(cell.slot)?.original ?? cell.slot;
-    final showParity =
-        cell.activeThisWeek &&
-        source.parity != WeekParity.all &&
-        _weekCount(source.weeks) > 1 &&
-        _weekCount(cell.slot.weeks) > 1;
-    final showLab = _showsLabLabel && cell.slot.span > 1;
-    final badgeHeight =
-        showLab || showParity || stackCount > 1 || !cell.activeThisWeek
-        ? _badgeReserveFor(context, showLab: showLab)
+    final (:showParity, :parity) = _effectiveParity();
+    final stacked = stackCount > 1;
+    final showOffWeek = !cell.activeThisWeek;
+    final showLab = !stacked && _showsLabLabel && _effectiveSpan > 1;
+    final badgeHeight = showLab || showParity || stacked || showOffWeek
+        ? _badgeReserveFor(
+            context,
+            showLab: showLab,
+            stacked: stacked,
+            showOffWeek: showOffWeek,
+            parity: showParity ? parity : WeekParity.all,
+          )
         : 0.0;
     return 8 +
         badgeHeight +
@@ -183,30 +195,17 @@ class CourseCell extends StatelessWidget {
             settings.cellTextColor,
           )
         : colors.offWeekText;
-    // 单/双周按教务原始周次（[SlotOrigin.original]，即调课记录的 origWeeks）判断：
-    // 「只改本周」后新时段的位串只剩一周，不能据此显示/朗读「单周」「双周」。
-    final source = slotOriginOf(cell.slot)?.original ?? cell.slot;
-    final parity = source.parity;
-    // 只有一周上课（「只改本周」拆出的那一周、教务/手动课只排了一周）不标单/双周；
-    // 胶囊与朗读共用这一判断。非本周格只显示「非本周」胶囊，不再同时显示单/双周（§13.8）。
-    final showParity =
-        active &&
-        parity != WeekParity.all &&
-        _weekCount(source.weeks) > 1 &&
-        _weekCount(cell.slot.weeks) > 1;
+    final (:showParity, :parity) = _effectiveParity();
     final stacked = stackCount > 1;
     final showOffWeek = !active;
-    // 显式类型优先；旧体育数据即使带实验标记，也保持原有的不打标行为。
-    final labSlot = _showsLabLabel;
-    // 1 节高的格子放不下底部标签行：格内省略「实验」，改由课程详情标注「实验课」。
-    final showLab = labSlot && cell.slot.span > 1;
-    // 有「实验」时底部只留一行：居中，「实验」在前，其余角标依次靠后（放不下就省略）。
-    final showCenterBadge = !showLab && (showParity || stacked || showOffWeek);
-    final showBottomBadge = showLab || showCenterBadge;
+    // 冲突格汇总多项，不再叠加「实验」；1 节高省略格内「实验」，改由详情标注「实验课」。
+    final showLab = !stacked && _showsLabLabel && _effectiveSpan > 1;
+    final showBottomBadge = stacked || showOffWeek || showLab || showParity;
+    final effectiveStackLabel = stackLabel ?? '$stackCount 门';
 
     return Semantics(
       button: true,
-      label: _semanticsLabel(showParity, parity),
+      label: _semanticsLabel(showParity && !stacked, parity),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -248,7 +247,13 @@ class CourseCell extends StatelessWidget {
                         box,
                         fg,
                         showBottomBadge,
-                        _badgeReserveFor(context, showLab: showLab),
+                        _badgeReserveFor(
+                          context,
+                          showLab: showLab,
+                          stacked: stacked,
+                          showOffWeek: showOffWeek,
+                          parity: showParity ? parity : WeekParity.all,
+                        ),
                       ),
                     ),
                   ),
@@ -267,121 +272,142 @@ class CourseCell extends StatelessWidget {
                       ),
                     ),
                   ),
-                if (showLab)
+                if (showBottomBadge)
                   Positioned(
                     left: 0,
                     right: 0,
                     bottom: 3,
-                    child: LayoutBuilder(
-                      builder: (context, box) {
-                        // 除「实验」外最多再放一个角标；行宽不够时只保留「实验」。
-                        final parityLabel = parity == WeekParity.odd
-                            ? '单周'
-                            : '双周';
-                        final (String?, Widget?) extra = stacked
-                            ? (
-                                '$stackCount 门',
-                                _badge(
-                                  '$stackCount 门',
-                                  fg,
-                                  key: const Key('course_cell_stack_badge'),
-                                ),
-                              )
-                            : showOffWeek
-                            ? (
-                                offWeekLabel,
-                                // 「非本周」已由格子语义标签念过一次，胶囊不再重复朗读。
-                                ExcludeSemantics(
-                                  child: _badge(
-                                    offWeekLabel,
-                                    fg,
-                                    key: const Key('course_cell_off_week_pill'),
-                                  ),
-                                ),
-                              )
-                            : showParity
-                            ? (
-                                parityLabel,
-                                _badge(
-                                  parityLabel,
-                                  fg,
-                                  key: const Key('course_cell_parity_pill'),
-                                ),
-                              )
-                            : (null, null);
-                        final fits =
-                            extra.$1 != null &&
-                            box.maxWidth >=
-                                _badgeWidth(
-                                      context,
-                                      labPillLabel,
-                                      fontSize: labPillFontSize,
-                                      paddingH: labPillPaddingH,
-                                    ) +
-                                    labPillGap +
-                                    _badgeWidth(context, extra.$1!);
-                        return Center(
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _badge(
-                                labPillLabel,
-                                fg,
-                                key: const Key('course_cell_lab_pill'),
-                                fontSize: labPillFontSize,
-                                paddingH: labPillPaddingH,
-                                height: _labPillHeight(context),
-                                borderAlpha: labPillBorderAlpha,
-                              ),
-                              if (fits) ...[
-                                const SizedBox(width: labPillGap),
-                                extra.$2!,
-                              ],
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                if (showCenterBadge)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 3,
-                    child: Center(
-                      child: Wrap(
-                        spacing: 2,
-                        alignment: WrapAlignment.center,
-                        children: [
-                          if (stacked)
-                            _badge(
-                              '$stackCount 门',
-                              fg,
-                              key: const Key('course_cell_stack_badge'),
-                            ),
-                          if (showOffWeek && !stacked)
-                            // 「非本周」已由格子语义标签念过一次，胶囊不再重复朗读。
-                            ExcludeSemantics(
-                              child: _badge(
-                                offWeekLabel,
-                                fg,
-                                key: const Key('course_cell_off_week_pill'),
-                              ),
-                            )
-                          else if (showParity && !stacked)
-                            _badge(
-                              parity == WeekParity.odd ? '单周' : '双周',
-                              fg,
-                              key: const Key('course_cell_parity_pill'),
-                            ),
-                        ],
-                      ),
+                    child: _buildBottomBadges(
+                      context,
+                      fg: fg,
+                      stacked: stacked,
+                      stackLabel: effectiveStackLabel,
+                      showOffWeek: showOffWeek,
+                      showLab: showLab,
+                      showParity: showParity,
+                      parity: parity,
                     ),
                   ),
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// 底部胶囊按紧迫度排优先级：冲突（N 门/项） > 非本周 > 实验 > 单/双周。
+  /// 窄格放不下两个胶囊时始终保留更高优先级标签，避免「实验」吞掉「N 门」或「非本周」。
+  Widget _buildBottomBadges(
+    BuildContext context, {
+    required Color fg,
+    required bool stacked,
+    required String stackLabel,
+    required bool showOffWeek,
+    required bool showLab,
+    required bool showParity,
+    required WeekParity parity,
+  }) {
+    if (stacked) {
+      return Center(
+        child: _badge(
+          stackLabel,
+          fg,
+          key: const Key('course_cell_stack_badge'),
+        ),
+      );
+    }
+
+    Widget labPill(BuildContext ctx) => _badge(
+      labPillLabel,
+      fg,
+      key: const Key('course_cell_lab_pill'),
+      fontSize: labPillFontSize,
+      paddingH: labPillPaddingH,
+      height: _labPillHeight(ctx),
+      borderAlpha: labPillBorderAlpha,
+    );
+
+    if (showOffWeek) {
+      // 「非本周」已由格子语义标签念过一次，胶囊不再重复朗读。
+      final offWeekPill = ExcludeSemantics(
+        child: _badge(
+          offWeekLabel,
+          fg,
+          key: const Key('course_cell_off_week_pill'),
+        ),
+      );
+      if (!showLab) return Center(child: offWeekPill);
+      return LayoutBuilder(
+        builder: (context, box) {
+          final fits =
+              box.maxWidth >=
+              _badgeWidth(context, offWeekLabel) +
+                  labPillGap +
+                  _badgeWidth(
+                    context,
+                    labPillLabel,
+                    fontSize: labPillFontSize,
+                    paddingH: labPillPaddingH,
+                  );
+          return Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                offWeekPill,
+                if (fits) ...[
+                  const SizedBox(width: labPillGap),
+                  labPill(context),
+                ],
+              ],
+            ),
+          );
+        },
+      );
+    }
+
+    if (showLab) {
+      final parityLabel = parity == WeekParity.odd ? '单周' : '双周';
+      if (!showParity) return Center(child: labPill(context));
+      return LayoutBuilder(
+        builder: (context, box) {
+          final fits =
+              box.maxWidth >=
+              _badgeWidth(
+                    context,
+                    labPillLabel,
+                    fontSize: labPillFontSize,
+                    paddingH: labPillPaddingH,
+                  ) +
+                  labPillGap +
+                  _badgeWidth(context, parityLabel);
+          return Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                labPill(context),
+                if (fits) ...[
+                  const SizedBox(width: labPillGap),
+                  _badge(
+                    parityLabel,
+                    fg,
+                    key: const Key('course_cell_parity_pill'),
+                  ),
+                ],
+              ],
+            ),
+          );
+        },
+      );
+    }
+
+    return Center(
+      child: _badge(
+        parity == WeekParity.odd ? '单周' : '双周',
+        fg,
+        key: const Key('course_cell_parity_pill'),
       ),
     );
   }
@@ -523,18 +549,41 @@ class CourseCell extends StatelessWidget {
     minimumHeight: labPillHeight,
   ).height;
 
-  double _badgeReserveFor(BuildContext context, {required bool showLab}) {
-    if (showLab) return math.max(labBadgeReserve, _labPillHeight(context) + 2);
-    final source = slotOriginOf(cell.slot)?.original ?? cell.slot;
-    final label = stackCount > 1
-        ? '$stackCount 门'
-        : !cell.activeThisWeek
-        ? offWeekLabel
-        : source.parity == WeekParity.odd
-        ? '单周'
-        : '双周';
-    final size = TimetableTheme.cellBadgeSize(context, label, maxWidth: width);
-    return math.max(badgeReserve, size.height + 2);
+  double _badgeReserveFor(
+    BuildContext context, {
+    required bool showLab,
+    required bool stacked,
+    required bool showOffWeek,
+    required WeekParity parity,
+  }) {
+    if (stacked) {
+      final size = TimetableTheme.cellBadgeSize(
+        context,
+        stackLabel ?? '$stackCount 门',
+        maxWidth: width,
+      );
+      return math.max(badgeReserve, size.height + 2);
+    }
+    var reserve = 0.0;
+    if (showLab) {
+      reserve = math.max(labBadgeReserve, _labPillHeight(context) + 2);
+    }
+    if (showOffWeek) {
+      final size = TimetableTheme.cellBadgeSize(
+        context,
+        offWeekLabel,
+        maxWidth: width,
+      );
+      reserve = math.max(reserve, math.max(badgeReserve, size.height + 2));
+    } else if (parity != WeekParity.all) {
+      final size = TimetableTheme.cellBadgeSize(
+        context,
+        parity == WeekParity.odd ? '单周' : '双周',
+        maxWidth: width,
+      );
+      reserve = math.max(reserve, math.max(badgeReserve, size.height + 2));
+    }
+    return reserve;
   }
 
   /// Micro 胶囊（单/双周、「非本周」、「N 门」与「实验」共用样式）：
@@ -587,11 +636,37 @@ class CourseCell extends StatelessWidget {
     return width + paddingH * 2 + 2;
   }
 
+  int get _effectiveSpan => displaySpan ?? cell.slot.span;
+
+  /// 计算本节是否应展示单/双周胶囊：
+  /// - 非本周格不标单/双周；
+  /// - 单日挪课（「只改这一天」改了日期/节次）属于孤立一次安排，不标单/双周；
+  /// - 拖动拆周回溯原时段周次，但主动编辑改过周次（[SlotOrigin.weeksEdited]）按新周次判；
+  /// - 须满足规律单/双周（[CourseSlot.displayParity]），避免孤立零散周误标。
+  ({bool showParity, WeekParity parity}) _effectiveParity() {
+    if (!cell.activeThisWeek) {
+      return (showParity: false, parity: WeekParity.all);
+    }
+    final edit = cell.dateEdit;
+    if (edit != null && edit.scope == DateEditScope.oneDay && edit.movesTime) {
+      return (showParity: false, parity: WeekParity.all);
+    }
+    final origin = slotOriginOf(cell.slot);
+    final source = origin != null && !origin.weeksEdited
+        ? origin.original
+        : cell.slot;
+    final parity = source.displayParity;
+    final show = parity != WeekParity.all && _weekCount(cell.slot.weeks) > 1;
+    return (showParity: show, parity: show ? parity : WeekParity.all);
+  }
+
   bool get _showsLabLabel =>
-      courseKindOf(course: cell.course, slot: cell.slot) == CourseKind.lab &&
-      (cell.slot.kind != null || !cell.course.isPe);
+      courseKindOf(course: cell.course, slot: cell.slot) == CourseKind.lab;
 
   String _semanticsLabel(bool showBadge, WeekParity parity) {
+    final stackSemantics = stackLabel != null && stackLabel!.endsWith('项')
+        ? '本时段 $stackCount 项'
+        : '本时段 $stackCount 门课';
     final parts = <String>[
       if (!cell.activeThisWeek) '非本周',
       courseDisplayName(course: cell.course, slot: cell.slot),
@@ -599,7 +674,7 @@ class CourseCell extends StatelessWidget {
       if (cell.slot.location.isNotEmpty) cell.slot.location,
       if (_showsLabLabel) '实验课',
       if (showBadge) (parity == WeekParity.odd ? '单周' : '双周'),
-      if (stackCount > 1) '本时段 $stackCount 门课',
+      if (stackCount > 1) stackSemantics,
     ];
     return parts.join('，');
   }

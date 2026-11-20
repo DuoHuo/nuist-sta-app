@@ -193,7 +193,7 @@ void main() {
     }
   });
 
-  testWidgets('LAB04 与「非本周」同行：「实验」在前、间距 4dp；行宽不够只保留「实验」', (tester) async {
+  testWidgets('LAB04 与「非本周」同行：「非本周」优先在前、间距 4dp；行宽不够保留「非本周」', (tester) async {
     await _pumpCell(tester, _cell(_course(), active: false));
     final lab = find.byKey(const Key('course_cell_lab_pill'));
     final offWeek = find.byKey(const Key('course_cell_off_week_pill'));
@@ -202,21 +202,48 @@ void main() {
     final labRect = tester.getRect(lab);
     final offRect = tester.getRect(offWeek);
     expect(labRect.center.dy, closeTo(offRect.center.dy, 0.01));
-    expect(labRect.left, lessThan(offRect.left));
-    expect(offRect.left - labRect.right, closeTo(4, 0.01));
+    expect(offRect.left, lessThan(labRect.left));
+    expect(labRect.left - offRect.right, closeTo(4, 0.01));
     final groupCell = tester.getRect(find.byType(CourseCell));
     expect(
-      (labRect.left + offRect.right) / 2,
+      (offRect.left + labRect.right) / 2,
       closeTo(groupCell.center.dx, 0.01),
     );
     expect(find.text('实验'), findsOneWidget);
     expect(find.text('非本周'), findsOneWidget);
 
-    // 窄格（真实周视图约 50dp）：放不下两个胶囊时只保留「实验」。
+    // 窄格（真实周视图约 50dp）：放不下两个胶囊时保留更高优先级的「非本周」。
     await tester.pumpWidget(const SizedBox.shrink());
     await _pumpCell(tester, _cell(_course(), active: false), width: 50);
-    expect(find.byKey(const Key('course_cell_lab_pill')), findsOneWidget);
-    expect(find.byKey(const Key('course_cell_off_week_pill')), findsNothing);
+    expect(find.byKey(const Key('course_cell_off_week_pill')), findsOneWidget);
+    expect(find.byKey(const Key('course_cell_lab_pill')), findsNothing);
+  });
+
+  testWidgets('LAB06 撞课实验格：冲突「N 门」优先，不被「实验」吞掉', (tester) async {
+    for (final width in [300.0, 50.0]) {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topLeft,
+              child: CourseCell(
+                controller: _c,
+                cell: _cell(_course()),
+                width: width,
+                height: 120,
+                radius: 4,
+                stackCount: 2,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const Key('course_cell_stack_badge')), findsOneWidget);
+      expect(find.text('2 门'), findsOneWidget);
+      expect(find.byKey(const Key('course_cell_lab_pill')), findsNothing);
+    }
   });
 
   testWidgets('LAB05 1 节高：格内省略「实验」，课程详情显示「实验课」', (tester) async {

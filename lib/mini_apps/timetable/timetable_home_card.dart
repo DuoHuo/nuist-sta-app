@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'timetable_schedule_home_row.dart';
+import 'timetable_schedule_event_layout.dart';
 import 'timetable_controller.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_models.dart';
@@ -168,6 +169,7 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
             tomorrow.courses,
             tomorrowEvents,
           );
+          final tomorrowDate = DateTime(today.year, today.month, today.day + 1);
           final list = all.take(maxItems).toList();
           body = [
             Column(
@@ -175,7 +177,12 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 for (final entry in list)
-                  _entryRow(entry, now, onCourseTap: (_) => _openTimetable()),
+                  _entryRow(
+                    entry,
+                    now,
+                    slotDate: tomorrowDate,
+                    onCourseTap: (_) => _openTimetable(),
+                  ),
               ],
             ),
           ];
@@ -273,6 +280,7 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
   Widget _entryRow(
     HomeEntry entry,
     DateTime now, {
+    DateTime? slotDate,
     required void Function(TodayCourseItem item) onCourseTap,
   }) {
     final course = entry.course;
@@ -280,6 +288,7 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
       return _CourseRow(
         item: course,
         now: now,
+        slotDate: slotDate ?? now,
         onTap: () => onCourseTap(course),
       );
     }
@@ -427,11 +436,13 @@ class _CourseRow extends StatelessWidget {
   const _CourseRow({
     required this.item,
     required this.now,
+    required this.slotDate,
     required this.onTap,
   });
 
   final TodayCourseItem item;
   final DateTime now;
+  final DateTime slotDate;
   final VoidCallback onTap;
 
   /// "08:00" → 当天该时刻；格式不对返回 null。
@@ -449,14 +460,17 @@ class _CourseRow extends StatelessWidget {
     final colors = TimetableTheme.colorsOf(context);
     // 3dp 竖条：与周课表同课 [coursePairFor] 底色（cell fill），全 App 一套底+字配对。
     final ctl = TimetableController.instance;
-    final color = coursePairFor(ctl, item.course, dark: colors.isDark).bg;
+    final pair = coursePairFor(ctl, item.course, dark: colors.isDark);
+    final color = pair.bg;
     final done = item.status == TodayCourseStatus.done;
     final fg = done ? colors.hint : colors.titleText;
+    final isLab =
+        courseKindOf(course: item.course, slot: item.slot) == CourseKind.lab;
     final start = item.slot.startNode;
     final end = item.slot.endNode;
     final nodeHint = '第$start${start == end ? '' : '–$end'}节';
     // 与周格 CourseCell / 小组件同一入口，保证实验课压缩小课间后各面一致。
-    final bounds = ctl.timeForSlot(item.course, item.slot, date: now);
+    final bounds = ctl.timeForSlot(item.course, item.slot, date: slotDate);
     final from = bounds.start;
     final to = bounds.end;
     // item 13 第二行：「08:00–09:40 · 第1–2节」（没有作息时间时只显示节次）。
@@ -498,15 +512,37 @@ class _CourseRow extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      // 长课名换行显示，不截断。
-                      Text(
-                        courseDisplayName(course: item.course, slot: item.slot),
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          height: 1.2,
-                          color: fg,
-                        ),
+                      // 长课名换行显示，不截断；实验课轻标「实验」提示压缩课间规则。
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              courseDisplayName(
+                                course: item.course,
+                                slot: item.slot,
+                              ),
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                height: 1.2,
+                                color: fg,
+                              ),
+                            ),
+                          ),
+                          if (isLab) ...[
+                            const SizedBox(width: 6),
+                            SchedulePill(
+                              key: const Key('home_course_lab_pill'),
+                              text: '实验',
+                              color: done
+                                  ? colors.hint
+                                  : TimetableTheme.readableCellText(
+                                      colors.surface,
+                                      pair.fg,
+                                    ),
+                            ),
+                          ],
+                        ],
                       ),
                       // item 2：课名与第二行间距 2。
                       const SizedBox(height: 2),

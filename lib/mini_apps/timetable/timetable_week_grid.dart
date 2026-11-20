@@ -613,33 +613,23 @@ class _WeekGridState extends State<WeekGrid> {
       final width = _fontReferenceWidth;
       if (width <= 0) continue;
       final items = _dayLayoutItems(days[di], nodes);
-      for (final group in _groupsForEventFocus(items.courses, items.events)) {
-        final overlapping = [
-          for (final e in items.events)
-            if (e.overlapsNodes(group.startNode, group.endNode)) e,
-        ];
-        // 与日程重叠而让位的非本周格不参与高度需求。
-        if (group.active.isEmpty && overlapping.isNotEmpty) continue;
-        final extra = group.active.isEmpty
-            ? const <ScheduleGridItem>[]
-            : overlapping;
-        var start = group.startNode;
-        var end = group.endNode;
-        for (final e in extra) {
-          start = math.min(start, e.startNode);
-          end = math.max(end, e.endNode);
-        }
-        if (start > nodes) continue;
-        final groupSpan = end.clamp(1, nodes) - start.clamp(1, nodes) + 1;
-        final stack = group.active.length + extra.length;
-        // 本周组内每门都测量，拖起主课后剩余课程仍能完整显示；灰组只画主课。
+      final blocks = planDayColumnBlocks(
+        courses: items.courses,
+        events: items.events,
+        week: week,
+        weekOfDate: controller.weekOfDate,
+      );
+      for (final block in blocks) {
+        if (block.startNode > nodes) continue;
+        final blockSpan =
+            block.endNode.clamp(1, nodes) - block.startNode.clamp(1, nodes) + 1;
+        // 本周组内每门都测量，拖起主课后剩余课程仍能完整显示；非本周块仅含最近一门。
         // 日程格（考试/日程）以及以「【考试】」导出的导入考试课程已在格子内部自适应，
         // 不额外撑大整周行高，避免与拉取课表不一致或导致「格子高度」设置无法缩小。
-        final courses = group.active.isEmpty ? [group.primary] : group.active;
-        for (final cell in courses) {
+        for (final cell in block.courses) {
           if (cell.course.name.startsWith('【考试】')) continue;
           final span = cell.slot.startNode > nodes
-              ? groupSpan
+              ? blockSpan
               : cell.slot.endNode.clamp(1, nodes) -
                     cell.slot.startNode.clamp(1, nodes) +
                     1;
@@ -651,7 +641,9 @@ class _WeekGridState extends State<WeekGrid> {
               fontReferenceWidth: _fontReferenceWidth,
               height: 0,
               radius: radius,
-              stackCount: stack,
+              stackCount: block.stackCount,
+              stackLabel: block.stackLabel,
+              displaySpan: span,
             ).preferredHeight(context),
             span,
           );
@@ -673,216 +665,187 @@ class _WeekGridState extends State<WeekGrid> {
   }) {
     final widgets = <Widget>[];
     final items = _dayLayoutItems(day, nodes);
-    final dayCells = items.courses;
-    // 日程（考试 / 其他，§14.2）：按时间映射到节次，夹在可见节数内（不消失）。
-    // 考试受显示开关控制；从考试安排选中的目标在本页临时展示。
-    final events = items.events;
-    final absorbed = <String>{};
-    for (final group in _groupsForEventFocus(dayCells, events)) {
-      // 与本周课重叠的日程并入该组：计入「N 门」与冲突圆点，点开时一起列出。
-      // 非本周灰格与日程重叠时让位不画（同灰格让位本周课）。
-      final overlapping = [
-        for (final e in events)
-          if (e.overlapsNodes(group.startNode, group.endNode)) e,
-      ];
-      if (group.active.isEmpty && overlapping.isNotEmpty) continue;
-      final extra = group.active.isEmpty
-          ? const <ScheduleGridItem>[]
-          : overlapping;
-      final focusedItem = extra
-          .where(
-            (e) =>
-                e.event.id == _focusedEvent?.id &&
-                !absorbed.contains(e.event.id),
-          )
-          .firstOrNull;
-      absorbed.addAll([for (final e in extra) e.event.id]);
-      // 拖起来的那一格：原位置空出来（不留虚影）。为了不打断进行中的长按手势，
-      // 原格子的 widget 保留在树里（结构不变），只是改为透明或改显示同组剩下的课。
-      final dragCell = group.primary;
-      var cell = dragCell;
-      var stack = group.active.length;
-      var hidden = false;
-      if (group.cells.any(_isDragged)) {
-        final rest = [
-          for (final c in group.cells)
-            if (!_isDragged(c)) c,
-        ];
-        if (rest.isEmpty) {
-          hidden = true;
-        } else {
-          final g = SlotCellGroup(rest);
-          cell = g.primary;
-          stack = g.active.length;
-        }
-      }
-      stack += extra.length;
-      var groupStart = group.startNode;
-      var groupEnd = group.endNode;
-      for (final e in extra) {
-        groupStart = math.min(groupStart, e.startNode);
-        groupEnd = math.max(groupEnd, e.endNode);
-      }
-      if (groupStart > nodes) continue;
-      final end = groupEnd.clamp(1, nodes);
-      final start = groupStart.clamp(1, nodes);
+    // 同一列内本周活跃项按节次连通分组，非本周课与非本周幽灵考试让位本周并按最近择一。
+    final blocks = planDayColumnBlocks(
+      courses: items.courses,
+      events: items.events,
+      week: week,
+      weekOfDate: controller.weekOfDate,
+    );
+    final focusedId = _focusedEvent?.id;
+    for (final block in blocks) {
+      if (block.startNode > nodes) continue;
+      final end = block.endNode.clamp(1, nodes);
+      final start = block.startNode.clamp(1, nodes);
       if (end < start) continue;
-      // 叠放时用该组的并集节次范围，避免遮挡。
-      final rawTop = (start - 1) * periodH + TimetableTheme.cellMargin;
-      final rawHeight =
-          (end - start + 1) * periodH - TimetableTheme.cellMargin * 2;
-      final rawLeft = dayIndex * dayW + TimetableTheme.cellMargin;
-      final rawWidth = dayW - TimetableTheme.cellMargin * 2;
-      // 对齐到物理像素，避免 cellMargin=1.5 + 小数 dayW 落在半像素上导致文字发虚。
+      final visibleSpan = end - start + 1;
       final box = TimetableTheme.snapDeviceRect(
-        left: rawLeft,
-        top: rawTop,
-        width: rawWidth,
-        height: rawHeight,
+        left: dayIndex * dayW + TimetableTheme.cellMargin,
+        top: (start - 1) * periodH + TimetableTheme.cellMargin,
+        width: dayW - TimetableTheme.cellMargin * 2,
+        height: visibleSpan * periodH - TimetableTheme.cellMargin * 2,
         dpr: dpr,
       );
       final left = box.left;
       final top = box.top;
       final width = _fontReferenceWidth;
       final height = box.height;
+
+      final primaryEvent = block.primaryEvent(focusedEventId: focusedId);
+      if (primaryEvent != null) {
+        final primary = primaryEvent.event;
+        final isFocused = primary.id == focusedId;
+        final stack = block.stackCount;
+        final orderedEvents = [
+          primary,
+          for (final e in block.events)
+            if (e.event.id != primary.id) e.event,
+        ];
+        final eventCell = ScheduleEventCell(
+          controller: controller,
+          event: primary,
+          width: width,
+          fontReferenceWidth: _fontReferenceWidth,
+          height: height,
+          radius: radius,
+          stackCount: stack,
+          activeThisWeek: primaryEvent.activeThisWeek,
+          onTap: stack > 1
+              ? () => _showStackSheet(
+                  context,
+                  block.courses,
+                  events: orderedEvents,
+                  eventsFirst: true,
+                )
+              : () => _openEvent(context, primary),
+        );
+        widgets.add(
+          Positioned(
+            key: ValueKey('schedule_slot_${primary.id}'),
+            left: left,
+            top: top,
+            width: width,
+            height: height,
+            child: _ViewportCell(
+              scroll: _gridScroll,
+              top: top,
+              height: height,
+              viewport: _viewportHeight,
+              alwaysVisible: isFocused,
+              child: isFocused
+                  ? _FocusedScheduleTarget(
+                      eventId: primary.id,
+                      reveal: widget.revealFocusedEvent,
+                      onRevealed: widget.onFocusedEventRevealed,
+                      radius: radius,
+                      child: eventCell,
+                    )
+                  : eventCell,
+            ),
+          ),
+        );
+        continue;
+      }
+
+      // 课程为主格（含仅非本周课程，或本周课程 + 其他日程）。
+      // 拖起来的那一格：原位置空出来（不留虚影）。为了不打断进行中的长按手势，
+      // 原格子的 CourseCell 保留在树里（结构不变），改为隐藏或显示同组剩下的课。
+      final dragCell = block.primaryCourse!;
+      final hasDragged = block.courses.any(_isDragged);
+      var cell = dragCell;
+      var remainingCourses = block.courses;
+      var hidden = false;
+      if (hasDragged) {
+        remainingCourses = [
+          for (final c in block.courses)
+            if (!_isDragged(c)) c,
+        ];
+        if (remainingCourses.isEmpty) {
+          hidden = true;
+        } else {
+          cell = SlotCellGroup(remainingCourses).primary;
+        }
+      }
+      final stack = block.isActive
+          ? remainingCourses.length + block.events.length
+          : 1;
+      final stackLabel = block.events.isEmpty ? '$stack 门' : '$stack 项';
       final draggable =
           widget.enableDrag &&
           !widget.previewMode &&
           dragCell.activeThisWeek &&
           dragCell.slot.hasFixedTime;
+
+      final courseWidget = Visibility(
+        visible: !hidden,
+        maintainState: true,
+        maintainAnimation: true,
+        maintainSize: true,
+        child: CourseCell(
+          controller: controller,
+          cell: cell,
+          width: width,
+          fontReferenceWidth: _fontReferenceWidth,
+          height: height,
+          radius: radius,
+          stackCount: stack,
+          stackLabel: stackLabel,
+          displaySpan: visibleSpan,
+          onTap: widget.onCourseTap == null
+              ? null
+              : stack > 1
+              ? () => _showStackSheet(
+                  context,
+                  remainingCourses,
+                  events: [for (final e in block.events) e.event],
+                )
+              : () => widget.onCourseTap!(cell),
+          onDragStart: draggable ? (_) => _onDragStart(dragCell) : null,
+          onDragUpdate: draggable ? _onDragUpdate : null,
+          onDragEnd: draggable ? _onDragEnd : null,
+          onDragCancel: draggable ? _onDragCancel : null,
+        ),
+      );
+
+      // 拖起唯一课程而同组还有「其他日程」时，底层露出日程格，同时保留上层隐藏的
+      // CourseCell 维持拖动手势不中断。
+      final Widget slotChild = hidden && block.events.isNotEmpty
+          ? Stack(
+              fit: StackFit.expand,
+              children: [
+                ScheduleEventCell(
+                  controller: controller,
+                  event: block.events.first.event,
+                  width: width,
+                  fontReferenceWidth: _fontReferenceWidth,
+                  height: height,
+                  radius: radius,
+                  stackCount: block.events.length,
+                  activeThisWeek: block.events.first.activeThisWeek,
+                ),
+                courseWidget,
+              ],
+            )
+          : courseWidget;
+
       widgets.add(
         Positioned(
           left: left,
           top: top,
           width: width,
           height: height,
-          // 拖走后原位隐藏：用 Visibility 保布局，避免 Opacity 造成整格半透明栅格化发虚。
           child: _ViewportCell(
             scroll: _gridScroll,
             top: top,
             height: height,
             viewport: _viewportHeight,
-            alwaysVisible: focusedItem != null || group.cells.any(_isDragged),
-            child: Visibility(
-              visible: !hidden,
-              maintainState: true,
-              maintainAnimation: true,
-              maintainSize: true,
-              child: focusedItem != null
-                  ? _FocusedScheduleTarget(
-                      eventId: focusedItem.event.id,
-                      reveal: widget.revealFocusedEvent,
-                      onRevealed: widget.onFocusedEventRevealed,
-                      radius: radius,
-                      child: ScheduleEventCell(
-                        controller: controller,
-                        event: focusedItem.event,
-                        width: width,
-                        fontReferenceWidth: _fontReferenceWidth,
-                        height: height,
-                        radius: radius,
-                        stackCount: stack,
-                        onTap: () => _showStackSheet(
-                          context,
-                          group.active,
-                          events: [
-                            focusedItem.event,
-                            for (final e in extra)
-                              if (e.event.id != focusedItem.event.id) e.event,
-                          ],
-                        ),
-                      ),
-                    )
-                  : CourseCell(
-                      controller: controller,
-                      cell: cell,
-                      width: width,
-                      fontReferenceWidth: _fontReferenceWidth,
-                      height: height,
-                      radius: radius,
-                      stackCount: stack,
-                      onTap: widget.onCourseTap == null
-                          ? null
-                          : stack > 1
-                          ? () => _showStackSheet(
-                              context,
-                              group.active,
-                              events: [for (final e in extra) e.event],
-                            )
-                          : () => widget.onCourseTap!(cell),
-                      onDragStart: draggable
-                          ? (_) => _onDragStart(dragCell)
-                          : null,
-                      onDragUpdate: draggable ? _onDragUpdate : null,
-                      onDragEnd: draggable ? _onDragEnd : null,
-                      onDragCancel: draggable ? _onDragCancel : null,
-                    ),
-            ),
+            alwaysVisible: hasDragged,
+            child: slotChild,
           ),
         ),
       );
     }
-    widgets.addAll(
-      _eventCellsFor(
-        context,
-        items: [
-          for (final e in events)
-            if (!absorbed.contains(e.event.id)) e,
-        ],
-        dayIndex: dayIndex,
-        dayW: dayW,
-        periodH: periodH,
-        radius: radius,
-        dpr: dpr,
-      ),
-    );
     return widgets;
-  }
-
-  /// 考试可能跨过多段课程；把目标连通范围合成一组，避免后画的课遮住目标。
-  List<SlotCellGroup> _groupsForEventFocus(
-    List<GridCell> cells,
-    List<ScheduleGridItem> events,
-  ) {
-    final groups = groupSlotCells(cells);
-    final target = events
-        .where((e) => e.event.id == _focusedEvent?.id)
-        .firstOrNull;
-    if (target == null) return groups;
-    var start = target.startNode;
-    var end = target.endNode;
-    final connected = <SlotCellGroup>{};
-    var expanded = true;
-    while (expanded) {
-      final oldStart = start;
-      final oldEnd = end;
-      for (final event in events) {
-        if (event.overlapsNodes(start, end)) {
-          start = math.min(start, event.startNode);
-          end = math.max(end, event.endNode);
-        }
-      }
-      for (final group in groups) {
-        if (group.active.isNotEmpty &&
-            group.startNode <= end &&
-            start <= group.endNode) {
-          connected.add(group);
-          start = math.min(start, group.startNode);
-          end = math.max(end, group.endNode);
-        }
-      }
-      expanded = start != oldStart || end != oldEnd;
-    }
-    if (connected.isEmpty) return groups;
-    return [
-      for (final group in groups)
-        if (!connected.contains(group)) group,
-      _FocusedSlotCellGroup(
-        [for (final group in connected) ...group.active],
-        startNode: start,
-        endNode: end,
-      ),
-    ];
   }
 
   void _openEvent(BuildContext context, ScheduleEvent e) {
@@ -893,109 +856,6 @@ class _WeekGridState extends State<WeekGrid> {
       return;
     }
     showScheduleEventDetailSheet(context, event: e, controller: controller);
-  }
-
-  /// 相互重叠的日程共用一格；测量与绘制采用相同的排序和并集范围。
-  List<List<ScheduleGridItem>> _eventClusters(List<ScheduleGridItem> items) {
-    final sorted = List.of(items)
-      ..sort((a, b) {
-        final byNode = a.startNode.compareTo(b.startNode);
-        if (byNode != 0) return byNode;
-        final byTime = a.event.start.compareTo(b.event.start);
-        if (byTime != 0) return byTime;
-        return a.event.title.compareTo(b.event.title);
-      });
-    final clusters = <List<ScheduleGridItem>>[];
-    var curEnd = -1;
-    for (final e in sorted) {
-      if (clusters.isNotEmpty && e.startNode <= curEnd) {
-        clusters.last.add(e);
-        curEnd = math.max(curEnd, e.endNode);
-      } else {
-        clusters.add([e]);
-        curEnd = e.endNode;
-      }
-    }
-    return clusters;
-  }
-
-  /// 不与本周课重叠的日程格（§14.2）：彼此节次重叠的成组，只画一格（按开始时间、
-  /// 名称排序的第一项）并显示「N 门」与冲突圆点，点开列出；不可拖动。
-  List<Widget> _eventCellsFor(
-    BuildContext context, {
-    required List<ScheduleGridItem> items,
-    required int dayIndex,
-    required double dayW,
-    required double periodH,
-    required double radius,
-    required double dpr,
-  }) {
-    return [
-      for (final cluster in _eventClusters(items))
-        () {
-          final start = cluster.map((e) => e.startNode).reduce(math.min);
-          final end = cluster.map((e) => e.endNode).reduce(math.max);
-          final box = TimetableTheme.snapDeviceRect(
-            left: dayIndex * dayW + TimetableTheme.cellMargin,
-            top: (start - 1) * periodH + TimetableTheme.cellMargin,
-            width: dayW - TimetableTheme.cellMargin * 2,
-            height: (end - start + 1) * periodH - TimetableTheme.cellMargin * 2,
-            dpr: dpr,
-          );
-          final width = _fontReferenceWidth;
-          final height = box.height;
-          final primaryItem =
-              cluster
-                  .where((e) => e.event.id == _focusedEvent?.id)
-                  .firstOrNull ??
-              cluster.first;
-          final primary = primaryItem.event;
-          final cell = ScheduleEventCell(
-            controller: controller,
-            event: primary,
-            width: width,
-            fontReferenceWidth: _fontReferenceWidth,
-            height: height,
-            radius: radius,
-            stackCount: cluster.length,
-            activeThisWeek: primaryItem.activeThisWeek,
-            onTap: cluster.length > 1
-                ? () => _showStackSheet(
-                    context,
-                    const [],
-                    events: [
-                      primary,
-                      for (final e in cluster)
-                        if (e.event.id != primary.id) e.event,
-                    ],
-                  )
-                : () => _openEvent(context, primary),
-          );
-          return Positioned(
-            key: ValueKey('schedule_slot_${primary.id}'),
-            left: box.left,
-            top: box.top,
-            width: width,
-            height: height,
-            child: _ViewportCell(
-              scroll: _gridScroll,
-              top: box.top,
-              height: height,
-              viewport: _viewportHeight,
-              alwaysVisible: primary.id == _focusedEvent?.id,
-              child: primary.id == _focusedEvent?.id
-                  ? _FocusedScheduleTarget(
-                      eventId: primary.id,
-                      reveal: widget.revealFocusedEvent,
-                      onRevealed: widget.onFocusedEventRevealed,
-                      radius: radius,
-                      child: cell,
-                    )
-                  : cell,
-            ),
-          );
-        }(),
-    ];
   }
 
   /// 跟手的格子：按像素跟手（松手后滑进落点），大小与原格一致、带阴影、不缩放；
@@ -1343,7 +1203,41 @@ class _WeekGridState extends State<WeekGrid> {
     BuildContext context,
     List<GridCell> cells, {
     List<ScheduleEvent> events = const [],
+    bool eventsFirst = false,
   }) {
+    List<Widget> courseTiles(BuildContext sheetContext) => [
+      for (final c in cells)
+        ListTile(
+          key: ValueKey('stack_item_${c.course.id}'),
+          title: Text(courseDisplayName(course: c.course, slot: c.slot)),
+          subtitle: Text(
+            '第 ${c.slot.startNode}–${c.slot.endNode} 节'
+            '${c.slot.location.isEmpty ? '' : ' · ${c.slot.location}'}',
+          ),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            widget.onCourseTap?.call(c);
+          },
+        ),
+    ];
+
+    List<Widget> eventTiles(BuildContext sheetContext) => [
+      for (final e in events)
+        ListTile(
+          key: ValueKey('stack_item_event_${e.id}'),
+          title: Text(e.title),
+          subtitle: Text(
+            '${schedulePillLabel(e)} · ${scheduleDateText(e.date)} · '
+            '${scheduleTimeText(e)}'
+            '${e.location.isEmpty ? '' : ' · ${e.location}'}',
+          ),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            _openEvent(context, e);
+          },
+        ),
+    ];
+
     return showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) => SafeArea(
@@ -1361,32 +1255,13 @@ class _WeekGridState extends State<WeekGrid> {
                 ),
               ),
             ),
-            for (final c in cells)
-              ListTile(
-                key: ValueKey('stack_item_${c.course.id}'),
-                title: Text(courseDisplayName(course: c.course, slot: c.slot)),
-                subtitle: Text(
-                  '第 ${c.slot.startNode}–${c.slot.endNode} 节'
-                  '${c.slot.location.isEmpty ? '' : ' · ${c.slot.location}'}',
-                ),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  widget.onCourseTap?.call(c);
-                },
-              ),
-            for (final e in events)
-              ListTile(
-                key: ValueKey('stack_item_event_${e.id}'),
-                title: Text(e.title),
-                subtitle: Text(
-                  '${schedulePillLabel(e)} · ${scheduleTimeText(e)}'
-                  '${e.location.isEmpty ? '' : ' · ${e.location}'}',
-                ),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _openEvent(context, e);
-                },
-              ),
+            if (eventsFirst) ...[
+              ...eventTiles(sheetContext),
+              ...courseTiles(sheetContext),
+            ] else ...[
+              ...courseTiles(sheetContext),
+              ...eventTiles(sheetContext),
+            ],
           ],
         ),
       ),
@@ -1467,6 +1342,230 @@ Future<DragScopeChoice?> showDragScopeSheet(
   );
 }
 
+/// 周视图单列中的一个渲染块（同一列内各块节次区间严格不相交）。
+///
+/// - 活跃块（[isActive] == true）：由本周课程与本周日程/考试按节次重叠求连通分量构成；
+///   [stackCount] 仅统计本周真实冲突项数，≥2 时显示「N 门」（纯课）或「N 项」（含日程/考试）。
+/// - 非本周块（[isActive] == false）：不与任何本周活跃块重叠，且在冲突的未来非本周课与
+///   未来幽灵考试中按距离当前查看周最近（`nextWeek` 最小，同周考试优先于课程）贪心择一，
+///   永远只有 1 项、不显示冲突点或「N 门」。
+@immutable
+class DayColumnBlock {
+  const DayColumnBlock({
+    required this.startNode,
+    required this.endNode,
+    required this.courses,
+    required this.events,
+    required this.isActive,
+  });
+
+  final int startNode;
+  final int endNode;
+  final List<GridCell> courses;
+  final List<ScheduleGridItem> events;
+  final bool isActive;
+
+  int get totalCount => courses.length + events.length;
+
+  /// 仅统计本周真实冲突项数；非本周块永远为 1（跨周不冲突）。
+  int get stackCount => isActive ? totalCount : 1;
+
+  String get stackLabel => events.isEmpty ? '$stackCount 门' : '$stackCount 项';
+
+  /// 当前块应由哪条日程作主格绘制；返回 null 时由课程作主格。
+  ///
+  /// 优先级：定位目标（[focusedEventId]）> 本周考试 > 本周课程 > 本周其他日程；
+  /// 非本周块若包含日程（未来幽灵考试）则直接返回该日程。
+  ScheduleGridItem? primaryEvent({String? focusedEventId}) {
+    if (events.isEmpty) return null;
+    if (focusedEventId != null) {
+      for (final e in events) {
+        if (e.event.id == focusedEventId) return e;
+      }
+    }
+    if (!isActive) return events.first;
+    for (final e in events) {
+      if (e.event.isExam) return e;
+    }
+    return courses.isEmpty ? events.first : null;
+  }
+
+  /// 当前块的主课程格；无课程时返回 null。
+  GridCell? get primaryCourse =>
+      courses.isEmpty ? null : SlotCellGroup(courses).primary;
+}
+
+bool _nodesOverlap(int aStart, int aEnd, int bStart, int bEnd) =>
+    aStart <= bEnd && bStart <= aEnd;
+
+int _compareActiveEvents(ScheduleGridItem a, ScheduleGridItem b) {
+  final byKind = (a.event.isExam ? 0 : 1).compareTo(b.event.isExam ? 0 : 1);
+  if (byKind != 0) return byKind;
+  final byNode = a.startNode.compareTo(b.startNode);
+  if (byNode != 0) return byNode;
+  final byTime = a.event.start.compareTo(b.event.start);
+  if (byTime != 0) return byTime;
+  final byTitle = a.event.title.compareTo(b.event.title);
+  if (byTitle != 0) return byTitle;
+  return a.event.id.compareTo(b.event.id);
+}
+
+/// 规划单列中所有课程与日程块的布局（纯函数，测量与绘制共用）。
+///
+/// 1. 活跃层（`activeThisWeek == true`）：课程与日程/考试一起按节次重叠求连通分量，
+///    彻底避免日程跨越多组课程时出现遮挡或重复计数；仅统计本周真实冲突。
+/// 2. 非本周层（`activeThisWeek == false`）：凡与活跃层重叠的一律让位隐藏（包含非本周课
+///    与未来周幽灵考试）；其余按距离当前查看周最近（`nextWeek` 升序，同周考试优先于课程）
+///    贪心择一放置，不合并、不标「N 门」。
+List<DayColumnBlock> planDayColumnBlocks({
+  required List<GridCell> courses,
+  required List<ScheduleGridItem> events,
+  required int week,
+  required int Function(DateTime date) weekOfDate,
+}) {
+  // ---- 1. 活跃层：本周课程 + 本周日程统一求节次连通分量 ----
+  final activeEntries =
+      <({int start, int end, GridCell? course, ScheduleGridItem? event})>[
+        for (final c in courses)
+          if (c.activeThisWeek)
+            (
+              start: c.slot.startNode,
+              end: c.slot.endNode,
+              course: c,
+              event: null,
+            ),
+        for (final e in events)
+          if (e.activeThisWeek)
+            (start: e.startNode, end: e.endNode, course: null, event: e),
+      ]..sort((a, b) {
+        final byStart = a.start.compareTo(b.start);
+        if (byStart != 0) return byStart;
+        return a.end.compareTo(b.end);
+      });
+
+  final activeBlocks = <DayColumnBlock>[];
+  var curStart = -1;
+  var curEnd = -1;
+  var curCourses = <GridCell>[];
+  var curEvents = <ScheduleGridItem>[];
+
+  void flushActive() {
+    if (curCourses.isEmpty && curEvents.isEmpty) return;
+    curCourses.sort(SlotCellGroup.compareByName);
+    curEvents.sort(_compareActiveEvents);
+    activeBlocks.add(
+      DayColumnBlock(
+        startNode: curStart,
+        endNode: curEnd,
+        courses: List.unmodifiable(curCourses),
+        events: List.unmodifiable(curEvents),
+        isActive: true,
+      ),
+    );
+  }
+
+  for (final entry in activeEntries) {
+    if ((curCourses.isNotEmpty || curEvents.isNotEmpty) &&
+        entry.start <= curEnd) {
+      if (entry.end > curEnd) curEnd = entry.end;
+      if (entry.course != null) curCourses.add(entry.course!);
+      if (entry.event != null) curEvents.add(entry.event!);
+    } else {
+      flushActive();
+      curStart = entry.start;
+      curEnd = entry.end;
+      curCourses = [if (entry.course != null) entry.course!];
+      curEvents = [if (entry.event != null) entry.event!];
+    }
+  }
+  flushActive();
+
+  // ---- 2. 非本周层：让位活跃层后，按距离当前周最近贪心放置 ----
+  bool overlapsActive(int start, int end) => activeBlocks.any(
+    (b) => _nodesOverlap(b.startNode, b.endNode, start, end),
+  );
+
+  final ghostCandidates =
+      <
+          ({
+            int nextWeek,
+            bool isExam,
+            int start,
+            int end,
+            int startMinutes,
+            String name,
+            String id,
+            GridCell? course,
+            ScheduleGridItem? event,
+          })
+        >[
+          for (final c in courses)
+            if (!c.activeThisWeek &&
+                !overlapsActive(c.slot.startNode, c.slot.endNode))
+              (
+                nextWeek: c.slot.nextActiveWeek(week) ?? (1 << 30),
+                isExam: false,
+                start: c.slot.startNode,
+                end: c.slot.endNode,
+                startMinutes: c.slot.startNode * 60,
+                name: normalizeCourseName(
+                  courseDisplayName(course: c.course, slot: c.slot),
+                ),
+                id: c.course.id,
+                course: c,
+                event: null,
+              ),
+          for (final e in events)
+            if (!e.activeThisWeek && !overlapsActive(e.startNode, e.endNode))
+              (
+                nextWeek: weekOfDate(e.event.date),
+                isExam: e.event.isExam,
+                start: e.startNode,
+                end: e.endNode,
+                startMinutes: e.event.start.totalMinutes,
+                name: e.event.title,
+                id: e.event.id,
+                course: null,
+                event: e,
+              ),
+        ]
+        ..sort((a, b) {
+          final byWeek = a.nextWeek.compareTo(b.nextWeek);
+          if (byWeek != 0) return byWeek;
+          final byKind = (a.isExam ? 0 : 1).compareTo(b.isExam ? 0 : 1);
+          if (byKind != 0) return byKind;
+          final byStart = a.start.compareTo(b.start);
+          if (byStart != 0) return byStart;
+          final byMin = a.startMinutes.compareTo(b.startMinutes);
+          if (byMin != 0) return byMin;
+          final byName = a.name.compareTo(b.name);
+          if (byName != 0) return byName;
+          return a.id.compareTo(b.id);
+        });
+
+  final ghostBlocks = <DayColumnBlock>[];
+  for (final g in ghostCandidates) {
+    if (ghostBlocks.any(
+      (placed) =>
+          _nodesOverlap(placed.startNode, placed.endNode, g.start, g.end),
+    )) {
+      continue;
+    }
+    ghostBlocks.add(
+      DayColumnBlock(
+        startNode: g.start,
+        endNode: g.end,
+        courses: g.course == null ? const [] : [g.course!],
+        events: g.event == null ? const [] : [g.event!],
+        isActive: false,
+      ),
+    );
+  }
+  ghostBlocks.sort((a, b) => a.startNode.compareTo(b.startNode));
+
+  return [...activeBlocks, ...ghostBlocks];
+}
+
 /// 同一天里节次重叠（传递闭包）的一组课程格。
 class SlotCellGroup {
   SlotCellGroup(this.cells);
@@ -1476,13 +1575,13 @@ class SlotCellGroup {
 
   /// 本周有课的格子，按课名排序（「N 门」= 其数量，≥2 才叠放）。
   late final List<GridCell> active =
-      cells.where((c) => c.activeThisWeek).toList()..sort(_byName);
+      cells.where((c) => c.activeThisWeek).toList()..sort(compareByName);
 
   /// 实际绘制的一格。
   ///
   /// 按课名（[normalizeCourseName]）排序的第一门。
   GridCell get primary {
-    final base = (List.of(cells)..sort(_byName)).first;
+    final base = (List.of(cells)..sort(compareByName)).first;
     // 冲突点/「N 门」由 WeekGrid 按本周叠放数决定，不沿用 controller 的 conflictCount。
     return GridCell(
       course: base.course,
@@ -1502,7 +1601,7 @@ class SlotCellGroup {
   int get endNode =>
       cells.map((c) => c.slot.endNode).reduce((a, b) => a > b ? a : b);
 
-  static int _byName(GridCell a, GridCell b) {
+  static int compareByName(GridCell a, GridCell b) {
     final byName =
         normalizeCourseName(courseDisplayName(course: a.course, slot: a.slot))
             .compareTo(
@@ -1513,21 +1612,6 @@ class SlotCellGroup {
     if (byName != 0) return byName;
     return a.course.id.compareTo(b.course.id);
   }
-}
-
-/// 定位考试时的课程组范围包含连接它们的考试与日程。
-class _FocusedSlotCellGroup extends SlotCellGroup {
-  _FocusedSlotCellGroup(
-    super.cells, {
-    required this.startNode,
-    required this.endNode,
-  });
-
-  @override
-  final int startNode;
-
-  @override
-  final int endNode;
 }
 
 bool _periodsOverlap(GridCell a, GridCell b) =>
@@ -1567,9 +1651,8 @@ bool isMovedAwayGhost(GridCell c, int week) {
 ///   （同星期 + 节次重叠 + 本周都有课，等价于对本周做 slotsConflict）→「N 门」+ 冲突点。
 ///   单双周同节次的两门课在任一周只有一门本周有课 → 正常单格。
 /// - 非本周灰格（「显示非本周课程」开启时）：与任一本周课重叠则让位不画、不计数；
-///   其余灰格之间同样成组，只画一格、不显示「N 门」。
-///   （让位规则待设计确认，集中在此函数，便于修改。）
-List<SlotCellGroup> groupSlotCells(List<GridCell> cells) {
+///   传入 [afterWeek] 时，重叠的灰格按距离 [afterWeek] 最近者择一保留，不显示「N 门」。
+List<SlotCellGroup> groupSlotCells(List<GridCell> cells, {int? afterWeek}) {
   final active = [
     for (final c in cells)
       if (c.activeThisWeek) c,
@@ -1578,7 +1661,27 @@ List<SlotCellGroup> groupSlotCells(List<GridCell> cells) {
     for (final c in cells)
       if (!c.activeThisWeek && !active.any((a) => _periodsOverlap(a, c))) c,
   ];
-  return [..._clusters(active), ..._clusters(ghosts)];
+  if (afterWeek == null) {
+    return [..._clusters(active), ..._clusters(ghosts)];
+  }
+  ghosts.sort((a, b) {
+    final na = a.slot.nextActiveWeek(afterWeek) ?? (1 << 30);
+    final nb = b.slot.nextActiveWeek(afterWeek) ?? (1 << 30);
+    if (na != nb) return na.compareTo(nb);
+    final byStart = a.slot.startNode.compareTo(b.slot.startNode);
+    if (byStart != 0) return byStart;
+    return SlotCellGroup.compareByName(a, b);
+  });
+  final picked = <GridCell>[];
+  for (final g in ghosts) {
+    if (picked.any((p) => _periodsOverlap(p, g))) continue;
+    picked.add(g);
+  }
+  picked.sort((a, b) => a.slot.startNode.compareTo(b.slot.startNode));
+  return [
+    ..._clusters(active),
+    for (final g in picked) SlotCellGroup([g]),
+  ];
 }
 
 /// 「其他」行（item 7）：只放教务（jwxt）里没有排节次的课，手动课与日程不进来
