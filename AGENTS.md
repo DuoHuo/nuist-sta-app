@@ -133,6 +133,11 @@ fix(electricity): 修复只有一条记录时折线图不显示
   日志和正文附件按容量、期限轮转；导出包含留存记录的完整内容。日志不得自动上传，
   只能由用户在「设置 → 诊断与日志」主动导出或清除。
 - 禁止引入遥测、崩溃上报、统计类 SDK。网络出口限于学校自己的系统和现有的非学校出口：社团自有服务（`lib/core/config/api_endpoints.dart`）、校园地图后端、小公交公开页面与状态服务。新增出口前必须先问用户；非学校出口禁止携带门户凭据、Cookie、学号等个人数据。
+- **本地包名**：开发者本地构建的包名必须带 `.debug` 后缀，`debug` 和 `release` 构建都一样。
+  禁止覆盖默认编译配置：不得用 `APP_ID_SUFFIX` 等环境变量、命令行参数或改 `android/app/build.gradle.kts`
+  去掉后缀，给用户的构建命令和指引也不得包含这类覆盖。只有 GitHub Actions 的发布流程可以产出无后缀的正式包。
+  本地构建必须使用 `android/app/debug-team.keystore` 签名，密码和别名均为 Android 调试默认值（`android` / `androiddebugkey`），禁止换用其他签名。
+- **渠道**：`APP_CHANNEL` 只有 GitHub 的发布流程注入 `release`；本地 debug 和 release 构建都使用默认的 `dev`，禁止本地传入 `release`。
 - 以下内容只在用户明确要求时改动：`pubspec.yaml` 的 `version`、Flutter 版本、`.github/workflows/`、Android 签名配置、`assets/js/vconsole.min.js`。
 - 新增或升级依赖前必须先问；改了依赖要一并提交 `pubspec.lock`。
 

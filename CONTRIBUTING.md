@@ -23,7 +23,14 @@ flutter --version
 flutter pub get
 ```
 
-开发构建的包名带 `.debug` 后缀（`dev.duohuo.nuist_sta_app.debug`），可以与正式包共存。
+本地构建的包名一律带 `.debug` 后缀（`dev.duohuo.nuist_sta_app.debug`），无论 `debug` 还是
+`release` 构建，可以与正式包共存。后缀由 `android/app/build.gradle.kts` 的默认配置决定，
+禁止在本地用 `APP_ID_SUFFIX` 等环境变量或修改构建脚本覆盖；只有 GitHub Actions 的
+正式发布流程会去掉后缀。
+
+本地构建必须使用仓库内的团队调试签名 `android/app/debug-team.keystore`，keystore 密码、
+别名（`androiddebugkey`）和 key 密码均为 Android 调试默认值 `android`。不要换用个人
+签名，否则同一台设备上的调试包会因签名不一致而无法覆盖安装。
 
 ### 运行与构建
 
