@@ -1,5 +1,7 @@
 // 多课表元数据模型、学期命名与学年学期比较（纯 Dart，不依赖 Flutter）。
 
+export '../../core/auth/enrollment_year.dart' show enrollmentYearFromStudentId;
+
 /// 默认（当前学期/初始）课表标识；数据仍保存在 `timetable/` 根目录以保持向后兼容。
 const String kDefaultScheduleId = 'default';
 
@@ -86,16 +88,6 @@ bool isHistoricalTerm(String termCode, {required String currentTermCode}) {
     return false;
   }
   return compareTermCodes(target, current) < 0;
-}
-
-/// 从学号前 4 位提取入学年份（如 `2025...` → `2025`）；无效时返回 null。
-int? enrollmentYearFromStudentId(String? studentId) {
-  if (studentId == null) return null;
-  final m = RegExp(r'^(\d{4})').firstMatch(studentId.trim());
-  if (m == null) return null;
-  final year = int.tryParse(m.group(1)!);
-  if (year == null || year < 1990 || year > 2100) return null;
-  return year;
 }
 
 /// 判断学期 [termCode] 是否在入学年份 [enrollmentYear] 及之后。

@@ -9,6 +9,7 @@ import 'labor_score/labor_score_manifest.dart';
 import 'library/library_manifest.dart';
 import 'score/score_manifest.dart';
 import 'student_info/student_info_manifest.dart';
+import 'sunshine_run/sunshine_run_manifest.dart';
 import 'timetable/timetable_exams_manifest.dart';
 import 'timetable/timetable_manifest.dart';
 
@@ -30,6 +31,7 @@ final appRegistry = AppRegistry([
   innovationCreditManifest,
   laborScoreManifest,
   libraryManifest,
+  sunshineRunManifest,
   // H5 小程序示例：给 url 即可，由通用 WebView 页承载。
   // AppManifest(id: 'demo-web', label: '网页示例', color: Color(0xFF8B5CF6),
   //     glyph: '网', url: 'https://example.com'),
