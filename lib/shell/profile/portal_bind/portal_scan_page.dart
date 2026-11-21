@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../../../core/navigation/app_navigation.dart';
 import '../../../core/auth/passkey_transfer.dart';
 import '../../../core/logging/app_log.dart';
 
@@ -36,7 +36,7 @@ class _PortalScanPageState extends State<PortalScanPage> {
       final value = barcode.rawValue;
       if (PasskeyTransfer.looksLikeExport(value)) {
         _done = true;
-        context.pop(value!.trim());
+        AppNavigation.pop(context, value!.trim());
         return;
       }
     }

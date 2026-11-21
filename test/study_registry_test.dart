@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/app_manifest.dart';
 import 'package:nuist_sta_app/core/app_registry.dart';
+import 'package:nuist_sta_app/core/navigation/app_navigation.dart';
 import 'package:nuist_sta_app/core/pull_to_refresh.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/registry.dart';
@@ -431,6 +432,9 @@ void main() {
 
   group('学习详情路由', () {
     testWidgets('三个新入口全屏打开并返回学习页', (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.reset);
       FlutterSecureStorage.setMockInitialValues({});
       final router = buildRouter();
       addTearDown(router.dispose);
@@ -439,16 +443,17 @@ void main() {
       );
       router.go('/study');
       await tester.pumpAndSettle();
-      final bottomNavigation = find.byWidgetPredicate(
-        (widget) => widget is Scaffold && widget.bottomNavigationBar != null,
-      );
+      final bottomNavigation = find.text('我的');
 
       for (final entry in const {
         'scores': '成绩查询',
         'innovation-credit': '双创学分',
         'labor-score': '劳动积分',
       }.entries) {
-        final pushed = router.push<void>('/apps/${entry.key}');
+        final pushed = AppNavigation.push<void>(
+          tester.element(find.byType(StudyPage)),
+          '/apps/${entry.key}',
+        );
         await tester.pumpAndSettle();
         expect(find.widgetWithText(AppBar, entry.value), findsOneWidget);
         expect(bottomNavigation, findsNothing);

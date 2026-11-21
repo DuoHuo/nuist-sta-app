@@ -871,7 +871,7 @@ void main() {
         expect(api.checks, previousChecks + 1);
         expect(
           GoRouterState.of(tester.element(find.byType(AboutPage))).uri.path,
-          '/about',
+          '/home/about',
         );
         expect(find.byType(UpdateDetailsDialog), findsNothing);
         expect(find.byType(SnackBar), findsOneWidget);
@@ -898,7 +898,7 @@ void main() {
           expect(find.byType(UpdateDetailsDialog), findsOneWidget);
           expect(
             GoRouterState.of(tester.element(find.byType(AboutPage))).uri.path,
-            '/about',
+            '/home/about',
           );
           await tester.tap(find.byTooltip('关闭更新详情'));
           await pumpInteraction(tester);
@@ -929,7 +929,7 @@ void main() {
       expect(find.byType(UpdateDetailsDialog), findsNothing);
       expect(
         GoRouterState.of(tester.element(find.byType(AboutPage))).uri.path,
-        '/about',
+        '/home/about',
       );
       expect(bridge.cancellations, 0);
       await tester.tap(find.text('下载进度'));
@@ -951,7 +951,7 @@ void main() {
       await backGesture(tester, 'updateBackGestureProgress', 0.4);
       await backGesture(tester, 'commitBackGesture');
       expect(find.byType(AboutPage), findsNothing);
-      expect(find.text('首页'), findsOneWidget);
+      expect(find.text('首页+学习'), findsOneWidget);
       expect(bridge.cancellations, 0);
       await tester.pumpWidget(const SizedBox());
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));
@@ -1028,7 +1028,7 @@ void main() {
     await tester.tap(find.byTooltip('关闭更新详情'));
     await tester.pumpAndSettle();
     expect(find.byType(UpdateDetailsDialog), findsNothing);
-    expect(find.text('首页'), findsOneWidget);
+    expect(find.text('首页+学习'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -1135,7 +1135,7 @@ void main() {
       await pumpInteraction(tester);
       expect(find.byType(UpdateDetailsDialog), findsNothing);
       if (coldStart) {
-        expect(find.text('首页'), findsOneWidget);
+        expect(find.text('首页+学习'), findsOneWidget);
       } else {
         expect(find.byType(AboutPage), findsOneWidget);
         expect(router!.canPop(), isTrue);

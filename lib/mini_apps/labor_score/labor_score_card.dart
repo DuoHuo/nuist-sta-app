@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/colors.dart';
+import '../../core/layout/adaptive_card_grid.dart';
 import 'labor_score_controller.dart';
 import 'labor_score_models.dart';
 
@@ -13,14 +14,17 @@ const kLaborColor = Color(0xFF00B42A);
 ///
 /// 未绑定门户 / 从未拉到数据时只显示一行提示，不撑出空表格。
 class LaborScoreCard extends StatefulWidget {
-  const LaborScoreCard({super.key});
+  const LaborScoreCard({super.key, this.controller});
+
+  /// 宿主可注入独立状态，默认与劳动积分详情共用实例。
+  final LaborScoreController? controller;
 
   @override
   State<LaborScoreCard> createState() => _LaborScoreCardState();
 }
 
 class _LaborScoreCardState extends State<LaborScoreCard> {
-  final _controller = LaborScoreController.instance;
+  late final _controller = widget.controller ?? LaborScoreController.instance;
 
   @override
   void initState() {
@@ -43,7 +47,7 @@ class _LaborScoreCardState extends State<LaborScoreCard> {
           body = _Placeholder(
             text: '请先绑定统一门户',
             action: '去绑定',
-            onTap: () => context.push('/portal-bind'),
+            onTap: () => AppNavigation.push(context, '/portal-bind'),
           );
         } else if (score == null) {
           body = _Placeholder(
@@ -57,7 +61,9 @@ class _LaborScoreCardState extends State<LaborScoreCard> {
         }
 
         return InkWell(
-          onTap: score == null ? null : () => context.push('/apps/labor-score'),
+          onTap: score == null
+              ? null
+              : () => AppNavigation.push(context, '/apps/labor-score'),
           borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
@@ -118,32 +124,34 @@ class _ScoreBody extends StatelessWidget {
             style: TextStyle(fontSize: 13, color: palette.hint),
           )
         else ...[
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
+          Wrap(
+            spacing: 10,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Text(
-                r.total.isEmpty ? '--' : r.total,
-                style: TextStyle(
-                  fontSize: 26,
-                  fontWeight: FontWeight.w700,
-                  color: palette.titleText,
-                  height: 1.1,
+              Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: r.total.isEmpty ? '--' : r.total,
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w700,
+                        color: palette.titleText,
+                        height: 1.1,
+                      ),
+                    ),
+                    TextSpan(
+                      text: ' 分',
+                      style: TextStyle(fontSize: 13, color: palette.labelText),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(width: 4),
-              Text(
-                '分',
-                style: TextStyle(fontSize: 13, color: palette.labelText),
               ),
               // 「未确认」是常态（确认由学生在平台上手动点），标出来只会让人
               // 以为哪里出了问题，所以只在已确认时给个标签。
-              if (r.isConfirmed) ...[
-                const SizedBox(width: 10),
-                _Tag(text: '已确认', color: palette.success),
-              ],
+              if (r.isConfirmed) ...[_Tag(text: '已确认', color: palette.success)],
               if (r.updatedAt.isNotEmpty) ...[
-                const SizedBox(width: 10),
                 Text(
                   '核算于 ${r.updatedShort}',
                   style: TextStyle(fontSize: 11, color: palette.hint),
@@ -154,20 +162,14 @@ class _ScoreBody extends StatelessWidget {
           const SizedBox(height: 12),
           Divider(height: 1, color: palette.rowDivider),
           const SizedBox(height: 10),
-          Row(
+          AdaptiveCardGrid(
+            maxColumns: 4,
+            minItemWidth: MediaQuery.textScalerOf(context).scale(48),
             children: [
-              Expanded(
-                child: _Stat(label: '理论', value: r.theory),
-              ),
-              Expanded(
-                child: _Stat(label: '生活', value: r.life),
-              ),
-              Expanded(
-                child: _Stat(label: '服务', value: r.service),
-              ),
-              Expanded(
-                child: _Stat(label: '专业', value: r.majorTotal),
-              ),
+              _Stat(label: '理论', value: r.theory),
+              _Stat(label: '生活', value: r.life),
+              _Stat(label: '服务', value: r.service),
+              _Stat(label: '专业', value: r.majorTotal),
             ],
           ),
         ],

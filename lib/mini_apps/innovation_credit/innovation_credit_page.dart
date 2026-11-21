@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/colors.dart';
 import '../../core/time_format.dart';
 import 'innovation_credit_card.dart'
@@ -84,7 +84,7 @@ class _StatusHeader extends StatelessWidget {
         color: palette.hint,
         title: '未绑定统一门户',
         subtitle: '双创学分查询需要门户身份，请先到「我的 → 绑定统一门户」完成绑定。',
-        onTap: () => context.push('/portal-bind'),
+        onTap: () => AppNavigation.push(context, '/portal-bind'),
       );
     }
     if (credit == null) {

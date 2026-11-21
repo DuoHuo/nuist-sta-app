@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/navigation/app_navigation.dart';
 import 'package:go_router/go_router.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
@@ -355,7 +356,8 @@ void main() {
       await tester.pumpAndSettle();
       router.pop();
       await tester.pump(const Duration(milliseconds: 16));
-      router.push<void>(
+      AppNavigation.push<void>(
+        tester.element(find.byType(TimetableExamsPage)),
         '/apps/timetable',
         extra: _c.scheduleEvents.firstWhere((event) => event.id == 'past'),
       );

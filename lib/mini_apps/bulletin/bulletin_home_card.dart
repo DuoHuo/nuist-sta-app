@@ -1,8 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
+import '../../core/navigation/app_page.dart';
 import '../../core/colors.dart';
 import 'bulletin_controller.dart';
 import 'bulletin_detail_page.dart';
@@ -74,7 +75,7 @@ class _BulletinHomeCardState extends State<BulletinHomeCard>
           child: Column(
             children: [
               InkWell(
-                onTap: () => context.push('/apps/bulletin'),
+                onTap: () => AppNavigation.push(context, '/apps/bulletin'),
                 borderRadius: BorderRadius.circular(14),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 13, 12, 10),
@@ -161,7 +162,7 @@ class _HomeBulletinRow extends StatelessWidget {
     final topic = topics.isEmpty ? null : topics.first;
     return InkWell(
       onTap: () => Navigator.of(context).push(
-        MaterialPageRoute<void>(
+        AppPageRoute<void>(
           builder: (_) => BulletinDetailPage(bulletin: bulletin),
         ),
       ),

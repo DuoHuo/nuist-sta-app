@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/colors.dart';
+import '../../core/navigation/app_navigation.dart';
 import '../update/update_controller.dart';
 import '../update/update_dialog.dart';
 import 'announcement_controller.dart';
@@ -33,7 +34,7 @@ class AnnouncementRouteScope extends InheritedWidget {
       isCurrent != oldWidget.isCurrent;
 }
 
-/// 首页顶栏的公告铃铛：存在未读可见公告时亮红点，点击打开公告列表并全部标为已读。
+/// 顶栏的公告铃铛：存在未读可见公告时亮红点，点击打开公告列表并全部标为已读。
 class AnnouncementBell extends StatelessWidget {
   const AnnouncementBell({super.key, this.controller, this.updates});
 
@@ -71,6 +72,7 @@ Future<void> openAnnouncements(
   // 对话框持续订阅，更新撤回后同步移除对应条目。
   final dialog = showDialog<void>(
     context: context,
+    useRootNavigator: false,
     builder: (_) => ListenableBuilder(
       listenable: Listenable.merge([c, updates]),
       builder: (_, _) {
@@ -168,6 +170,7 @@ class _AnnouncementOverlayState extends State<AnnouncementOverlay> {
       _router?.routerDelegate.addListener(_onRouteChanged);
     }
     // 同时订阅根壳路由：对话框关闭不一定触发 GoRouter 的路由变化。
+    AppNavigationScope.maybeOf(context);
     if (AnnouncementRouteScope.isCurrentOf(context) != false && _onTop) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybePresent());
     }
@@ -188,10 +191,13 @@ class _AnnouncementOverlayState extends State<AnnouncementOverlay> {
         !(ModalRoute.of(context)?.isCurrent ?? true)) {
       return false;
     }
-    // indexedStack 的隐藏分支仍可能 isCurrent，另查活动页签和根导航栈。
+    // 双栏的首页可见性独立于最近操作栏的 URI。
     // 直接读导航器，避免刚关闭提示时继承的根路由快照尚未重建。
-    return (_router == null ||
-            _router!.routerDelegate.currentConfiguration.uri.path == '/') &&
+    final scope = AppNavigationScope.readOf(context);
+    return (scope?.visible ??
+            (_router == null ||
+                _router!.routerDelegate.currentConfiguration.uri.path ==
+                    '/')) &&
         !Navigator.of(context, rootNavigator: true).canPop();
   }
 
@@ -223,6 +229,7 @@ class _AnnouncementOverlayState extends State<AnnouncementOverlay> {
         if (blocking.isEmpty) break;
         await showDialog<void>(
           context: context,
+          useRootNavigator: true,
           barrierDismissible: false,
           builder: (_) => _BlockingDialog(controller: _c, item: blocking.first),
         );

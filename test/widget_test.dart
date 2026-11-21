@@ -9,6 +9,14 @@ import 'package:nuist_sta_app/core/theme_mode.dart';
 import 'package:nuist_sta_app/mini_apps/registry.dart';
 import 'package:nuist_sta_app/shell/home/app_grid_item.dart';
 
+Future<void> _pumpPhone(WidgetTester tester) async {
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = const Size(390, 844);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  await tester.pumpWidget(const NuistApp());
+}
+
 void main() {
   test('小程序注册表 id 全局唯一且入口完整', () {
     final ids = appRegistry.apps.map((m) => m.id).toList();
@@ -23,7 +31,7 @@ void main() {
   });
 
   testWidgets('首页展示 NUIST++ 标题与校园地图入口', (WidgetTester tester) async {
-    await tester.pumpWidget(const NuistApp());
+    await _pumpPhone(tester);
 
     expect(find.text('NUIST++'), findsOneWidget);
     expect(find.text('信息公告'), findsNWidgets(2));
@@ -51,7 +59,7 @@ void main() {
   });
 
   testWidgets('点击校园地图进入小程序页（全屏、无底部页签）', (WidgetTester tester) async {
-    await tester.pumpWidget(const NuistApp());
+    await _pumpPhone(tester);
 
     final map = find.text('校园地图');
     await tester.ensureVisible(map);
@@ -65,7 +73,7 @@ void main() {
   });
 
   testWidgets('点击空教室进入查询页（全屏、无底部页签）', (WidgetTester tester) async {
-    await tester.pumpWidget(const NuistApp());
+    await _pumpPhone(tester);
 
     final free = find.text('空教室');
     await tester.ensureVisible(free);
@@ -82,7 +90,7 @@ void main() {
   });
 
   testWidgets('切到我的页展示用户卡片与功能列表', (WidgetTester tester) async {
-    await tester.pumpWidget(const NuistApp());
+    await _pumpPhone(tester);
 
     await tester.tap(find.text('我的'));
     await tester.pumpAndSettle();
@@ -98,7 +106,7 @@ void main() {
   });
 
   testWidgets('切到学习页展示五张卡片的标题', (WidgetTester tester) async {
-    await tester.pumpWidget(const NuistApp());
+    await _pumpPhone(tester);
 
     await tester.tap(find.text('学习'));
     await tester.pumpAndSettle();
@@ -117,7 +125,7 @@ void main() {
 
   testWidgets('我的页进入设置并切换深色模式', (WidgetTester tester) async {
     addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
-    await tester.pumpWidget(const NuistApp());
+    await _pumpPhone(tester);
 
     await tester.tap(find.text('我的'));
     await tester.pumpAndSettle();
@@ -207,7 +215,7 @@ void main() {
     testWidgets('${mode.name} 下路由和直接推入的页面支持预测性返回及取消', (tester) async {
       addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
       AppThemeMode.instance.value = mode;
-      await tester.pumpWidget(const NuistApp());
+      await _pumpPhone(tester);
       await tester.tap(find.text('我的'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('设置'));
@@ -231,7 +239,7 @@ void main() {
           'flutter/backgesture',
           const StandardMethodCodec().encodeMethodCall(
             MethodCall(method, {
-              'touchOffset': [edge == 0 ? 5.0 : 795.0, 300.0],
+              'touchOffset': [edge == 0 ? 5.0 : 385.0, 300.0],
               'progress': progress,
               'swipeEdge': edge,
             }),

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import 'timetable_controller.dart';
 import 'timetable_exam_merge.dart';
 import 'timetable_schedule_event.dart';
@@ -78,7 +78,7 @@ class _TimetableExamsCardState extends State<TimetableExamsCard> {
     _controller.ensureStarted();
   }
 
-  void _openExams() => context.push('/apps/exam-schedule');
+  void _openExams() => AppNavigation.push(context, '/apps/exam-schedule');
 
   @override
   Widget build(BuildContext context) {
@@ -111,7 +111,11 @@ class _TimetableExamsCardState extends State<TimetableExamsCard> {
                     controller: _controller,
                     event: e,
                     today: now,
-                    onTap: () => context.push('/apps/timetable', extra: e),
+                    onTap: () => AppNavigation.push(
+                      context,
+                      '/apps/timetable',
+                      extra: e,
+                    ),
                   ),
               ],
             ),

@@ -117,6 +117,7 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
     String? saveError;
     await showDialog<void>(
       context: context,
+      useRootNavigator: false,
       builder: (_) => StatefulBuilder(
         builder: (dialogContext, setDialogState) => SimpleDialog(
           title: const Text('一周起始'),

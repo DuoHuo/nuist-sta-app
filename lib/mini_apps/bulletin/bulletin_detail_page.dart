@@ -182,6 +182,7 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
     try {
       await showDialog<void>(
         context: context,
+        useRootNavigator: false,
         builder: (_) => BulletinAttachmentPreviewDialog(
           attachment: attachment,
           api: _repository.api,

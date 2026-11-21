@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/navigation/app_page.dart';
 import '../../core/colors.dart';
 import 'bulletin_controller.dart';
 import 'bulletin_detail_page.dart';
@@ -323,7 +324,7 @@ class _BulletinPageState extends State<BulletinPage> {
                       child: _BulletinTile(
                         bulletin: item,
                         onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
+                          AppPageRoute<void>(
                             builder: (_) => BulletinDetailPage(bulletin: item),
                           ),
                         ),

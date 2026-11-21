@@ -1,3 +1,4 @@
+import '../../core/navigation/app_page.dart';
 import 'timetable_persistence_feedback.dart';
 
 import 'package:flutter/material.dart';
@@ -84,7 +85,7 @@ Future<void> openDaySwapPage(
   DateTime? initialFrom,
 }) {
   return Navigator.of(context).push<void>(
-    MaterialPageRoute<void>(
+    AppPageRoute<void>(
       builder: (_) =>
           TimetableDaySwapsPage(controller: c, initialFrom: initialFrom),
     ),
@@ -179,6 +180,7 @@ class _TimetableDaySwapsPageState extends State<TimetableDaySwapsPage> {
     }
     final ok = await showDialog<bool>(
       context: context,
+      useRootNavigator: false,
       builder: (ctx) => AlertDialog(
         key: const Key('day_swap_confirm_dialog'),
         title: const Text('整天调课'),

@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../../core/navigation/app_navigation.dart';
 import '../../../core/app_snack_bar.dart';
 import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/auth/passkey_store.dart';
@@ -64,7 +64,7 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
   /// 就不必再输一遍密码。万一残留的是别人的账号，绑定页顶部有「换个账号」，
   /// 绑完状态页也会把学号摆出来，看一眼就知道对不对。
   Future<void> _openRegister() async {
-    await context.push<bool>('/portal-bind/register');
+    await AppNavigation.push<bool>(context, '/portal-bind/register');
     if (mounted) _load();
   }
 
@@ -91,12 +91,14 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
           '传完就删除。',
       confirmText: '我知道了',
     );
-    if (confirmed && mounted) await context.push('/portal-bind/export');
+    if (confirmed && mounted) {
+      await AppNavigation.push(context, '/portal-bind/export');
+    }
   }
 
   /// 导入页自行完成凭据保存、清会话与模块通知；返回后更新绑定信息。
   Future<void> _openImport() async {
-    await context.push<bool>('/portal-bind/import');
+    await AppNavigation.push<bool>(context, '/portal-bind/import');
     if (mounted) _load();
   }
 
@@ -147,6 +149,7 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
   }) async {
     final result = await showDialog<bool>(
       context: context,
+      useRootNavigator: false,
       builder: (dialogContext) => AlertDialog(
         title: Text(title),
         content: Text(

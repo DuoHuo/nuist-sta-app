@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/navigation/app_page.dart';
 import '../../../core/app_snack_bar.dart';
 import '../../../core/colors.dart';
 import 'app_icon_controller.dart';
@@ -69,7 +70,7 @@ class _AppIconPageState extends State<AppIconPage> with WidgetsBindingObserver {
       return;
     }
     final cropped = await Navigator.of(context).push<Uint8List>(
-      MaterialPageRoute(builder: (_) => AppIconCropPage(imageBytes: picked)),
+      AppPageRoute(builder: (_) => AppIconCropPage(imageBytes: picked)),
     );
     if (!mounted || cropped == null) {
       _controller.clearPickedImage();

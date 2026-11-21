@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/colors.dart';
 import 'innovation_credit_controller.dart';
 import 'innovation_credit_models.dart';
@@ -13,14 +13,18 @@ const kInnovationColor = Color(0xFFFFB400);
 ///
 /// 未绑定门户 / 从未拉到数据时只显示一行提示，不撑出空列表。
 class InnovationCreditCard extends StatefulWidget {
-  const InnovationCreditCard({super.key});
+  const InnovationCreditCard({super.key, this.controller});
+
+  /// 宿主可注入独立状态，默认与双创学分详情共用实例。
+  final InnovationCreditController? controller;
 
   @override
   State<InnovationCreditCard> createState() => _InnovationCreditCardState();
 }
 
 class _InnovationCreditCardState extends State<InnovationCreditCard> {
-  final _controller = InnovationCreditController.instance;
+  late final _controller =
+      widget.controller ?? InnovationCreditController.instance;
 
   @override
   void initState() {
@@ -43,7 +47,7 @@ class _InnovationCreditCardState extends State<InnovationCreditCard> {
           body = _Placeholder(
             text: '请先绑定统一门户',
             action: '去绑定',
-            onTap: () => context.push('/portal-bind'),
+            onTap: () => AppNavigation.push(context, '/portal-bind'),
           );
         } else if (credit == null) {
           body = _Placeholder(
@@ -59,7 +63,7 @@ class _InnovationCreditCardState extends State<InnovationCreditCard> {
         return InkWell(
           onTap: credit == null
               ? null
-              : () => context.push('/apps/innovation-credit'),
+              : () => AppNavigation.push(context, '/apps/innovation-credit'),
           borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
@@ -116,23 +120,31 @@ class _CreditBody extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 8),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
+        Wrap(
+          spacing: 10,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Text(
-              credit.total.isEmpty ? '--' : credit.total,
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.w700,
-                color: palette.titleText,
-                height: 1.1,
+            Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: credit.total.isEmpty ? '--' : credit.total,
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w700,
+                      color: palette.titleText,
+                      height: 1.1,
+                    ),
+                  ),
+                  TextSpan(
+                    text: ' 分',
+                    style: TextStyle(fontSize: 13, color: palette.labelText),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(width: 4),
-            Text('分', style: TextStyle(fontSize: 13, color: palette.labelText)),
             if (credit.grade.isNotEmpty) ...[
-              const SizedBox(width: 10),
               _Tag(
                 text: gradeLabel(credit),
                 color: gradeColor(credit.gradeKind, palette),
@@ -154,21 +166,18 @@ class _CreditBody extends StatelessWidget {
           for (final item in items.take(_maxItems))
             Padding(
               padding: const EdgeInsets.only(top: 10),
-              child: Row(
+              child: Wrap(
+                spacing: 12,
+                runSpacing: 4,
                 children: [
-                  Expanded(
-                    child: Text(
-                      item.name,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 13, color: palette.titleText),
-                    ),
+                  Text(
+                    item.name,
+                    style: TextStyle(fontSize: 13, color: palette.titleText),
                   ),
-                  const SizedBox(width: 8),
                   Text(
                     item.date,
                     style: TextStyle(fontSize: 11, color: palette.hint),
                   ),
-                  const SizedBox(width: 12),
                   Text(
                     item.score.isEmpty ? '--' : '+${item.score}',
                     style: TextStyle(
@@ -183,11 +192,14 @@ class _CreditBody extends StatelessWidget {
         const SizedBox(height: 10),
         Row(
           children: [
-            Text(
-              items.length > _maxItems ? '共 ${items.length} 项 · 查看全部' : '查看明细',
-              style: TextStyle(fontSize: 12, color: palette.labelText),
+            Expanded(
+              child: Text(
+                items.length > _maxItems
+                    ? '共 ${items.length} 项 · 查看全部'
+                    : '查看明细',
+                style: TextStyle(fontSize: 12, color: palette.labelText),
+              ),
             ),
-            const Spacer(),
             Icon(Icons.chevron_right, color: palette.chevron),
           ],
         ),

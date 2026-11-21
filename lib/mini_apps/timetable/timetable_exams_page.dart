@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import 'timetable_controller.dart';
 import 'timetable_exam_merge.dart';
 import 'timetable_exams_card.dart';
@@ -15,7 +15,7 @@ class TimetableExamsPage extends StatelessWidget {
   const TimetableExamsPage({super.key});
 
   void _openTimetable(BuildContext context, ScheduleEvent event) =>
-      context.push('/apps/timetable', extra: event);
+      AppNavigation.push(context, '/apps/timetable', extra: event);
 
   @override
   Widget build(BuildContext context) {

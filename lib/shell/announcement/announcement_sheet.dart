@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../core/navigation/app_page.dart';
 import '../../core/colors.dart';
 import 'announcement_models.dart';
 import 'announcement_web_page.dart';
@@ -14,6 +15,7 @@ Future<void> showAnnouncementDialog(
 }) {
   return showDialog<void>(
     context: context,
+    useRootNavigator: false,
     builder: (_) =>
         AnnouncementDialog(items: items, localActions: localActions),
   );
@@ -261,7 +263,7 @@ class AnnouncementCard extends StatelessWidget {
     final navigator = Navigator.of(context);
     if (closeDialogOnOpenLink) navigator.pop();
     navigator.push(
-      MaterialPageRoute<void>(builder: (_) => announcementWebPageBuilder(link)),
+      AppPageRoute<void>(builder: (_) => announcementWebPageBuilder(link)),
     );
   }
 

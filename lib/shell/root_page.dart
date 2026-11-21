@@ -1,69 +1,269 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/colors.dart';
+import '../core/layout/app_pane_layout.dart';
+import '../core/navigation/app_navigation.dart';
+import 'announcement/announcement_controller.dart';
+import 'announcement/announcement_overlay.dart';
+import 'update/update_controller.dart';
 
-/// 大 APP 的壳：底部三页签（首页 / 学习 / 我的），页签内容由路由的
-/// StatefulShellRoute 提供（各 branch 独立保留导航状态）。
-class RootPage extends StatelessWidget {
-  const RootPage({super.key, required this.navigationShell});
+/// 按窗口宽度展示一个或两个分支，各导航器始终留在同一个 Stack 槽位。
+class RootPage extends StatefulWidget {
+  const RootPage({
+    super.key,
+    required this.navigationShell,
+    required this.navigation,
+    required this.children,
+    this.updates,
+    this.announcements,
+  });
 
   final StatefulNavigationShell navigationShell;
+  final AppNavigationController navigation;
+  final List<Widget> children;
 
-  static const _items = <_TabItem>[
-    _TabItem(Icons.home_outlined, Icons.home, '首页'),
-    _TabItem(Icons.school_outlined, Icons.school, '学习'),
-    _TabItem(Icons.person_outline, Icons.person, '我的'),
+  /// 宽屏全局通知入口与首页共用的控制器。
+  final UpdateController? updates;
+  final AnnouncementController? announcements;
+
+  @override
+  State<RootPage> createState() => _RootPageState();
+}
+
+class _RootPageState extends State<RootPage> {
+  final _lastRects = <int, Rect>{};
+
+  @override
+  void initState() {
+    super.initState();
+    FocusManager.instance.addListener(_recordInputFocus);
+  }
+
+  void _recordInputFocus() {
+    final focus = FocusManager.instance.primaryFocus;
+    final focusContext = focus?.context;
+    if (focusContext == null || !focusContext.mounted) return;
+    // 只记录真实输入焦点，忽略预加载导航器自动取得的 FocusScope 焦点。
+    if (focusContext.widget is! EditableText &&
+        focusContext.findAncestorWidgetOfExactType<EditableText>() == null) {
+      return;
+    }
+    final scope = AppNavigationScope.readOf(focusContext);
+    if (scope == null || scope.navigation != widget.navigation) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !focusContext.mounted ||
+          FocusManager.instance.primaryFocus != focus) {
+        return;
+      }
+      widget.navigation.interact(scope.branch);
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  @override
+  void dispose() {
+    FocusManager.instance.removeListener(_recordInputFocus);
+    super.dispose();
+  }
+
+  static const _phoneItems = <_TabItem>[
+    _TabItem(Icons.home_outlined, Icons.home, '首页', 0),
+    _TabItem(Icons.school_outlined, Icons.school, '学习', 1),
+    _TabItem(Icons.person_outline, Icons.person, '我的', 2),
+  ];
+  static const _wideItems = <_TabItem>[
+    _TabItem(Icons.dashboard_outlined, Icons.dashboard, '首页+学习', 0),
+    _TabItem(Icons.person_outline, Icons.person, '我的', 2),
   ];
 
   @override
   Widget build(BuildContext context) {
-    final palette = AppPalette.of(context);
-    final current = navigationShell.currentIndex;
-    return Scaffold(
-      body: navigationShell,
-      // 不用 BottomNavigationBar：它的水波纹以整条栏为画布铺开。
-      // 每个条目各自一块 Material + InkWell，涟漪只落在被按的格子里。
-      bottomNavigationBar: Material(
-        color: palette.surface,
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border(top: BorderSide(color: palette.divider)),
-          ),
-          child: SafeArea(
-            top: false,
-            child: SizedBox(
-              height: 56,
-              child: Row(
+    return BackButtonListener(
+      onBackButtonPressed: widget.navigation.handleBack,
+      child: ListenableBuilder(
+        listenable: widget.navigation,
+        builder: (context, _) => LayoutBuilder(
+          builder: (context, constraints) {
+            final palette = AppPalette.of(context);
+            final media = MediaQuery.of(context)
+                .copyWith(size: constraints.biggest);
+            final layout = AppPaneLayout.resolve(media);
+            final navigation = widget.navigation;
+            final current = navigation.updateLayout(wide: layout.wide);
+            final combined = layout.wide && current != 2;
+            final showBar = layout.wide || !navigation.hasDetails(current);
+            Widget tabButton(_TabItem item) => _TabButton(
+              item: item,
+              selected: layout.wide
+                  ? (item.branch == 2) == (current == 2)
+                  : item.branch == current,
+              onTap: () => navigation.showBranch(item.branch),
+            );
+            final region = current == 2
+                ? layout.windowRegion
+                : combined
+                ? layout.region
+                : layout.singleRegion;
+            final barHeight = showBar
+                ? math
+                      .max(56.0, 30 + media.textScaler.scale(10))
+                      .clamp(0.0, region.height)
+                : 0.0;
+            Rect contentRect(Rect rect) => Rect.fromLTRB(
+              rect.left,
+              rect.top,
+              rect.right,
+              math.max(rect.top, rect.bottom - barHeight),
+            );
+            final singleRect = contentRect(region);
+            final rects = <int, Rect>{
+              if (combined) ...{
+                0: contentRect(layout.home!),
+                1: contentRect(layout.study!),
+              } else
+                current: singleRect,
+            };
+            _lastRects.addAll(rects);
+            return Scaffold(
+              resizeToAvoidBottomInset: false,
+              backgroundColor: palette.pageBg,
+              body: Stack(
                 children: [
-                  for (var i = 0; i < _items.length; i++)
-                    Expanded(
-                      child: _TabButton(
-                        item: _items[i],
-                        selected: i == current,
-                        onTap: () => navigationShell.goBranch(
-                          i,
-                          // 重复点击当前页签回到该页签首页。
-                          initialLocation: i == current,
+                  for (var index = 0; index < widget.children.length; index++)
+                    _pane(
+                      index,
+                      rects[index] ?? _lastRects[index] ?? singleRect,
+                      media,
+                      visible: rects.containsKey(index),
+                      wide: layout.wide,
+                    ),
+                  if (combined &&
+                      !(navigation.branchNavigatorKeys[1].currentState
+                              ?.canPop() ??
+                          false))
+                    Positioned(
+                      left: rects[1]!.right - kMinInteractiveDimension,
+                      top: rects[1]!.top,
+                      width: kMinInteractiveDimension,
+                      height: kToolbarHeight,
+                      child: Center(
+                        // 全局入口不改变活动栏，弹层也由根导航器统一管理。
+                        child: AnnouncementBell(
+                          updates: widget.updates ?? UpdateController.instance,
+                          controller: widget.announcements,
                         ),
                       ),
                     ),
                 ],
               ),
-            ),
-          ),
+              // 真实底栏参与 Scaffold 几何，浮动提示显示在入口上方。
+              bottomNavigationBar: showBar
+                  ? SizedBox(
+                      height: media.size.height - region.bottom + barHeight,
+                      child: Stack(
+                        children: [
+                          Positioned(
+                            left: region.left,
+                            top: 0,
+                            width: region.width,
+                            height: barHeight,
+                            child: Material(
+                              color: palette.surface,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  border: Border(
+                                    top: BorderSide(color: palette.divider),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    if (combined &&
+                                        layout.separatedByHinge) ...[
+                                      SizedBox(
+                                        width: layout.home!.width,
+                                        child: tabButton(_wideItems[0]),
+                                      ),
+                                      SizedBox(
+                                        width:
+                                            layout.study!.left -
+                                            layout.home!.right,
+                                      ),
+                                      SizedBox(
+                                        width: layout.study!.width,
+                                        child: tabButton(_wideItems[1]),
+                                      ),
+                                    ] else
+                                      for (final item
+                                          in layout.wide
+                                              ? _wideItems
+                                              : _phoneItems)
+                                        Expanded(child: tabButton(item)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : null,
+            );
+          },
         ),
       ),
     );
   }
+
+  Widget _pane(
+    int index,
+    Rect rect,
+    MediaQueryData media, {
+    required bool visible,
+    required bool wide,
+  }) => Positioned.fromRect(
+    key: ValueKey('app-pane-$index'),
+    rect: rect,
+    child: AppNavigationScope(
+      navigation: widget.navigation,
+      branch: index,
+      visible: visible,
+      wide: wide,
+      child: Offstage(
+        offstage: !visible,
+        child: TickerMode(
+          enabled: visible,
+          child: FocusScope(
+            canRequestFocus: visible,
+            onKeyEvent: (_, event) {
+              widget.navigation.interact(index);
+              return KeyEventResult.ignored;
+            },
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) => widget.navigation.interact(index),
+              child: MediaQuery(
+                data: AppPaneLayout.mediaForRect(media, rect),
+                child: ClipRect(child: widget.children[index]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _TabItem {
-  const _TabItem(this.icon, this.activeIcon, this.label);
+  const _TabItem(this.icon, this.activeIcon, this.label, this.branch);
 
   final IconData icon;
   final IconData activeIcon;
   final String label;
+  final int branch;
 }
 
 class _TabButton extends StatelessWidget {

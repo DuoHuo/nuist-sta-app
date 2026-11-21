@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/colors.dart';
 import 'free_classroom_controller.dart';
 import 'free_classroom_models.dart';
@@ -111,7 +111,7 @@ class _FreeClassroomPageState extends State<FreeClassroomPage> {
   }
 
   Future<void> _goBindPortal() async {
-    await context.push('/portal-bind');
+    await AppNavigation.push(context, '/portal-bind');
     await _controller.recheckPortal();
   }
 

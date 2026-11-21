@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../core/navigation/app_page.dart';
 import '../../core/app_snack_bar.dart';
 import '../../core/app_select.dart';
 import '../../core/logging/app_log.dart';
@@ -93,7 +94,7 @@ class _CampusBuildingModelEntryState extends State<CampusBuildingModelEntry> {
 
   void _open() {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      AppPageRoute<void>(
         builder: (_) => CampusBuildingModelPage(
           source: widget.source!,
           buildingId: widget.buildingId,

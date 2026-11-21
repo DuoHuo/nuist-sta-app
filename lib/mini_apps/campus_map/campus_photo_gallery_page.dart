@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/navigation/app_page.dart';
 import '../../core/logging/app_log.dart';
 import 'campus_map_photos.dart';
 import 'campus_map_widgets.dart';
@@ -71,7 +72,7 @@ class _CampusPhotoGalleryPageState extends State<CampusPhotoGalleryPage> {
 
   void _openViewer(int index) {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      AppPageRoute<void>(
         builder: (_) => CampusPhotoViewerPage(
           photos: _photos,
           initialIndex: index,
@@ -403,7 +404,7 @@ class _CampusBuildingPhotosEntryState extends State<CampusBuildingPhotosEntry> {
 
   void _open() {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      AppPageRoute<void>(
         builder: (_) => CampusPhotoGalleryPage(
           source: widget.source,
           buildingId: widget.buildingId,

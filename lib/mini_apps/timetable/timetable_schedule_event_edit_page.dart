@@ -1,3 +1,4 @@
+import '../../core/navigation/app_page.dart';
 import 'timetable_persistence_feedback.dart';
 
 import 'package:flutter/material.dart';
@@ -19,7 +20,7 @@ Future<ScheduleEvent?> showScheduleEventEditPage(
   DateTime? initialDate,
 }) {
   return Navigator.of(context).push<ScheduleEvent>(
-    MaterialPageRoute(
+    AppPageRoute(
       // Android 的全屏对话框会禁用预测性返回，其他平台保留原有模态行为。
       fullscreenDialog: Theme.of(context).platform != TargetPlatform.android,
       builder: (_) => ScheduleEventEditPage(
@@ -47,6 +48,7 @@ Future<bool> confirmDeleteScheduleEvent(
   }
   final ok = await showDialog<bool>(
     context: context,
+    useRootNavigator: false,
     builder: (ctx) => AlertDialog(
       content: Text(text, key: const Key('schedule_delete_message')),
       actions: [

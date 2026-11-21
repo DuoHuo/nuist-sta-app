@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import 'timetable_schedule_home_row.dart';
 import 'timetable_schedule_event_layout.dart';
 import 'timetable_controller.dart';
@@ -89,11 +89,11 @@ class _TimetableHomeCardState extends State<TimetableHomeCard> {
     _controller.ensureStarted();
   }
 
-  void _openTimetable() => context.push('/apps/timetable');
+  void _openTimetable() => AppNavigation.push(context, '/apps/timetable');
 
   /// 登录：回来后只刷新绑定状态（UI）。绑定成功的同步由注册表统一分发。
   Future<void> _openLogin() async {
-    await context.push('/portal-bind');
+    await AppNavigation.push(context, '/portal-bind');
     if (!mounted) return;
     await _controller.refreshPortalBound();
   }

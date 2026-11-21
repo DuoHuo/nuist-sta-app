@@ -31,11 +31,19 @@ class AppGridItem extends StatelessWidget {
             child: _buildIcon(),
           ),
           const SizedBox(height: 7),
-          Text(
-            app.label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: palette.labelText, fontSize: 12),
+          SizedBox(
+            height: MediaQuery.textScalerOf(context).scale(12) * 2.5,
+            child: Text(
+              app.label,
+              maxLines: 2,
+              textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: palette.labelText,
+                fontSize: 12,
+                height: 1.2,
+              ),
+            ),
           ),
         ],
       ),

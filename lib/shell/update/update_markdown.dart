@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
+import '../../core/navigation/app_page.dart';
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
 import '../../core/network/owned_api_client.dart';
@@ -100,9 +101,7 @@ class UpdateChangelog extends StatelessWidget {
         });
         if (link == null) return;
         Navigator.of(context, rootNavigator: true).push(
-          MaterialPageRoute<void>(
-            builder: (_) => announcementWebPageBuilder(link),
-          ),
+          AppPageRoute<void>(builder: (_) => announcementWebPageBuilder(link)),
         );
       },
     );
