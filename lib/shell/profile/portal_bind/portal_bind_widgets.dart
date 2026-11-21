@@ -118,6 +118,7 @@ Future<String?> showPinDialog(
 }) {
   return showDialog<String>(
     context: context,
+    useRootNavigator: false,
     builder: (_) => _PinDialog(
       title: title,
       message: message,

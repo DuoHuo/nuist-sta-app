@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/navigation/app_page.dart';
 import 'timetable_change_format.dart';
 import 'timetable_controller.dart';
 import 'timetable_copy.dart';
@@ -12,7 +13,7 @@ Future<void> openTimetableChangeLogPage(
   TimetableController? controller,
 }) {
   return Navigator.of(context).push<void>(
-    MaterialPageRoute<void>(
+    AppPageRoute<void>(
       builder: (_) => TimetableChangeLogPage(controller: controller),
     ),
   );

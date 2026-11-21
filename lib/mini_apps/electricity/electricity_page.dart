@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/colors.dart';
 import 'electricity_controller.dart';
 import 'electricity_format.dart';
@@ -170,7 +170,7 @@ class _StatusHeader extends StatelessWidget {
         color: palette.hint,
         title: '未绑定统一门户',
         subtitle: '电费查询需要门户身份，请先到「我的 → 统一门户」完成绑定。',
-        onTap: () => context.push('/portal-bind'),
+        onTap: () => AppNavigation.push(context, '/portal-bind'),
       );
     }
     if (room == null) {

@@ -2,9 +2,10 @@
 
 整体是「**壳 + 注册表 + 小程序**」三层。
 
-壳（底部页签 + 宫格首页）固定不变；每个小程序是 `lib/mini_apps/` 下一个自包含目录，
+壳提供底部页签、宫格首页和随窗口宽度调整的单栏／双栏容器；每个小程序是
+`lib/mini_apps/` 下一个自包含目录，
 在注册表登记一次，由 manifest 声明首页宫格、首页卡片和学习页卡片；有入口的小程序
-通过全屏路由 `/apps/<id>` 打开，也可以只贡献学习卡片。
+通过公开路由 `/apps/<id>` 在所属面板打开，也可以只贡献学习卡片。
 
 这样切分的目的是**让小程序可以独立增删、并行开发、合并互不冲突** —— 社团同学各做各的，
 不需要协调同一个文件。
@@ -20,6 +21,8 @@ lib/
 │   ├── config/         # campus_config.dart 校园地址与密钥（hex 编码）—— 见 configuration.md；
 │   │                   # api_endpoints.dart 社团自有服务地址（明文）
 │   ├── logging/        # 结构化日志、Trace/Span、轮转存储与用户导出
+│   ├── layout/         # 安全区、铰链与双栏矩形；卡片指标的响应式网格
+│   ├── navigation/     # 固定分支导航器、所属栏跳转与预测性返回协调
 │   ├── network/        # 自有服务客户端与元数据；校园 VPN 与 Rust 原生库的 FFI 封装
 │   ├── schedule/       # WeeklyClasses：「本周课程」跨小程序接口（课表提供，地图读取）
 │   ├── app_manifest.dart   # AppManifest：小程序描述
@@ -34,7 +37,7 @@ lib/
 │   ├── time_format.dart    # 时间格式化
 │   └── wip.dart            # showWipSnackBar「开发中」占位反馈
 ├── shell/              # 大 APP 的壳（社团一般不用动）
-│   ├── root_page.dart  # 底部三页签
+│   ├── root_page.dart  # 固定分支容器、宽窄布局与底部入口
 │   ├── announcement/   # 应用公告（拉取社团自有服务）
 │   ├── home/           # 首页宫格
 │   ├── study/          # 学习页
@@ -50,8 +53,8 @@ lib/
 
 | 路径 | 内容 |
 |---|---|
-| `/` `/study` `/profile` | 三个页签，包在 `StatefulShellRoute.indexedStack` 里 |
-| `/apps/:appId` | 全屏小程序；按 id 查注册表的入口索引，未知 id 或仅卡片模块显示「小程序不存在或已下线」 |
+| `/` `/study` `/profile` | 固定的三个 `StatefulShellRoute` 分支；壳自定义导航器容器以同时展示首页与学习 |
+| `/apps/:appId` | 小程序公开入口；按 id 查注册表的入口索引，未知 id 或仅卡片模块显示「小程序不存在或已下线」 |
 | `/portal-bind`、`/portal-bind/register` | 统一门户绑定与状态页 |
 | `/portal-bind/export`、`/portal-bind/import`、`/portal-bind/import/scan` | 通行密钥导出、导入与扫码导入 |
 | `/place/:placeId` | 校园地图地物详情页，可深链 |
@@ -60,11 +63,46 @@ lib/
 学习页的成绩、双创学分、劳动积分详情分别使用 `/apps/scores`、`/apps/innovation-credit`、
 `/apps/labor-score`，页面入口由各模块的 manifest 提供。
 
-小程序路由与壳路由**平级**，所以进小程序后不带底部页签；从宫格或学习页 `push` 进入后，
-系统返回键自然退回原页面。
+三个分支复用同一份详情构建逻辑。页面内用
+`AppNavigation.push<T>(context, '/apps/<id>', extra: ...)` 跳转，包装器先同步所属分支，
+再调用 `context.push<T>`。首页、学习和我的详情分别使用内部前缀
+`/home/`、`/study/`、`/profile/`，查询参数、`extra` 和泛型返回结果原样保留。
+原有公开路径继续接受深链，没有来源面板的入口重定向到首页分支。
 
-> **⚠️ 必须用 `context.push('/apps/<id>')`，不要用 `go`。**
-> 用 `go` 会替换掉栈底，小程序页顶栏就没有返回按钮、返回键也退不回原页面。
+> **页面内进入详情必须使用 `AppNavigation.push`，保持 `context.push` 的入栈语义，禁止用 `go`。**
+> 直接调用全局路由器无法确定双栏中的来源；`go` 也不会保留来源页面的详情栈。
+
+返回结果使用 `AppNavigation.pop<T>(context, result)`，避免另一栏的操作改变全局活动分支后
+退出错误页面；返回直接交给所属栏导航器，不关闭全局弹层，并保留此前活动分支。
+手势期间的异步返回会等待
+动画结束，页面已退出时不再重复返回。独立小程序宿主没有 `AppNavigationScope` 时，包装器退化成原有
+`context.push/pop`。当前详情的 URI 和 `extra` 从 `GoRouterState.of(context)` 或
+`router.state` 读取；嵌套栈的 `currentConfiguration.uri` 可能仍是分支根路径。
+
+### 窗口与宽屏布局
+
+`AppPaneLayout` 按窗口扣除安全区后的逻辑宽度判断，不按机型或方向判断。普通窗口从
+656 dp 起展示双栏：首页在左、学习在右，每栏至少 320 dp，中间间距 16 dp，剩余宽度
+等分。竖向铰链两侧都达到 320 dp 时，两栏分别填满各自安全区域；否则选择最大的连续
+安全区域。横向铰链同样先选择最大的安全区域。柔性屏展开或状态未知时，`fold`
+仅表示连续屏幕上的折痕，不裁剪窗口；旋转后折痕变为横向也保留完整高度。
+半开状态的折痕按分隔区域处理，展平后恢复完整窗口。
+
+宽屏底部入口为「首页+学习／我的」，我的页及其设置等详情始终使用完整窗口的系统安全
+区域，不按折痕或铰链限制为半屏；返回组合入口恢复两栏原状态。通知铃铛在宽屏组合界面的
+学习顶栏的右上角由壳提供，窄屏保留首页顶栏入口，两处共用公告和更新控制器。宽屏通知
+列表是根导航器上的全局弹层，打开时暂停自动提示，关闭后保留此前的活动栏。
+组合界面收窄时，根页显示首页；有详情时保留最近操作栏的详情并铺满，返回该栏根页后显示
+首页。窄屏根页保留首页、学习、我的三个入口，详情隐藏底栏。
+
+三个导航器在同一个 `Stack` 的固定槽位中通过矩形、`Offstage`、`TickerMode` 和
+`FocusScope` 调整显示，不因宽窄切换重建路由树。导航栈、滚动位置、表单输入和等待中的
+返回 Future 保留；各栏接收局部 `MediaQuery`，安全区、键盘和显示特征只扣除一次。
+首页宫格和卡片指标随可用宽度与字号换行，不增加宽屏偏好设置。
+
+普通对话框与底部弹层使用所属栏的导航器，`showDialog` 显式指定
+`useRootNavigator: false`。阻断公告、更新详情及更新日志网页使用根导航器，
+作用范围为整个窗口；全局提示条由壳的外层 `Scaffold` 展示一次。
 
 ### 返回行为与预测性返回
 
@@ -75,6 +113,14 @@ lib/
 全局适配由 `android/app/src/main/AndroidManifest.xml` 的
 `android:enableOnBackInvokedCallback="true"` 和 `lib/core/theme.dart` 的
 `PredictiveBackPageTransitionsBuilder` 共同提供，明暗主题共享；页面应沿用这套配置。
+路由表使用 `AppPage`，直接 `Navigator.push` 的普通页面使用 `AppPageRoute`，
+它们保留 Material 转场，并限制只有返回目标栏接收预测性手势。系统返回依次交给全局
+弹层、最近操作栏、另一可见栏，再交给系统；各栏通过 `maybePop` 保留原有内容保护和内部
+返回顺序。手势开始后冻结目标，取消或完成动画结束后才处理新的面板导航。
+
+壳根页的嵌套返回由 `BackButtonListener` 与协调器处理，不使用隐藏分支的嵌套
+`PopScope` 阻止系统退出；业务页面与全局弹层的 `PopScope` 不受此根页例外影响。
+
 `fullscreenDialog: true` 会让 Flutter 的 `PageRoute.popGestureEnabled` 返回 `false`，
 也会阻断 Android 预测性返回。因此，全屏表单在 Android 上使用普通 Material 路由，
 需要关闭图标时显式配置顶栏；iOS 如需全屏模态语义，应按平台设置，不能连带关闭 Android 手势。
@@ -423,6 +469,12 @@ JSON（包括嵌套字符串）、表单、URL 认证参数与 HTML 表格/控�
 
 `test/study_registry_test.dart` 覆盖学习卡片注册、排序、增删及刷新分发，验证并发刷新会等待
 全部回调，单项同步抛错不影响其余回调启动，以及仅卡片模块和未知 id 的路由兜底。
+
+`test/wide_layout_test.dart` 覆盖阈值、安全区、铰链、独立导航与滚动、宽窄切换的状态
+保留、局部与全局弹层、返回协调和明暗主题下的预测性返回，并通过真实课表宫格、添加
+入口和课程表单验证未保存保护、键盘避让与保护解除。
+`test/adaptive_card_layout_test.dart` 用合成数据检查 320 dp 与两倍字号下已加载卡片的
+完整指标和排版。
 
 另外它还用 `findsOneWidget` 断言了若干界面文案（首页宫格、学习页五张卡片标题、我的页
 「设置」「关于」等）。**副作用：新增小程序的 `label` 不能与现有重名**，否则这些断言会挂。

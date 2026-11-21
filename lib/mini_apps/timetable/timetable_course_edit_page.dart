@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/navigation/app_page.dart';
 import 'timetable_controller.dart';
 import 'timetable_course_form.dart';
 import 'timetable_models.dart';
@@ -14,7 +15,7 @@ Future<bool?> showJwxtCourseEditPage(
   required GridCell cell,
   bool autofocusNote = false,
 }) => Navigator.of(context).push<bool>(
-  MaterialPageRoute(
+  AppPageRoute(
     // Android 的全屏对话框会禁用预测性返回，其他平台保留原有模态行为。
     fullscreenDialog: Theme.of(context).platform != TargetPlatform.android,
     builder: (_) => JwxtCourseEditPage(

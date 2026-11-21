@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/colors.dart';
+import '../../core/layout/adaptive_card_grid.dart';
 import 'academic_controller.dart';
 import 'academic_models.dart';
 
@@ -40,7 +41,7 @@ class _AcademicSummaryCardState extends State<AcademicSummaryCard> {
           body = _Placeholder(
             text: '请先绑定统一门户',
             action: '去绑定',
-            onTap: () => context.push('/portal-bind'),
+            onTap: () => AppNavigation.push(context, '/portal-bind'),
           );
         } else if (summary == null) {
           body = _Placeholder(
@@ -107,27 +108,25 @@ class AcademicSummaryBody extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 8),
-        Row(
+        AdaptiveCardGrid(
+          maxColumns: 3,
+          minItemWidth: MediaQuery.textScalerOf(context).scale(70),
           children: [
-            Expanded(
-              child: _Metric(label: '平均绩点', value: s.averageGradePoint),
-            ),
-            Expanded(
-              child: _Metric(label: 'GPA', value: s.gpa),
-            ),
-            Expanded(
-              child: _Metric(label: '平均分', value: s.averageScore),
-            ),
+            _Metric(label: '平均绩点', value: s.averageGradePoint),
+            _Metric(label: 'GPA', value: s.gpa),
+            _Metric(label: '平均分', value: s.averageScore),
           ],
         ),
         const SizedBox(height: 16),
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          alignment: WrapAlignment.spaceBetween,
           children: [
             Text(
               '学分进度',
               style: TextStyle(fontSize: 12, color: palette.labelText),
             ),
-            const Spacer(),
             Text(
               '已获 ${_orDash(s.earnedCredits)} / 应修 ${_orDash(s.requiredCredits)}'
               '　${s.creditProgressText}',
@@ -148,25 +147,14 @@ class AcademicSummaryBody extends StatelessWidget {
         const SizedBox(height: 14),
         Divider(height: 1, color: palette.rowDivider),
         const SizedBox(height: 10),
-        Row(
+        AdaptiveCardGrid(
+          maxColumns: 2,
+          minItemWidth: MediaQuery.textScalerOf(context).scale(110),
           children: [
-            Expanded(
-              child: _Stat(label: '班级排名', value: s.classRank),
-            ),
-            Expanded(
-              child: _Stat(label: '专业排名', value: s.majorRank),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: _Stat(label: '课程通过率', value: s.passRateText),
-            ),
-            Expanded(
-              child: _Stat(label: '学分加权平均分', value: s.weightedAverageScore),
-            ),
+            _Stat(label: '班级排名', value: s.classRank),
+            _Stat(label: '专业排名', value: s.majorRank),
+            _Stat(label: '课程通过率', value: s.passRateText),
+            _Stat(label: '学分加权平均分', value: s.weightedAverageScore),
           ],
         ),
       ],
@@ -205,7 +193,7 @@ class _Metric extends StatelessWidget {
   }
 }
 
-/// 次要指标：标签在左，数值在右。
+/// 次要指标纵向展示，长标签与完整排名不争抢同一行。
 class _Stat extends StatelessWidget {
   const _Stat({required this.label, required this.value});
 
@@ -215,19 +203,17 @@ class _Stat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label, style: TextStyle(fontSize: 12, color: palette.labelText)),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            value.isEmpty ? '--' : value,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-              color: palette.titleText,
-            ),
+        const SizedBox(height: 3),
+        Text(
+          value.isEmpty ? '--' : value,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: palette.titleText,
           ),
         ),
       ],

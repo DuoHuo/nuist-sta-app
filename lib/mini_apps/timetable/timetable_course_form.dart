@@ -290,6 +290,7 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
     _confirmingExit = true;
     final discard = await showDialog<bool>(
       context: context,
+      useRootNavigator: false,
       builder: (context) => AlertDialog(
         title: const Text('放弃未保存的修改？'),
         content: const Text('离开后，这次填写的内容不会保存。'),
@@ -486,6 +487,7 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
     setState(() => _choosingScope = true);
     final confirmed = await showDialog<bool>(
       context: context,
+      useRootNavigator: false,
       builder: (context) => AlertDialog(
         title: const Text('改为考试'),
         content: const Column(

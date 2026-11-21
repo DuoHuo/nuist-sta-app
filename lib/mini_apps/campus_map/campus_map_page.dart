@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/navigation/app_page.dart';
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
 import '../../core/logging/app_log.dart';
@@ -800,7 +801,7 @@ class _CampusMapPageState extends State<CampusMapPage>
   /// 使用同一套编号。
   void _openDetail(CampusPlace place) {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      AppPageRoute<void>(
         builder: (_) =>
             CampusPlaceDetailPage(placeId: place.id, source: widget.source),
       ),
@@ -809,7 +810,7 @@ class _CampusMapPageState extends State<CampusMapPage>
 
   void _openStreet(CampusPlace place) {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      AppPageRoute<void>(
         builder: (_) => CampusStreetViewPage(
           request: StreetViewRequest(
             buildingId: place.id,

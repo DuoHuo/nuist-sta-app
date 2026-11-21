@@ -4,9 +4,10 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../../core/navigation/app_navigation.dart';
+import '../../../core/navigation/app_page.dart';
 import '../../../core/app_snack_bar.dart';
 import '../../../core/app_select.dart';
 import '../../../core/colors.dart';
@@ -133,7 +134,7 @@ class _AppIconEntryState extends State<_AppIconEntry>
   }
 
   Future<void> _open() async {
-    await context.push('/settings/app-icon');
+    await AppNavigation.push(context, '/settings/app-icon');
     if (mounted) await _controller.refresh();
   }
 
@@ -286,7 +287,7 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
       }, successLevel: AppLogLevel.debug);
       if (!mounted) return;
       await Navigator.of(context).push<void>(
-        MaterialPageRoute(
+        AppPageRoute(
           builder: (_) =>
               _LogPreviewPage(records: preview.records, stats: preview.stats),
         ),
@@ -310,6 +311,7 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
     try {
       final confirmed = await showDialog<bool>(
         context: context,
+        useRootNavigator: false,
         builder: (dialogContext) => AlertDialog(
           title: const Text('导出诊断日志'),
           content: const Text(
@@ -371,6 +373,7 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
     try {
       final confirmed = await showDialog<bool>(
         context: context,
+        useRootNavigator: false,
         builder: (dialogContext) => AlertDialog(
           title: const Text('清除诊断日志'),
           content: const Text('将清除本机运行日志和应用生成的导出副本。清除后无法恢复，当前日志模式不变。'),

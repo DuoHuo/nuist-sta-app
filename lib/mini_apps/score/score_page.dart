@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/app_select.dart';
 import '../../core/colors.dart';
 import '../../core/time_format.dart';
@@ -45,7 +45,7 @@ class _ScorePageState extends State<ScorePage> {
               icon: Icons.link_off,
               title: '未绑定统一门户',
               subtitle: '成绩查询需要教务系统登录，请先到「我的 → 绑定统一门户」完成绑定。',
-              onTap: () => context.push('/portal-bind'),
+              onTap: () => AppNavigation.push(context, '/portal-bind'),
             );
           }
           if (report == null) {

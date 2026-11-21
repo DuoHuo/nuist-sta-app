@@ -38,6 +38,18 @@ Map<String, Object?> row(
   'JASMC': '测试楼',
 };
 
+Iterable<ImperativeRouteMatch> _imperativeMatches(
+  List<RouteMatchBase> matches,
+) sync* {
+  for (final match in matches) {
+    if (match is ShellRouteMatch) {
+      yield* _imperativeMatches(match.matches);
+    } else if (match is ImperativeRouteMatch) {
+      yield match;
+    }
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final ctl = TimetableController.instance;
@@ -201,22 +213,19 @@ void main() {
     await open('/apps/timetable');
     await open('/apps/timetable');
     expect(
-      router.routerDelegate.currentConfiguration.matches
-          .whereType<ImperativeRouteMatch>(),
+      _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
       hasLength(1),
     );
     router.push('/settings');
     await tester.pumpAndSettle();
     await open('/apps/timetable');
     expect(
-      router.routerDelegate.currentConfiguration.matches
-          .whereType<ImperativeRouteMatch>(),
+      _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
       hasLength(1),
     );
     await open('/apps/timetable?focus=tomorrow');
     expect(
-      router.routerDelegate.currentConfiguration.matches
-          .whereType<ImperativeRouteMatch>(),
+      _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
       hasLength(1),
     );
     router.pop();
@@ -263,8 +272,7 @@ void main() {
       launch.complete('/apps/timetable');
       await tester.pumpAndSettle();
       expect(
-        router.routerDelegate.currentConfiguration.matches
-            .whereType<ImperativeRouteMatch>(),
+        _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
         hasLength(1),
         reason: '迟到的平台回执不能重复压入课表',
       );
@@ -303,8 +311,7 @@ void main() {
       expect(route.animation!.value, 1);
       expect(route.popGestureEnabled, isTrue);
       expect(
-        router.routerDelegate.currentConfiguration.matches
-            .whereType<ImperativeRouteMatch>(),
+        _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
         hasLength(1),
       );
       Future<void> gesture(String method, [double progress = 0]) async {

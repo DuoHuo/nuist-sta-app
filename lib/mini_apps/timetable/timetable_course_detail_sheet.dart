@@ -581,6 +581,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     final readOnly = course.source == CourseSource.jwxt;
     final confirmed = await showDialog<bool>(
       context: context,
+      useRootNavigator: false,
       builder: (ctx) => AlertDialog(
         title: const Text('删除课程'),
         content: readOnly

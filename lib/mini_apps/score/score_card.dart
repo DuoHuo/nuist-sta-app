@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/colors.dart';
+import '../../core/layout/adaptive_card_grid.dart';
 import 'score_controller.dart';
 import 'score_models.dart';
 
@@ -9,14 +10,17 @@ const kScoreColor = Color(0xFF7C4DFF);
 
 /// 学习页的成绩查询卡片：展示最近学期概况，点击进入全部成绩。
 class ScoreCard extends StatefulWidget {
-  const ScoreCard({super.key});
+  const ScoreCard({super.key, this.controller});
+
+  /// 宿主可注入独立状态，默认与成绩详情共用实例。
+  final ScoreController? controller;
 
   @override
   State<ScoreCard> createState() => _ScoreCardState();
 }
 
 class _ScoreCardState extends State<ScoreCard> {
-  final _controller = ScoreController.instance;
+  late final _controller = widget.controller ?? ScoreController.instance;
 
   @override
   void initState() {
@@ -39,7 +43,7 @@ class _ScoreCardState extends State<ScoreCard> {
           body = _Placeholder(
             text: '请先绑定统一门户',
             action: '去绑定',
-            onTap: () => context.push('/portal-bind'),
+            onTap: () => AppNavigation.push(context, '/portal-bind'),
           );
         } else if (report == null) {
           body = _Placeholder(
@@ -53,7 +57,9 @@ class _ScoreCardState extends State<ScoreCard> {
         }
 
         return InkWell(
-          onTap: report == null ? null : () => context.push('/apps/scores'),
+          onTap: report == null
+              ? null
+              : () => AppNavigation.push(context, '/apps/scores'),
           borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
@@ -108,7 +114,10 @@ class _ScoreBody extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 8),
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          alignment: WrapAlignment.spaceBetween,
           children: [
             Text(
               term ?? '全部成绩',
@@ -118,7 +127,6 @@ class _ScoreBody extends StatelessWidget {
                 color: palette.titleText,
               ),
             ),
-            const Spacer(),
             Text(
               '${summary.total} 门',
               style: TextStyle(fontSize: 12, color: palette.hint),
@@ -126,17 +134,13 @@ class _ScoreBody extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
-        Row(
+        AdaptiveCardGrid(
+          maxColumns: 3,
+          minItemWidth: MediaQuery.textScalerOf(context).scale(68),
           children: [
-            Expanded(
-              child: _Metric(label: '平均分', value: _average(summary)),
-            ),
-            Expanded(
-              child: _Metric(label: '通过', value: '${summary.passed} 门'),
-            ),
-            Expanded(
-              child: _Metric(label: '学分', value: summary.creditsText),
-            ),
+            _Metric(label: '平均分', value: _average(summary)),
+            _Metric(label: '通过', value: '${summary.passed} 门'),
+            _Metric(label: '学分', value: summary.creditsText),
           ],
         ),
         const SizedBox(height: 10),

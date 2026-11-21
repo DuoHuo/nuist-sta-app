@@ -1,8 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
+import '../../core/navigation/app_page.dart';
 import '../../core/app_snack_bar.dart';
 import 'timetable_schedule_event_detail_sheet.dart';
 import 'timetable_schedule_event.dart';
@@ -295,7 +296,7 @@ class _TimetablePageState extends State<TimetablePage> {
   /// 打开门户绑定状态页（登录 / 解绑）。回来后只刷新绑定状态（UI）；登录成功的
   /// 同步由注册表统一分发，这里不重复调用。
   Future<void> _openLogin() async {
-    await context.push('/portal-bind');
+    await AppNavigation.push(context, '/portal-bind');
     if (!mounted) return;
     await _host.refreshPortalBound();
   }
@@ -530,7 +531,7 @@ class _TimetablePageState extends State<TimetablePage> {
 
   void _openSettings() {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      AppPageRoute<void>(
         builder: (_) => TimetableSettingsPage(controller: _controller),
       ),
     );
@@ -538,7 +539,7 @@ class _TimetablePageState extends State<TimetablePage> {
 
   void _openExport() {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      AppPageRoute<void>(
         builder: (_) => TimetableExportPage(controller: _controller),
       ),
     );

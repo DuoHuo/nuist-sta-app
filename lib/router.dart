@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/app_manifest.dart';
+import 'core/app_registry.dart';
+import 'core/navigation/app_navigation.dart';
+import 'core/navigation/app_page.dart';
 import 'mini_apps/campus_map/campus_place_detail_page.dart';
 import 'mini_apps/registry.dart';
 import 'mini_apps/timetable/timetable_page.dart';
@@ -26,118 +29,135 @@ import 'shell/study/study_page.dart';
 /// 系统通知和桌面小组件进入课表时直接显示内容，返回仍沿用 Material 手势。
 const timetableDirectLaunch = 'timetableDirectLaunch';
 
-class _DirectLaunchPage extends MaterialPage<void> {
-  const _DirectLaunchPage({required super.key, required super.child});
-
-  @override
-  Route<void> createRoute(BuildContext context) => _DirectLaunchRoute(this);
-}
-
-class _DirectLaunchRoute extends PageRoute<void>
-    with MaterialRouteTransitionMixin<void> {
-  _DirectLaunchRoute(_DirectLaunchPage page) : super(settings: page);
-
-  @override
-  Duration get transitionDuration => Duration.zero;
-
-  @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 300);
-
-  @override
-  bool get maintainState => true;
-
-  @override
-  Widget buildContent(BuildContext context) =>
-      (settings as _DirectLaunchPage).child;
-}
-
-/// 全局路由的构建工厂：由 NuistApp 在初始化时创建一次，
-/// 保证每次挂载都是干净实例（widget 测试之间不互相串状态）。
+/// 创建一次固定的三分支路由树；宽窄变化仅由壳改变导航器的布局。
 ///
-/// 结构：
-/// - StatefulShellRoute：壳（底部三页签），branch 0 = 首页 `/`，
-///   branch 1 = 学习 `/study`，branch 2 = 我的 `/profile`
-/// - `/apps/:appId`：小程序全屏入口，与壳平级 —— 进入小程序后不带底部页签，
-///   从宫格或学习卡片 push 后返回原页面。原生小程序进 [AppManifest.entry]，
-///   H5 小程序进通用 WebView 承载页。
-/// - `/portal-bind`：统一门户的绑定状态页（学号、凭据信息、重新绑定/解绑），
-///   其子路由 `/portal-bind/register` 才是内嵌登录 + 注册 Passkey 的流程页；
-///   `export` / `import`（及 `import/scan` 扫码）是通行密钥在设备间搬运的页面。
-///   都与壳平级，全屏展示。
-/// - `/place/:placeId`：校园地图的地物详情页（建筑 / POI / 通用地物共用）。
-///   与壳平级，可深链与分享；页面按编号自行取数，不依赖地图页是否打开。
-/// - `/about`：关于页（应用图标、版本号、贡献者名单），与壳平级。
-/// - `/settings`：App 级设置页（外观、应用图标、诊断日志），与壳平级；
-///   `/settings/app-icon` 是其子路由，沿用普通页面返回手势。
+/// AppNavigation 将公开详情路径放入所属分支；无来源深链进入首页分支。
+/// 所有分支复用同一份详情构建逻辑，保留 [AppManifest.entry]、查询参数和 extra。
 GoRouter buildRouter({
   UpdateController? updateController,
   AnnouncementController? announcementController,
+  AppNavigationController? navigation,
+  AppRegistry? registry,
   bool ignorePlatformInitialRoute = false,
-}) => GoRouter(
-  initialLocation: ignorePlatformInitialRoute ? '/' : null,
-  overridePlatformDefaultLocation: ignorePlatformInitialRoute,
-  routes: [
-    StatefulShellRoute.indexedStack(
-      pageBuilder: (context, state, navigationShell) => MaterialPage<void>(
-        key: state.pageKey,
-        child: Builder(
-          builder: (context) => AnnouncementRouteScope(
-            isCurrent: ModalRoute.isCurrentOf(context) ?? true,
-            child: RootPage(navigationShell: navigationShell),
+}) {
+  final panes = navigation ?? AppNavigationController();
+  final apps = registry ?? appRegistry;
+  List<GoRoute> details(String prefix, {bool public = false}) => _detailRoutes(
+    prefix: prefix,
+    public: public,
+    navigation: panes,
+    registry: apps,
+    updateController: updateController,
+  );
+  final router = GoRouter(
+    initialLocation: ignorePlatformInitialRoute ? '/' : null,
+    overridePlatformDefaultLocation: ignorePlatformInitialRoute,
+    navigatorKey: panes.rootNavigatorKey,
+    observers: [panes.rootObserver],
+    routes: [
+      StatefulShellRoute(
+        notifyRootObserver: false,
+        navigatorContainerBuilder: (context, navigationShell, children) =>
+            RootPage(
+              navigationShell: navigationShell,
+              navigation: panes,
+              updates: updateController,
+              announcements: announcementController,
+              children: children,
+            ),
+        pageBuilder: (context, state, navigationShell) => AppPage<void>(
+          key: state.pageKey,
+          navigation: panes,
+          isShellRoot: true,
+          child: Builder(
+            builder: (context) => AnnouncementRouteScope(
+              isCurrent: ModalRoute.isCurrentOf(context) ?? true,
+              child: navigationShell,
+            ),
           ),
         ),
-      ),
-      branches: [
-        StatefulShellBranch(
-          routes: [
-            GoRoute(
-              path: '/',
-              pageBuilder: (_, state) => MaterialPage<void>(
-                key: state.pageKey,
-                child: HomePage(
-                  updates: updateController,
-                  announcements: announcementController,
+        branches: [
+          StatefulShellBranch(
+            navigatorKey: panes.branchNavigatorKeys[0],
+            observers: [panes.branchObservers[0]],
+            preload: true,
+            routes: [
+              GoRoute(
+                path: '/',
+                pageBuilder: (_, state) => AppPage<void>(
+                  key: state.pageKey,
+                  navigation: panes,
+                  child: HomePage(
+                    updates: updateController,
+                    announcements: announcementController,
+                    registry: apps,
+                  ),
                 ),
+                routes: details('home/'),
               ),
-            ),
-          ],
-        ),
-        StatefulShellBranch(
-          // 后台预建学习页；卡片在页面不可见时延后构建，首次切换不再整页现建。
-          preload: true,
-          routes: [
-            GoRoute(
-              path: '/study',
-              pageBuilder: (_, state) => MaterialPage<void>(
-                key: state.pageKey,
-                child: const StudyPage(),
+            ],
+          ),
+          StatefulShellBranch(
+            navigatorKey: panes.branchNavigatorKeys[1],
+            observers: [panes.branchObservers[1]],
+            preload: true,
+            routes: [
+              GoRoute(
+                path: '/study',
+                pageBuilder: (_, state) => AppPage<void>(
+                  key: state.pageKey,
+                  navigation: panes,
+                  child: StudyPage(registry: apps),
+                ),
+                routes: details(''),
               ),
-            ),
-          ],
-        ),
-        StatefulShellBranch(
-          routes: [
-            GoRoute(
-              path: '/profile',
-              pageBuilder: (_, state) => MaterialPage<void>(
-                key: state.pageKey,
-                child: const ProfilePage(),
+            ],
+          ),
+          StatefulShellBranch(
+            navigatorKey: panes.branchNavigatorKeys[2],
+            observers: [panes.branchObservers[2]],
+            routes: [
+              GoRoute(
+                path: '/profile',
+                pageBuilder: (_, state) => AppPage<void>(
+                  key: state.pageKey,
+                  navigation: panes,
+                  child: const ProfilePage(),
+                ),
+                routes: details(''),
               ),
-            ),
-          ],
-        ),
-      ],
-    ),
+            ],
+          ),
+        ],
+      ),
+      // 保留原公开路径；深链和没有面板 scope 的入口统一落在首页栈。
+      ...details('/', public: true),
+    ],
+  );
+  panes.attach(router);
+  return router;
+}
+
+List<GoRoute> _detailRoutes({
+  required String prefix,
+  required bool public,
+  required AppNavigationController navigation,
+  required AppRegistry registry,
+  UpdateController? updateController,
+}) {
+  AppPage<void> page(GoRouterState state, Widget child) =>
+      AppPage<void>(key: state.pageKey, navigation: navigation, child: child);
+  String? redirect(BuildContext context, GoRouterState state) =>
+      public ? AppNavigation.locationInBranch(state.uri.toString(), 0) : null;
+  return [
     GoRoute(
-      path: '/apps/:appId',
+      path: '${prefix}apps/:appId',
+      redirect: redirect,
       pageBuilder: (context, state) {
         final id = state.pathParameters['appId']!;
-        final manifest = appRegistry.byId[id];
+        final manifest = registry.byId[id];
         if (manifest == null) {
-          return MaterialPage<void>(
-            key: state.pageKey,
-            child: _MiniAppNotFoundPage(appId: id),
-          );
+          return page(state, _MiniAppNotFoundPage(appId: id));
         }
         final child = manifest.isWeb
             ? MiniWebViewPage(manifest: manifest)
@@ -149,81 +169,67 @@ GoRouter buildRouter({
                     : null,
               )
             : manifest.entry!(context);
-        if (id == 'timetable' && state.extra == timetableDirectLaunch) {
-          return _DirectLaunchPage(key: state.pageKey, child: child);
-        }
-        return MaterialPage<void>(key: state.pageKey, child: child);
+        return AppPage<void>(
+          key: state.pageKey,
+          navigation: navigation,
+          directLaunch:
+              id == 'timetable' && state.extra == timetableDirectLaunch,
+          child: child,
+        );
       },
     ),
     GoRoute(
-      path: '/place/:placeId',
-      pageBuilder: (context, state) => MaterialPage<void>(
-        key: state.pageKey,
-        child: CampusPlaceDetailPage(placeId: state.pathParameters['placeId']!),
+      path: '${prefix}place/:placeId',
+      redirect: redirect,
+      pageBuilder: (_, state) => page(
+        state,
+        CampusPlaceDetailPage(placeId: state.pathParameters['placeId']!),
       ),
     ),
     GoRoute(
-      path: '/portal-bind',
-      pageBuilder: (_, state) => MaterialPage<void>(
-        key: state.pageKey,
-        child: const PortalStatusPage(),
-      ),
+      path: '${prefix}portal-bind',
+      redirect: redirect,
+      pageBuilder: (_, state) => page(state, const PortalStatusPage()),
       routes: [
         GoRoute(
           path: 'register',
-          pageBuilder: (_, state) => MaterialPage<void>(
-            key: state.pageKey,
-            child: const PortalBindPage(),
-          ),
+          pageBuilder: (_, state) => page(state, const PortalBindPage()),
         ),
         GoRoute(
           path: 'export',
-          pageBuilder: (_, state) => MaterialPage<void>(
-            key: state.pageKey,
-            child: const PortalExportPage(),
-          ),
+          pageBuilder: (_, state) => page(state, const PortalExportPage()),
         ),
         GoRoute(
           path: 'import',
-          pageBuilder: (_, state) => MaterialPage<void>(
-            key: state.pageKey,
-            child: const PortalImportPage(),
-          ),
+          pageBuilder: (_, state) => page(state, const PortalImportPage()),
           routes: [
             GoRoute(
               path: 'scan',
-              pageBuilder: (_, state) => MaterialPage<void>(
-                key: state.pageKey,
-                child: const PortalScanPage(),
-              ),
+              pageBuilder: (_, state) => page(state, const PortalScanPage()),
             ),
           ],
         ),
       ],
     ),
     GoRoute(
-      path: '/about',
-      pageBuilder: (_, state) => MaterialPage<void>(
-        key: state.pageKey,
-        child: AboutPage(updates: updateController),
-      ),
+      path: '${prefix}about',
+      redirect: redirect,
+      pageBuilder: (_, state) =>
+          page(state, AboutPage(updates: updateController)),
     ),
     GoRoute(
-      path: '/settings',
-      pageBuilder: (_, state) =>
-          MaterialPage<void>(key: state.pageKey, child: const SettingsPage()),
+      path: '${prefix}settings',
+      redirect: redirect,
+      pageBuilder: (_, state) => page(state, const SettingsPage()),
       routes: [
         GoRoute(
           path: 'app-icon',
-          pageBuilder: (_, state) => MaterialPage<void>(
-            key: state.pageKey,
-            child: const AppIconPage(),
-          ),
+          pageBuilder: (_, state) => page(state, const AppIconPage()),
         ),
       ],
     ),
-  ],
-);
+  ];
+}
 
 /// 访问了注册表中不存在的小程序 id 时的兜底页。
 class _MiniAppNotFoundPage extends StatelessWidget {

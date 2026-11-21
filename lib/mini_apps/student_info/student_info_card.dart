@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/colors.dart';
 import '../../core/time_format.dart';
 import 'student_info_controller.dart';
@@ -15,7 +15,10 @@ import 'student_info_models.dart';
 ///
 /// 未绑定门户 / 从未拉到数据时退化成带标题的一行提示，和其他卡片一致。
 class StudentInfoCard extends StatefulWidget {
-  const StudentInfoCard({super.key});
+  const StudentInfoCard({super.key, this.controller});
+
+  /// 宿主可注入独立状态，默认使用学习页共享实例。
+  final StudentInfoController? controller;
 
   /// 是否把卡头换成「头像 + 姓名 + 学号 · 学院 · 班级」。数据与组件都留着，
   /// 需要时打开即可。
@@ -26,7 +29,7 @@ class StudentInfoCard extends StatefulWidget {
 }
 
 class _StudentInfoCardState extends State<StudentInfoCard> {
-  final _controller = StudentInfoController.instance;
+  late final _controller = widget.controller ?? StudentInfoController.instance;
 
   @override
   void initState() {
@@ -50,7 +53,7 @@ class _StudentInfoCardState extends State<StudentInfoCard> {
           body = _Placeholder(
             text: '请先绑定统一门户',
             action: '去绑定',
-            onTap: () => context.push('/portal-bind'),
+            onTap: () => AppNavigation.push(context, '/portal-bind'),
           );
         } else if (info == null) {
           body = _Placeholder(
@@ -220,7 +223,10 @@ class _SemesterSection extends StatelessWidget {
             style: TextStyle(fontSize: 12, color: palette.hint),
           )
         else ...[
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text(
                 s.label,
@@ -230,9 +236,7 @@ class _SemesterSection extends StatelessWidget {
                   color: palette.titleText,
                 ),
               ),
-              const SizedBox(width: 8),
               _Chip(text: phase, color: phaseColor),
-              const Spacer(),
               if (s.maxWeeks > 0)
                 Text(
                   '共 ${s.maxWeeks} 周',
@@ -253,14 +257,18 @@ class _SemesterSection extends StatelessWidget {
           const SizedBox(height: 5),
           Row(
             children: [
-              Text(
-                '${formatMonthDay(s.start)} 开学',
-                style: TextStyle(fontSize: 10, color: palette.hint),
+              Expanded(
+                child: Text(
+                  '${formatMonthDay(s.start)} 开学',
+                  style: TextStyle(fontSize: 10, color: palette.hint),
+                ),
               ),
-              const Spacer(),
-              Text(
-                '${formatMonthDay(s.end)} 结束',
-                style: TextStyle(fontSize: 10, color: palette.hint),
+              Expanded(
+                child: Text(
+                  '${formatMonthDay(s.end)} 结束',
+                  textAlign: TextAlign.end,
+                  style: TextStyle(fontSize: 10, color: palette.hint),
+                ),
               ),
             ],
           ),

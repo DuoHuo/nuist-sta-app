@@ -4,9 +4,9 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:go_router/go_router.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../../core/navigation/app_navigation.dart';
 import '../../../core/app_info.dart';
 import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/config/campus_config.dart';
@@ -322,6 +322,7 @@ class _PortalBindPageState extends State<PortalBindPage> {
     if (!mounted) return;
     await showDialog<void>(
       context: context,
+      useRootNavigator: false,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
         title: const Text('绑定成功'),
@@ -334,7 +335,7 @@ class _PortalBindPageState extends State<PortalBindPage> {
         ],
       ),
     );
-    if (mounted) context.pop(true);
+    if (mounted) AppNavigation.pop(context, true);
   }
 
   void _retry() {

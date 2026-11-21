@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/app_manifest.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_session.dart';
@@ -192,7 +192,7 @@ class _PortalErrorView extends StatelessWidget {
             const SizedBox(height: 20),
             if (needsBinding)
               FilledButton(
-                onPressed: () => context.push('/portal-bind'),
+                onPressed: () => AppNavigation.push(context, '/portal-bind'),
                 child: const Text('去绑定'),
               )
             else

@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../../core/navigation/app_navigation.dart';
 import '../../../core/app_snack_bar.dart';
 import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/auth/passkey_store.dart';
@@ -47,13 +47,17 @@ class _PortalImportPageState extends State<PortalImportPage> {
     if (!mounted) return;
     final text = await showDialog<String>(
       context: context,
+      useRootNavigator: false,
       builder: (_) => _PasteDialog(initial: initial),
     );
     if (text != null) await _handle(text, source: 'clipboard');
   }
 
   Future<void> _fromScan() async {
-    final text = await context.push<String>('/portal-bind/import/scan');
+    final text = await AppNavigation.push<String>(
+      context,
+      '/portal-bind/import/scan',
+    );
     if (text != null) await _handle(text, source: 'qr');
   }
 
@@ -142,7 +146,7 @@ class _PortalImportPageState extends State<PortalImportPage> {
           if (mounted) _message('绑定未完成，请重试');
           return;
         }
-        if (mounted) context.pop(true);
+        if (mounted) AppNavigation.pop(context, true);
       });
 
   Future<bool> _preview(PasskeyBundle bundle, {required bool replacing}) async {
@@ -160,6 +164,7 @@ class _PortalImportPageState extends State<PortalImportPage> {
     ];
     final result = await showDialog<bool>(
       context: context,
+      useRootNavigator: false,
       builder: (dialogContext) => AlertDialog(
         title: const Text('确认导入'),
         content: Column(

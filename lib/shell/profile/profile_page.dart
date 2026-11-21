@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_exceptions.dart';
 import '../../core/auth/portal_session.dart';
@@ -47,7 +47,7 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _openPortalBind() async {
-    await context.push('/portal-bind');
+    await AppNavigation.push(context, '/portal-bind');
     _loadPortalBound();
   }
 
@@ -80,12 +80,12 @@ class _ProfilePageState extends State<ProfilePage> {
                 ProfileListTile(
                   tile: _settingsTile,
                   showDivider: true,
-                  onTap: () => context.push('/settings'),
+                  onTap: () => AppNavigation.push(context, '/settings'),
                 ),
                 ProfileListTile(
                   tile: _aboutTile,
                   showDivider: false,
-                  onTap: () => context.push('/about'),
+                  onTap: () => AppNavigation.push(context, '/about'),
                 ),
               ],
             ),
