@@ -104,16 +104,16 @@ void main() {
       if (index == 1) throw const FileSystemException('合成替换失败');
     };
     await expectLater(
-      c.updateSettings(c.settings.copyWith(showSaturday: false)),
+      c.updateSettings(c.settings.copyWith(maxWeeks: 18)),
       throwsA(isA<TimetablePersistenceException>()),
     );
-    expect(c.settings.showSaturday, isTrue);
+    expect(c.settings.maxWeeks, 30);
     expect(savedFiles(), before);
     await pumpEventQueue();
     expect(changes, isEmpty);
     TimetableStore.debugBeforeBatchReplace = null;
     await restart();
-    expect(c.settings.showSaturday, isTrue);
+    expect(c.settings.maxWeeks, 30);
   });
 
   test('课程转换考试最后文件失败时全部存储与内存均不变，重试仅通知一次', () async {
@@ -284,7 +284,7 @@ void main() {
       }
     };
     final first = c.updateSettings(
-      c.settingsForEditing.copyWith(showSaturday: false),
+      c.settingsForEditing.copyWith(reminderLeadMinutes: 10),
     );
     final failed = c.updateSettings(
       c.settingsForEditing.copyWith(nextDayReminderEnabled: false),
@@ -296,7 +296,7 @@ void main() {
     await first;
     await failure;
     await pumpEventQueue();
-    expect(c.settings.showSaturday, isFalse);
+    expect(c.settings.reminderLeadMinutes, 10);
     expect(c.settings.nextDayReminderEnabled, isTrue);
     expect(observed, [true]);
   });

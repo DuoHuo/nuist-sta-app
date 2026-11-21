@@ -646,7 +646,6 @@ void main() {
     expect(c.settings.showSaturday, isFalse);
     final saved = (await TimetableStore.readSnapshot())!;
     expect(saved.courses.single.id, 'new');
-    expect(saved.settings.showSaturday, isFalse);
     expect((await TimetableStore.readSettings()).showSaturday, isFalse);
     final originalBinding = TimetableController.bindingCheck;
     addTearDown(() => TimetableController.bindingCheck = originalBinding);

@@ -54,13 +54,12 @@ class ScheduleStore {
   static Future<void> _write(String name, Map<String, dynamic> values) =>
       _log.inSpan(() async {
         try {
-          final file = await TimetableStore.fileFor(name, forWrite: true);
-          if (file == null) return;
-          // 同一次合并读写不让出事件循环，两个文件键更新不会互相覆盖。
-          final raw = TimetableStore.readJsonFile(file, forWrite: true);
-          raw.addAll(values);
-          raw['schemaVersion'] = schemaVersion;
-          TimetableStore.writeJsonFile(file, raw);
+          // 批次内同步合并；批次外放到串行后台队列/Isolate 完成读盘、校验与原子替换。
+          await TimetableStore.modifyNamedJsonFile(name, (raw) {
+            raw.addAll(values);
+            raw['schemaVersion'] = schemaVersion;
+            return true;
+          });
         } catch (error, stackTrace) {
           _log.error(
             'json.write_failed',
@@ -83,15 +82,16 @@ class ScheduleStore {
 
   // ---- 日程 ----
 
-  static Future<List<ScheduleEvent>> readEvents() async {
-    final raw = await _read(scheduleEventsFile);
-    return [
-      for (final item in _list(raw, 'events'))
-        if (item is Map<String, dynamic>)
-          if (ScheduleEvent.tryFromJson(item) case final event?)
-            ExamParser.cleanImportedExam(event),
-    ];
-  }
+  static Future<List<ScheduleEvent>> readEvents() async =>
+      parseEvents(await _read(scheduleEventsFile));
+
+  /// 从已解码 JSON 解析日程。
+  static List<ScheduleEvent> parseEvents(Map<String, dynamic> raw) => [
+    for (final item in _list(raw, 'events'))
+      if (item is Map<String, dynamic>)
+        if (ScheduleEvent.tryFromJson(item) case final event?)
+          ExamParser.cleanImportedExam(event),
+  ];
 
   /// 只写 `events`（合并写：`otherColors` 与未知顶层键保留）。
   /// 只写日程；文件里已有的 `otherColors` 原样保留（不丢「其他」固定色）。
@@ -102,8 +102,12 @@ class ScheduleStore {
 
   /// 「其他」日程按名称固定的色号（`schedule_events.json` 顶层 `otherColors`，
   /// `{名称: 色号}`）。缺失/类型不对 → 空；坏条目跳过。
-  static Future<Map<String, int>> readOtherColors() async {
-    final v = (await _read(scheduleEventsFile))['otherColors'];
+  static Future<Map<String, int>> readOtherColors() async =>
+      parseOtherColors(await _read(scheduleEventsFile));
+
+  /// 从已解码 JSON 解析「其他」日程颜色映射。
+  static Map<String, int> parseOtherColors(Map<String, dynamic> raw) {
+    final v = raw['otherColors'];
     if (v is! Map) return {};
     return {
       for (final e in v.entries)
@@ -123,8 +127,11 @@ class ScheduleStore {
 
   // ---- 教务课编辑 / 删除 ----
 
-  static Future<Map<String, CourseEdit>> readCourseEdits() async {
-    final raw = await _read(courseEditsFile);
+  static Future<Map<String, CourseEdit>> readCourseEdits() async =>
+      parseCourseEdits(await _read(courseEditsFile));
+
+  /// 从已解码 JSON 解析教务课编辑记录。
+  static Map<String, CourseEdit> parseCourseEdits(Map<String, dynamic> raw) {
     final out = <String, CourseEdit>{};
     for (final item in _list(raw, 'edits')) {
       final e = CourseEdit.tryParse(item);
@@ -142,13 +149,15 @@ class ScheduleStore {
   // ---- 单日修改（第 1 条）----
 
   /// `course_edits.json` 的 `dateEdits`；缺失 / 类型不对 → 空，坏条目跳过。
-  static Future<List<CourseDateEdit>> readCourseDateEdits() async {
-    final raw = await _read(courseEditsFile);
-    return [
-      for (final item in _list(raw, 'dateEdits'))
-        ?CourseDateEdit.tryParse(item),
-    ];
-  }
+  static Future<List<CourseDateEdit>> readCourseDateEdits() async =>
+      parseCourseDateEdits(await _read(courseEditsFile));
+
+  /// 从已解码 JSON 解析单日修改记录。
+  static List<CourseDateEdit> parseCourseDateEdits(
+    Map<String, dynamic> raw,
+  ) => [
+    for (final item in _list(raw, 'dateEdits')) ?CourseDateEdit.tryParse(item),
+  ];
 
   /// 只写 `dateEdits`（合并写：`edits` 与未知顶层键保留）。
   static Future<void> saveCourseDateEdits(List<CourseDateEdit> list) =>
@@ -160,10 +169,13 @@ class ScheduleStore {
   // ---- 整天调课（第 8 条）----
 
   /// 读 `day_swaps.json`；坏文件按 [_read] 备份为 `.corrupt` 后按空，坏条目跳过。
-  static Future<List<DaySwap>> readDaySwaps() async {
-    final raw = await _read(daySwapsFile);
-    return [for (final item in _list(raw, 'swaps')) ?DaySwap.tryParse(item)];
-  }
+  static Future<List<DaySwap>> readDaySwaps() async =>
+      parseDaySwaps(await _read(daySwapsFile));
+
+  /// 从已解码 JSON 解析整天调课记录。
+  static List<DaySwap> parseDaySwaps(Map<String, dynamic> raw) => [
+    for (final item in _list(raw, 'swaps')) ?DaySwap.tryParse(item),
+  ];
 
   static Future<void> saveDaySwaps(List<DaySwap> swaps) =>
       _write(daySwapsFile, {
@@ -172,8 +184,13 @@ class ScheduleStore {
 
   // ---- 教务考试覆盖 ----
 
-  static Future<Map<String, ExamOverride>> readExamOverrides() async {
-    final raw = await _read(examOverridesFile);
+  static Future<Map<String, ExamOverride>> readExamOverrides() async =>
+      parseExamOverrides(await _read(examOverridesFile));
+
+  /// 从已解码 JSON 解析考试覆盖记录。
+  static Map<String, ExamOverride> parseExamOverrides(
+    Map<String, dynamic> raw,
+  ) {
     final out = <String, ExamOverride>{};
     for (final item in _list(raw, 'overrides')) {
       final o = ExamOverride.tryParse(item);
@@ -190,8 +207,12 @@ class ScheduleStore {
   // ---- 自动同步节流 ----
 
   /// 最近一次同步成功时间；无/坏 → null（视为首次安装）。
-  static Future<DateTime?> readLastSyncSuccess() async {
-    final v = (await _read(syncStateFile))['lastSuccessAt'];
+  static Future<DateTime?> readLastSyncSuccess() async =>
+      parseLastSyncSuccess(await _read(syncStateFile));
+
+  /// 从已解码 JSON 解析最近一次同步成功时间。
+  static DateTime? parseLastSyncSuccess(Map<String, dynamic> raw) {
+    final v = raw['lastSuccessAt'];
     return v is String ? DateTime.tryParse(v) : null;
   }
 
@@ -199,8 +220,12 @@ class ScheduleStore {
       _write(syncStateFile, {'lastSuccessAt': at.toIso8601String()});
 
   /// 最近一次自动拉取尝试；失败也保存，重启后继续限制重复自动请求。
-  static Future<DateTime?> readLastAutomaticAttempt() async {
-    final value = (await _read(syncStateFile))['lastAutomaticAttemptAt'];
+  static Future<DateTime?> readLastAutomaticAttempt() async =>
+      parseLastAutomaticAttempt(await _read(syncStateFile));
+
+  /// 从已解码 JSON 解析最近一次自动拉取尝试时间。
+  static DateTime? parseLastAutomaticAttempt(Map<String, dynamic> raw) {
+    final value = raw['lastAutomaticAttemptAt'];
     return value is String ? DateTime.tryParse(value) : null;
   }
 
@@ -211,7 +236,11 @@ class ScheduleStore {
   /// 门户 / 教务登录是否已过期（`sync_state.json` 的 `portalSessionExpired`）。
   /// 缺失 / 类型不对 → false；文件坏按 [_read] 的备份规则处理。
   static Future<bool> readPortalSessionExpired() async =>
-      (await _read(syncStateFile))['portalSessionExpired'] == true;
+      parsePortalSessionExpired(await _read(syncStateFile));
+
+  /// 从已解码 JSON 解析门户登录过期标记。
+  static bool parsePortalSessionExpired(Map<String, dynamic> raw) =>
+      raw['portalSessionExpired'] == true;
 
   /// 合并写（保留 `lastSuccessAt` 等其他键）。
   static Future<void> savePortalSessionExpired(bool expired) =>

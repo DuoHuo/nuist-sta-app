@@ -851,6 +851,13 @@ class TimetableChangeLogStore {
   @visibleForTesting
   static List<TimetableChangeRecord>? debugMemory;
 
+  /// 是否启用内存后端（供同模块控制器避免直接访问 @visibleForTesting 字段）。
+  static bool get hasDebugMemory => debugMemory != null;
+
+  /// 从内存后端过滤尚未通知的记录。
+  static List<TimetableChangeRecord> readUnnotifiedDebugMemory() =>
+      unnotifiedFrom(debugMemory ?? const []);
+
   static Future<void>? _operations;
 
   static Future<T> _serialize<T>(Future<T> Function() action) {
@@ -868,6 +875,31 @@ class TimetableChangeLogStore {
 
   static Future<List<TimetableChangeRecord>> readAll() => _serialize(_readAll);
 
+  /// 从已解码 JSON 解析全部变更记录。
+  static List<TimetableChangeRecord> parseRecords(
+    Map<String, dynamic> decoded,
+  ) {
+    final list = decoded['changes'];
+    if (list is! List) return const [];
+    return [
+      for (final item in list)
+        if (item is Map<String, dynamic>)
+          TimetableChangeRecord.fromJson(item)
+        else if (item is Map)
+          TimetableChangeRecord.fromJson({
+            for (final e in item.entries) '${e.key}': e.value,
+          }),
+    ];
+  }
+
+  /// 过滤尚未通知的记录。
+  static List<TimetableChangeRecord> unnotifiedFrom(
+    List<TimetableChangeRecord> all,
+  ) => [
+    for (final c in all)
+      if (!c.notified) c,
+  ];
+
   static Future<List<TimetableChangeRecord>> _readAll() async {
     final mem = debugMemory;
     if (mem != null) return List.unmodifiable(mem);
@@ -876,18 +908,8 @@ class TimetableChangeLogStore {
     if (file == null || !await file.exists()) return const [];
     try {
       final decoded = jsonDecode(await file.readAsString());
-      if (decoded is! Map) return const [];
-      final list = decoded['changes'];
-      if (list is! List) return const [];
-      return [
-        for (final item in list)
-          if (item is Map<String, dynamic>)
-            TimetableChangeRecord.fromJson(item)
-          else if (item is Map)
-            TimetableChangeRecord.fromJson({
-              for (final e in item.entries) '${e.key}': e.value,
-            }),
-      ];
+      if (decoded is! Map<String, dynamic>) return const [];
+      return parseRecords(decoded);
     } catch (error, stackTrace) {
       _log.warning(
         'changes.read_failed',

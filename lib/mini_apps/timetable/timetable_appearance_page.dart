@@ -41,6 +41,9 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
   PageController? _pageController;
   late int _previewWeek;
   bool _previewExpanded = false;
+  int? _draftOpacity;
+  double? _draftHeaderSize;
+  double? _draftPeriodHeight;
 
   int get _totalWeeks => math.max(1, _c.totalWeeks);
 
@@ -173,13 +176,24 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
         listenable: c,
         builder: (context, _) {
           final s = c.settings;
+          final previewSettings = s.copyWith(
+            cellOpacity: _draftOpacity ?? s.cellOpacity,
+            headerTextSize: _draftHeaderSize ?? s.headerTextSize,
+            periodHeight: _draftPeriodHeight ?? s.periodHeight,
+          );
           final colors = TimetableTheme.colorsOf(context);
-          final opacity = s.cellOpacity.clamp(
+          final opacity = previewSettings.cellOpacity.clamp(
             TimetableAppearancePage.opacityMin,
             TimetableAppearancePage.opacityMax,
           );
-          final headerSize = s.headerTextSize
+          final headerSize = previewSettings.headerTextSize
               .clamp(kHeaderTextSizeMin, kHeaderTextSizeMax)
+              .toDouble();
+          final periodHeight = previewSettings.periodHeight
+              .clamp(
+                TimetableTheme.periodHeightMin,
+                TimetableTheme.periodHeightMax,
+              )
               .toDouble();
           final total = _totalWeeks;
           // 选色键盘升起时保持底部占位，预览与设置列表不随键盘逐帧重排。
@@ -293,6 +307,7 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                                 ),
                                           week: week,
                                           controller: c,
+                                          settingsOverride: previewSettings,
                                           enableDrag: false,
                                           previewMode: true,
                                         );
@@ -351,12 +366,22 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                     label: '$opacity%',
                                     onChanged: (v) {
                                       final next = v.round();
-                                      if (next == c.settings.cellOpacity) {
+                                      if (next == opacity &&
+                                          _draftOpacity == next) {
                                         return;
                                       }
-                                      _update(
-                                        (x) => x.copyWith(cellOpacity: next),
-                                      );
+                                      setState(() => _draftOpacity = next);
+                                    },
+                                    onChangeEnd: (v) async {
+                                      final next = v.round();
+                                      if (next != c.settings.cellOpacity) {
+                                        await _update(
+                                          (x) => x.copyWith(cellOpacity: next),
+                                        );
+                                      }
+                                      if (mounted && _draftOpacity == next) {
+                                        setState(() => _draftOpacity = null);
+                                      }
                                     },
                                   ),
                                 ),
@@ -381,12 +406,23 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                     label: '${headerSize.round()}',
                                     onChanged: (v) {
                                       final next = v.roundToDouble();
-                                      if (next == c.settings.headerTextSize) {
+                                      if (next == headerSize &&
+                                          _draftHeaderSize == next) {
                                         return;
                                       }
-                                      _update(
-                                        (x) => x.copyWith(headerTextSize: next),
-                                      );
+                                      setState(() => _draftHeaderSize = next);
+                                    },
+                                    onChangeEnd: (v) async {
+                                      final next = v.roundToDouble();
+                                      if (next != c.settings.headerTextSize) {
+                                        await _update(
+                                          (x) =>
+                                              x.copyWith(headerTextSize: next),
+                                        );
+                                      }
+                                      if (mounted && _draftHeaderSize == next) {
+                                        setState(() => _draftHeaderSize = null);
+                                      }
                                     },
                                   ),
                                 ),
@@ -402,7 +438,7 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                 ),
                                 _ApSliderRow(
                                   title: '格子高度',
-                                  valueLabel: '${s.periodHeight.round()}',
+                                  valueLabel: '${periodHeight.round()}',
                                   valueKey: const Key(
                                     'tt_settings_period_height_value',
                                   ),
@@ -416,14 +452,27 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                                                         .periodHeightMin) /
                                                 2)
                                             .round(),
-                                    value: s.periodHeight.clamp(
-                                      TimetableTheme.periodHeightMin,
-                                      TimetableTheme.periodHeightMax,
-                                    ),
+                                    value: periodHeight,
                                     activeColor: colors.accent,
-                                    onChanged: (v) => _update(
-                                      (x) => x.copyWith(periodHeight: v),
-                                    ),
+                                    onChanged: (v) {
+                                      if (v == periodHeight &&
+                                          _draftPeriodHeight == v) {
+                                        return;
+                                      }
+                                      setState(() => _draftPeriodHeight = v);
+                                    },
+                                    onChangeEnd: (v) async {
+                                      if (v != c.settings.periodHeight) {
+                                        await _update(
+                                          (x) => x.copyWith(periodHeight: v),
+                                        );
+                                      }
+                                      if (mounted && _draftPeriodHeight == v) {
+                                        setState(
+                                          () => _draftPeriodHeight = null,
+                                        );
+                                      }
+                                    },
                                   ),
                                 ),
                                 // 与「不透明度」等行同级左对齐，勿嵌进滑杆行。

@@ -121,6 +121,8 @@ void main() {
     await tester.ensureVisible(headerSlider);
     await tester.pumpAndSettle();
     tester.widget<Slider>(headerSlider).onChanged!(kHeaderTextSizeMax);
+    await tester.pump();
+    tester.widget<Slider>(headerSlider).onChangeEnd!(kHeaderTextSizeMax);
     await settleIo(tester);
     expect(_c.settings.headerTextSize, 14);
 

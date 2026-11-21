@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -141,6 +142,23 @@ enum ScheduleChangeReason {
 /// 课表全局状态：首页卡片与周视图共用。
 class TimetableController extends ChangeNotifier {
   TimetableController._([this._scopedId, this._manager]);
+
+  TimetableController._forReminderCompute({
+    required TimetableSnapshot snapshot,
+    required List<Course> manualCourses,
+    required List<SlotOverride> overrides,
+    required Map<String, CourseEdit> courseEdits,
+    required List<DaySwap> daySwaps,
+    required List<CourseDateEdit> dateEdits,
+  }) : _scopedId = null,
+       _manager = null {
+    _snapshot = snapshot;
+    _manualCourses = manualCourses;
+    _overrides = overrides;
+    _courseEdits = courseEdits;
+    _daySwaps = daySwaps;
+    _dateEdits = dateEdits;
+  }
 
   static final TimetableController instance = TimetableController._();
   static final _log = AppLog.logger('timetable.controller');
@@ -297,6 +315,14 @@ class TimetableController extends ChangeNotifier {
   /// 上次 [followCurrentWeekIfChanged] 观察到的 [currentWeek]。
   /// 变了才把 [viewingWeek] 拉回本周；同周内手动翻周不打断。
   int? _lastSeenCurrentWeek;
+  DateTime? _lastSeenDate;
+  int _scheduleVersion = 0;
+
+  /// 课表内容/影响排程设置的版本号（供通知与小组件去重）。
+  int get scheduleVersion => _scheduleVersion;
+
+  Map<String, dynamic>? _preloadedCourseColorsRaw;
+  Map<String, dynamic>? _preloadedSyncChangesRaw;
   bool _loading = false;
   String? _statusMessage;
   bool _portalBound = false;
@@ -379,9 +405,14 @@ class TimetableController extends ChangeNotifier {
   Stream<ScheduleChangeReason> get scheduleChanged => _scheduleChanged.stream;
 
   void _fireScheduleChanged(ScheduleChangeReason r) {
+    _scheduleVersion++;
     _scheduleChanged.add(r);
     if (_isPrimaryHost) unawaited(updateNextDayReminder());
   }
+
+  /// 测试开关：开启后即使在 flutter_test 中也把明日提醒计算放进真实 Isolate.run。
+  @visibleForTesting
+  static bool debugBuildNextDayReminderInBackground = false;
 
   Future<void>? _nextDayReminderWork;
   int _nextDayReminderGeneration = 0;
@@ -482,46 +513,46 @@ class TimetableController extends ChangeNotifier {
         _loggedInForReminder &&
         settings.termStartDate != null &&
         (_snapshot.syncedAt != null || hasCourses);
-    final payloads = <String, Object?>{};
+    var payloads = <String, Object?>{};
     if (enabled) {
       // 用 syncClock（测试可注入），覆盖未来 400 个本机自然日。
       final now = syncClock();
       final today = DateTime(now.year, now.month, now.day);
-      for (var first = 0; first < 400; first += 7) {
-        // 每个同步批次结束即恢复，不能在 await 后覆盖界面新读入的缓存。
-        final savedDayCells = Map<(int, int), List<GridCell>>.from(_dayCells);
-        final savedDayCellSources = _dayCellSources;
-        try {
-          for (
-            var offset = first;
-            offset < first + 7 && offset < 400;
-            offset++
-          ) {
-            final eve = DateTime(today.year, today.month, today.day + offset);
-            final tomorrow = DateTime(eve.year, eve.month, eve.day + 1);
-            final week = actualWeek(tomorrow);
-            if (week == null) break;
-            final outsideTerm = week < 1 || week > totalWeeks;
-            final payload = buildNextDayReminder(
-              tomorrow: tomorrow,
-              courses: outsideTerm ? const [] : coursesOnDate(tomorrow),
-              periods: periods,
-              startTimeOf: (item) =>
-                  timeForSlot(item.course, item.slot, date: tomorrow).start,
-              loggedIn: _loggedInForReminder,
-              hasCache: true,
-              outsideTerm: outsideTerm,
-            );
-            if (payload != null) {
-              payloads[nextDayReminderDateKey(eve)] = payload.toJson();
-            }
-          }
-        } finally {
-          _dayCells
-            ..clear()
-            ..addAll(savedDayCells);
-          _dayCellSources = savedDayCellSources;
+      final snapshotArg = TimetableSnapshot(
+        courses: _snapshot.courses,
+        periods: periods,
+        settings: _snapshot.settings,
+        syncedAt: _snapshot.syncedAt,
+      );
+      final manualArg = _manualCourses;
+      final overridesArg = _overrides;
+      final courseEditsArg = _courseEdits;
+      final daySwapsArg = _daySwaps;
+      final dateEditsArg = _dateEdits;
+      final loggedIn = _loggedInForReminder;
+      final total = totalWeeks;
+      if (!Platform.environment.containsKey('FLUTTER_TEST') ||
+          debugBuildNextDayReminderInBackground) {
+        payloads = await Isolate.run(
+          () => _computeNextDayReminderPayloads(
+            today: today,
+            totalWeeks: total,
+            loggedIn: loggedIn,
+            snapshot: snapshotArg,
+            manualCourses: manualArg,
+            overrides: overridesArg,
+            courseEdits: courseEditsArg,
+            daySwaps: daySwapsArg,
+            dateEdits: dateEditsArg,
+          ),
+        );
+        if (generation != _nextDayReminderGeneration ||
+            inputs != _nextDayReminderInputs()) {
+          return null;
         }
+      } else {
+        // FakeAsync 不推进 Isolate，保持让出一帧以合并同一轮事件里的连续变更，
+        // 但只在临时独立实例中计算，不拷回/不覆盖主控制器的 _dayCells 缓存。
         final done = Completer<void>();
         _nextDayReminderYieldDone = done;
         _nextDayReminderYieldTimer = Timer(Duration.zero, done.complete);
@@ -534,6 +565,17 @@ class TimetableController extends ChangeNotifier {
             inputs != _nextDayReminderInputs()) {
           return null;
         }
+        payloads = _computeNextDayReminderPayloads(
+          today: today,
+          totalWeeks: total,
+          loggedIn: loggedIn,
+          snapshot: snapshotArg,
+          manualCourses: manualArg,
+          overrides: overridesArg,
+          courseEdits: courseEditsArg,
+          daySwaps: daySwapsArg,
+          dateEdits: dateEditsArg,
+        );
       }
     }
     return {
@@ -543,6 +585,49 @@ class TimetableController extends ChangeNotifier {
       ),
       'payloads': payloads,
     };
+  }
+
+  static Map<String, Object?> _computeNextDayReminderPayloads({
+    required DateTime today,
+    required int totalWeeks,
+    required bool loggedIn,
+    required TimetableSnapshot snapshot,
+    required List<Course> manualCourses,
+    required List<SlotOverride> overrides,
+    required Map<String, CourseEdit> courseEdits,
+    required List<DaySwap> daySwaps,
+    required List<CourseDateEdit> dateEdits,
+  }) {
+    final helper = TimetableController._forReminderCompute(
+      snapshot: snapshot,
+      manualCourses: manualCourses,
+      overrides: overrides,
+      courseEdits: courseEdits,
+      daySwaps: daySwaps,
+      dateEdits: dateEdits,
+    );
+    final payloads = <String, Object?>{};
+    for (var offset = 0; offset < 400; offset++) {
+      final eve = DateTime(today.year, today.month, today.day + offset);
+      final tomorrow = DateTime(eve.year, eve.month, eve.day + 1);
+      final week = helper.actualWeek(tomorrow);
+      if (week == null) break;
+      final outsideTerm = week < 1 || week > totalWeeks;
+      final payload = buildNextDayReminder(
+        tomorrow: tomorrow,
+        courses: outsideTerm ? const [] : helper.coursesOnDate(tomorrow),
+        periods: helper.periods,
+        startTimeOf: (item) =>
+            helper.timeForSlot(item.course, item.slot, date: tomorrow).start,
+        loggedIn: loggedIn,
+        hasCache: true,
+        outsideTerm: outsideTerm,
+      );
+      if (payload != null) {
+        payloads[nextDayReminderDateKey(eve)] = payload.toJson();
+      }
+    }
+    return payloads;
   }
 
   final StreamController<TimetableSyncOutcome> _syncOutcomes =
@@ -741,6 +826,7 @@ class TimetableController extends ChangeNotifier {
       _courseEdits = Map.unmodifiable(nextCourseEdits);
     }
     if (nextDateEdits != null) _dateEdits = List.unmodifiable(nextDateEdits);
+    _scheduleVersion++;
     notifyListeners();
     _fireScheduleChanged(ScheduleChangeReason.courseEdit);
   });
@@ -1144,7 +1230,7 @@ class TimetableController extends ChangeNotifier {
   /// 调课 / 编辑 / 日程等本地数据，并通知监听者刷新 UI。
   ///
   /// **不**调用 [fetchSnapshot]，**不**调用 [TimetableSyncDiff.applyAfterFetch]。
-  /// 首页下拉、App 回前台、首页课表卡片刷新按钮只走这里；远程全量同步用
+  /// 首页下拉、首页课表卡片刷新按钮只走这里；远程全量同步用
   /// [syncFromJwxt] / [manualSync]。
   ///
   /// 成功返回 `true`；读盘失败返回 `false`（供 UI toast「刷新失败」），不抛出。
@@ -1157,6 +1243,7 @@ class TimetableController extends ChangeNotifier {
       _colorMap = null;
       await _loadColorMap();
       _clampViewingWeek();
+      _lastSeenDate = _today;
       notifyListeners();
       return true;
     } catch (_) {
@@ -1165,7 +1252,8 @@ class TimetableController extends ChangeNotifier {
   }
 
   Future<void> _start() async {
-    await _reloadFromDisk();
+    final includeChangeLog = !TimetableChangeLogStore.hasDebugMemory;
+    await _reloadFromDisk(includeChangeLog: includeChangeLog);
     await _loadColorMap();
     if (_fillMissingAssignedColors()) {
       try {
@@ -1189,10 +1277,25 @@ class TimetableController extends ChangeNotifier {
     }
     _viewingWeek = _defaultViewingWeek;
     _lastSeenCurrentWeek = currentWeek;
+    _lastSeenDate = _today;
+    final preloadedChanges = _preloadedSyncChangesRaw;
+    _preloadedSyncChangesRaw = null;
     if (_snapshot.syncedAt != null || _snapshot.courses.isNotEmpty) {
-      _mergePendingChanges(
-        await _inScope(() => TimetableChangeLogStore.readUnnotified()),
-      );
+      if (TimetableChangeLogStore.hasDebugMemory) {
+        _mergePendingChanges(
+          TimetableChangeLogStore.readUnnotifiedDebugMemory(),
+        );
+      } else if (preloadedChanges != null) {
+        _mergePendingChanges(
+          TimetableChangeLogStore.unnotifiedFrom(
+            TimetableChangeLogStore.parseRecords(preloadedChanges),
+          ),
+        );
+      } else {
+        _mergePendingChanges(
+          await _inScope(() => TimetableChangeLogStore.readUnnotified()),
+        );
+      }
     }
     final local = _localReady;
     if (local != null && !local.isCompleted) local.complete();
@@ -1217,9 +1320,17 @@ class TimetableController extends ChangeNotifier {
 
   /// 从磁盘重载全部本地数据（快照、手动课程、调课 / 编辑 / 日程记录、同步状态）。
   /// [_start] 与 [refreshLocal] 共用；不读门户绑定状态，也不发网络请求。
-  Future<void> _reloadFromDisk() async {
+  Future<void> _reloadFromDisk({bool includeChangeLog = false}) async {
+    final bundle = await TimetableStore.readScopeBundle(
+      initialScheduleId: activeStorageId,
+      resolvePrimaryFromIndex: _isPrimaryHost,
+      readSchedulesIndex: _isPrimaryHost,
+      includeChangeLog: includeChangeLog,
+    );
     if (_isPrimaryHost) {
-      final storedIndex = await TimetableStore.readSchedulesIndex();
+      final storedIndex = TimetableStore.parseSchedulesIndex(
+        bundle.schedulesIndex,
+      );
       if (storedIndex != null) {
         final sorted = _sortedSchedules(storedIndex.schedules);
         _schedulesIndex = storedIndex.copyWith(
@@ -1241,62 +1352,76 @@ class TimetableController extends ChangeNotifier {
         }
       }
     }
-    await _inScope(() async {
-      _manualCourses = await TimetableStore.readManualCourses();
-      _overrides = await TimetableStore.readOverrides();
-      _scheduleEvents = List.unmodifiable(await ScheduleStore.readEvents());
-      _otherColors = Map.unmodifiable(await ScheduleStore.readOtherColors());
-      _courseEdits = Map.unmodifiable(await ScheduleStore.readCourseEdits());
-      _dateEdits = List.unmodifiable(await ScheduleStore.readCourseDateEdits());
-      _daySwaps = List.unmodifiable(await ScheduleStore.readDaySwaps());
-      _examOverrides = Map.unmodifiable(
-        await ScheduleStore.readExamOverrides(),
-      );
-      _lastSyncSuccessAt = await ScheduleStore.readLastSyncSuccess();
-      _lastAutomaticAttemptAt = await ScheduleStore.readLastAutomaticAttempt();
-      _portalSessionExpired = await ScheduleStore.readPortalSessionExpired();
-      final cached = await TimetableStore.readSnapshot();
-      final storedSettings = await TimetableStore.readSettings();
-      if (cached != null) {
-        if (activeStorageId == kDefaultScheduleId) {
-          _snapshot = cached.copyWith(
-            settings: cached.settings.termCode.isEmpty
-                ? storedSettings
-                : cached.settings
-                      .withDisplayPrefsFrom(storedSettings)
-                      .copyWith(
-                        scheduleName: storedSettings.scheduleName != '我的课表'
-                            ? storedSettings.scheduleName
-                            : cached.settings.scheduleName,
-                      ),
-          );
-        } else {
-          _snapshot = cached.copyWith(
-            settings: cached.settings.withDisplayPrefsFrom(storedSettings),
-          );
-        }
-      } else {
-        _snapshot = TimetableSnapshot(
-          settings: activeStorageId == kDefaultScheduleId
+    _manualCourses = TimetableStore.parseManualCourses(bundle.manualCourses);
+    _overrides = TimetableStore.parseOverrides(bundle.overrides);
+    _scheduleEvents = List.unmodifiable(
+      ScheduleStore.parseEvents(bundle.scheduleEvents),
+    );
+    _otherColors = Map.unmodifiable(
+      ScheduleStore.parseOtherColors(bundle.scheduleEvents),
+    );
+    _courseEdits = Map.unmodifiable(
+      ScheduleStore.parseCourseEdits(bundle.courseEdits),
+    );
+    _dateEdits = List.unmodifiable(
+      ScheduleStore.parseCourseDateEdits(bundle.courseEdits),
+    );
+    _daySwaps = List.unmodifiable(ScheduleStore.parseDaySwaps(bundle.daySwaps));
+    _examOverrides = Map.unmodifiable(
+      ScheduleStore.parseExamOverrides(bundle.examOverrides),
+    );
+    _lastSyncSuccessAt = ScheduleStore.parseLastSyncSuccess(bundle.syncState);
+    _lastAutomaticAttemptAt = ScheduleStore.parseLastAutomaticAttempt(
+      bundle.syncState,
+    );
+    _portalSessionExpired = ScheduleStore.parsePortalSessionExpired(
+      bundle.syncState,
+    );
+    _preloadedCourseColorsRaw = bundle.courseColors;
+    _preloadedSyncChangesRaw = includeChangeLog ? bundle.syncChanges : null;
+
+    final cached = TimetableStore.parseSnapshot(bundle.snapshot);
+    final storedSettings = TimetableStore.parseSettings(bundle.settings);
+    if (cached != null) {
+      if (activeStorageId == kDefaultScheduleId) {
+        _snapshot = cached.copyWith(
+          settings: cached.settings.termCode.isEmpty
               ? storedSettings
-              : const TimetableSettings().withDisplayPrefsFrom(storedSettings),
+              : cached.settings
+                    .withDisplayPrefsFrom(storedSettings)
+                    .copyWith(
+                      scheduleName: storedSettings.scheduleName != '我的课表'
+                          ? storedSettings.scheduleName
+                          : cached.settings.scheduleName,
+                    ),
+        );
+      } else {
+        _snapshot = cached.copyWith(
+          settings: cached.settings.withDisplayPrefsFrom(storedSettings),
         );
       }
-      final isImported =
-          scheduleMetaOf(activeStorageId)?.isImportedSchedule == true;
-      _snapshot = _snapshot.copyWith(
-        settings: _withResolvedTermStart(
-          !isImported &&
-                  activeStorageId == kDefaultScheduleId &&
-                  _snapshot.settings.termCode.isEmpty
-              ? _snapshot.settings.copyWith(termCode: '2026-2027-1')
-              : _snapshot.settings,
-        ),
+    } else {
+      _snapshot = TimetableSnapshot(
+        settings: activeStorageId == kDefaultScheduleId
+            ? storedSettings
+            : const TimetableSettings().withDisplayPrefsFrom(storedSettings),
       );
-      if (_snapshot.periods.isEmpty) {
-        _snapshot = _snapshot.copyWith(periods: defaultPeriods());
-      }
-    });
+    }
+    final isImported =
+        scheduleMetaOf(activeStorageId)?.isImportedSchedule == true;
+    _snapshot = _snapshot.copyWith(
+      settings: _withResolvedTermStart(
+        !isImported &&
+                activeStorageId == kDefaultScheduleId &&
+                _snapshot.settings.termCode.isEmpty
+            ? _snapshot.settings.copyWith(termCode: '2026-2027-1')
+            : _snapshot.settings,
+      ),
+    );
+    if (_snapshot.periods.isEmpty) {
+      _snapshot = _snapshot.copyWith(periods: defaultPeriods());
+    }
+    _scheduleVersion++;
     if (_isPrimaryHost) {
       for (final scoped in _scopedControllers.values.toList()) {
         if (scoped._started) {
@@ -1314,17 +1439,24 @@ class TimetableController extends ChangeNotifier {
   /// 类型不对 → 重建一次（[_buildFallbackColorMap]）并落盘。
   Future<void> _loadColorMap() async {
     final scheme = coursePaletteSchemeOf(settings.paletteScheme);
+    final preloaded = _preloadedCourseColorsRaw;
+    _preloadedCourseColorsRaw = null;
     StoredCourseColors? stored;
     await _inScope(() async {
-      try {
-        _userColors = await TimetableStore.readUserCourseColors();
-      } catch (_) {
-        _userColors = const {};
-      }
-      try {
-        stored = await TimetableStore.readCourseColors();
-      } catch (_) {
-        stored = null;
+      if (preloaded != null) {
+        _userColors = TimetableStore.parseUserCourseColors(preloaded);
+        stored = TimetableStore.parseCourseColors(preloaded);
+      } else {
+        try {
+          _userColors = await TimetableStore.readUserCourseColors();
+        } catch (_) {
+          _userColors = const {};
+        }
+        try {
+          stored = await TimetableStore.readCourseColors();
+        } catch (_) {
+          stored = null;
+        }
       }
       _colorMapJwxt = _snapshot.courses;
       _colorMapScheme = scheme;
@@ -1360,6 +1492,38 @@ class TimetableController extends ChangeNotifier {
   /// 「回到本周」（同 [goToCurrentWeek]；已在本周时不通知）。
   void jumpToCurrentWeek() => goToCurrentWeek();
 
+  /// 纯显示/外观偏好键：只写 settings.json，不重写 snapshot.json，不触发 ScheduleChangeReason.settings。
+  static const _pureAppearanceSettingKeys = <String>{
+    'periodHeight',
+    'cellRadius',
+    'showSaturday',
+    'showSunday',
+    'showNonCurrentWeek',
+    'showGridLines',
+    'weekStartsOnMonday',
+    'showLocation',
+    'showTeacher',
+    'fontScale',
+    'cellOpacity',
+    'showTomorrowOnHome',
+    'cellTextColor',
+    'homeMaxItems',
+    'headerTextSize',
+    'showPeriodTimes',
+  };
+
+  /// 影响桌面小组件的显示偏好键：只写 settings.json（不重写 snapshot.json），仍需通知小组件同步。
+  static const _widgetAffectingDisplayKeys = <String>{
+    'examColor',
+    'showExams',
+    'widgetShowTeacher',
+    'widgetShowLocation',
+    'widgetShowCountdown',
+    'widgetShowCount',
+    'widgetShowPeriod',
+    'widgetCourseCount',
+  };
+
   /// 保存本次真正改动的设置；失败时恢复最后成功保存的状态。
   /// 等待保存期间保留待选值，连续调整不会互相覆盖或漏掉恢复原值的操作。
   Future<void> updateSettings(TimetableSettings next) {
@@ -1384,6 +1548,15 @@ class TimetableController extends ChangeNotifier {
           if (_settingsWriteKeyRevisions[key] == revision) key,
       };
       if (activeKeys.isEmpty) return;
+      final isPureAppearance = activeKeys.every(
+        _pureAppearanceSettingKeys.contains,
+      );
+      final shouldWriteSnapshot = !activeKeys.every(
+        (k) =>
+            _pureAppearanceSettingKeys.contains(k) ||
+            _widgetAffectingDisplayKeys.contains(k),
+      );
+      final shouldFireScheduleChanged = !isPureAppearance;
       try {
         final previous = _snapshot.settings;
         final raw = previous.toJson();
@@ -1430,7 +1603,9 @@ class TimetableController extends ChangeNotifier {
                 previous.withDisplayPrefsFrom(applied),
               );
             }
-            await TimetableStore.saveSnapshot(snapshot);
+            if (shouldWriteSnapshot) {
+              await TimetableStore.saveSnapshot(snapshot);
+            }
           }),
         );
         _snapshot = snapshot;
@@ -1440,16 +1615,24 @@ class TimetableController extends ChangeNotifier {
           _colorMapJwxt = snapshot.courses;
           _colorMapScheme = scheme;
         }
-        _syncDisplayPrefsAcrossControllers(applied);
+        _syncDisplayPrefsAcrossControllers(
+          applied,
+          fireScheduleChanged: shouldFireScheduleChanged,
+        );
       } finally {
         if (revision == _settingsWriteRevision) _pendingSettings = null;
         notifyListeners();
       }
-      _fireScheduleChanged(ScheduleChangeReason.settings);
+      if (shouldFireScheduleChanged) {
+        _fireScheduleChanged(ScheduleChangeReason.settings);
+      }
     });
   }
 
-  void _syncDisplayPrefsAcrossControllers(TimetableSettings applied) {
+  void _syncDisplayPrefsAcrossControllers(
+    TimetableSettings applied, {
+    bool fireScheduleChanged = true,
+  }) {
     final host = _manager ?? this;
     if (!identical(host, this)) {
       host._snapshot = host._snapshot.copyWith(
@@ -1459,7 +1642,9 @@ class TimetableController extends ChangeNotifier {
         host._colorMap = null;
       }
       host.notifyListeners();
-      host._fireScheduleChanged(ScheduleChangeReason.settings);
+      if (fireScheduleChanged) {
+        host._fireScheduleChanged(ScheduleChangeReason.settings);
+      }
     }
     for (final scoped in host._scopedControllers.values) {
       if (identical(scoped, this)) continue;
@@ -2060,6 +2245,8 @@ class TimetableController extends ChangeNotifier {
     _initialized = true;
     _viewingWeek = viewingWeek ?? _defaultViewingWeek;
     _lastSeenCurrentWeek = currentWeek;
+    _lastSeenDate = _today;
+    _scheduleVersion++;
     notifyListeners();
   }
 
@@ -2070,6 +2257,10 @@ class TimetableController extends ChangeNotifier {
     _pendingChangeAlerts.clear();
     _changeAlertRevision++;
     _lastSeenCurrentWeek = null;
+    _lastSeenDate = null;
+    _scheduleVersion++;
+    _preloadedCourseColorsRaw = null;
+    _preloadedSyncChangesRaw = null;
     _started = false;
     _starting = null;
     _localReady = null;
@@ -4720,13 +4911,25 @@ class TimetableController extends ChangeNotifier {
     return change;
   }
 
-  /// App 回到前台：始终先 [refreshLocal]（返回值供 UI toast「刷新失败」）；
-  /// 若距上次**成功**远程同步已超过 [resumeRemoteSyncInterval]（含从未成功），
-  /// 再静默发起一次后台远程同步（[unawaited]，不阻塞本 Future / 首页展示）。
-  /// 切回首页 tab、首页下拉仍只走 [refreshLocal]，不经过这里的远程分支。
+  /// App 回到前台：仅检查初始化、跨天/跨周（[followCurrentWeekIfChanged]）
+  /// 与 6 小时远端同步冷却，不再无条件全量重读本地磁盘。
+  /// 切回首页 tab、首页下拉仍走显式 [refreshLocal]。
   Future<bool> onAppResumed() async {
-    final ok = await refreshLocal();
-    followCurrentWeekIfChanged();
+    try {
+      await ensureStarted();
+    } catch (_) {
+      return false;
+    }
+    final today = _today;
+    final dateChanged = _lastSeenDate != null && _lastSeenDate != today;
+    _lastSeenDate = today;
+    final weekChanged = followCurrentWeekIfChanged();
+    if (dateChanged && !weekChanged) {
+      notifyListeners();
+    }
+    if (dateChanged || weekChanged) {
+      unawaited(updateNextDayReminder());
+    }
     if (_elapsedSinceSuccess(resumeRemoteSyncInterval)) {
       // 与冷启动一样走 _trigger（90 分钟节流不再套用；此处用 6h due）。
       // 不 await：本地刷新结果立刻返回，远程在后台跑。
@@ -4737,7 +4940,7 @@ class TimetableController extends ChangeNotifier {
         ).catchError((Object _) => false),
       );
     }
-    return ok;
+    return true;
   }
 
   /// 网络恢复（由 App 层的连接监听调用）：只有上一次自动同步因断网失败时，

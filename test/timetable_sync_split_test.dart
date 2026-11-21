@@ -87,7 +87,7 @@ void main() {
     expect(c.lastSyncDiff, isNull, reason: '本地刷新不套用远程同步 diff');
   });
 
-  test('onAppResumed 未满 6 小时只本地刷新，磁盘改动可读回', () async {
+  test('onAppResumed 未满 6 小时不拉教务也不重复读盘，显式 refreshLocal 可读回磁盘改动', () async {
     TimetableController.fetchSnapshot = (term, {baseSettings}) async {
       fetches++;
       return _snapshot([_course('j1')]);
@@ -103,7 +103,12 @@ void main() {
 
     expect(await c.onAppResumed(), isTrue);
     expect(fetches, 1, reason: '距上次成功不足 6 小时，回前台不拉教务');
-    expect(c.jwxtCourses.map((e) => e.id), ['j2'], reason: '重新读盘');
+    expect(c.jwxtCourses.map((e) => e.id), ['j1'], reason: '回前台不无条件重读整套磁盘');
+
+    expect(await c.refreshLocal(), isTrue);
+    expect(c.jwxtCourses.map((e) => e.id), [
+      'j2',
+    ], reason: '显式 refreshLocal 可重读磁盘');
   });
 
   test('refreshLocal 成功返回 true，钩子抛错返回 false', () async {

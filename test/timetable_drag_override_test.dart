@@ -615,7 +615,7 @@ void main() {
     await c.restoreOverride(jwxtEff('K1|01'), 1);
     await c.addManualCourse(_manual('', '新课'));
     await c.deleteManualCourse('m1');
-    await c.updateSettings(c.settings.copyWith(showTeacher: true));
+    await c.updateSettings(c.settings.copyWith(reminderLeadMinutes: 10));
     TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
         TimetableSnapshot(courses: [_jwxt('K1|01', '高数')], settings: settings);
     await c.syncFromJwxt();

@@ -44,6 +44,13 @@ class TimetableNotifyService {
   Future<void>? _started;
   Timer? _debounce;
   bool _lastSyncFailed = false;
+  Object? _lastRescheduleFingerprint;
+  int _rescheduleGeneration = 0;
+
+  void _invalidateRescheduleCache() {
+    _lastRescheduleFingerprint = null;
+    _rescheduleGeneration++;
+  }
 
   /// 幂等启动：订阅课表变化并做一次重排。
   Future<void> ensureStarted() => _started ??= _start();
@@ -69,6 +76,7 @@ class TimetableNotifyService {
     _debounce?.cancel();
     await _changeSub?.cancel();
     await _syncSub?.cancel();
+    _invalidateRescheduleCache();
     _started = null;
   }
 
@@ -160,15 +168,23 @@ class TimetableNotifyService {
   Future<NotifyPermissionStatus> permissionStatus() =>
       _bridge.permissionStatus();
 
-  Future<bool> requestNotificationPermission() =>
-      _bridge.requestNotificationPermission();
+  Future<bool> requestNotificationPermission() {
+    _invalidateRescheduleCache();
+    return _bridge.requestNotificationPermission();
+  }
 
-  Future<bool> openExactAlarmSettings() => _bridge.openExactAlarmSettings();
+  Future<bool> openExactAlarmSettings() {
+    _invalidateRescheduleCache();
+    return _bridge.openExactAlarmSettings();
+  }
 
   Future<bool> openBatteryOptimizationSettings() =>
       _bridge.openBatteryOptimizationSettings();
 
-  Future<bool> openNotificationSettings() => _bridge.openNotificationSettings();
+  Future<bool> openNotificationSettings() {
+    _invalidateRescheduleCache();
+    return _bridge.openNotificationSettings();
+  }
 
   Future<WidgetPinResult> pinWidget({required bool square}) =>
       _bridge.pinWidget(square: square);
@@ -333,12 +349,50 @@ class TimetableNotifyService {
     );
   }
 
+  Object _rescheduleFingerprint() {
+    final now = _clock();
+    final synced = _ctl.syncedAt;
+    final staleCache =
+        synced != null && now.difference(synced) > const Duration(days: 7);
+    final s = _ctl.settings;
+    return (
+      DateTime(now.year, now.month, now.day),
+      now.timeZoneOffset,
+      staleCache,
+      _ctl.scheduleVersion,
+      s.reminderEnabled,
+      s.reminderLeadMinutes,
+      s.showExams,
+      s.examColor,
+      s.paletteScheme,
+      s.termStartDate,
+      s.maxWeeks,
+      s.widgetShowTeacher,
+      s.widgetShowLocation,
+      s.widgetShowCountdown,
+      s.widgetShowCount,
+      s.widgetShowPeriod,
+      s.widgetCourseCount,
+      _ctl.portalBound,
+      synced,
+      _lastSyncFailed,
+    );
+  }
+
   /// 重排提醒并刷新小组件。数据或设置变化后会自动调用；UI 一般无需手动调。
-  Future<void> reschedule() async {
+  /// 输入未变化且上次成功时跳过重复 MethodChannel 与小组件广播；传 [force] 可强制重排。
+  Future<void> reschedule({bool force = false}) async {
+    final fingerprint = _rescheduleFingerprint();
+    if (!force && fingerprint == _lastRescheduleFingerprint) {
+      return;
+    }
+    final generation = ++_rescheduleGeneration;
+    var remindersOk = true;
     try {
       final plan = currentPlan();
       await _bridge.scheduleReminders([for (final a in plan) a.toJson()]);
     } catch (error, stackTrace) {
+      remindersOk = false;
       AppLog.logger('timetable.notify').warning(
         'reminders.schedule_failed',
         fields: {'stage': 'reminder.schedule', 'outcome': 'degraded'},
@@ -346,13 +400,24 @@ class TimetableNotifyService {
         stackTrace: stackTrace,
       );
     }
-    await refreshWidget();
+    final widgetOk = await _refreshWidgetInternal();
+    if (remindersOk &&
+        widgetOk &&
+        generation == _rescheduleGeneration &&
+        _rescheduleFingerprint() == fingerprint) {
+      _lastRescheduleFingerprint = fingerprint;
+    }
   }
 
   /// 只刷新小组件（写入最新 payload）。
   Future<void> refreshWidget() async {
+    await _refreshWidgetInternal();
+  }
+
+  Future<bool> _refreshWidgetInternal() async {
     try {
       await _bridge.updateWidget(currentWidgetPayload());
+      return true;
     } catch (error, stackTrace) {
       AppLog.logger('timetable.notify').warning(
         'widget.refresh_failed',
@@ -360,6 +425,7 @@ class TimetableNotifyService {
         error: error,
         stackTrace: stackTrace,
       );
+      return false;
     }
   }
 }

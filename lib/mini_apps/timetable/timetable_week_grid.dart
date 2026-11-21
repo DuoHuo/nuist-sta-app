@@ -97,6 +97,7 @@ class WeekGrid extends StatefulWidget {
     this.onFocusedEventRevealed,
     this.enableDrag = true,
     this.previewMode = false,
+    this.settingsOverride,
   });
 
   final int week;
@@ -120,6 +121,9 @@ class WeekGrid extends StatefulWidget {
 
   /// 外观页缩略预览：禁点击/长按/拖动，只随设置即时重绘。
   final bool previewMode;
+
+  /// 局部预览覆盖设置（滑杆拖动过程中避免落盘，只重绘预览）。
+  final TimetableSettings? settingsOverride;
 
   @override
   State<WeekGrid> createState() => _WeekGridState();
@@ -255,7 +259,7 @@ class _WeekGridState extends State<WeekGrid> {
 
   @override
   Widget build(BuildContext context) {
-    final settings = controller.settings;
+    final settings = widget.settingsOverride ?? controller.settings;
     final nodes = settings.nodesPerDay.clamp(1, TimetableTheme.maxNodesPerDay);
     final basePeriodH = settings.periodHeight.clamp(
       TimetableTheme.periodHeightMin,
@@ -636,6 +640,7 @@ class _WeekGridState extends State<WeekGrid> {
           take(
             CourseCell(
               controller: controller,
+              settingsOverride: widget.settingsOverride,
               cell: cell,
               width: width,
               fontReferenceWidth: _fontReferenceWidth,
@@ -783,6 +788,7 @@ class _WeekGridState extends State<WeekGrid> {
         maintainSize: true,
         child: CourseCell(
           controller: controller,
+          settingsOverride: widget.settingsOverride,
           cell: cell,
           width: width,
           fontReferenceWidth: _fontReferenceWidth,
