@@ -606,16 +606,24 @@ class CourseCell extends StatelessWidget {
   }) => Container(
     key: key,
     height: height,
-    alignment: height == null ? null : Alignment.center,
     padding: EdgeInsets.symmetric(horizontal: paddingH, vertical: 0),
     decoration: BoxDecoration(
       border: Border.all(color: fg.withValues(alpha: borderAlpha), width: 1),
       borderRadius: BorderRadius.circular(8),
     ),
-    child: Text(
-      text,
-      style: TextStyle(fontSize: fontSize, color: fg),
-    ),
+    child: height == null
+        ? Text(
+            text,
+            style: TextStyle(fontSize: fontSize, color: fg),
+          )
+        : Center(
+            widthFactor: 1,
+            heightFactor: 1,
+            child: Text(
+              text,
+              style: TextStyle(fontSize: fontSize, color: fg),
+            ),
+          ),
   );
 
   /// 胶囊在当前字体与系统缩放下的宽度（含横向内边距与 1dp 描边），

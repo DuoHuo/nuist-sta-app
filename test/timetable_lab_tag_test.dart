@@ -107,9 +107,10 @@ void main() {
     final radius = decoration.borderRadius! as BorderRadius;
     final text = tester.widget<Text>(find.text('实验'));
 
-    // 字号 10sp；高度 16dp；水平内边距 4dp；圆角 = 高度一半。
+    // 字号 10sp；高度 16dp；宽度随文字包裹（不撑满格宽）；水平内边距 4dp；圆角 = 高度一半。
     expect(text.style!.fontSize, 10);
     expect(tester.getSize(pill).height, 16);
+    expect(tester.getSize(pill).width, lessThan(48));
     expect((container.padding! as EdgeInsets).left, 4);
     expect((container.padding! as EdgeInsets).right, 4);
     expect(radius.topLeft.x, 8);
