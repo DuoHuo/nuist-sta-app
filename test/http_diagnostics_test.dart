@@ -9,6 +9,7 @@ import 'package:nuist_sta_app/core/config/campus_config.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/logging/diagnostic_error.dart';
 import 'package:nuist_sta_app/core/logging/diagnostic_redactor.dart';
+import 'package:nuist_sta_app/core/logging/diagnostic_worker.dart';
 import 'package:nuist_sta_app/core/logging/http_diagnostics.dart';
 import 'package:nuist_sta_app/core/network/vpn_native.dart';
 
@@ -16,11 +17,21 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final records = <Map<String, Object?>>[];
   setUp(() async {
+    diagnosticSpoolWriteForTesting = null;
+    diagnosticSpoolDirectoryForTesting = null;
+    diagnosticSpoolFailAfterBytesForTesting = null;
+    diagnosticBeforePersistForTesting = null;
     await AppLog.resetForTesting();
     records.clear();
     AppLog.recordListenerForTesting = records.add;
   });
-  tearDown(AppLog.resetForTesting);
+  tearDown(() async {
+    diagnosticSpoolWriteForTesting = null;
+    diagnosticSpoolDirectoryForTesting = null;
+    diagnosticSpoolFailAfterBytesForTesting = null;
+    diagnosticBeforePersistForTesting = null;
+    await AppLog.resetForTesting();
+  });
 
   Map<String, Object?> exchange() =>
       (records.singleWhere(
@@ -1124,6 +1135,318 @@ void main() {
         httpDiagnosticEvidence(response.requestOptions)!['record_ref']
             as Map<String, Object?>;
     final full = await AppLog.readRecord(reference);
+    final captured = (full!['attrs'] as Map)['details']['response'] as Map;
+    expect(captured['body'], 'A' * (64 * 1024));
+    expect(captured['complete'], isFalse);
+    expect(captured['incomplete_reason'], 'capture_spool_write_failed');
+  });
+
+  test('非流式大正文响应立即交付业务，不等待后台脱敏压缩与附件落盘', () async {
+    final directory = await Directory.systemTemp.createTemp('http-async-test-');
+    addTearDown(() async {
+      diagnosticBeforePersistForTesting = null;
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    final allowPersist = Completer<void>();
+    final persistStarted = Completer<void>();
+    diagnosticBeforePersistForTesting = () {
+      if (!persistStarted.isCompleted) persistStarted.complete();
+      return allowPersist.future;
+    };
+    final body = jsonEncode({
+      'token': 'synthetic-nonblocking-secret',
+      'padding': '非阻塞正文' * 20000,
+      'tail': '非阻塞末尾标记',
+    });
+    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+    dio.httpClientAdapter = _Adapter(
+      (_, _) async => ResponseBody.fromString(
+        body,
+        200,
+        headers: {
+          Headers.contentTypeHeader: ['application/json'],
+        },
+      ),
+    );
+    installHttpDiagnostics(dio);
+    addTearDown(() => dio.close(force: true));
+
+    final response = await dio.get<String>(
+      'https://service.example/nonblocking',
+    );
+    expect(response.data, body);
+    await persistStarted.future;
+    expect(allowPersist.isCompleted, isFalse);
+
+    final evidence = httpDiagnosticEvidence(response.requestOptions);
+    expect(evidence, isNotNull);
+    expect(
+      (evidence!['exchange'] as Map)['response']['body_attachment'],
+      isTrue,
+    );
+    final reference = evidence['record_ref'] as Map<String, Object?>;
+
+    allowPersist.complete();
+    final full = await AppLog.readRecord(reference);
+    expect(full, isNotNull);
+    expect(jsonEncode(full), contains('非阻塞末尾标记'));
+    expect(jsonEncode(full), isNot(contains('synthetic-nonblocking-secret')));
+  });
+
+  test('多次大正文请求复用单一常驻后台 Worker Isolate', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'http-worker-test-',
+    );
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+    dio.httpClientAdapter = _Adapter(
+      (options, _) async => ResponseBody.fromString(
+        '${'常驻复用正文' * 15000}-${options.uri.pathSegments.last}',
+        200,
+        headers: {
+          Headers.contentTypeHeader: ['text/plain'],
+        },
+      ),
+    );
+    installHttpDiagnostics(dio);
+    addTearDown(() => dio.close(force: true));
+
+    final refs = <Map<String, Object?>>[];
+    for (var i = 0; i < 3; i++) {
+      final response = await dio.get<String>('https://service.example/item$i');
+      refs.add(
+        httpDiagnosticEvidence(response.requestOptions)!['record_ref']
+            as Map<String, Object?>,
+      );
+    }
+    expect(DiagnosticWorker.spawnCountForTesting, 1);
+    for (var i = 0; i < 3; i++) {
+      final full = await AppLog.readRecord(refs[i]);
+      expect(jsonEncode(full), contains('item$i'));
+    }
+  });
+
+  test('大正文流式传输触发背压后中断仍完整保留已接收前缀并标记不完整', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'http-backpressure-test-',
+    );
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    final source = StreamController<Uint8List>();
+    final dio = Dio(BaseOptions(responseType: ResponseType.stream));
+    dio.httpClientAdapter = _Adapter(
+      (_, _) async => ResponseBody(
+        source.stream,
+        200,
+        headers: {
+          Headers.contentTypeHeader: ['text/plain'],
+        },
+      ),
+    );
+    installHttpDiagnostics(dio);
+    addTearDown(() => dio.close(force: true));
+
+    final response = await dio.get<ResponseBody>(
+      'https://service.example/backpressure',
+    );
+    final receivedBytes = <int>[];
+    final done = Completer<void>();
+    Object? streamError;
+    response.data!.stream.listen(
+      receivedBytes.addAll,
+      onError: (Object error) {
+        streamError = error;
+        if (!done.isCompleted) done.complete();
+      },
+      onDone: () {
+        if (!done.isCompleted) done.complete();
+      },
+    );
+
+    final prefix = utf8.encode('${'背压前缀' * 40000}prefix-tail');
+    source.add(Uint8List.fromList(prefix));
+    source.addError(const SocketException('synthetic backpressure reset'));
+    await done.future;
+    await source.close();
+
+    expect(streamError, isA<SocketException>());
+    expect(receivedBytes.length, prefix.length);
+    await waitForPendingHttpDiagnostics();
+    final evidence = httpDiagnosticEvidence(response.requestOptions);
+    expect(evidence, isNotNull);
+    final full = await AppLog.readRecord(
+      evidence!['record_ref'] as Map<String, Object?>,
+    );
+    final detail = (full!['attrs'] as Map)['details']['response'] as Map;
+    expect(detail['complete'], isFalse);
+    expect(detail['body'], contains('prefix-tail'));
+    expect(records.any((r) => r['event'] == 'capture.failed'), isFalse);
+  });
+
+  test('非落盘中等正文在后台脱敏或持久化挂起期间报错或查询证据不丢失正文', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'http-medium-race-',
+    );
+    addTearDown(() async {
+      diagnosticBeforePersistForTesting = null;
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    final reqBody = jsonEncode({
+      'password': 'synthetic-medium-req-secret',
+      'pad': '请求中等正文' * 2500,
+      'tail': '请求尾部标记',
+    });
+    final resBody = jsonEncode({
+      'token': 'synthetic-medium-res-secret',
+      'pad': '响应中等正文' * 2500,
+      'tail': '响应尾部标记',
+    });
+    expect(utf8.encode(reqBody).length, inExclusiveRange(16 * 1024, 64 * 1024));
+    expect(utf8.encode(resBody).length, inExclusiveRange(16 * 1024, 64 * 1024));
+
+    final allowFinish = Completer<void>();
+    diagnosticBeforePersistForTesting = () => allowFinish.future;
+
+    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+    dio.httpClientAdapter = _Adapter((_, stream) async {
+      await stream!.drain<void>();
+      return ResponseBody.fromString(
+        resBody,
+        200,
+        headers: {
+          Headers.contentTypeHeader: ['application/json'],
+        },
+      );
+    });
+    installHttpDiagnostics(dio);
+    addTearDown(() => dio.close(force: true));
+
+    Map<String, Object?>? liveEvidence;
+    await expectLater(
+      AppLog.logger('test.medium').operation<void>('medium.parse', () async {
+        final response = await dio.post<String>(
+          'https://service.example/medium',
+          data: reqBody,
+          options: Options(contentType: Headers.jsonContentType),
+        );
+        // 让 _finish 进入异步 _describeBodyInBackground / 挂起窗口后再同步读取证据。
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        liveEvidence = httpDiagnosticEvidence(response.requestOptions);
+        throw const DiagnosticException('中等正文解析失败', code: 'schema_changed');
+      }),
+      throwsA(isA<DiagnosticException>()),
+    );
+
+    final liveJson = jsonEncode(liveEvidence);
+    expect(liveJson, contains('请求尾部标记'));
+    expect(liveJson, contains('响应尾部标记'));
+    expect(liveJson, isNot(contains('synthetic-medium-req-secret')));
+    expect(liveJson, isNot(contains('synthetic-medium-res-secret')));
+
+    final failedJson = jsonEncode(evidenceOf(failedOperation('medium.parse')));
+    expect(failedJson, contains('请求尾部标记'));
+    expect(failedJson, contains('响应尾部标记'));
+    expect(failedJson, isNot(contains('synthetic-medium-req-secret')));
+    expect(failedJson, isNot(contains('synthetic-medium-res-secret')));
+
+    allowFinish.complete();
+    final ref = liveEvidence!['record_ref'] as Map<String, Object?>;
+    final full = await AppLog.readRecord(ref);
+    final persistedJson = jsonEncode(full);
+    expect(persistedJson, contains('请求尾部标记'));
+    expect(persistedJson, contains('响应尾部标记'));
+    expect(persistedJson, isNot(contains('synthetic-medium-req-secret')));
+    expect(persistedJson, isNot(contains('synthetic-medium-res-secret')));
+  });
+
+  test('流水线 spoolOpen 失败时不产生未捕获异步异常且保留错误标记', () async {
+    final directory = await Directory.systemTemp.createTemp('http-open-fail-');
+    final blockerDir = await Directory('${directory.path}/spool').create();
+    await Directory('${blockerDir.path}/body.bin').create();
+    addTearDown(() async {
+      diagnosticSpoolDirectoryForTesting = null;
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    diagnosticSpoolDirectoryForTesting = blockerDir;
+
+    final body = 'open失败正文' * 20000;
+    final unhandled = <Object>[];
+    Response<String>? response;
+    await runZonedGuarded(
+      () async {
+        final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+        dio.httpClientAdapter = _Adapter(
+          (_, _) async => ResponseBody.fromString(body, 200),
+        );
+        installHttpDiagnostics(dio);
+        addTearDown(() => dio.close(force: true));
+        response = await dio.get<String>('https://service.example/open-fail');
+        await waitForPendingHttpDiagnostics();
+      },
+      (error, stack) {
+        unhandled.add(error);
+      },
+    );
+
+    expect(unhandled, isEmpty);
+    expect(response!.data, body);
+    final ref =
+        httpDiagnosticEvidence(response!.requestOptions)!['record_ref']
+            as Map<String, Object?>;
+    final full = await AppLog.readRecord(ref);
+    final captured = (full!['attrs'] as Map)['details']['response'] as Map;
+    expect(captured['complete'], isFalse);
+    expect(captured['incomplete_reason'], 'capture_spool_write_failed');
+  });
+
+  test('流水线触发背压时 spoolWrite 真实失败无未捕获异常、不死锁且保留精确前缀', () async {
+    final directory = await Directory.systemTemp.createTemp('http-pipe-fail-');
+    addTearDown(() async {
+      diagnosticSpoolFailAfterBytesForTesting = null;
+      await AppLog.resetForTesting();
+      await directory.delete(recursive: true);
+    });
+    await AppLog.initialize(directory: directory);
+    diagnosticSpoolFailAfterBytesForTesting = 64 * 1024;
+
+    final body = '${'A' * (64 * 1024)}${'B' * (640 * 1024)}';
+    final unhandled = <Object>[];
+    Response<String>? response;
+    await runZonedGuarded(
+      () async {
+        final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+        dio.httpClientAdapter = _Adapter(
+          (_, _) async => ResponseBody.fromString(body, 200),
+        );
+        installHttpDiagnostics(dio);
+        addTearDown(() => dio.close(force: true));
+        response = await dio.get<String>('https://service.example/pipe-fail');
+        await waitForPendingHttpDiagnostics();
+      },
+      (error, stack) {
+        unhandled.add(error);
+      },
+    );
+
+    expect(unhandled, isEmpty);
+    expect(response!.data, body);
+    final ref =
+        httpDiagnosticEvidence(response!.requestOptions)!['record_ref']
+            as Map<String, Object?>;
+    final full = await AppLog.readRecord(ref);
     final captured = (full!['attrs'] as Map)['details']['response'] as Map;
     expect(captured['body'], 'A' * (64 * 1024));
     expect(captured['complete'], isFalse);

@@ -1215,6 +1215,95 @@ void main() {
     });
   }
 
+  test('RotatingLogStore 短窗口批量缓冲合并写入并在阈值或定时器到期后落盘', () async {
+    final temp = await Directory.systemTemp.createTemp('log_batch_test_');
+    addTearDown(() async {
+      if (await temp.exists()) await temp.delete(recursive: true);
+    });
+    final store = RotatingLogStore(
+      temp,
+      flushInterval: const Duration(milliseconds: 120),
+      flushThresholdBytes: 4 * 1024,
+    );
+    addTearDown(store.close);
+    await store.initialize();
+
+    await store.append('{"event":"batch_1"}');
+    await store.append('{"event":"batch_2"}');
+    expect(store.pendingBufferBytes, greaterThan(0));
+    expect(store.writeBatchCountForTesting, 0);
+
+    await Future<void>.delayed(const Duration(milliseconds: 220));
+    expect(store.pendingBufferBytes, 0);
+    expect(store.writeBatchCountForTesting, 1);
+    final logContent = await File('${temp.path}/app.log').readAsString();
+    expect(logContent, contains('batch_1'));
+    expect(logContent, contains('batch_2'));
+
+    await store.append('{"event":"threshold","pad":"${'x' * 4500}"}');
+    expect(store.pendingBufferBytes, 0);
+    expect(store.writeBatchCountForTesting, 2);
+  });
+
+  test('warning 与 error 级别日志触发立即刷盘，resetForTesting 清理定时器', () async {
+    final temp = await Directory.systemTemp.createTemp('log_urgent_flush_');
+    addTearDown(() async {
+      await AppLog.resetForTesting();
+      if (await temp.exists()) await temp.delete(recursive: true);
+    });
+    AppLog.flushIntervalForTesting = const Duration(seconds: 10);
+    await AppLog.initialize(directory: temp);
+    final logFile = File('${temp.path}/nuist_sta_app/logs/app.log');
+    // session.started 本身是 info 级，批量窗口内尚未刷盘；先观察其大小。
+    final beforeBytes = await logFile.exists() ? await logFile.length() : 0;
+
+    AppLog.logger('test.batch').info('buffered.info');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(await logFile.exists() ? await logFile.length() : 0, beforeBytes);
+
+    AppLog.logger('test.batch').warning('urgent.warning');
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    final afterWarning = await logFile.readAsString();
+    expect(afterWarning, contains('buffered.info'));
+    expect(afterWarning, contains('urgent.warning'));
+
+    AppLog.logger('test.batch').info('buffered.before.error');
+    final bytesAfterWarning = await logFile.length();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(await logFile.length(), bytesAfterWarning);
+
+    AppLog.logger('test.batch')
+        .error('urgent.error', error: StateError('boom'));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    final afterError = await logFile.readAsString();
+    expect(afterError, contains('buffered.before.error'));
+    expect(afterError, contains('urgent.error'));
+  });
+
+  test('RotatingLogStore 在活跃日志文件被外部删除后可自动重建句柄并保留新日志', () async {
+    final temp = await Directory.systemTemp.createTemp('log_recreate_test_');
+    addTearDown(() async {
+      if (await temp.exists()) await temp.delete(recursive: true);
+    });
+    final store = RotatingLogStore(
+      temp,
+      flushInterval: const Duration(milliseconds: 50),
+    );
+    addTearDown(store.close);
+    await store.initialize();
+
+    await store.append('{"event":"first"}', immediateFlush: true);
+    final logFile = File('${temp.path}/app.log');
+    expect(await logFile.exists(), isTrue);
+
+    await logFile.delete();
+    expect(await logFile.exists(), isFalse);
+
+    await store.append('{"event":"second"}', immediateFlush: true);
+    expect(await logFile.exists(), isTrue);
+    expect(await logFile.readAsString(), contains('second'));
+  });
+
   test('业务代码不能绕过统一日志入口', () async {
     final violations = <String>[];
     await for (final entity in Directory('lib').list(recursive: true)) {

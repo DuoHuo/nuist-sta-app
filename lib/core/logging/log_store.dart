@@ -1,264 +1,20 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
-import 'package:pointycastle/api.dart';
-import 'package:pointycastle/block/aes.dart';
-import 'package:pointycastle/stream/sic.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
-import 'diagnostic_redactor.dart';
+import 'diagnostic_worker.dart';
 
-/// 尚未进入日志附件的正文文件；临时采集只写密文，密钥仅存在于进程内。
-class DiagnosticBodyFile {
-  const DiagnosticBodyFile({
-    required this.path,
-    required this.length,
-    required this.complete,
-    this.contentType,
-    this.key,
-    this.iv,
-    this.deleteAfterRead = false,
-    this.incompleteReason,
-  });
-  final String path;
-  final int length;
-  final bool complete;
-  final String? contentType;
-  final Uint8List? key;
-  final Uint8List? iv;
-  final bool deleteAfterRead;
-  final String? incompleteReason;
-}
-
-Iterable<Uint8List> _bodyChunks(DiagnosticBodyFile body) sync* {
-  final file = File(body.path).openSync();
-  final cipher = body.key == null
-      ? null
-      : (SICStreamCipher(AESEngine())
-          ..init(false, ParametersWithIV(KeyParameter(body.key!), body.iv!)));
-  var remaining = body.length;
-  try {
-    while (remaining > 0) {
-      final bytes = file.readSync(
-        remaining < 64 * 1024 ? remaining : 64 * 1024,
-      );
-      if (bytes.isEmpty) throw const FormatException('诊断正文文件被截断');
-      remaining -= bytes.length;
-      if (cipher == null) {
-        yield bytes;
-      } else {
-        final plain = Uint8List(bytes.length);
-        cipher.processBytes(bytes, 0, bytes.length, plain, 0);
-        yield plain;
-      }
-    }
-  } finally {
-    file.closeSync();
-  }
-}
-
-class _AttachmentSink implements Sink<List<int>> {
-  _AttachmentSink(this.file);
-  final RandomAccessFile file;
-  @override
-  void add(List<int> bytes) => file.writeFromSync(bytes);
-  @override
-  void close() {}
-}
-
-class _CountingSink implements Sink<List<int>> {
-  _CountingSink(this.output);
-  final Sink<List<int>> output;
-  int length = 0;
-  @override
-  void add(List<int> bytes) {
-    length += bytes.length;
-    output.add(bytes);
-  }
-
-  @override
-  void close() => output.close();
-}
-
-class _BodyEncodingSink implements Sink<List<int>> {
-  _BodyEncodingSink(this.output);
-  final Sink<List<int>> output;
-  @override
-  void add(List<int> bytes) => output.add(bytes);
-  @override
-  void close() {}
-}
-
-String? _bodyTextEncoding(DiagnosticBodyFile body) {
-  var printable = 0;
-  var controls = 0;
-  var units = 0;
-  var validUtf8 = true;
-  final decoder = utf8.decoder.startChunkedConversion(
-    StringConversionSink.fromStringSink(
-      _TextCounter((text) {
-        units += text.length;
-        controls += text.codeUnits
-            .where((u) => u < 32 && u != 9 && u != 10 && u != 13 || u == 127)
-            .length;
-      }),
-    ),
-  );
-  for (final bytes in _bodyChunks(body)) {
-    printable += bytes
-        .where((b) => b >= 32 && b <= 126 || b == 9 || b == 10 || b == 13)
-        .length;
-    if (validUtf8) {
-      try {
-        decoder.add(bytes);
-      } on FormatException {
-        validUtf8 = false;
-      }
-    }
-  }
-  if (validUtf8) {
-    try {
-      decoder.close();
-    } on FormatException {
-      validUtf8 = false;
-    }
-  }
-  if (validUtf8 && (units == 0 || controls / units < .05)) return 'utf-8';
-  if (body.length == 0 || printable / body.length >= .85) return 'latin1';
-  return null;
-}
-
-class _TextCounter implements StringSink {
-  _TextCounter(this.consume);
-  final void Function(String) consume;
-  @override
-  void write(Object? object) => consume('$object');
-  @override
-  void writeAll(Iterable objects, [String separator = '']) =>
-      write(objects.join(separator));
-  @override
-  void writeCharCode(int charCode) => write(String.fromCharCode(charCode));
-  @override
-  void writeln([Object? object = '']) => write('$object\n');
-}
+export 'diagnostic_worker.dart' show DiagnosticBodyFile;
 
 Future<int> _writeBodyAttachment(
   String path,
   Map<String, Object?> record,
   Map<String, DiagnosticBodyFile> bodies,
-) => Isolate.run(() {
-  final output = File(path).openSync(mode: FileMode.write);
-  final compressed = gzip.encoder.startChunkedConversion(
-    _AttachmentSink(output),
-  );
-  final sink = _CountingSink(compressed);
-  final attrs = record['attrs'];
-  final details = attrs is Map ? attrs['details'] : null;
-  final request = details is Map ? details['request'] : null;
-  final url = request is Map ? request['url'] : null;
-  final requestPath = url is String
-      ? Uri.tryParse(url)?.path.toLowerCase()
-      : null;
-  final credentials = const {
-    '/authserver/startassertion',
-    '/authserver/finishassertion',
-    '/authserver/startregister',
-    '/authserver/finishregister',
-  }.contains(requestPath);
-  void write(String value) => sink.add(utf8.encode(value));
-  void json(Object? value, List<String> route) {
-    final part =
-        route.length == 3 && route[0] == 'attrs' && route[1] == 'details'
-        ? bodies[route[2]]
-        : null;
-    if (part != null && value is Map) {
-      final encoding = _bodyTextEncoding(part);
-      final metadata = Map<String, Object?>.from(value)
-        ..remove('body_attachment');
-      metadata['encoding'] = encoding ?? 'base64';
-      metadata['captured_bytes'] = part.length;
-      metadata['complete'] = part.complete;
-      final prefix = jsonEncode(metadata);
-      write(prefix.substring(0, prefix.length - 1));
-      write(',');
-      if (encoding != null) {
-        final buffer = StringBuffer();
-        final converter = (encoding == 'utf-8' ? utf8.decoder : latin1.decoder)
-            .startChunkedConversion(
-              StringConversionSink.fromStringSink(buffer),
-            );
-        for (final chunk in _bodyChunks(part)) {
-          converter.add(chunk);
-        }
-        converter.close();
-        final text = DiagnosticRedactor.text(
-          buffer.toString(),
-          credentialContext: credentials,
-        );
-        write('"body":${jsonEncode(text)}}');
-      } else {
-        write('"body_base64":"');
-        final encoder = base64.encoder
-            .fuse(ascii.encoder)
-            .startChunkedConversion(_BodyEncodingSink(sink));
-        for (final chunk in _bodyChunks(part)) {
-          encoder.add(chunk);
-        }
-        // 使用不关闭总输出的 sink，正文结束后还要写 JSON 的其余字段。
-        encoder.close();
-        write('"}');
-      }
-    } else if (value is Map) {
-      write('{');
-      var first = true;
-      for (final entry in value.entries) {
-        if (!first) write(',');
-        first = false;
-        write('${jsonEncode(entry.key.toString())}:');
-        json(entry.value, [...route, entry.key.toString()]);
-      }
-      write('}');
-    } else if (value is Iterable) {
-      write('[');
-      var first = true;
-      for (final item in value) {
-        if (!first) write(',');
-        first = false;
-        json(item, const []);
-      }
-      write(']');
-    } else {
-      write(jsonEncode(value));
-    }
-  }
-
-  try {
-    json(record, const []);
-    write('\n');
-    sink.close();
-    output.flushSync();
-    return sink.length;
-  } finally {
-    output.closeSync();
-    for (final body in bodies.values) {
-      if (body.deleteAfterRead) {
-        try {
-          File(body.path).deleteSync();
-        } catch (_) {}
-      }
-      body.key?.fillRange(0, body.key!.length, 0);
-    }
-  }
-});
-
-// 独立作用域避免闭包把存储队列及其 Future 一并带入 isolate。
-class _PreparedRecord {
-  const _PreparedRecord(this.record, this.bytes, this.compressed);
-  final Map<String, dynamic>? record;
-  final List<int> bytes;
-  final List<int>? compressed;
-}
+) => DiagnosticWorker.writeBodyAttachment(path, record, bodies);
 
 typedef _IndexLine = ({
   String line,
@@ -331,45 +87,23 @@ Future<_IndexRead> _readIndexInBackground(
   DateTime cutoff,
 ) => Isolate.run(() => _readIndex(bytes, sanitizer, modified, cutoff));
 
-_PreparedRecord _prepareRecord(
+PreparedLogRecord _prepareRecord(
   String? line,
   Map<String, Object?>? input,
   Set<String> evictedTraces,
   bool attachmentsEnabled,
-) {
-  Map<String, dynamic>? record;
-  if (input != null) {
-    record = Map<String, dynamic>.from(input);
-  } else {
-    try {
-      final decoded = jsonDecode(line!);
-      if (decoded is Map<String, dynamic>) record = decoded;
-    } catch (_) {
-      /* 兼容无结构化清洗器的普通行存储。 */
-    }
-  }
-  if (record != null &&
-      evictedTraces.contains(RotatingLogStore._traceGroup(record))) {
-    record = RotatingLogStore._markStorage(record, {
-      'history_missing': true,
-      'reason': 'operation_history_evicted',
-    });
-    line = null;
-  }
-  final encoded = utf8.encode('${line ?? jsonEncode(record)}\n');
-  final compressed = attachmentsEnabled && encoded.length > 64 * 1024
-      ? gzip.encode(encoded)
-      : null;
-  return _PreparedRecord(record, encoded, compressed);
-}
+) => prepareLogRecordSync(line, input, evictedTraces, attachmentsEnabled);
 
-Future<_PreparedRecord> _prepareRecordInBackground(
+Future<PreparedLogRecord> _prepareRecordInBackground(
   String? line,
   Map<String, Object?>? record,
   Set<String> evictedTraces,
   bool attachmentsEnabled,
-) => Isolate.run(
-  () => _prepareRecord(line, record, evictedTraces, attachmentsEnabled),
+) => DiagnosticWorker.prepareRecord(
+  line,
+  record,
+  evictedTraces,
+  attachmentsEnabled,
 );
 
 Future<({String line, bool recovered, DateTime? at})> _hydrateAttachment(
@@ -667,6 +401,8 @@ class RotatingLogStore {
     this.retention = const Duration(days: 7),
     this.maxAttachmentBytes = 64 * 1024 * 1024,
     this.sanitizeRecord,
+    this.flushInterval = const Duration(milliseconds: 250),
+    this.flushThresholdBytes = 12 * 1024,
   });
 
   final Directory directory;
@@ -675,6 +411,8 @@ class RotatingLogStore {
   final int maxFiles;
   final Duration retention;
   final int maxAttachmentBytes;
+  final Duration? flushInterval;
+  final int flushThresholdBytes;
 
   /// 读取旧日志时再次校验字段，避免旧版本的自由文本随诊断文件导出。
   final Map<String, Object?>? Function(Map<String, Object?>)? sanitizeRecord;
@@ -682,15 +420,29 @@ class RotatingLogStore {
   Future<void> _queue = Future.value();
   DateTime? _nextPruneAt;
   int? _activeBytes;
+  bool _directoryReady = false;
+  bool _attachmentsDirReady = false;
+  RandomAccessFile? _activeHandle;
+  final BytesBuilder _writeBuffer = BytesBuilder(copy: false);
+  Timer? _flushTimer;
   final Set<String> _unreadableFiles = {};
   final Set<String> _recoveredFiles = {};
   int? _attachmentBytes;
   bool _attachmentsNeedMaintenance = false;
   final Map<String, DateTime> _evictedTraces = {};
+  Set<String>? _evictedTracesCache;
   Directory get _attachments => Directory(_path('records'));
   File get _historyFile => File(_path('evicted_traces.json'));
   File get _rewriteCommitted => File(_path('.index-rewrite.committed'));
   File get _rewritePlan => File(_path('.index-rewrite.plan'));
+
+  /// 当前待刷盘缓冲字节数，仅供测试验证批量缓冲行为。
+  @visibleForTesting
+  int get pendingBufferBytes => _writeBuffer.length;
+
+  /// 实际执行批量写文件调用的次数，仅供测试验证写入合并。
+  @visibleForTesting
+  int writeBatchCountForTesting = 0;
 
   Future<T> _enqueue<T>(Future<T> Function() action) {
     final next = _queue.then((_) => action());
@@ -706,9 +458,111 @@ class RotatingLogStore {
 
   File get _verboseUntilFile => File(_path('verbose_until'));
 
+  Future<void> _ensureDirectory() async {
+    if (_directoryReady) return;
+    await directory.create(recursive: true);
+    _directoryReady = true;
+  }
+
+  Future<void> _ensureAttachmentsDirectory() async {
+    if (_attachmentsDirReady) return;
+    await _attachments.create(recursive: true);
+    _attachmentsDirReady = true;
+  }
+
+  Set<String> _evictedTraceSet() => _evictedTraces.isEmpty
+      ? const <String>{}
+      : (_evictedTracesCache ??= _evictedTraces.keys.toSet());
+
+  void _cancelFlushTimer() {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+  }
+
+  void _scheduleFlush() {
+    if (_flushTimer != null || _writeBuffer.isEmpty) return;
+    final delay = flushInterval;
+    if (delay == null || delay <= Duration.zero) return;
+    _flushTimer = Timer(delay, () {
+      _flushTimer = null;
+      unawaited(
+        _enqueue(() => _flushBufferNow())
+            .catchError((Object _, StackTrace _) {}),
+      );
+    });
+  }
+
+  Future<RandomAccessFile> _openActiveHandle() async {
+    final existing = _activeHandle;
+    if (existing != null) return existing;
+    await _ensureDirectory();
+    final opened = await _file(0).open(mode: FileMode.append);
+    _activeHandle = opened;
+    return opened;
+  }
+
+  Future<void> _closeActiveHandle() async {
+    final handle = _activeHandle;
+    _activeHandle = null;
+    if (handle != null) {
+      try {
+        await handle.close();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _flushBufferNow({bool syncToDisk = false}) async {
+    _cancelFlushTimer();
+    if (_writeBuffer.isEmpty) {
+      if (syncToDisk && _activeHandle != null) {
+        if (!await _file(0).exists()) {
+          _activeBytes = null;
+          _directoryReady = false;
+          await _closeActiveHandle();
+          return;
+        }
+        try {
+          await _activeHandle!.flush();
+        } catch (_) {
+          _activeBytes = null;
+          _directoryReady = false;
+          await _closeActiveHandle();
+        }
+      }
+      return;
+    }
+    final bytes = _writeBuffer.takeBytes();
+    // 外部清理临时目录时旧句柄可能仍指向已删除的 inode，先校验存在性再写入。
+    if (_activeHandle != null && !await _file(0).exists()) {
+      await _closeActiveHandle();
+      _activeBytes = null;
+      _directoryReady = false;
+    }
+    final reusedHandle = _activeHandle != null;
+    try {
+      final handle = await _openActiveHandle();
+      await handle.writeFrom(bytes);
+      writeBatchCountForTesting++;
+      if (syncToDisk) await handle.flush();
+    } catch (_) {
+      _activeBytes = null;
+      _directoryReady = false;
+      await _closeActiveHandle();
+      if (reusedHandle) {
+        final fresh = await _openActiveHandle();
+        await fresh.writeFrom(bytes);
+        writeBatchCountForTesting++;
+        if (syncToDisk) await fresh.flush();
+        _activeBytes = await _file(0).length();
+        return;
+      }
+      rethrow;
+    }
+  }
+
   /// 创建目录并清理过期轮转文件。
   Future<void> initialize() => _enqueue(() async {
-    await directory.create(recursive: true);
+    await _ensureDirectory();
     await _recoverRewrites();
     await _readHistory();
     await _pruneExpired();
@@ -716,19 +570,22 @@ class RotatingLogStore {
   });
 
   /// 追加一行日志。调用方无需等待；内部会保证写入顺序。
-  Future<void> append(String line) => _enqueue(() => _appendNow(line));
+  Future<void> append(String line, {bool immediateFlush = false}) =>
+      _enqueue(() => _appendNow(line, immediateFlush: immediateFlush));
 
   /// 将已脱敏记录按调用顺序入队，大正文的编码和压缩交由后台执行。
   Future<void> appendRecord(
     Map<String, Object?> record, {
     bool background = false,
     Map<String, DiagnosticBodyFile>? bodyFiles,
+    bool immediateFlush = false,
   }) => _enqueue(
     () => _appendNow(
       null,
       record: record,
       background: background,
       bodyFiles: bodyFiles,
+      immediateFlush: immediateFlush,
     ),
   );
 
@@ -737,14 +594,15 @@ class RotatingLogStore {
     Map<String, Object?>? record,
     bool background = false,
     Map<String, DiagnosticBodyFile>? bodyFiles,
+    bool immediateFlush = false,
   }) async {
-    await directory.create(recursive: true);
+    await _ensureDirectory();
     if (_nextPruneAt == null || DateTime.now().isAfter(_nextPruneAt!)) {
       await _pruneExpired();
       await _pruneExports();
     }
     final active = _file(0);
-    final evictedTraces = _evictedTraces.keys.toSet();
+    final evictedTraces = _evictedTraceSet();
     // 结构化记录复用原有 Map，不再编码后解析两次；UTF-8 与 gzip 也同次后台处理。
     final prepared =
         background ||
@@ -769,7 +627,7 @@ class RotatingLogStore {
         final name =
             '${record['session_id']}-${record['seq'].toRadixString(16)}-'
             '${DateTime.now().microsecondsSinceEpoch.toRadixString(16)}.json.gz';
-        await _attachments.create(recursive: true);
+        await _ensureAttachmentsDirectory();
         final attachment = File(
           '${_attachments.path}${Platform.pathSeparator}$name',
         );
@@ -825,9 +683,9 @@ class RotatingLogStore {
       if (encoded.length > maxFileBytes) {
         throw const FormatException('日志记录超过单文件容量限制');
       }
-      final currentLength = _activeBytes ??= await active.exists()
-          ? await active.length()
-          : 0;
+      final currentLength = _activeBytes ??=
+          (await active.exists() ? await active.length() : 0) +
+          _writeBuffer.length;
       if (currentLength > 0 && currentLength + encoded.length > maxFileBytes) {
         await _rotate();
         // 轮转可能刚淘汰仍在进行的操作；新记录必须标明之前的历史不再完整。
@@ -841,14 +699,29 @@ class RotatingLogStore {
         throw const FormatException('日志索引超过单文件容量限制');
       }
       attemptedIndexWrite = true;
-      await active.writeAsBytes(encoded, mode: FileMode.append, flush: false);
+      _writeBuffer.add(encoded);
       _activeBytes = (_activeBytes ?? 0) + encoded.length;
+      final shouldFlushNow =
+          immediateFlush ||
+          flushInterval == null ||
+          flushInterval! <= Duration.zero ||
+          _writeBuffer.length >= flushThresholdBytes ||
+          bodyFiles != null ||
+          _attachmentsNeedMaintenance;
+      if (shouldFlushNow) {
+        await _flushBufferNow();
+      } else {
+        _scheduleFlush();
+      }
       if (_attachmentsNeedMaintenance) {
         await _maintainAttachments();
       }
     } catch (_) {
       _activeBytes = null;
+      _directoryReady = false;
+      _attachmentsDirReady = false;
       _attachmentsNeedMaintenance = true;
+      await _closeActiveHandle();
       if (!attemptedIndexWrite && createdAttachment != null) {
         try {
           if (await createdAttachment.exists()) {
@@ -862,6 +735,8 @@ class RotatingLogStore {
   }
 
   Future<void> _rotate() async {
+    await _flushBufferNow();
+    await _closeActiveHandle();
     final indexes = await _loadIndexes();
     // 每写满一个索引文件就轮转一次；逐行解析约 2MiB 索引不能占住界面线程。
     final plan = await _rotationPlanAsync(indexes, maxFiles);
@@ -870,6 +745,7 @@ class RotatingLogStore {
     for (final group in groups) {
       _evictedTraces[group] = DateTime.now().toUtc();
     }
+    _evictedTracesCache = null;
     final replacements = <File, String?>{
       _file(0): null,
       _historyFile: _historyContent(),
@@ -881,6 +757,7 @@ class RotatingLogStore {
       _evictedTraces
         ..clear()
         ..addAll(previousHistory);
+      _evictedTracesCache = null;
       rethrow;
     }
     _activeBytes = 0;
@@ -954,6 +831,7 @@ class RotatingLogStore {
           _evictedTraces[entry.key as String] = at;
         }
       }
+      _evictedTracesCache = null;
     } catch (_) {
       _unreadableFiles.add(_historyFile.path);
     }
@@ -1066,6 +944,8 @@ class RotatingLogStore {
   }
 
   Future<void> _pruneExpired() async {
+    await _flushBufferNow();
+    await _closeActiveHandle();
     _unreadableFiles.clear();
     _activeBytes = null;
     Map<int, List<String>> indexes;
@@ -1098,6 +978,7 @@ class RotatingLogStore {
       _evictedTraces[group] = DateTime.now().toUtc();
     }
     if (expiredGroups.isNotEmpty) {
+      _evictedTracesCache = null;
       replacements[_historyFile] = _historyContent();
     }
     if (replacements.isNotEmpty) {
@@ -1107,6 +988,7 @@ class RotatingLogStore {
         _evictedTraces
           ..clear()
           ..addAll(previousHistory);
+        _evictedTracesCache = null;
         return;
       }
     }
@@ -1115,6 +997,8 @@ class RotatingLogStore {
   }
 
   Future<void> _maintainAttachments() async {
+    await _flushBufferNow();
+    await _closeActiveHandle();
     if (!await _attachments.exists()) {
       _attachmentBytes = 0;
       _attachmentsNeedMaintenance = false;
@@ -1246,6 +1130,7 @@ class RotatingLogStore {
       }
       if (changed) replacements[_file(entry.key)] = _joinLines(retained);
     }
+    _evictedTracesCache = null;
     if (replacements.isEmpty) {
       _attachmentBytes = bytes;
       return;
@@ -1257,6 +1142,7 @@ class RotatingLogStore {
       _evictedTraces
         ..clear()
         ..addAll(previousHistory);
+      _evictedTracesCache = null;
       _attachmentBytes = null;
       _attachmentsNeedMaintenance = true;
       return;
@@ -1372,12 +1258,19 @@ class RotatingLogStore {
     await _pruneExports();
   });
 
-  /// 等待此前的写入和维护全部结束。
-  Future<void> flush() => _enqueue(() async {});
+  /// 等待此前的写入、缓冲刷盘和维护全部结束。
+  Future<void> flush() => _enqueue(() => _flushBufferNow(syncToDisk: true));
+
+  /// 刷盘并关闭复用的底层文件句柄，供测试重置或退出前调用。
+  Future<void> close() => _enqueue(() async {
+    await _flushBufferNow(syncToDisk: true);
+    await _closeActiveHandle();
+  });
 
   /// 等待在途写入完成，按从旧到新的顺序生成快照。
   Future<LogSnapshot> snapshot({bool expandAttachments = true}) =>
       _enqueue(() async {
+        await _flushBufferNow();
         await _pruneExpired();
         return _snapshotNow(expandAttachments: expandAttachments);
       });
@@ -1385,6 +1278,7 @@ class RotatingLogStore {
   /// 精确恢复缓存引用的原始诊断，仅展开命中的附件。
   Future<Map<String, Object?>?> findRecord(String sessionId, int sequence) =>
       _enqueue(() async {
+        await _flushBufferNow();
         await _pruneExpired();
         for (var index = 0; index < maxFiles; index++) {
           final content = await _readContent(
@@ -1406,6 +1300,7 @@ class RotatingLogStore {
       });
 
   Future<LogSnapshot> _snapshotNow({bool expandAttachments = true}) async {
+    await _flushBufferNow();
     final contents = <String>[];
     for (var index = maxFiles - 1; index >= 0; index--) {
       final file = _file(index);
@@ -1437,6 +1332,7 @@ class RotatingLogStore {
 
   /// 只统计文件大小，不构造完整的导出字符串。
   Future<LogStoreStats> stats() => _enqueue(() async {
+    await _flushBufferNow();
     if (_nextPruneAt == null || DateTime.now().isAfter(_nextPruneAt!)) {
       await _pruneExpired();
       await _pruneExports();
@@ -1486,6 +1382,7 @@ class RotatingLogStore {
   ) => _enqueue(() async {
     final exports = exportDirectory;
     if (exports == null) throw StateError('未配置诊断日志导出目录');
+    await _flushBufferNow();
     await _pruneExpired();
     final snapshot = await _snapshotNow();
     await exports.create(recursive: true);
@@ -1537,6 +1434,11 @@ class RotatingLogStore {
 
   /// 清空全部日志文件，不改变详细日志开关。
   Future<void> clear() => _enqueue(() async {
+    _cancelFlushTimer();
+    _writeBuffer.clear();
+    await _closeActiveHandle();
+    _directoryReady = false;
+    _attachmentsDirReady = false;
     _activeBytes = null;
     _attachmentBytes = null;
     await _recoverRewrites();
@@ -1565,6 +1467,7 @@ class RotatingLogStore {
     }
     if (await _historyFile.exists()) await _historyFile.delete();
     _evictedTraces.clear();
+    _evictedTracesCache = null;
     _attachmentBytes = 0;
     _attachmentsNeedMaintenance = false;
     _nextPruneAt = null;
@@ -1585,7 +1488,7 @@ class RotatingLogStore {
         if (await _verboseUntilFile.exists()) await _verboseUntilFile.delete();
         return;
       }
-      await directory.create(recursive: true);
+      await _ensureDirectory();
       await _verboseUntilFile.writeAsString(value.toUtc().toIso8601String());
     } catch (_) {
       // 开关持久化失败只影响下次启动，不影响当前会话。

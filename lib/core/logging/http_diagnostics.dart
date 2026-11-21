@@ -1,81 +1,80 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
-import 'package:pointycastle/api.dart';
-import 'package:pointycastle/block/aes.dart';
-import 'package:pointycastle/stream/sic.dart';
 
 import '../config/campus_config.dart';
 import 'app_log.dart';
 import 'diagnostic_error.dart';
 import 'diagnostic_redactor.dart';
-import 'log_store.dart';
+import 'diagnostic_worker.dart';
 
-void _spoolWorker((SendPort, String, Uint8List, Uint8List) configuration) {
-  final (reply, path, key, iv) = configuration;
-  final commands = ReceivePort();
-  try {
-    final file = File(path).openSync(mode: FileMode.write);
-    final cipher = SICStreamCipher(AESEngine())
-      ..init(true, ParametersWithIV(KeyParameter(key), iv));
-    reply.send(commands.sendPort);
-    commands.listen((message) {
-      try {
-        if (message == null) {
-          file.closeSync();
-          key.fillRange(0, key.length, 0);
-          reply.send(null);
-          commands.close();
-        } else {
-          final bytes = (message as TransferableTypedData)
-              .materialize()
-              .asUint8List();
-          final encrypted = Uint8List(bytes.length);
-          cipher.processBytes(bytes, 0, bytes.length, encrypted, 0);
-          file.writeFromSync(encrypted);
-          reply.send(null);
-        }
-      } catch (error) {
-        reply.send(error.toString());
-      }
-    });
-  } catch (error) {
-    reply.send(error.toString());
-    commands.close();
-  }
-}
+int _nextSpoolId = 0;
 
 // 大正文旁路写入本机临时密文，避免完整字节与 base64 长期占住 UI 堆。
 class _BodyCapture {
   _BodyCapture({this.privateBufferLimit});
 
   static const inlineLimit = 64 * 1024;
+  static const _chunkBytes = 64 * 1024;
+  static const _highWaterBytes = 512 * 1024;
+  static const _lowWaterBytes = 256 * 1024;
+
   final int? privateBufferLimit;
   final _bytes = BytesBuilder(copy: false);
+  final int _spoolId = ++_nextSpoolId;
   File? _file;
-  Isolate? _worker;
-  SendPort? _commands;
-  StreamIterator<dynamic>? _responses;
+  bool _ownsTempDir = false;
   Uint8List? _key;
   Uint8List? _iv;
+  bool _spooled = false;
+  bool _spoolOpened = false;
+  bool _spoolClosed = false;
+  bool _openStarted = false;
+  Future<void>? _openFuture;
+  Future<void>? _testHookTail;
+  int _pendingOps = 0;
+  Completer<void>? _idleCompleter;
   int length = 0;
   int _written = 0;
+  int _inFlightBytes = 0;
+  Completer<void>? _backpressure;
   Object? error;
-  Future<void>? _adding;
 
-  Future<void> add(Uint8List bytes) {
-    return _adding = _add(bytes).whenComplete(() => _adding = null);
+  bool get isSpooled => _spooled;
+
+  Future<void> _waitForPendingOps() => _pendingOps == 0
+      ? Future<void>.value()
+      : (_idleCompleter ??= Completer<void>()).future;
+
+  void _finishOp() {
+    _pendingOps--;
+    if (_pendingOps == 0) {
+      final idle = _idleCompleter;
+      if (idle != null && !idle.isCompleted) {
+        _idleCompleter = null;
+        idle.complete();
+      }
+    }
   }
 
-  Future<void> _add(Uint8List bytes) async {
+  void _releaseBackpressureIfReady() {
+    if (error != null || _inFlightBytes <= _lowWaterBytes) {
+      final waiter = _backpressure;
+      if (waiter != null && !waiter.isCompleted) {
+        _backpressure = null;
+        waiter.complete();
+      }
+    }
+  }
+
+  Future<void>? enqueue(Uint8List bytes) {
     length += bytes.length;
-    if (error != null) return;
+    if (error != null) return null;
     // 需整段遮蔽的原文不进入后台附件；检索请求仅暂存在有上限的内存中。
     if (privateBufferLimit case final limit?) {
       if (length <= limit) {
@@ -83,67 +82,135 @@ class _BodyCapture {
       } else {
         _bytes.clear();
       }
-      return;
+      return null;
     }
-    if (_file == null && _bytes.length + bytes.length <= inlineLimit) {
+    if (!_spooled && _bytes.length + bytes.length <= inlineLimit) {
       _bytes.add(Uint8List.fromList(bytes));
-      return;
+      return null;
     }
-    try {
-      if (_file == null) {
-        final directory = await Directory.systemTemp.createTemp(
-          'nuist-http-body-',
-        );
-        _file = File('${directory.path}/body.bin');
-        final random = Random.secure();
-        _key = Uint8List.fromList(
-          List.generate(32, (_) => random.nextInt(256)),
-        );
-        _iv = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
-        final responses = ReceivePort();
-        _responses = StreamIterator(responses);
-        _worker = await Isolate.spawn(_spoolWorker, (
-          responses.sendPort,
-          _file!.path,
-          _key!,
-          _iv!,
-        ));
-        await _nextResponse();
-        final ready = _responses!.current;
-        if (ready is! SendPort) throw FileSystemException('$ready');
-        _commands = ready;
-        await _write(_bytes.takeBytes());
+    Uint8List? initial;
+    if (!_spooled) {
+      _spooled = true;
+      initial = _bytes.takeBytes();
+    }
+    if (initial != null && initial.isNotEmpty) {
+      _enqueueChunks(initial);
+    }
+    if (bytes.isNotEmpty) {
+      _enqueueChunks(bytes);
+    }
+    if (error == null && _inFlightBytes >= _highWaterBytes) {
+      return (_backpressure ??= Completer<void>()).future;
+    }
+    return null;
+  }
+
+  Future<void> _ensureOpen() {
+    if (_openStarted) return _openFuture!;
+    _openStarted = true;
+    final future = () async {
+      final overrideDir = diagnosticSpoolDirectoryForTesting;
+      late final Directory directory;
+      if (overrideDir != null) {
+        directory = overrideDir;
+        _ownsTempDir = false;
+      } else {
+        directory = await Directory.systemTemp.createTemp('nuist-http-body-');
+        _ownsTempDir = true;
       }
-      await _write(bytes);
+      final file = File('${directory.path}/body.bin');
+      _file = file;
+      final random = Random.secure();
+      final key = Uint8List.fromList(
+        List.generate(32, (_) => random.nextInt(256)),
+      );
+      final iv = Uint8List.fromList(
+        List.generate(16, (_) => random.nextInt(256)),
+      );
+      _key = key;
+      _iv = iv;
+      await DiagnosticWorker.spoolOpen(
+        _spoolId,
+        file.path,
+        key,
+        iv,
+        failAfterBytes: diagnosticSpoolFailAfterBytesForTesting,
+      );
+      _spoolOpened = true;
+    }();
+    // 防止多个并发或后续等待前就已失败时在根分支产生未捕获异步异常。
+    future.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return _openFuture = future;
+  }
+
+  Future<void> _writePipelinedSlice(
+    Future<void> openFuture,
+    Uint8List slice,
+  ) async {
+    try {
+      await openFuture;
+      if (error != null) return;
+      await DiagnosticWorker.spoolWrite(_spoolId, slice);
+      _written += slice.length;
     } catch (failure) {
-      error = failure;
+      error ??= failure;
+    } finally {
+      _inFlightBytes -= slice.length;
+      _releaseBackpressureIfReady();
+      _finishOp();
     }
   }
 
-  Future<void> _write(Uint8List bytes) async {
-    for (var offset = 0; offset < bytes.length; offset += 64 * 1024) {
-      final end = min(offset + 64 * 1024, bytes.length);
-      await diagnosticSpoolWriteForTesting?.call(_written);
-      _commands!.send(
-        TransferableTypedData.fromList([
-          Uint8List.sublistView(bytes, offset, end),
-        ]),
+  void _enqueueChunks(Uint8List bytes) {
+    final testHook = diagnosticSpoolWriteForTesting;
+    for (var offset = 0; offset < bytes.length; offset += _chunkBytes) {
+      final end = min(offset + _chunkBytes, bytes.length);
+      final slice = Uint8List.fromList(
+        Uint8List.sublistView(bytes, offset, end),
       );
-      await _nextResponse();
-      final failure = _responses!.current;
-      if (failure != null) throw FileSystemException('$failure');
-      _written += end - offset;
+      if (testHook != null) {
+        _pendingOps++;
+        final previous = _testHookTail ?? Future<void>.value();
+        late final Future<void> current;
+        current = previous.then((_) async {
+          try {
+            if (error != null) return;
+            await _ensureOpen();
+            await testHook(_written);
+            await DiagnosticWorker.spoolWrite(_spoolId, slice);
+            _written += slice.length;
+          } catch (failure) {
+            error ??= failure;
+          } finally {
+            if (identical(_testHookTail, current)) _testHookTail = null;
+            _finishOp();
+          }
+        });
+        _testHookTail = current;
+      } else {
+        _inFlightBytes += slice.length;
+        _pendingOps++;
+        final openFuture = _ensureOpen();
+        unawaited(_writePipelinedSlice(openFuture, slice));
+      }
     }
   }
 
   Future<DiagnosticBodyFile?> finish(String? contentType, bool complete) async {
-    await _adding;
-    try {
-      await _closeWorker();
-    } catch (failure) {
-      error ??= failure;
+    await _waitForPendingOps();
+    if (_spoolOpened && !_spoolClosed) {
+      _spoolClosed = true;
+      try {
+        await DiagnosticWorker.spoolClose(_spoolId);
+      } catch (failure) {
+        error ??= failure;
+      }
     }
+    _releaseBackpressureIfReady();
     if (_file == null) return null;
+    if (error != null && _written == 0 && !_spoolOpened) {
+      return null;
+    }
     return DiagnosticBodyFile(
       path: _file!.path,
       length: _written,
@@ -151,65 +218,76 @@ class _BodyCapture {
       contentType: contentType,
       key: _key,
       iv: _iv,
-      deleteAfterRead: true,
+      deleteAfterRead: _ownsTempDir,
       incompleteReason: error == null ? null : 'capture_spool_write_failed',
     );
   }
 
-  Uint8List takeBytes() => _bytes.takeBytes();
+  Uint8List peekBytes() => _bytes.toBytes();
+
   Future<void> dispose() async {
     try {
-      await _adding;
-      await _closeWorker();
+      await _waitForPendingOps();
+      if (_spoolOpened && !_spoolClosed) {
+        _spoolClosed = true;
+        await DiagnosticWorker.spoolAbort(_spoolId, _file?.path);
+      }
+    } catch (_) {
     } finally {
+      final waiter = _backpressure;
+      if (waiter != null && !waiter.isCompleted) {
+        _backpressure = null;
+        waiter.complete();
+      }
       final file = _file;
       if (file != null) {
         try {
-          if (await file.exists()) await file.delete();
-          await file.parent.delete();
+          if (await FileSystemEntity.isFile(file.path)) await file.delete();
+          if (_ownsTempDir) await file.parent.delete();
         } catch (_) {}
       }
       _key?.fillRange(0, _key!.length, 0);
       _bytes.clear();
     }
   }
-
-  Future<void> _closeWorker() async {
-    try {
-      if (_commands != null && error == null) {
-        _commands!.send(null);
-        await _nextResponse();
-      }
-    } finally {
-      _commands = null;
-      _worker?.kill();
-      _worker = null;
-      await _responses?.cancel();
-      _responses = null;
-    }
-  }
-
-  Future<void> _nextResponse() async {
-    if (!await _responses!.moveNext().timeout(const Duration(seconds: 3))) {
-      throw const FileSystemException('诊断正文后台处理已结束');
-    }
-  }
 }
 
 final _exchanges = Expando<_HttpExchange>();
 int _requestSequence = 0;
+Future<void>? _finishPipeline;
+bool _barrierRegistered = false;
+
+void _ensureBarrierRegistered() {
+  if (_barrierRegistered) return;
+  _barrierRegistered = true;
+  AppLog.registerPendingBarrier(waitForPendingHttpDiagnostics);
+}
+
+/// 等待后台串行诊断管线完成当前已入队的所有 HTTP 交流写入。
+Future<void> waitForPendingHttpDiagnostics() =>
+    _finishPipeline ?? Future<void>.value();
 
 /// 仅测试中模拟已收到正文、但诊断副本的后续写入失败。
 @visibleForTesting
 Future<void> Function(int written)? diagnosticSpoolWriteForTesting;
 
+/// 仅测试中覆盖加密暂存目录，用于模拟 spoolOpen 失败路径。
+@visibleForTesting
+Directory? diagnosticSpoolDirectoryForTesting;
+
+/// 仅测试中在后台 Worker 写入指定字节数后注入真实 spoolWrite 失败。
+@visibleForTesting
+int? diagnosticSpoolFailAfterBytesForTesting;
+
+/// 仅测试中模拟后台落盘前阻塞，验证业务响应交付不被阻塞。
+@visibleForTesting
+Future<void> Function()? diagnosticBeforePersistForTesting;
+
 Future<Map<String, Object?>> _describeBodyInBackground(
   Uint8List bytes,
   String? contentType,
   bool complete,
-) => Isolate.run(
-  () => _HttpExchange._describeBody(bytes, contentType, complete),
-);
+) => DiagnosticWorker.describeBody(bytes, contentType, complete);
 
 /// 校园和普通客户端共用的请求编号，只存在于本机诊断上下文。
 int httpDiagnosticRequestId(RequestOptions options) =>
@@ -221,9 +299,10 @@ AppLogSpan httpDiagnosticSpan(RequestOptions options) =>
 
 /// 获取已经读完或中断的真实交流快照；不二次读取流、不拼造缺失响应。
 Map<String, Object?>? httpDiagnosticEvidence(RequestOptions options) =>
-    _exchanges[options]?.evidence;
+    _exchanges[options]?.currentEvidence();
 
 _HttpExchange _exchangeFor(RequestOptions options) {
+  _ensureBarrierRegistered();
   var exchange = _exchanges[options];
   if (exchange == null || exchange.finished) {
     exchange = _HttpExchange(options);
@@ -237,6 +316,7 @@ _HttpExchange _exchangeFor(RequestOptions options) {
 /// 采集位置在 Dio 的 JSON 转换之前；只旁路复制消费者实际读取的字节，
 /// 不重放请求、不提前耗尽流，也不更改 TLS、Cookie 或业务错误策略。
 void installHttpDiagnostics(Dio dio) {
+  _ensureBarrierRegistered();
   if (dio.httpClientAdapter is! _DiagnosticHttpAdapter) {
     dio.httpClientAdapter = _DiagnosticHttpAdapter(dio.httpClientAdapter);
   }
@@ -259,7 +339,7 @@ class _DiagnosticInterceptor extends Interceptor {
   }
 
   @override
-  void onResponse(Response response, ResponseInterceptorHandler handler) async {
+  void onResponse(Response response, ResponseInterceptorHandler handler) {
     final exchange = _exchanges[response.requestOptions];
     if (exchange != null && !exchange.adapterReached) {
       exchange.status = response.statusCode;
@@ -268,7 +348,7 @@ class _DiagnosticInterceptor extends Interceptor {
       exchange.interceptedResponse = response.data;
     }
     if (response.requestOptions.responseType != ResponseType.stream) {
-      await exchange?.finish();
+      exchange?.enqueueFinish();
     }
     handler.next(response);
   }
@@ -277,7 +357,7 @@ class _DiagnosticInterceptor extends Interceptor {
   void onError(DioException error, ErrorInterceptorHandler handler) async {
     await (_exchanges[error.requestOptions] ??
             _exchangeFor(error.requestOptions))
-        .finish(error: error, stackTrace: error.stackTrace);
+        .enqueueFinish(error: error, stackTrace: error.stackTrace);
     handler.next(error);
   }
 }
@@ -321,7 +401,7 @@ class _DiagnosticHttpAdapter implements HttpClientAdapter {
         response.stream = exchange.observe(response.stream, request: false);
         return response;
       } catch (error, stackTrace) {
-        await exchange.finish(error: error, stackTrace: stackTrace);
+        await exchange.enqueueFinish(error: error, stackTrace: stackTrace);
         rethrow;
       }
     });
@@ -362,6 +442,7 @@ class _HttpExchange {
   bool requestComplete = false;
   bool responseComplete = false;
   bool finished = false;
+  int? _reservedSeq;
   Future<void>? _finishing;
   Map<String, Object?>? evidence;
   bool adapterReached = false;
@@ -373,33 +454,49 @@ class _HttpExchange {
     StreamSubscription<Uint8List>? subscription;
     var ended = false;
     var cancelled = false;
-    Future<void>? adding;
+    var downstreamPaused = false;
+    var backpressurePaused = false;
     Future<void>? terminalError;
+
+    void syncPause() {
+      if (subscription == null || cancelled) return;
+      if (downstreamPaused || backpressurePaused) {
+        if (!subscription!.isPaused) subscription!.pause();
+      } else {
+        if (subscription!.isPaused) subscription!.resume();
+      }
+    }
+
     controller = StreamController<Uint8List>(
       sync: true,
       onListen: () {
         subscription = source.listen(
           (bytes) {
-            adding = () async {
-              subscription?.pause();
+            if (!cancelled) controller.add(bytes);
+            if (!finished) {
               try {
-                if (!finished) {
-                  await (request ? requestBytes : responseBytes).add(bytes);
+                final backpressure = (request ? requestBytes : responseBytes)
+                    .enqueue(bytes);
+                if (backpressure != null && !backpressurePaused) {
+                  backpressurePaused = true;
+                  syncPause();
+                  backpressure.whenComplete(() {
+                    backpressurePaused = false;
+                    syncPause();
+                  });
                 }
               } catch (error) {
                 captureError = error;
               }
-              if (!cancelled) {
-                controller.add(bytes);
-                subscription?.resume();
-              }
-            }();
+            }
           },
           onError: (Object error, StackTrace stackTrace) {
             final previous = terminalError;
             terminalError = () async {
               await previous;
-              if (!request) await finish(error: error, stackTrace: stackTrace);
+              if (!request) {
+                await enqueueFinish(error: error, stackTrace: stackTrace);
+              }
               if (!cancelled) controller.addError(error, stackTrace);
             }();
           },
@@ -411,23 +508,30 @@ class _HttpExchange {
               requestComplete = true;
             } else {
               responseComplete = true;
-              if (options.responseType == ResponseType.stream) await finish();
+              if (options.responseType == ResponseType.stream) {
+                enqueueFinish();
+              }
             }
             controller.close();
           },
           cancelOnError: false,
         );
       },
-      onPause: () => subscription?.pause(),
-      onResume: () => subscription?.resume(),
+      onPause: () {
+        downstreamPaused = true;
+        syncPause();
+      },
+      onResume: () {
+        downstreamPaused = false;
+        syncPause();
+      },
       onCancel: () async {
         cancelled = true;
         await subscription?.cancel();
-        await adding;
         if (!ended && !request) {
-          // 下一微任务给 Dio 错误回调保留机会；cancel 完成前已收到的正文须持久化。
+          // 下一微任务给 Dio 错误回调保留机会；cancel 完成前已收到的正文须入队持久化。
           await Future<void>.value();
-          await finish(
+          enqueueFinish(
             error: const DiagnosticException(
               '响应流在读完之前终止，已保存实际收到的内容',
               code: 'response_stream_incomplete',
@@ -440,13 +544,129 @@ class _HttpExchange {
     return controller.stream;
   }
 
-  Map<String, Object?> body(
-    _BodyCapture builder,
+  Map<String, Object?>? currentEvidence() {
+    if (evidence != null) return evidence;
+    if (finished) return _materializeEvidenceSync();
+    return null;
+  }
+
+  Map<String, Object?> _buildExchangePayload(
+    Map<String, Object?> requestBody,
+    Map<String, Object?> responseBody,
+  ) => <String, Object?>{
+    'request_id': requestId,
+    'method': options.method,
+    'service': AppLog.serviceForHost(options.uri.host),
+    'status_code': status,
+    'duration_ms': watch.elapsedMilliseconds,
+    'capture_source': adapterReached
+        ? 'http_adapter_entity'
+        : 'request_interceptor',
+    'request': {
+      'url': options.uri.toString(),
+      'headers': requestHeaders,
+      if (!_librarySearch && !requestComplete && options.data != null)
+        'logical_body': switch (options.data) {
+          String() || Map() || List() => options.data,
+          FormData data => {
+            'fields': {for (final field in data.fields) field.key: field.value},
+            'files': [
+              for (final file in data.files)
+                {
+                  'field': file.key,
+                  'filename': file.value.filename,
+                  'length': file.value.length,
+                },
+            ],
+          },
+          _ => {'unavailable_reason': 'request_stream_not_consumed'},
+        },
+      ...requestBody,
+    },
+    'response': {
+      'status': status,
+      'status_message': statusMessage,
+      'headers': responseHeaders,
+      if (!_libraryReader && !adapterReached)
+        'logical_body': interceptedResponse,
+      ...responseBody,
+      if (!responseComplete)
+        'incomplete_reason': !adapterReached
+            ? 'interceptor_response_without_transport'
+            : status == null
+            ? 'no_response_received'
+            : 'consumer_did_not_read_to_end',
+    },
+    if (redirects.isNotEmpty) 'redirects': redirects,
+    if (captureError != null) 'capture_error': captureError.toString(),
+  };
+
+  Map<String, Object?> _describeCapturedSync(
+    _BodyCapture capture,
     String? contentType,
     bool complete,
   ) {
-    final bytes = builder.takeBytes();
-    return _describeBody(bytes, contentType, complete && captureError == null);
+    if (capture.isSpooled) {
+      return {
+        'body_attachment': true,
+        'captured_bytes': capture.length,
+        'complete': complete && capture.error == null && captureError == null,
+        'content_type': contentType,
+        if (capture.error != null)
+          'incomplete_reason': 'capture_spool_write_failed',
+      };
+    }
+    return describeDiagnosticBody(
+      capture.peekBytes(),
+      contentType,
+      complete && captureError == null,
+    );
+  }
+
+  Map<String, Object?> _materializeEvidenceSync() {
+    if (evidence != null) return evidence!;
+    final requestBody = _librarySearch
+        ? _privateLibraryBody(
+            requestBytes,
+            requestComplete,
+            logicalBody: options.data,
+            search: true,
+          )
+        : _describeCapturedSync(
+            requestBytes,
+            options.contentType,
+            requestComplete,
+          );
+    final responseBody = _libraryReader
+        ? _privateLibraryBody(
+            responseBytes,
+            responseComplete,
+            logicalBody: interceptedResponse,
+          )
+        : _describeCapturedSync(
+            responseBytes,
+            responseHeaders[Headers.contentTypeHeader]?.firstOrNull,
+            responseComplete,
+          );
+    final exchange = _buildExchangePayload(requestBody, responseBody);
+    final cleaned = DiagnosticRedactor.value(exchange) as Map<String, Object?>;
+    final ref = <String, Object?>{
+      'session_id': AppLog.sessionId,
+      'seq': _reservedSeq ?? AppLog.reserveSequence(),
+    };
+    return evidence = {'record_ref': ref, 'exchange': cleaned};
+  }
+
+  Map<String, Object?> _materializeTraceEvidenceEntry() {
+    final snapshot = _materializeEvidenceSync();
+    final ref = snapshot['record_ref']! as Map<String, Object?>;
+    final details = snapshot['exchange']! as Map<String, Object?>;
+    final identity = '${ref['session_id']}:${ref['seq']}';
+    return {
+      'id': identity,
+      'label': 'http.exchange',
+      'details': {'record_ref': ref, ...details},
+    };
   }
 
   Future<Map<String, Object?>> _bodyAsync(
@@ -467,45 +687,19 @@ class _HttpExchange {
           'incomplete_reason': file.incompleteReason,
       };
     }
-    final bytes = builder.takeBytes();
+    if (builder.error != null) {
+      return {
+        'captured_bytes': 0,
+        'complete': false,
+        'content_type': contentType,
+        'incomplete_reason': 'capture_spool_write_failed',
+      };
+    }
+    final bytes = builder.peekBytes();
     final intact = complete && captureError == null;
     return bytes.length > 16 * 1024
         ? await _describeBodyInBackground(bytes, contentType, intact)
-        : _describeBody(bytes, contentType, intact);
-  }
-
-  static Map<String, Object?> _describeBody(
-    Uint8List bytes,
-    String? contentType,
-    bool complete,
-  ) {
-    final type = contentType?.toLowerCase() ?? '';
-    final textual =
-        type.isEmpty ||
-        type.startsWith('text/') ||
-        type.contains('json') ||
-        type.contains('xml') ||
-        type.contains('javascript') ||
-        type.contains('x-www-form-urlencoded');
-    if (textual) {
-      try {
-        return {
-          'body': utf8.decode(bytes),
-          'encoding': 'utf-8',
-          'captured_bytes': bytes.length,
-          'complete': complete,
-        };
-      } on FormatException {
-        // 保留非 UTF-8 实体原始字节，避免损坏正文冒充有效文本。
-      }
-    }
-    return {
-      'body_base64': base64Encode(bytes),
-      'encoding': 'base64',
-      'content_type': contentType,
-      'captured_bytes': bytes.length,
-      'complete': complete,
-    };
+        : describeDiagnosticBody(bytes, contentType, intact);
   }
 
   Map<String, Object?> _privateLibraryBody(
@@ -514,7 +708,7 @@ class _HttpExchange {
     Object? logicalBody,
     bool search = false,
   }) {
-    final bytes = capture.takeBytes();
+    final bytes = capture.peekBytes();
     final metadata = {
       'captured_bytes': capture.length,
       'complete': complete && captureError == null,
@@ -549,13 +743,37 @@ class _HttpExchange {
     };
   }
 
-  Future<void> finish({Object? error, StackTrace? stackTrace}) =>
-      _finishing ??= _finish(error: error, stackTrace: stackTrace);
-
-  Future<void> _finish({Object? error, StackTrace? stackTrace}) async {
+  Future<void> enqueueFinish({Object? error, StackTrace? stackTrace}) {
+    if (_finishing != null) return _finishing!;
     finished = true;
     watch.stop();
+    final seq = _reservedSeq ??= AppLog.reserveSequence();
+    span.run(
+      () => AppLog.registerLazyEvidence(
+        '${AppLog.sessionId}:$seq',
+        _materializeTraceEvidenceEntry,
+      ),
+    );
+    final previous = _finishPipeline;
+    final next = previous == null
+        ? _finish(error: error, stackTrace: stackTrace)
+        : previous.then((_) => _finish(error: error, stackTrace: stackTrace));
+    late final Future<void> tail;
+    tail = next.then<void>(
+      (_) {
+        if (identical(_finishPipeline, tail)) _finishPipeline = null;
+      },
+      onError: (Object _, StackTrace _) {
+        if (identical(_finishPipeline, tail)) _finishPipeline = null;
+      },
+    );
+    _finishPipeline = tail;
+    return _finishing = next;
+  }
+
+  Future<void> _finish({Object? error, StackTrace? stackTrace}) async {
     try {
+      await diagnosticBeforePersistForTesting?.call();
       final requestBody = _librarySearch
           ? _privateLibraryBody(
               requestBytes,
@@ -579,55 +797,7 @@ class _HttpExchange {
               responseHeaders[Headers.contentTypeHeader]?.firstOrNull,
               responseComplete,
             );
-      final exchange = <String, Object?>{
-        'request_id': requestId,
-        'method': options.method,
-        'service': AppLog.serviceForHost(options.uri.host),
-        'status_code': status,
-        'duration_ms': watch.elapsedMilliseconds,
-        'capture_source': adapterReached
-            ? 'http_adapter_entity'
-            : 'request_interceptor',
-        'request': {
-          'url': options.uri.toString(),
-          'headers': requestHeaders,
-          if (!_librarySearch && !requestComplete && options.data != null)
-            'logical_body': switch (options.data) {
-              String() || Map() || List() => options.data,
-              FormData data => {
-                'fields': {
-                  for (final field in data.fields) field.key: field.value,
-                },
-                'files': [
-                  for (final file in data.files)
-                    {
-                      'field': file.key,
-                      'filename': file.value.filename,
-                      'length': file.value.length,
-                    },
-                ],
-              },
-              _ => {'unavailable_reason': 'request_stream_not_consumed'},
-            },
-          ...requestBody,
-        },
-        'response': {
-          'status': status,
-          'status_message': statusMessage,
-          'headers': responseHeaders,
-          if (!_libraryReader && !adapterReached)
-            'logical_body': interceptedResponse,
-          ...responseBody,
-          if (!responseComplete)
-            'incomplete_reason': !adapterReached
-                ? 'interceptor_response_without_transport'
-                : status == null
-                ? 'no_response_received'
-                : 'consumer_did_not_read_to_end',
-        },
-        if (redirects.isNotEmpty) 'redirects': redirects,
-        if (captureError != null) 'capture_error': captureError.toString(),
-      };
+      final exchange = _buildExchangePayload(requestBody, responseBody);
       evidence = await span.run(
         () => AppLog.recordHttpExchangeAsync(
           'http',
@@ -635,6 +805,7 @@ class _HttpExchange {
           error: error,
           stackTrace: stackTrace,
           bodyFiles: _bodyFiles.isEmpty ? null : _bodyFiles,
+          reservedSequence: _reservedSeq,
         ),
       );
     } catch (error, stackTrace) {

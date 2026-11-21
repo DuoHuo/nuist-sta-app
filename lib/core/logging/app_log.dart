@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -14,9 +13,10 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../config/campus_config.dart';
 import '../config/api_endpoints.dart';
-import 'log_store.dart';
 import 'diagnostic_error.dart';
 import 'diagnostic_redactor.dart';
+import 'diagnostic_worker.dart';
+import 'log_store.dart';
 
 /// 应用日志级别。所有级别均本地留存，控制台默认显示关键结果。
 enum AppLogLevel { debug, info, warning, error, fatal }
@@ -27,6 +27,79 @@ class AppLog {
 
   static const formatVersion = 2;
   static final String _sessionId = _randomHex(8);
+
+  /// 供诊断拦截器与序列化逻辑读取当前进程会话标识。
+  static String get sessionId => _sessionId;
+
+  static final RegExp _hex16Pattern = RegExp(r'^[a-f0-9]{16}$');
+  static final RegExp _hex32Pattern = RegExp(r'^[a-f0-9]{32}$');
+  static final RegExp _appVersionPattern = RegExp(
+    r'^\d{1,3}(?:\.\d{1,3}){1,3}(?:[-+][A-Za-z0-9_.-]{1,32})?$',
+  );
+  static final RegExp _buildNumberPattern = RegExp(r'^\d{1,9}$');
+  static final RegExp _localePattern = RegExp(
+    r'^[a-zA-Z]{2,3}(?:[_-][a-zA-Z0-9]{2,8}){0,3}$',
+  );
+  static final RegExp _leadingLevelPattern = RegExp(r'^[A-Z]+\s+');
+  static final RegExp _upperMethodPattern = RegExp(r'^[A-Z]+$');
+  static final RegExp _scopePrefixPattern = RegExp(r'^(?:core|shell)\.');
+  static final RegExp _lineBreakPattern = RegExp(r'[\r\n]+');
+  static final RegExp _whitespacePattern = RegExp(r'\s');
+  static final RegExp _invalidNameCharsPattern = RegExp(r'[^a-z0-9_.-]+');
+  static final RegExp _multiUnderscorePattern = RegExp(r'_+');
+  static final RegExp _digits6To20Pattern = RegExp(r'\d{6,20}');
+  static final RegExp _hostAliasPattern = RegExp(r'^host_(?:\d{1,3}|other)$');
+  static final RegExp _attachmentNamePattern = RegExp(
+    r'^[a-f0-9-]+\.json\.gz$',
+  );
+  static final RegExp _scriptCodePattern = RegExp(
+    r'(?: -> code |recheck code )(-?\d{1,5})(?!\d)',
+  );
+  static final RegExp _identifierLowerPattern = RegExp(
+    r'^[a-zA-Z][a-zA-Z0-9_.-]{0,95}$',
+  );
+  static final RegExp _identifierUpperPattern = RegExp(
+    r'^[A-Za-z][A-Za-z0-9_.-]{0,95}$',
+  );
+  static final RegExp _hostForbiddenCharsPattern = RegExp(r'[\s/@?#]');
+  static final RegExp _typeNamePattern = RegExp(
+    r'^[A-Za-z_$][A-Za-z0-9_$]{0,79}$',
+  );
+  static final RegExp _appIdPattern = RegExp(r'^[a-z][a-z_-]{0,63}$');
+  static final RegExp _pemBlockPattern = RegExp(
+    r'-----BEGIN [^-]+-----.*?-----END [^-]+-----',
+    caseSensitive: false,
+    dotAll: true,
+  );
+  static final RegExp _jwtPattern = RegExp(
+    r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b',
+  );
+  static final RegExp _authHeaderPattern = RegExp(
+    r'\b(?:authorization|proxy-authorization|(?:set-)?cookie)\s*[:=][^\r\n]*',
+    caseSensitive: false,
+  );
+  static final RegExp _authSchemePattern = RegExp(
+    r'\b(?:bearer|basic)\s+[^\s,;]+',
+    caseSensitive: false,
+  );
+  static final RegExp _kvSecretPattern = RegExp(
+    r'\b(authorization|cookie|ticket|token|password|secret|signature|pin)\s*[:=]\s*[^\s,;]+',
+    caseSensitive: false,
+  );
+  static final RegExp _standaloneDigits6To20Pattern = RegExp(
+    r'(?<!\d)\d{6,20}(?!\d)',
+  );
+  static final RegExp _httpUrlPattern = RegExp(
+    r'''https?://[^\s<>"']+''',
+    caseSensitive: false,
+  );
+  static final RegExp _ipv4Pattern = RegExp(
+    r'\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b',
+  );
+  static final RegExp _domainPattern = RegExp(
+    r'(?<![a-zA-Z0-9_-])(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?::\d+)?',
+  );
+  static final RegExp _crlfTabPattern = RegExp(r'[\r\n\t]+');
 
   /// 本次运行是否已通过版本号五连击显示日志入口，不影响日志记录级别。
   static final ValueNotifier<bool> diagnosticsVisible = ValueNotifier(false);
@@ -108,6 +181,37 @@ class AppLog {
   @visibleForTesting
   static bool consoleEnabledForTesting = false;
 
+  /// 测试中覆盖批处理刷盘间隔；为 null 时在测试环境默认立即写盘以避免悬挂定时器。
+  @visibleForTesting
+  static Duration? flushIntervalForTesting;
+
+  static final Set<Future<void> Function()> _pendingBarriers = {};
+
+  /// 注册异步诊断管线屏障；导出、精确查证或测试重置前会等待所有在途写入落盘。
+  static void registerPendingBarrier(Future<void> Function() barrier) {
+    _pendingBarriers.add(barrier);
+  }
+
+  static Future<void> _waitPendingBarriers() async {
+    for (final barrier in List<Future<void> Function()>.of(_pendingBarriers)) {
+      await barrier();
+    }
+  }
+
+  /// 为异步入队的 HTTP 诊断预先分配单调序号，保证缓存引用与最终落盘记录一致。
+  static int reserveSequence() => ++_sequence;
+
+  /// 在当前操作上下文内登记延迟构造的证据，避免正常成功路径提前做同步脱敏。
+  static void registerLazyEvidence(
+    String identity,
+    Map<String, Object?> Function() supplier,
+  ) {
+    final context = Zone.current[_contextKey] as _LogContext?;
+    final collection = context?.evidence;
+    if (context == null || collection == null) return;
+    collection.addLazy(identity, context, supplier);
+  }
+
   /// 初始化缓存目录中的轮转日志。失败时退化为开发控制台日志。
   static Future<void> initialize({Directory? directory}) {
     if (_initialized) return Future.value();
@@ -127,6 +231,9 @@ class AppLog {
           '${Platform.pathSeparator}exports',
         ),
         sanitizeRecord: _sanitizePersistedRecord,
+        flushInterval:
+            flushIntervalForTesting ??
+            (_inFlutterTest ? null : const Duration(milliseconds: 250)),
       );
       await store.initialize();
       _store = store;
@@ -431,18 +538,17 @@ class AppLog {
     Object? error,
     StackTrace? stackTrace,
     Map<String, DiagnosticBodyFile>? bodyFiles,
+    int? reservedSequence,
   }) async {
     try {
       // 门户跳转页、JSON 接口逐条脱敏要跑十余轮正则，几 KiB 的正文在手机上
-      // 也会占用数帧；真机除极小交流外都在后台处理。widget 测试的 FakeAsync
-      // 不推进 isolate，仍按原阈值同步处理。
+      // 也会占用数帧；真机除极小交流外都在常驻后台 Worker 处理。widget 测试的
+      // FakeAsync 不推进 isolate，仍按原阈值同步处理。
       final background = _inFlutterTest
           ? _hasLargeDiagnostic(exchange)
           : _diagnosticSize(exchange, limit: 1024) >= 1024;
       final cleaned = background
-          ? await Isolate.run(
-              () => DiagnosticRedactor.value(exchange) as Map<String, Object?>,
-            )
+          ? await DiagnosticWorker.redactValue(exchange)
           : DiagnosticRedactor.value(exchange) as Map<String, Object?>;
       // 文件正文必须先持久化附件，返回时才允许采集器释放临时文件。
       if (bodyFiles != null) await initialize();
@@ -455,6 +561,7 @@ class AppLog {
         sanitized: true,
         bodyFiles: bodyFiles,
         persistence: persisted,
+        reservedSequence: reservedSequence,
       );
       final saved = await persisted?.future;
       if (bodyFiles != null && saved != true) {
@@ -538,6 +645,7 @@ class AppLog {
     bool sanitized = false,
     Map<String, DiagnosticBodyFile>? bodyFiles,
     Completer<bool>? persistence,
+    int? reservedSequence,
   }) {
     Map<String, Object?>? evidence;
     _write(
@@ -560,6 +668,7 @@ class AppLog {
       sanitizedDetails: sanitized,
       bodyFiles: bodyFiles,
       persistence: persistence,
+      reservedSequence: reservedSequence,
       onRecord: (record) {
         final reference = <String, Object?>{
           'session_id': record['session_id'],
@@ -618,12 +727,17 @@ class AppLog {
     final session = reference['session_id'];
     final sequence = reference['seq'];
     if (session is! String ||
-        !RegExp(r'^[a-f0-9]{16}$').hasMatch(session) ||
+        !_hex16Pattern.hasMatch(session) ||
         sequence is! int ||
         sequence < 0) {
       return null;
     }
-    return _store?.findRecord(session, sequence).timeout(timeout);
+    Future<Map<String, Object?>?> read() async {
+      await _waitPendingBarriers();
+      return _store?.findRecord(session, sequence);
+    }
+
+    return read().timeout(timeout);
   }
 
   /// 从可信原生下载结果保留文件快照；网页消息不能触发本机文件读取。
@@ -739,11 +853,15 @@ class AppLog {
   }
 
   /// 当前日志占用。
-  static Future<LogStoreStats> stats() async =>
-      (await _store?.stats()) ?? const LogStoreStats(bytes: 0, fileCount: 0);
+  static Future<LogStoreStats> stats() async {
+    await _waitPendingBarriers();
+    return (await _store?.stats()) ??
+        const LogStoreStats(bytes: 0, fileCount: 0);
+  }
 
   /// 生成一致的日志快照。
   static Future<LogSnapshot> snapshot({bool expandAttachments = true}) async {
+    await _waitPendingBarriers();
     await collectNativeDiagnostics();
     return await _store?.snapshot(expandAttachments: expandAttachments) ??
         const LogSnapshot(
@@ -756,6 +874,7 @@ class AppLog {
   static Future<void> clear() async {
     _clearingLogs = true;
     try {
+      await _waitPendingBarriers();
       await _nativeCollection;
       Object? failure;
       StackTrace? failureStack;
@@ -862,6 +981,7 @@ class AppLog {
   /// 将安全元信息与日志快照写入受限的导出缓存。
   static Future<File> createExport(Map<String, Object?> metadata) async {
     await initialize();
+    await _waitPendingBarriers();
     await collectNativeDiagnostics();
     final store = _store;
     if (store == null) throw StateError('诊断日志存储暂不可用');
@@ -884,10 +1004,8 @@ class AppLog {
       final value = metadata[key];
       if (value is! String) continue;
       final allowed = switch (key) {
-        'app_version' => RegExp(
-          r'^\d{1,3}(?:\.\d{1,3}){1,3}(?:[-+][A-Za-z0-9_.-]{1,32})?$',
-        ).hasMatch(value),
-        'build_number' => RegExp(r'^\d{1,9}$').hasMatch(value),
+        'app_version' => _appVersionPattern.hasMatch(value),
+        'build_number' => _buildNumberPattern.hasMatch(value),
         'platform' => const {
           'android',
           'ios',
@@ -896,9 +1014,7 @@ class AppLog {
           'macos',
           'fuchsia',
         }.contains(value),
-        'locale' => RegExp(
-          r'^[a-zA-Z]{2,3}(?:[_-][a-zA-Z0-9]{2,8}){0,3}$',
-        ).hasMatch(value),
+        'locale' => _localePattern.hasMatch(value),
         _ => true,
       };
       if (allowed) {
@@ -926,6 +1042,7 @@ class AppLog {
     void Function(Map<String, Object?> record)? onRecord,
     bool sanitizedDetails = false,
     Map<String, DiagnosticBodyFile>? bodyFiles,
+    int? reservedSequence,
   }) {
     if (!_isEnabled(level)) return;
     try {
@@ -974,7 +1091,7 @@ class AppLog {
       }
       final record = <String, Object?>{
         'ts': now.toIso8601String(),
-        'seq': ++_sequence,
+        'seq': reservedSequence ?? ++_sequence,
         'level': level.name.toUpperCase(),
         'scope': _sanitizeName(scope),
         'event': _sanitizeName(event),
@@ -1030,12 +1147,17 @@ class AppLog {
           persistence?.complete(false);
           return;
         }
+        final immediateFlush =
+            level.index >= AppLogLevel.warning.index ||
+            persistence != null ||
+            bodyFiles != null;
         unawaited(
           _store
                   ?.appendRecord(
                     record,
                     background: _hasLargeDiagnostic(record),
                     bodyFiles: bodyFiles,
+                    immediateFlush: immediateFlush,
                   )
                   .then((_) {
                     storageAvailable.value = true;
@@ -1100,7 +1222,7 @@ class AppLog {
             .invokeMethod<void>('write', {
               'level': level.index,
               // logcat 已有级别列；原生标签同时兼容独立 flutter logs。
-              'message': message.replaceFirst(RegExp(r'^[A-Z]+\s+'), ''),
+              'message': message.replaceFirst(_leadingLevelPattern, ''),
             })
             .catchError((Object _) {
               _nativeConsoleAvailable = false;
@@ -1193,7 +1315,7 @@ class AppLog {
       }
     }
     if (attrs['method'] case final String method
-        when RegExp(r'^[A-Z]+$').hasMatch(method)) {
+        when _upperMethodPattern.hasMatch(method)) {
       request.add(method);
     }
     if (attrs['service'] case final service?) {
@@ -1279,10 +1401,7 @@ class AppLog {
     if (attrs['native_timeout_ms'] ?? attrs['timeout_ms'] case final timeout?) {
       parts.add('期限 ${_formatDuration(timeout)}');
     }
-    final scope = '${record['scope']}'.replaceFirst(
-      RegExp(r'^(?:core|shell)\.'),
-      '',
-    );
+    final scope = '${record['scope']}'.replaceFirst(_scopePrefixPattern, '');
     final sequence = '${record['seq']}'.padLeft(6, '0');
     final trace = record['trace_id'];
     final context = (includeScope || includeLevel) && trace is String
@@ -1319,7 +1438,7 @@ class AppLog {
           : _labels[base];
       if (base == 'refresh') {
         final module = '${record['scope']}'
-            .replaceFirst(RegExp(r'^(?:core|shell)\.'), '')
+            .replaceFirst(_scopePrefixPattern, '')
             .split('.')
             .first;
         if (_labels[module] case final moduleLabel?) label = '$moduleLabel刷新';
@@ -1366,7 +1485,7 @@ class AppLog {
     final cause = chain is List && chain.isNotEmpty ? chain.last : null;
     final message = cause is Map ? cause['message'] : null;
     final description = message is String
-        ? message.replaceAll(RegExp(r'[\r\n]+'), ' ').trim()
+        ? message.replaceAll(_lineBreakPattern, ' ').trim()
         : '';
     return '${_label(kind)}'
         '${type != null && const {'unexpected', 'flutter_framework', 'uncaught_async', 'unknown'}.contains(kind) ? '（$type）' : ''}'
@@ -1666,7 +1785,7 @@ class AppLog {
   }
 
   static String _formatConsoleValue(Object? value) => switch (value) {
-    String() when RegExp(r'\s').hasMatch(value) => jsonEncode(value),
+    String() when _whitespacePattern.hasMatch(value) => jsonEncode(value),
     String() => value,
     Iterable() => jsonEncode(value.toList()),
     _ => '$value',
@@ -1684,8 +1803,8 @@ class AppLog {
   static String _sanitizeName(String value) {
     final cleaned = value
         .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9_.-]+'), '_')
-        .replaceAll(RegExp(r'_+'), '_');
+        .replaceAll(_invalidNameCharsPattern, '_')
+        .replaceAll(_multiUnderscorePattern, '_');
     return cleaned.length <= 80 ? cleaned : cleaned.substring(0, 80);
   }
 
@@ -1703,7 +1822,7 @@ class AppLog {
           : _sanitizeField(key, entry.value);
       if (value != null) result[key] = value;
       if (value == null && entry.value != null) {
-        discarded.add(key.replaceAll(RegExp(r'\d{6,20}'), 'id'));
+        discarded.add(key.replaceAll(_digits6To20Pattern, 'id'));
       }
     }
     for (final entry in const {
@@ -1714,7 +1833,7 @@ class AppLog {
       if (result[entry.key] != null &&
           !result.containsKey(entry.value) &&
           host is String &&
-          !RegExp(r'^host_(?:\d{1,3}|other)$').hasMatch(host)) {
+          !_hostAliasPattern.hasMatch(host)) {
         result[entry.value] = serviceForHost(host);
       }
     }
@@ -1754,25 +1873,30 @@ class AppLog {
         originalAttrs['stack_trace'] as String,
       );
     }
-    bool validId(Object? id, int length) =>
-        id is String && RegExp('^[a-f0-9]{$length}\$').hasMatch(id);
     return {
       'ts': DateTime.parse(at).toUtc().toIso8601String(),
       'seq': sequence,
       'level': level,
-      'scope': _sanitizeName(scope).replaceAll(RegExp(r'\d{6,20}'), 'id'),
-      'event': _sanitizeName(event).replaceAll(RegExp(r'\d{6,20}'), 'id'),
+      'scope': _sanitizeName(scope).replaceAll(_digits6To20Pattern, 'id'),
+      'event': _sanitizeName(event).replaceAll(_digits6To20Pattern, 'id'),
       if (record['record_attachment'] case final String attachment
-          when RegExp(r'^[a-f0-9-]+\.json\.gz$').hasMatch(attachment))
+          when _attachmentNamePattern.hasMatch(attachment))
         'record_attachment': attachment,
       if (record['record_attachment_bytes'] case final int bytes
           when bytes >= 0)
         'record_attachment_bytes': bytes,
-      if (validId(record['session_id'], 16)) 'session_id': record['session_id'],
-      if (validId(record['trace_id'], 32)) 'trace_id': record['trace_id'],
-      if (validId(record['span_id'], 16)) 'span_id': record['span_id'],
-      if (validId(record['parent_span_id'], 16))
-        'parent_span_id': record['parent_span_id'],
+      if (record['session_id'] case final String id
+          when _hex16Pattern.hasMatch(id))
+        'session_id': id,
+      if (record['trace_id'] case final String id
+          when _hex32Pattern.hasMatch(id))
+        'trace_id': id,
+      if (record['span_id'] case final String id
+          when _hex16Pattern.hasMatch(id))
+        'span_id': id,
+      if (record['parent_span_id'] case final String id
+          when _hex16Pattern.hasMatch(id))
+        'parent_span_id': id,
       if (attrs.isNotEmpty) 'attrs': attrs,
     };
   }
@@ -2134,9 +2258,7 @@ class AppLog {
       }
     }
     if (text.contains(' -> code ')) event = 'response';
-    final code = RegExp(r'(?: -> code |recheck code )(-?\d{1,5})(?!\d)')
-        .firstMatch(text)
-        ?.group(1);
+    final code = _scriptCodePattern.firstMatch(text)?.group(1);
     return {
       'script_event': event,
       'response_code': ?(code == null ? null : int.tryParse(code)),
@@ -2157,8 +2279,7 @@ class AppLog {
       'outcome',
     }.contains(key)) {
       final name = value is Enum ? value.name : value;
-      return name is String &&
-              RegExp(r'^[a-zA-Z][a-zA-Z0-9_.-]{0,95}$').hasMatch(name)
+      return name is String && _identifierLowerPattern.hasMatch(name)
           ? name
           : null;
     }
@@ -2169,7 +2290,7 @@ class AppLog {
     }
     if (key == 'reason' &&
         value is String &&
-        RegExp(r'^[A-Za-z][A-Za-z0-9_.-]{0,95}$').hasMatch(value)) {
+        _identifierUpperPattern.hasMatch(value)) {
       return value;
     }
     if (_booleanFields.contains(key)) return value is bool ? value : null;
@@ -2229,10 +2350,10 @@ class AppLog {
     if (key == 'host' || key == 'redirect_host') {
       if (text.isEmpty ||
           text.length > 253 ||
-          RegExp(r'[\s/@?#]').hasMatch(text)) {
+          _hostForbiddenCharsPattern.hasMatch(text)) {
         return null;
       }
-      if (RegExp(r'^host_(?:\d{1,3}|other)$').hasMatch(text)) return text;
+      if (_hostAliasPattern.hasMatch(text)) return text;
       final normalized = text.toLowerCase();
       return _hostAliases[normalized] ??
           (_hostAliases.length >= 128
@@ -2244,12 +2365,10 @@ class AppLog {
     }
     if (key == 'error_type' || key == 'response_type') {
       final type = text.split('<').first;
-      return RegExp(r'^[A-Za-z_$][A-Za-z0-9_$]{0,79}$').hasMatch(type)
-          ? type
-          : null;
+      return _typeNamePattern.hasMatch(type) ? type : null;
     }
     if (key == 'app_id') {
-      return RegExp(r'^[a-z][a-z_-]{0,63}$').hasMatch(text) ? text : null;
+      return _appIdPattern.hasMatch(text) ? text : null;
     }
     if (key == 'file_kind') {
       return const {
@@ -2283,50 +2402,16 @@ class AppLog {
 
   static String _sanitizeText(String input) {
     var value = input;
-    value = value.replaceAll(
-      RegExp(
-        r'-----BEGIN [^-]+-----.*?-----END [^-]+-----',
-        caseSensitive: false,
-        dotAll: true,
-      ),
-      '[REDACTED_SECRET]',
-    );
-    value = value.replaceAll(
-      RegExp(r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b'),
-      '[REDACTED_TOKEN]',
-    );
-    value = value.replaceAll(
-      RegExp(
-        r'\b(?:authorization|proxy-authorization|(?:set-)?cookie)\s*[:=][^\r\n]*',
-        caseSensitive: false,
-      ),
-      '[REDACTED_SECRET]',
-    );
-    value = value.replaceAll(
-      RegExp(r'\b(?:bearer|basic)\s+[^\s,;]+', caseSensitive: false),
-      '[REDACTED_SECRET]',
-    );
-    value = value.replaceAll(
-      RegExp(
-        r'\b(authorization|cookie|ticket|token|password|secret|signature|pin)\s*[:=]\s*[^\s,;]+',
-        caseSensitive: false,
-      ),
-      '[REDACTED_SECRET]',
-    );
-    value = value.replaceAll(RegExp(r'(?<!\d)\d{6,20}(?!\d)'), '[REDACTED_ID]');
-    value = value.replaceAll(
-      RegExp(r'''https?://[^\s<>"']+''', caseSensitive: false),
-      '[REDACTED_URL]',
-    );
-    value = value.replaceAll(
-      RegExp(r'\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b'),
-      '[REDACTED_HOST]',
-    );
-    value = value.replaceAll(
-      RegExp(r'(?<![a-zA-Z0-9_-])(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?::\d+)?'),
-      '[REDACTED_HOST]',
-    );
-    value = value.replaceAll(RegExp(r'[\r\n\t]+'), ' ').trim();
+    value = value.replaceAll(_pemBlockPattern, '[REDACTED_SECRET]');
+    value = value.replaceAll(_jwtPattern, '[REDACTED_TOKEN]');
+    value = value.replaceAll(_authHeaderPattern, '[REDACTED_SECRET]');
+    value = value.replaceAll(_authSchemePattern, '[REDACTED_SECRET]');
+    value = value.replaceAll(_kvSecretPattern, '[REDACTED_SECRET]');
+    value = value.replaceAll(_standaloneDigits6To20Pattern, '[REDACTED_ID]');
+    value = value.replaceAll(_httpUrlPattern, '[REDACTED_URL]');
+    value = value.replaceAll(_ipv4Pattern, '[REDACTED_HOST]');
+    value = value.replaceAll(_domainPattern, '[REDACTED_HOST]');
+    value = value.replaceAll(_crlfTabPattern, ' ').trim();
     return value.length <= 256 ? value : '${value.substring(0, 253)}...';
   }
 
@@ -2335,7 +2420,10 @@ class AppLog {
 
   @visibleForTesting
   static Future<void> resetForTesting() async {
-    await _store?.flush();
+    await _waitPendingBarriers();
+    await _store?.close();
+    await DiagnosticWorker.resetForTesting();
+    flushIntervalForTesting = null;
     _maintenanceTimer?.cancel();
     _maintenanceTimer = null;
     _verboseTimer?.cancel();
@@ -2617,24 +2705,52 @@ class _LogContext {
 }
 
 class _TraceEvidence {
-  final _items =
-      <String, ({Set<_LogContext> owners, Map<String, Object?> value})>{};
+  final _items = <String, _TraceEvidenceEntry>{};
 
   void add(String id, _LogContext owner, Map<String, Object?> value) {
-    _items
-        .putIfAbsent(
-          id,
-          () => (owners: Set<_LogContext>.identity(), value: value),
-        )
-        .owners
-        .add(owner);
+    final entry = _items.putIfAbsent(id, () => _TraceEvidenceEntry());
+    entry.owners.add(owner);
+    entry.value = value;
+    entry.supplier = null;
   }
 
-  List<Map<String, Object?>> forContext(_LogContext context) => [
-    for (final item in _items.values)
-      if (item.owners.any(
+  void addLazy(
+    String id,
+    _LogContext owner,
+    Map<String, Object?> Function() supplier,
+  ) {
+    final entry = _items.putIfAbsent(id, () => _TraceEvidenceEntry());
+    entry.owners.add(owner);
+    if (entry.value == null) {
+      entry.supplier = supplier;
+    }
+  }
+
+  List<Map<String, Object?>> forContext(_LogContext context) {
+    final result = <Map<String, Object?>>[];
+    for (final item in _items.values) {
+      if (!item.owners.any(
         (owner) => owner.isWithin(context) || context.isWithin(owner),
-      ))
-        item.value,
-  ];
+      )) {
+        continue;
+      }
+      final resolved = item.resolve();
+      if (resolved != null) result.add(resolved);
+    }
+    return result;
+  }
+}
+
+class _TraceEvidenceEntry {
+  final owners = Set<_LogContext>.identity();
+  Map<String, Object?>? value;
+  Map<String, Object?> Function()? supplier;
+
+  Map<String, Object?>? resolve() {
+    if (value != null) return value;
+    final fn = supplier;
+    if (fn == null) return null;
+    supplier = null;
+    return value = fn();
+  }
 }
