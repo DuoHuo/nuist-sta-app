@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import 'core/app_info.dart';
 import 'core/app_snack_bar.dart';
+import 'core/auth/student_academic_info.dart';
 import 'core/logging/app_log.dart';
 import 'core/network/vpn_gateway.dart';
 import 'core/navigation/app_navigation.dart';
@@ -15,6 +16,7 @@ import 'core/refresh/silent_refresh.dart';
 import 'core/schedule/weekly_classes.dart';
 import 'core/theme.dart';
 import 'core/theme_mode.dart';
+import 'mini_apps/student_info/student_info_academic_source.dart';
 import 'mini_apps/timetable/timetable_lifecycle.dart';
 import 'mini_apps/timetable/timetable_notify_bridge.dart';
 import 'mini_apps/timetable/timetable_week_classes.dart';
@@ -87,6 +89,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     }
     // 校园地图等通过 core 接口读本周课程，由壳把课表的实现登记进去。
     WeeklyClasses.source ??= const TimetableWeeklyClasses();
+    StudentAcademics.source ??= StudentInfoAcademicSource.instance;
     AppThemeMode.instance.load();
     // 点击上课提醒 / 桌面小组件 → 打开课表（今天所在周）。
     final bridge = TimetableNotifyBridge.instance;

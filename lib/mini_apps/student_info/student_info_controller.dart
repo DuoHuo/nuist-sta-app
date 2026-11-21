@@ -39,6 +39,7 @@ class StudentInfoController extends ChangeNotifier {
   static final StudentInfoController instance = StudentInfoController._();
 
   StudentInfo? _info;
+  bool _infoFromCache = false;
   bool _loading = false;
   String? _error;
   bool _portalBound = true;
@@ -48,6 +49,9 @@ class StudentInfoController extends ChangeNotifier {
   int _bindingGeneration = 0;
 
   StudentInfo? get info => _info;
+
+  /// 当前身份与学期是否从本机缓存恢复，供跨小程序来源说明使用。
+  bool get infoFromCache => _infoFromCache;
   bool get loading => _loading;
 
   /// 最近一次刷新失败的原因，成功后清空。
@@ -67,6 +71,7 @@ class StudentInfoController extends ChangeNotifier {
     final cached = await _readCache();
     if (generation != _bindingGeneration) return;
     _info = cached;
+    _infoFromCache = cached != null;
     notifyListeners();
   }
 
@@ -158,6 +163,7 @@ class StudentInfoController extends ChangeNotifier {
             return;
           }
           _info = info;
+          _infoFromCache = false;
         },
         userInitiated: userInitiated,
         fields: {'has_cache': _info != null},

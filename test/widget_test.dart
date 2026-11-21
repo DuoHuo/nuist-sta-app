@@ -41,7 +41,7 @@ void main() {
     expect(find.text('空教室'), findsOneWidget);
     expect(find.text('首页'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);
-    expect(find.byType(AppGridItem), findsNWidgets(7));
+    expect(find.byType(AppGridItem), findsNWidgets(8));
     expect(
       tester
           .widgetList<AppGridItem>(find.byType(AppGridItem))
@@ -54,6 +54,7 @@ void main() {
         'timetable',
         'exam-schedule',
         'library',
+        'sunshine-run',
       ],
     );
   });
