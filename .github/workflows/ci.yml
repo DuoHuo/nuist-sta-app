@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # mini_apps/<app>/ 只能 import lib/core/ 和第三方包，见 CONTRIBUTING.md「依赖方向」
       - name: Check dependency direction
@@ -98,11 +98,21 @@ jobs:
             '202512340001'
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
+
+      # 依赖、wrapper 与本地构建缓存由 setup-gradle 管理，默认只在 main 分支写入缓存。
+      # 缓存组件 gradle-actions-caching 为闭源，按 Gradle Technologies Terms of Use 使用。
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # 打开 Gradle 构建缓存，让 lint、R8 等任务在输入不变时直接复用结果。
+      - name: Enable Gradle build cache
+        run: |
+          mkdir -p "${GRADLE_USER_HOME:-$HOME/.gradle}"
+          echo "org.gradle.caching=true" >> "${GRADLE_USER_HOME:-$HOME/.gradle}/gradle.properties"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -110,6 +120,24 @@ jobs:
           flutter-version: '3.47.4'
           channel: stable
           cache: true
+
+      # NDK 版本由 Flutter 的 Gradle 插件决定，从 SDK 源码读取，升级 Flutter 时缓存随之失效。
+      - name: Resolve Android NDK version
+        run: |
+          set -euo pipefail
+          NDK_VERSION="$(sed -n 's/.*val ndkVersion: String = "\([^"]*\)".*/\1/p' \
+            "$FLUTTER_ROOT/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt")"
+          test -n "$NDK_VERSION"
+          echo "NDK_VERSION=$NDK_VERSION" >> "$GITHUB_ENV"
+
+      # 运行器镜像不带该版本的 NDK 和 CMake，构建时会现下现装。CMake 版本是 AGP 默认值。
+      - name: Cache Android NDK and CMake
+        uses: actions/cache@v6
+        with:
+          path: |
+            /usr/local/lib/android/sdk/ndk/${{ env.NDK_VERSION }}
+            /usr/local/lib/android/sdk/cmake/3.22.1
+          key: android-ndk-${{ runner.os }}-${{ env.NDK_VERSION }}-cmake-3.22.1
 
       - name: Install dependencies
         run: flutter pub get

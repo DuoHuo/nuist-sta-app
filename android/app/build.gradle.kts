@@ -80,7 +80,6 @@ android {
         }
 
         release {
-            proguardFiles("proguard-bulletin-search.pro")
             applicationIdSuffix = configuredApplicationIdSuffix
             signingConfig = if (listOf(
                     signingKeyPath,

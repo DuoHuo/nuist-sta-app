@@ -6,10 +6,23 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
+      channel:
+        description: App channel. release 只能在 main 分支上选
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - release
       release_tag:
-        description: Release tag, for example v0.0.3
+        description: Release tag, for example v0.0.3. 仅 release 渠道生效，tag 必须已存在且指向当前提交
         required: false
         type: string
+
+# 同一个 tag（或同一分支的手动运行）排队执行，不取消正在进行的构建。
+concurrency:
+  group: build-release-${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -17,18 +30,99 @@ jobs:
     environment: release
     permissions:
       contents: read
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      release_tag: ${{ steps.plan.outputs.release_tag }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      # tag 触发固定为 release 渠道；手动触发按输入选择，只上传 artifact，
+      # 仅当选择 release 并给出已存在的 tag 时才发布。
+      - name: Plan Build
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          BUILD_NAME=""
+          RELEASE_TAG=""
+          if [ "$EVENT_NAME" = "push" ]; then
+            CHANNEL=release
+            RELEASE_TAG="$REF_NAME"
+            ARTIFACT_FILE="NUIST++-android-arm64.apk"
+          else
+            CHANNEL="$INPUT_CHANNEL"
+            case "$CHANNEL" in
+              dev|release) ;;
+              *) echo "::error::未知渠道 $CHANNEL"; exit 1 ;;
+            esac
+            if [ "$CHANNEL" = "release" ] && [ "$REF" != "refs/heads/main" ]; then
+              echo "::error::release 渠道只能在 main 分支上手动触发，当前为 $REF"
+              exit 1
+            fi
+            if [ "$CHANNEL" = "release" ]; then
+              RELEASE_TAG="$INPUT_RELEASE_TAG"
+            elif [ -n "$INPUT_RELEASE_TAG" ]; then
+              echo "::warning::dev 渠道不发布，忽略 release_tag=$INPUT_RELEASE_TAG"
+            fi
+            BASE_VERSION="$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' pubspec.yaml)"
+            test -n "$BASE_VERSION"
+            BUILD_NAME="${BASE_VERSION}+${SHORT_SHA}"
+            ARTIFACT_FILE="NUIST++-${CHANNEL}-${SHORT_SHA}-android-arm64.apk"
+          fi
+          PUBLISH=false
+          if [ -n "$RELEASE_TAG" ]; then
+            if ! [[ "$RELEASE_TAG" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+              echo "::error::release_tag 必须形如 v0.0.3，当前为 $RELEASE_TAG"
+              exit 1
+            fi
+            if ! TAG_SHA="$(git rev-parse -q --verify "refs/tags/$RELEASE_TAG^{commit}")"; then
+              echo "::error::tag $RELEASE_TAG 不存在，请先创建并推送 tag（不会自动新建）"
+              exit 1
+            fi
+            if [ "$TAG_SHA" != "$RELEASE_SHA" ]; then
+              echo "::error::tag $RELEASE_TAG 指向 $TAG_SHA，与本次构建的提交 $RELEASE_SHA 不一致"
+              exit 1
+            fi
+            PUBLISH=true
+          fi
+          {
+            echo "CHANNEL=$CHANNEL"
+            echo "BUILD_NAME=$BUILD_NAME"
+            echo "ARTIFACT_FILE=$ARTIFACT_FILE"
+          } >> "$GITHUB_ENV"
+          {
+            echo "publish=$PUBLISH"
+            echo "release_tag=$RELEASE_TAG"
+          } >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL build_name=${BUILD_NAME:-<pubspec>} publish=$PUBLISH tag=${RELEASE_TAG:-<none>}"
+
       - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '21'
-          cache: 'gradle'
+
+      # 只读取 CI 在 main 上写入的 Gradle 缓存，发布构建不写缓存。
+      # 缓存组件 gradle-actions-caching 为闭源，按 Gradle Technologies Terms of Use 使用。
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: true
+
+      - name: Enable Gradle build cache
+        run: |
+          mkdir -p "${GRADLE_USER_HOME:-$HOME/.gradle}"
+          echo "org.gradle.caching=true" >> "${GRADLE_USER_HOME:-$HOME/.gradle}/gradle.properties"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -36,6 +130,24 @@ jobs:
           flutter-version: '3.47.4'
           channel: 'stable'
           cache: true
+
+      # NDK 版本由 Flutter 的 Gradle 插件决定，从 SDK 源码读取，升级 Flutter 时缓存随之失效。
+      - name: Resolve Android NDK version
+        run: |
+          set -euo pipefail
+          NDK_VERSION="$(sed -n 's/.*val ndkVersion: String = "\([^"]*\)".*/\1/p' \
+            "$FLUTTER_ROOT/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt")"
+          test -n "$NDK_VERSION"
+          echo "NDK_VERSION=$NDK_VERSION" >> "$GITHUB_ENV"
+
+      # 只读取 CI 在 main 上写入的缓存，发布构建不写缓存；未命中时构建会自行下载安装。
+      - name: Restore Android NDK and CMake
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            /usr/local/lib/android/sdk/ndk/${{ env.NDK_VERSION }}
+            /usr/local/lib/android/sdk/cmake/3.22.1
+          key: android-ndk-${{ runner.os }}-${{ env.NDK_VERSION }}-cmake-3.22.1
 
       - name: Install dependencies
         run: flutter pub get
@@ -71,10 +183,19 @@ jobs:
           APP_ID_SUFFIX: ''
           SIGNING_KEY_PATH: ${{ github.workspace }}/release.jks
           KEYSTORE_PASSWORD: ${{ secrets.DH_KEYSTORE_PASSWORD }}
-        run: flutter build apk --release --target-platform android-arm64 --obfuscate --split-debug-info=build/app/outputs/symbols --dart-define=APP_CHANNEL=release
+        run: |
+          set -euo pipefail
+          # 手动触发时版本号带短 SHA；tag 触发沿用 pubspec.yaml 的版本号。
+          EXTRA_ARGS=()
+          if [ -n "$BUILD_NAME" ]; then
+            EXTRA_ARGS+=(--build-name="$BUILD_NAME")
+          fi
+          flutter build apk --release --target-platform android-arm64 --obfuscate \
+            --split-debug-info=build/app/outputs/symbols \
+            --dart-define=APP_CHANNEL="$CHANNEL" "${EXTRA_ARGS[@]}"
 
       - name: Rename Release APK
-        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/NUIST++-android-arm64.apk
+        run: mv build/app/outputs/flutter-apk/app-release.apk "build/app/outputs/flutter-apk/$ARTIFACT_FILE"
 
       - name: Clean up Keystore
         if: always()
@@ -84,10 +205,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-apk
-          path: build/app/outputs/flutter-apk/NUIST++-android-arm64.apk
+          path: build/app/outputs/flutter-apk/${{ env.ARTIFACT_FILE }}
+          if-no-files-found: error
 
   publish:
-    if: github.event_name == 'push' || inputs.release_tag != ''
+    if: needs.build.outputs.publish == 'true'
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -98,21 +220,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # tag 已在 build 的 Plan Build 中校验过：格式为 v*、已存在且指向本次提交。
       - name: Resolve Release Tag
         id: release-tag
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
-          REF_NAME: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
         run: |
           set -euo pipefail
-
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            RELEASE_TAG="$INPUT_RELEASE_TAG"
-          else
-            RELEASE_TAG="$REF_NAME"
-          fi
-
+          test -n "$RELEASE_TAG"
           printf 'release_tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Generate Release Notes
@@ -177,7 +292,11 @@ jobs:
           RELEASE_TAG: ${{ steps.release-tag.outputs.release_tag }}
         run: |
           set -euo pipefail
-          mv release-artifact/NUIST++-android-arm64.apk "release-artifact/NUIST++-${RELEASE_TAG}-android-arm64.apk"
+          # tag 触发与手动 release 的 artifact 文件名不同，这里统一改成带 tag 的名字。
+          shopt -s nullglob
+          apks=(release-artifact/*.apk)
+          test "${#apks[@]}" -eq 1
+          mv "${apks[0]}" "release-artifact/NUIST++-${RELEASE_TAG}-android-arm64.apk"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
