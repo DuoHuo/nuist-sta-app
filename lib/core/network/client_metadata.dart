@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../logging/app_log.dart';
+import '../privacy/privacy_consent.dart';
 
 /// 自有服务请求使用的客户端信息，不包含门户身份或业务内容。
 @immutable
@@ -21,6 +22,7 @@ class ClientMetadata {
     this.androidSdk,
     this.romName,
     this.romVersion,
+    this.anonymousId,
   });
 
   final String? platform;
@@ -33,6 +35,34 @@ class ClientMetadata {
   final int? androidSdk;
   final String? romName;
   final String? romVersion;
+
+  /// 非空表示匿名模式（用户已拒绝隐私政策）：设备标识使用这份随机 UUID，Android 版本和
+  /// 厂商系统统一报 `anonymous`（不发送 API level），[clientId]、[romName]、[romVersion] 被忽略。
+  final String? anonymousId;
+
+  /// 是否匿名模式。
+  bool get anonymous => anonymousId != null;
+
+  /// 转为匿名模式（用户已拒绝）：丢弃由 Android ID 派生的标识、Android 版本和厂商系统信息，
+  /// 改带随机 UUID，Android 版本报 `anonymous`。
+  ClientMetadata toAnonymous(String id) => ClientMetadata(
+    platform: platform,
+    appPackage: appPackage,
+    appChannel: appChannel,
+    appVersion: appVersion,
+    appVersionCode: appVersionCode,
+    androidVersion: 'anonymous',
+    anonymousId: id,
+  );
+
+  /// 用户还没选择时：不带任何设备标识和系统信息，只保留应用版本、包名与渠道。
+  ClientMetadata withoutDevice() => ClientMetadata(
+    platform: platform,
+    appPackage: appPackage,
+    appChannel: appChannel,
+    appVersion: appVersion,
+    appVersionCode: appVersionCode,
+  );
 
   /// 只生成通过格式校验的请求头；不可用字段直接省略。
   Map<String, String> get headers {
@@ -49,16 +79,23 @@ class ClientMetadata {
     add('X-App-Version', _text(appVersion, _versionPattern, 64));
     add('X-App-Version-Code', _positiveNumber(appVersionCode, 2100000000));
     if (validPlatform == 'android') {
-      final validId = _text(clientId, _idPattern, 64);
-      if (validId != null) {
-        result['X-Client-ID'] = validId;
-        result['X-Client-ID-Type'] = 'ssaid_sha256_v1';
+      if (anonymous) {
+        if (PrivacyConsent.isUuid(anonymousId!)) {
+          result['X-Client-ID'] = anonymousId!;
+          result['X-Client-ID-Type'] = 'random_uuid_v1';
+        }
+      } else {
+        final validId = _text(clientId, _idPattern, 64);
+        if (validId != null) {
+          result['X-Client-ID'] = validId;
+          result['X-Client-ID-Type'] = 'ssaid_sha256_v1';
+        }
       }
       add('X-Android-Version', _text(androidVersion, _versionPattern, 32));
       add('X-Android-SDK', _positiveNumber(androidSdk, 1000));
-      final validRom = _member(romName, _romNames);
+      final validRom = anonymous ? 'anonymous' : _member(romName, _romNames);
       add('X-ROM-Name', validRom);
-      if (validRom != null) {
+      if (validRom != null && !anonymous) {
         add(
           'X-ROM-Version',
           validRom == 'OriginOS' && romVersion == 'Ocean'
@@ -143,7 +180,9 @@ class ClientMetadataProvider {
     Future<Map<Object?, Object?>?> Function()? nativeLoader,
     String? platform,
     String? appChannel,
-  }) : _packageLoader = packageLoader ?? PackageInfo.fromPlatform,
+    PrivacyConsent? consent,
+  }) : _consent = consent ?? PrivacyConsent.instance,
+       _packageLoader = packageLoader ?? PackageInfo.fromPlatform,
        _nativeLoader = nativeLoader ?? _readNative,
        _platform = platform ?? _currentPlatform,
        _appChannel =
@@ -158,10 +197,25 @@ class ClientMetadataProvider {
   final Future<Map<Object?, Object?>?> Function() _nativeLoader;
   final String _platform;
   final String _appChannel;
+  final PrivacyConsent _consent;
   Future<ClientMetadata>? _loading;
 
   /// 同时发起的调用复用同一读取，不重复访问平台通道。
-  Future<ClientMetadata> get() => _loading ??= _load();
+  ///
+  /// 平台读取结果会缓存，但每次调用都按当前的隐私政策选择生成：
+  /// - 已同意：Android ID 派生标识、系统版本与厂商系统信息；
+  /// - 已拒绝：随机匿名 UUID，Android 版本和厂商系统报 `anonymous`；
+  /// - 未选择：不带任何设备标识和系统信息，随机 UUID 也不发送。
+  Future<ClientMetadata> get() async {
+    final base = await (_loading ??= _load());
+    return switch (_consent.value) {
+      PrivacyDecision.accepted => base,
+      PrivacyDecision.declined => base.toAnonymous(
+        await _consent.anonymousId(),
+      ),
+      PrivacyDecision.undecided => base.withoutDevice(),
+    };
+  }
 
   Future<ClientMetadata> _load() async {
     // 两个来源各自兜底，原生通道失败仍保留应用版本和包名。

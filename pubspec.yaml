@@ -44,18 +44,19 @@ dependencies:
   asn1lib: ^1.6.5
   fl_chart: ^1.2.0
   path_provider: ^2.1.6
-  maplibre_gl: ^0.27.1
-  geolocator: ^14.0.3
+  maplibre_gl: ^0.28.0
   share_plus: ^13.3.0
   file_picker: ^13.1.0
   qr_flutter: ^4.1.0
-  mobile_scanner: ^7.4.2
   # 课表：网络恢复后补同步。7.3.2 起依赖 dbus ^0.8，与 geolocator_linux 0.2.6 冲突。
   connectivity_plus: ^7.3.1
   package_info_plus: ^10.2.2
   # 校园地图：加速度计 + 磁力计算朝向，画定位蓝点的方向箭头。
   sensors_plus: ^7.1.1
   flutter_markdown_plus: ^1.0.12
+  flutter_zxing: ^3.1.1
+  camera: ^0.12.2
+  flutter_miuix: ^1.4.0
 
 dev_dependencies:
   flutter_test:
@@ -85,6 +86,10 @@ flutter:
     - assets/map_layers/
     # 内置底图样式：服务器样式的打包副本，取不到服务器样式时兜底（外观一致）。
     - assets/map/campus_style.json
+    # 隐私政策页直接渲染仓库根目录的这份文件，不另存副本。
+    - PRIVACY.md
+    # 原生组件（Rust、Gradle、内置 C++ 库）的许可证正文，供「开源许可」页登记。
+    - assets/licenses/native_licenses.txt
     - assets/js/portal_passkey.js
     # 端上调试控制台，只在 debug 构建注入页面（见 PortalBindPage._injectVConsole）。
     - assets/js/vconsole.min.js

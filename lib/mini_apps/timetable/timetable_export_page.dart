@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
 import '../../core/logging/app_log.dart';
+import '../../core/privacy/privacy_consent_dialog.dart';
 import 'timetable_controller.dart';
 import 'timetable_export_api.dart';
 import 'timetable_export_models.dart';
@@ -52,6 +53,14 @@ class _TimetableExportPageState extends State<TimetableExportPage> {
   Future<void> _generate() async {
     final snapshot = _snapshot;
     if (_generating || snapshot == null) return;
+    // 课表快照会发送到社团服务器，必须先同意隐私政策。
+    final agreed = await ensurePrivacyConsent(
+      context,
+      reason:
+          '生成 WakeUp 口令会把课表快照（课程、教师、上课地点、备注等）发送到社团服务器，'
+          '再由其提交给 WakeUp 分享服务。需要先同意',
+    );
+    if (!agreed || !mounted) return;
     setState(() {
       _generating = true;
       _error = null;

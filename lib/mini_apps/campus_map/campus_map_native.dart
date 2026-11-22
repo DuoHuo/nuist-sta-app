@@ -115,11 +115,6 @@ class _CampusMapNativeState extends State<CampusMapNative>
           )
           ..value = 1
           ..addListener(_scheduleShuttleUpdate);
-    // Android 上用 TextureView 承载地图，由 Flutter 当普通纹理层合成。插件默认的
-    // SurfaceView + Virtual Display 在 release 包里时常出现多帧叠成一片、
-    // 地图发白的重影。只影响合成方式，3D 体块、倾斜视角照常渲染；
-    // 必须在第一张地图创建前设好（静态开关，这里早于本组件的 build）。
-    MapLibreMap.useHybridComposition = true;
     _startTimeout();
   }
 
@@ -644,12 +639,10 @@ class _CampusMapNativeState extends State<CampusMapNative>
             ],
           ]);
           if (!mounted || epoch != _shuttleStyleEpoch || !_ready) return;
-          final scale = Theme.of(context).platform == TargetPlatform.android
-              ? MediaQuery.devicePixelRatioOf(context)
-              : 1.0;
+          // 0.28 起各平台的屏幕坐标都是逻辑像素，不再需要按 Android 的设备像素比换算。
           final distances = [
             for (var i = 0; i < pixels.length; i += 2)
-              ShuttleMapLayer.screenDistance(pixels[i], pixels[i + 1], scale),
+              ShuttleMapLayer.screenDistance(pixels[i], pixels[i + 1], 1),
           ];
           await c.setGeoJsonSource(
             'shuttle-stations',
@@ -1481,7 +1474,7 @@ class _CampusMapNativeState extends State<CampusMapNative>
   Future<void> _onTap(Point<double> point, LatLng _) async {
     final c = _controller;
     if (c == null || !_ready) return;
-    // 插件用物理像素上报点击位置，查询矩形同为其坐标系。
+    // 0.28 起点击位置在各平台都是逻辑像素，查询矩形同为其坐标系。
     final rect = Rect.fromCenter(
       center: Offset(point.x, point.y),
       width: 48,
@@ -1826,6 +1819,12 @@ class _CampusMapNativeState extends State<CampusMapNative>
           key: ValueKey(_mapRevision),
           styleString: config.styleUrl,
           initialCameraPosition: null,
+          // Android 上用 TextureView 承载地图，由 Flutter 当普通纹理层合成。插件默认的
+          // SurfaceView 在 release 包里时常出现多帧叠成一片、地图发白的重影。
+          // 只影响合成方式，3D 体块、倾斜视角照常渲染；iOS 和 web 忽略该参数。
+          androidView: const AndroidMapView(
+            surface: AndroidMapSurface.textureView,
+          ),
           onMapCreated: (c) => _controller = c,
           onStyleLoadedCallback: () {
             _shuttleStyleEpoch++;

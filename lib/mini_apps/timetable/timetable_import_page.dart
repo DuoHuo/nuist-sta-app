@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
 import '../../core/logging/app_log.dart';
+import '../../core/privacy/privacy_consent_dialog.dart';
 import 'timetable_controller.dart';
 import 'timetable_import_api.dart';
 import 'timetable_import_models.dart';
@@ -88,6 +89,16 @@ class _TimetableImportPageState extends State<TimetableImportPage> {
   Future<void> _parse() async {
     if (_parsing) return;
     FocusScope.of(context).unfocus();
+    // 真实口令要发到社团服务器解析，必须先同意隐私政策；内置演示口令只在本地解析，不拦截。
+    if (!TimetableImportApi.isMockShareKey(
+      extractWakeupShareKey(_inputController.text),
+    )) {
+      final agreed = await ensurePrivacyConsent(
+        context,
+        reason: '导入课表会把口令发送到社团服务器，再由其向 WakeUp 分享服务解析。需要先同意',
+      );
+      if (!agreed || !mounted) return;
+    }
     setState(() {
       _parsing = true;
       _error = null;

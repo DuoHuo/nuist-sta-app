@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/config/api_endpoints.dart';
+import 'package:nuist_sta_app/core/privacy/privacy_consent.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_export_api.dart';
@@ -88,8 +89,10 @@ void main() {
     TimetableStore.debugDirectory = tmp;
     _c.debugReset();
     _load();
+    PrivacyConsent.instance.value = PrivacyDecision.accepted;
   });
   tearDown(() {
+    PrivacyConsent.instance.value = PrivacyDecision.undecided;
     _c.debugReset();
     TimetableStore.debugDirectory = null;
     tmp.deleteSync(recursive: true);
@@ -357,6 +360,53 @@ void main() {
     expect(clipboard, '分享口令为「$_shareId」');
   });
 
+  for (final decision in [
+    PrivacyDecision.undecided,
+    PrivacyDecision.declined,
+  ]) {
+    testWidgets('${decision.name}：生成口令前要求同意，取消则不发送课表', (tester) async {
+      PrivacyConsent.instance.value = decision;
+      final api = _FakeApi();
+      addTearDown(api.close);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: appLightTheme(),
+          home: TimetableExportPage(controller: _c, api: api),
+        ),
+      );
+      await tester.tap(find.text('生成 WakeUp 口令'));
+      await tester.pumpAndSettle();
+      expect(find.text('需要同意隐私政策'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(api.requests, 0);
+      expect(PrivacyConsent.instance.value, decision);
+    });
+  }
+
+  testWidgets('生成口令时同意隐私政策后继续发送', (tester) async {
+    PrivacyConsent.instance.value = PrivacyDecision.declined;
+    final api = _FakeApi();
+    addTearDown(api.close);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        home: TimetableExportPage(controller: _c, api: api),
+      ),
+    );
+    await tester.tap(find.text('生成 WakeUp 口令'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('同意并继续'));
+    // 先等 Miuix 弹窗的退出动画播完，路由才会返回结果。
+    await tester.pumpAndSettle();
+    // 记录选择要经过平台通道的异步往返，真实异步让它先完成。
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump();
+    expect(PrivacyConsent.instance.accepted, isTrue);
+    expect(api.requests, 1);
+  });
   testWidgets('无未导出课时不显示入口', (tester) async {
     final api = _FakeApi();
     addTearDown(api.close);

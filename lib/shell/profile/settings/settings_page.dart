@@ -14,6 +14,8 @@ import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
 import '../../../core/logging/log_export_service.dart';
 import '../../../core/logging/log_store.dart';
+import '../../../core/privacy/privacy_consent.dart';
+import '../../../core/privacy/privacy_consent_dialog.dart';
 import '../../../core/theme_mode.dart';
 import 'app_icon_controller.dart';
 
@@ -92,6 +94,17 @@ class SettingsPage extends StatelessWidget {
             ),
             const _AppIconEntry(),
           ],
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 20, 4, 6),
+            child: Semantics(
+              header: true,
+              child: Text(
+                '隐私',
+                style: TextStyle(color: palette.labelText, fontSize: 13),
+              ),
+            ),
+          ),
+          const _PrivacyConsentEntry(),
           ValueListenableBuilder<bool>(
             valueListenable: AppLog.diagnosticsVisible,
             builder: (context, visible, _) => visible
@@ -102,6 +115,36 @@ class SettingsPage extends StatelessWidget {
                 : const SizedBox.shrink(),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 设置页里的隐私政策入口：已同意时可撤回，未同意时可重新同意。
+class _PrivacyConsentEntry extends StatelessWidget {
+  const _PrivacyConsentEntry();
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return Material(
+      color: palette.surface,
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: ValueListenableBuilder<PrivacyDecision>(
+        valueListenable: PrivacyConsent.instance,
+        builder: (context, decision, _) {
+          final accepted = decision == PrivacyDecision.accepted;
+          return ListTile(
+            key: const Key('settings_privacy_consent'),
+            contentPadding: const EdgeInsets.fromLTRB(16, 4, 12, 4),
+            title: Text(accepted ? '撤回隐私政策同意' : '同意隐私政策'),
+            trailing: Icon(Icons.chevron_right, color: palette.chevron),
+            onTap: () => accepted
+                ? confirmWithdrawPrivacyConsent(context)
+                : PrivacyConsent.instance.set(PrivacyDecision.accepted),
+          );
+        },
       ),
     );
   }

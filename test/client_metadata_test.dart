@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/network/client_metadata.dart';
+import 'package:nuist_sta_app/core/privacy/privacy_consent.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 PackageInfo packageInfo({String buildNumber = '02800'}) => PackageInfo(
@@ -13,11 +14,16 @@ PackageInfo packageInfo({String buildNumber = '02800'}) => PackageInfo(
   buildNumber: buildNumber,
 );
 
+/// 不落盘的同意状态，匿名标识只在内存里生成。
+PrivacyConsent consentOf(PrivacyDecision decision) =>
+    PrivacyConsent(directory: () async => null)..value = decision;
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('基础信息与原生字段独立读取，并规范化数字构建号', () async {
     final provider = ClientMetadataProvider(
+      consent: consentOf(PrivacyDecision.accepted),
       platform: 'android',
       appChannel: 'ci',
       packageLoader: () async => packageInfo(),
@@ -57,6 +63,7 @@ void main() {
     var nativeCalls = 0;
     final pending = Completer<PackageInfo>();
     final provider = ClientMetadataProvider(
+      consent: consentOf(PrivacyDecision.accepted),
       platform: 'android',
       packageLoader: () {
         packageCalls++;
@@ -69,8 +76,9 @@ void main() {
     );
     final first = provider.get();
     final second = provider.get();
-    expect(identical(first, second), isTrue);
     pending.complete(packageInfo());
+    // 平台读取只发生一次；已同意时返回的就是缓存的同一份元数据。
+    expect(identical(await first, await second), isTrue);
     expect(identical(await first, await provider.get()), isTrue);
     expect(packageCalls, 1);
     expect(nativeCalls, 1);
@@ -79,6 +87,7 @@ void main() {
   test('原生通道失败仍返回包名和版本，失败结果不重复采集', () async {
     var calls = 0;
     final provider = ClientMetadataProvider(
+      consent: consentOf(PrivacyDecision.accepted),
       platform: 'android',
       packageLoader: () async => packageInfo(),
       nativeLoader: () async {
@@ -96,6 +105,7 @@ void main() {
 
   test('非Android平台不调用设备通道，也不发送Android字段', () async {
     final provider = ClientMetadataProvider(
+      consent: consentOf(PrivacyDecision.accepted),
       platform: 'ios',
       packageLoader: () async => packageInfo(),
       nativeLoader: () async => fail('不应调用Android通道'),
@@ -193,6 +203,7 @@ void main() {
 
   test('包信息失败时可使用原生实际包名，但不编造应用版本', () async {
     final provider = ClientMetadataProvider(
+      consent: consentOf(PrivacyDecision.accepted),
       platform: 'android',
       packageLoader: () async => throw PlatformException(code: 'unavailable'),
       nativeLoader: () async => {'appPackage': 'dev.duohuo.nuist_sta_app'},
@@ -204,6 +215,7 @@ void main() {
 
   test('设备标识不依赖包名来源，包信息单独处理', () async {
     final provider = ClientMetadataProvider(
+      consent: consentOf(PrivacyDecision.accepted),
       platform: 'android',
       packageLoader: () async => packageInfo(),
       nativeLoader: () async => {
@@ -239,6 +251,7 @@ void main() {
 
   test('无效渠道及版本号不会被包装成有效兼容信息', () async {
     final provider = ClientMetadataProvider(
+      consent: consentOf(PrivacyDecision.accepted),
       platform: 'android',
       appChannel: 'invalid',
       packageLoader: () async => packageInfo(buildNumber: 'v02800'),
@@ -291,9 +304,111 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     final provider = ClientMetadataProvider(
+      consent: consentOf(PrivacyDecision.accepted),
       platform: 'android',
       packageLoader: () async => packageInfo(),
     );
     expect((await provider.get()).headers['X-ROM-Name'], 'EMUI');
+  });
+
+  Map<Object?, Object?> nativeFields() => {
+    'appPackage': 'dev.duohuo.nuist_sta_app',
+    'clientId': 'ab' * 32,
+    'androidVersion': '14',
+    'androidSdk': 34,
+    'romName': 'OriginOS',
+    'romVersion': '4',
+  };
+
+  test('已拒绝：只发送随机 UUID，Android 版本和厂商系统固定为 anonymous', () async {
+    final provider = ClientMetadataProvider(
+      consent: consentOf(PrivacyDecision.declined),
+      platform: 'android',
+      appChannel: 'ci',
+      packageLoader: () async => packageInfo(),
+      nativeLoader: () async => nativeFields(),
+    );
+    final headers = (await provider.get()).headers;
+    expect(headers['X-Client-ID'], isNot('ab' * 32));
+    expect(PrivacyConsent.isUuid(headers['X-Client-ID']!), isTrue);
+    expect(headers['X-Client-ID-Type'], 'random_uuid_v1');
+    expect(headers['X-Android-Version'], 'anonymous');
+    expect(headers['X-ROM-Name'], 'anonymous');
+    expect(headers.containsKey('X-Android-SDK'), isFalse);
+    expect(headers.containsKey('X-ROM-Version'), isFalse);
+    // 应用版本和包名不受影响，公告筛选仍可用。
+    expect(headers['X-App-Version-Code'], '2800');
+    expect(headers['X-App-Package'], 'dev.duohuo.nuist_sta_app');
+    expect(headers.values.join(), isNot(contains('OriginOS')));
+    expect(headers.values, isNot(contains('14')));
+  });
+
+  test('未选择：不发送任何标识和系统信息，随机 UUID 也不发送', () async {
+    final provider = ClientMetadataProvider(
+      consent: consentOf(PrivacyDecision.undecided),
+      platform: 'android',
+      appChannel: 'ci',
+      packageLoader: () async => packageInfo(),
+      nativeLoader: () async => nativeFields(),
+    );
+    final headers = (await provider.get()).headers;
+    for (final name in [
+      'X-Client-ID',
+      'X-Client-ID-Type',
+      'X-Android-Version',
+      'X-Android-SDK',
+      'X-ROM-Name',
+      'X-ROM-Version',
+    ]) {
+      expect(headers.containsKey(name), isFalse, reason: name);
+    }
+    expect(headers['X-App-Version-Code'], '2800');
+    expect(headers['X-App-Package'], 'dev.duohuo.nuist_sta_app');
+  });
+  test('匿名标识在同一份同意状态里保持不变，且每个实例各自随机', () async {
+    final consent = consentOf(PrivacyDecision.declined);
+    final provider = ClientMetadataProvider(
+      consent: consent,
+      platform: 'android',
+      packageLoader: () async => packageInfo(),
+      nativeLoader: () async => nativeFields(),
+    );
+    final first = (await provider.get()).headers['X-Client-ID'];
+    expect((await provider.get()).headers['X-Client-ID'], first);
+    expect(await consent.anonymousId(), first);
+    expect(
+      await consentOf(PrivacyDecision.declined).anonymousId(),
+      isNot(first),
+    );
+  });
+
+  test('同意后立即改发设备派生标识，撤回后改回匿名', () async {
+    final consent = consentOf(PrivacyDecision.undecided);
+    final provider = ClientMetadataProvider(
+      consent: consent,
+      platform: 'android',
+      packageLoader: () async => packageInfo(),
+      nativeLoader: () async => nativeFields(),
+    );
+    expect((await provider.get()).headers.containsKey('X-Client-ID'), isFalse);
+    await consent.set(PrivacyDecision.accepted);
+    var headers = (await provider.get()).headers;
+    expect(headers['X-Client-ID'], 'ab' * 32);
+    expect(headers['X-Client-ID-Type'], 'ssaid_sha256_v1');
+    expect(headers['X-ROM-Name'], 'OriginOS');
+    await consent.set(PrivacyDecision.declined);
+    headers = (await provider.get()).headers;
+    expect(headers['X-Client-ID-Type'], 'random_uuid_v1');
+    expect(headers['X-ROM-Name'], 'anonymous');
+    expect(headers['X-Android-Version'], 'anonymous');
+  });
+
+  test('匿名标识不是 UUID v4 时不发送标识头', () {
+    final headers = ClientMetadata(
+      platform: 'android',
+      anonymousId: 'ab' * 32,
+    ).headers;
+    expect(headers.containsKey('X-Client-ID'), isFalse);
+    expect(headers.containsKey('X-Client-ID-Type'), isFalse);
   });
 }

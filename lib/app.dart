@@ -11,6 +11,9 @@ import 'core/app_snack_bar.dart';
 import 'core/auth/student_academic_info.dart';
 import 'core/logging/app_log.dart';
 import 'core/network/vpn_gateway.dart';
+import 'core/navigation/app_page.dart';
+import 'core/privacy/privacy_consent.dart';
+import 'core/privacy/privacy_consent_dialog.dart';
 import 'core/navigation/app_navigation.dart';
 import 'core/refresh/silent_refresh.dart';
 import 'core/schedule/weekly_classes.dart';
@@ -21,16 +24,20 @@ import 'mini_apps/timetable/timetable_lifecycle.dart';
 import 'mini_apps/timetable/timetable_notify_bridge.dart';
 import 'mini_apps/timetable/timetable_week_classes.dart';
 import 'router.dart';
+import 'shell/privacy/privacy_policy_page.dart';
 import 'shell/update/update_bridge.dart';
 import 'shell/update/update_controller.dart';
 import 'shell/update/update_dialog.dart';
 
 class NuistApp extends StatefulWidget {
-  const NuistApp({super.key, this.updates, this.updateBridge});
+  const NuistApp({super.key, this.updates, this.updateBridge, this.consent});
 
   /// 宿主与测试可注入更新状态及通知通道。
   final UpdateController? updates;
   final AppUpdateBridge? updateBridge;
+
+  /// 隐私政策同意状态。传入时一定会在未选择时弹出同意框；默认只在真机上弹出。
+  final PrivacyConsent? consent;
 
   @override
   State<NuistApp> createState() => _NuistAppState();
@@ -47,7 +54,13 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     navigation: _navigation,
     ignorePlatformInitialRoute: _systemTimetableRoute != null,
   );
+  late final _consent = widget.consent ?? PrivacyConsent.instance;
   bool _openingUpdate = false;
+  bool get _askConsent =>
+      widget.consent != null ||
+      (!kIsWeb &&
+          Platform.isAndroid &&
+          !Platform.environment.containsKey('FLUTTER_TEST'));
 
   bool get _listenForUpdates =>
       widget.updateBridge != null ||
@@ -91,6 +104,11 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     WeeklyClasses.source ??= const TimetableWeeklyClasses();
     StudentAcademics.source ??= StudentInfoAcademicSource.instance;
     AppThemeMode.instance.load();
+    PrivacyConsent.openPolicy = (context) => Navigator.of(
+      context,
+      rootNavigator: true,
+    ).push(AppPageRoute<void>(builder: (_) => const PrivacyPolicyPage()));
+    if (_askConsent) unawaited(_showConsentIfNeeded());
     // 点击上课提醒 / 桌面小组件 → 打开课表（今天所在周）。
     final bridge = TimetableNotifyBridge.instance;
     bridge.setRouteHandler(_openRoute);
@@ -143,6 +161,29 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
         );
         // 平台无网络监听时，仍由请求前的健康检查恢复隧道。
       }
+    }
+  }
+
+  /// 首次启动或隐私政策版本更新后，在首帧后弹出一次同意框。
+  Future<void> _showConsentIfNeeded() async {
+    try {
+      await _consent.load();
+      if (_consent.value != PrivacyDecision.undecided || !mounted) return;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      await _navigation.gestureFinished;
+      if (!mounted) return;
+      final navigatorContext =
+          _router.routerDelegate.navigatorKey.currentContext;
+      if (navigatorContext != null && navigatorContext.mounted) {
+        await showPrivacyConsentDialog(navigatorContext, consent: _consent);
+      }
+    } catch (error, stackTrace) {
+      _log.warning(
+        'consent.dialog_failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
   }
 
@@ -268,6 +309,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     if (_listenForUpdates) {
       _updateBridge.setOpenHandler(null);
     }
+    PrivacyConsent.openPolicy = null;
     _navigation.dispose();
     _router.dispose();
     super.dispose();

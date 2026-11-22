@@ -125,6 +125,14 @@ dependencies {
     implementation("androidx.glance:glance-preview:1.2.0")
 }
 
+// 项目按 AGPL-3.0 发布，不能打包闭源的 Google Play 服务。定位走系统 LocationManager
+// （DeviceLocationPlugin），扫码用 zxing-cpp；maplibre_gl 自带的 GMS 定位引擎只在设置了
+// 高精度定位请求时才会用到，本项目不使用，这里整体排除。
+configurations.all {
+    exclude(group = "com.google.android.gms")
+    exclude(group = "com.google.mlkit")
+}
+
 // ===== 校内服务地址：与 Dart 侧共用 lib/core/config/campus_config.dart =====
 // 该文件里是 hex 编码；Android 资源 XML 不能执行 Dart，所以这里把 hex 解出来
 // 生成 network_security_config.xml（生成物在 build/ 里，不入库）。

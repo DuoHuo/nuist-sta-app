@@ -133,6 +133,9 @@ class MainActivity : FlutterActivity() {
         if (!flutterEngine.plugins.has(ClientMetadataPlugin::class.java)) {
             flutterEngine.plugins.add(ClientMetadataPlugin())
         }
+        if (!flutterEngine.plugins.has(DeviceLocationPlugin::class.java)) {
+            flutterEngine.plugins.add(DeviceLocationPlugin())
+        }
         if (!flutterEngine.plugins.has(NotifyWidgetPlugin::class.java)) {
             flutterEngine.plugins.add(NotifyWidgetPlugin())
         }

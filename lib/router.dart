@@ -11,7 +11,9 @@ import 'mini_apps/timetable/timetable_page.dart';
 import 'mini_apps/timetable/timetable_schedule_event.dart';
 import 'mini_apps/web/mini_web_view_page.dart';
 import 'shell/home/home_page.dart';
+import 'shell/privacy/privacy_policy_page.dart';
 import 'shell/profile/about/about_page.dart';
+import 'shell/profile/about/licenses_page.dart';
 import 'shell/profile/portal_bind/portal_bind_page.dart';
 import 'shell/profile/portal_bind/portal_export_page.dart';
 import 'shell/profile/portal_bind/portal_import_page.dart';
@@ -216,6 +218,16 @@ List<GoRoute> _detailRoutes({
       redirect: redirect,
       pageBuilder: (_, state) =>
           page(state, AboutPage(updates: updateController)),
+    ),
+    GoRoute(
+      path: '${prefix}privacy',
+      redirect: redirect,
+      pageBuilder: (_, state) => page(state, const PrivacyPolicyPage()),
+    ),
+    GoRoute(
+      path: '${prefix}licenses',
+      redirect: redirect,
+      pageBuilder: (_, state) => page(state, const LicensesPage()),
     ),
     GoRoute(
       path: '${prefix}settings',

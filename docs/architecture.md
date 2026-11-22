@@ -24,6 +24,8 @@ lib/
 │   ├── layout/         # 安全区、铰链与双栏矩形；卡片指标的响应式网格
 │   ├── navigation/     # 固定分支导航器、所属栏跳转与预测性返回协调
 │   ├── network/        # 自有服务客户端与元数据；校园 VPN 与 Rust 原生库的 FFI 封装
+│   ├── privacy/        # 隐私政策同意状态、匿名标识与同意/撤回弹窗 —— 见下文「隐私同意」
+│   ├── ui/             # miuix_bottom_dialog.dart：Miuix 风格的下半屏对话框
 │   ├── schedule/       # WeeklyClasses：「本周课程」跨小程序接口（课表提供，地图读取）
 │   ├── app_manifest.dart   # AppManifest：小程序描述
 │   ├── app_registry.dart   # AppRegistry：注册校验与宫格、学习卡片、入口索引
@@ -40,8 +42,9 @@ lib/
 │   ├── root_page.dart  # 固定分支容器、宽窄布局与底部入口
 │   ├── announcement/   # 应用公告（拉取社团自有服务）
 │   ├── home/           # 首页宫格
+│   ├── privacy/        # 隐私政策页（渲染随包打包的 PRIVACY.md）
 │   ├── study/          # 学习页
-│   └── profile/        # 我的页（portal_bind/ 统一门户、settings/ 设置、about/ 关于）
+│   └── profile/        # 我的页（portal_bind/ 统一门户、settings/ 设置、about/ 关于与开源许可）
 └── mini_apps/          # 所有小程序，每个一个目录
     ├── registry.dart   # ★ 全量注册表
     └── …
@@ -59,6 +62,7 @@ lib/
 | `/portal-bind/export`、`/portal-bind/import`、`/portal-bind/import/scan` | 通行密钥导出、导入与扫码导入 |
 | `/place/:placeId` | 校园地图地物详情页，可深链 |
 | `/about`、`/settings` | 关于页、App 级设置页 |
+| `/privacy`、`/licenses` | 隐私政策页、开源许可页（均从关于页进入） |
 
 学习页的成绩、双创学分、劳动积分详情分别使用 `/apps/scores`、`/apps/innovation-credit`、
 `/apps/labor-score`，页面入口由各模块的 manifest 提供。
@@ -323,9 +327,9 @@ UI 侧用 `ListenableBuilder(listenable: controller, builder: …)` 订阅。
 不能由 Flutter 的 release/debug 模式或包名猜测。非法渠道省略且记录安全的诊断事件。
 原生通道 `nuist/client_metadata` 在后台读取受限的厂商属性，返回可识别的 ROM 名称和
 市场版本，以及不包含包名和渠道的 SSAID 派生值；不把原始 Android ID、完整固件字符串或系统指纹传回 Dart。
-元数据单项不可用时省略，不阻断业务。没有采集开关，字段与用途见 [隐私说明](../PRIVACY.md)。
+元数据单项不可用时省略，不阻断业务。发送哪些字段取决于用户的隐私政策选择，见下文「隐私同意」，字段与用途见 [隐私说明](../PRIVACY.md)。
 
-标识类型为 `ssaid_sha256_v1`，计算方式是 `SHA256('nuist-sta:ssaid:v1:' + canonicalSSAID)`；
+同意后的标识类型为 `ssaid_sha256_v1`，计算方式是 `SHA256('nuist-sta:ssaid:v1:' + canonicalSSAID)`；
 服务端直接保存客户端标识，不再进行二次 HMAC 或哈希。相同标识跨包名、渠道去重，应用版本
 仍按包名、渠道分别保存。Android SSAID 也受签名影响，因此不保证不同签名的构建共用标识。
 
@@ -342,6 +346,28 @@ ANCO 环境优先于普通 ROM 判断，类别为 `HarmonyOSNEXT`；从宿主软
 先取得完整上下文，再复用匹配缓存及其条件请求头。升级、渠道变化、旧格式或上下文缺失时不
 展示旧缓存，离线也不退回其他版本的公告。无缓存却收到 304 时最多补一次无条件请求。
 服务端筛选后没返回某个 ID 不代表该公告已删除，因此已读记录独立保留。
+
+### 隐私同意
+
+`core/privacy/privacy_consent.dart` 的 `PrivacyConsent` 保存用户对隐私政策的选择（同意、拒绝、未选择），
+记录写在应用支持目录的 `settings/privacy_consent`，含政策版本号 `kPrivacyPolicyVersion`；
+`PRIVACY.md` 的收集范围、用途或接收方变化时递增它，已有记录随之失效并重新询问。
+`ClientMetadataProvider.get()` 每次按当前选择生成请求头：
+
+| 选择 | 标识 | Android 版本 / SDK | 厂商系统 |
+|---|---|---|---|
+| 同意 | `X-Client-ID` 为 SSAID 派生值，类型 `ssaid_sha256_v1` | 真实值 | 真实值 |
+| 拒绝 | 随机 UUID v4，类型 `random_uuid_v1` | `anonymous`，不发 SDK | `anonymous` |
+| 未选择 | 不发送 | 不发送 | 不发送 |
+
+随机 UUID 由 `PrivacyConsent.anonymousId()` 首次需要时生成并保存在 `settings/anonymous_id`，
+与设备信息无关。应用版本、包名和渠道在三种状态下都发送，公告筛选不受影响。
+课表分享要和社团服务器交换数据（生成口令上传课表快照，导入口令上传口令），必须先同意：
+`ensurePrivacyConsent` 在生成口令和导入真实口令前弹窗询问，内置演示口令只在本地解析，不拦截。
+首次启动的同意弹窗由 `app.dart` 在首帧后弹出，设置页的入口提供撤回（弹窗内 10 秒倒计时）和重新同意。
+这些弹窗用 `core/ui/miuix_bottom_dialog.dart`（`flutter_miuix`），手机上从下半屏弹出。
+`core` 不能依赖 `shell`，所以隐私政策页入口通过 `PrivacyConsent.openPolicy` 由壳在启动时登记。
+服务端把 `random_uuid_v1` 的请求单独统计，不与现有设备和请求数混合，见 nuist-sta-server 的 README。
 
 ## 校园 VPN 网络请求
 
@@ -483,6 +509,21 @@ JSON（包括嵌套字符串）、表单、URL 认证参数与 HTML 表格/控�
 
 CI 要求依赖方向与敏感字面量检查通过、启动图标与源图一致、`cargo test` 通过、`dart format` 无差异、
 `flutter analyze` 零警告、`flutter test`（含加载本机 VPN 动态库的 FFI 测试）全绿，没有覆盖率门槛。
+
+## 许可证与依赖
+
+项目按 AGPL-3.0 发布，不能打包闭源的 Google Play 服务和 ML Kit。因此：
+
+- 扫码用 `flutter_zxing`（zxing-cpp），不用 `mobile_scanner`；
+- 定位走系统 `LocationManager`，原生实现是 `DeviceLocationPlugin.kt`，Dart 侧在
+  `campus_map_location.dart`，不用 `geolocator`；
+- `android/gradle.properties` 的 `maplibre_gl.playServicesLocation=false` 关闭 `maplibre_gl` 的 GMS 引擎，
+  `build.gradle.kts` 另外整体排除 `com.google.android.gms` 与 `com.google.mlkit`。
+
+构建后可以扫描 APK 的 dex，`com/google/android/gms/` 与 `com/google/mlkit/` 的命中数应为 0。
+新增依赖前先确认许可证与 AGPL 兼容。「开源许可」页由 Flutter 自动收集 Dart 依赖的 LICENSE；
+Rust（`native/vpn`）、Gradle 和 `flutter_zxing` 内置 C++ 库的许可证正文放在
+`assets/licenses/native_licenses.txt`，增删这些依赖时同步更新。
 
 ## 相关文档
 

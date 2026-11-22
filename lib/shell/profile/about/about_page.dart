@@ -7,6 +7,7 @@ import '../../../core/app_snack_bar.dart';
 import '../../../core/app_info.dart';
 import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
+import '../../../core/navigation/app_navigation.dart';
 import '../../update/update_controller.dart';
 import '../../update/update_dialog.dart';
 import 'contributor_avatar.dart';
@@ -215,6 +216,39 @@ class _AboutPageState extends State<AboutPage> {
                 ListenableBuilder(
                   listenable: _controller,
                   builder: (context, _) => _buildContributors(palette),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Material(
+            color: palette.surface,
+            borderRadius: BorderRadius.circular(12),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                ListTile(
+                  key: const Key('about_privacy'),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                  leading: Icon(
+                    Icons.privacy_tip_outlined,
+                    color: palette.accent,
+                  ),
+                  title: const Text('隐私政策'),
+                  trailing: Icon(Icons.chevron_right, color: palette.chevron),
+                  onTap: () => AppNavigation.push(context, '/privacy'),
+                ),
+                Divider(height: 1, indent: 16, color: palette.rowDivider),
+                ListTile(
+                  key: const Key('about_licenses'),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                  leading: Icon(
+                    Icons.description_outlined,
+                    color: palette.accent,
+                  ),
+                  title: const Text('开源许可'),
+                  trailing: Icon(Icons.chevron_right, color: palette.chevron),
+                  onTap: () => AppNavigation.push(context, '/licenses'),
                 ),
               ],
             ),

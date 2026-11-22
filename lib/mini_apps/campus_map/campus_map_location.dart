@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:geolocator/geolocator.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/logging/app_log.dart';
 import '../../core/logging/diagnostic_error.dart';
@@ -55,111 +55,156 @@ abstract interface class LiveUserLocationSource implements UserLocationSource {
   Stream<LocationFix> watch();
 }
 
+/// 定位权限状态，对应原生通道返回的字符串。
+enum _Permission { granted, denied, deniedForever }
+
+/// 经系统 `LocationManager` 定位，不依赖 Google Play 服务。原生实现见 Android 端
+/// `DeviceLocationPlugin`。
 class DeviceUserLocation implements LiveUserLocationSource {
   const DeviceUserLocation();
+
   static final _log = AppLog.logger('campus_map.location');
+  static const _channel = MethodChannel('nuist/device_location');
+  static const _updates = EventChannel('nuist/device_location/updates');
 
   /// 最近位置超过这个时长就不拿来当「当前位置」兜底。
   static const _staleAfter = Duration(minutes: 10);
 
+  static Future<_Permission> _permission({required bool request}) async {
+    final name = await _channel.invokeMethod<String>(
+      request ? 'requestPermission' : 'permission',
+    );
+    return switch (name) {
+      'granted' => _Permission.granted,
+      'deniedForever' => _Permission.deniedForever,
+      _ => _Permission.denied,
+    };
+  }
+
+  static Future<bool> _serviceEnabled() async =>
+      await _channel.invokeMethod<bool>('isEnabled') ?? false;
+
   Future<void> _ensurePermission() async {
-    if (!await Geolocator.isLocationServiceEnabled()) {
-      throw const CampusLocationException(
-        '定位服务未开启，请在系统设置中打开位置信息',
-        code: 'location_service_disabled',
+    try {
+      if (!await _serviceEnabled()) {
+        throw const CampusLocationException(
+          '定位服务未开启，请在系统设置中打开位置信息',
+          code: 'location_service_disabled',
+        );
+      }
+      var permission = await _permission(request: false);
+      if (permission == _Permission.denied) {
+        permission = await _permission(request: true);
+      }
+      switch (permission) {
+        case _Permission.denied:
+          throw const CampusLocationException(
+            '未获得定位权限，无法显示你的位置',
+            code: 'location_permission_denied',
+          );
+        case _Permission.deniedForever:
+          throw const CampusLocationException(
+            '定位权限已被拒绝，请在系统设置中允许',
+            code: 'location_permission_denied_forever',
+          );
+        case _Permission.granted:
+          break;
+      }
+    } on PlatformException catch (error, stackTrace) {
+      throw CampusLocationException(
+        '定位暂时不可用',
+        cause: error,
+        causeStackTrace: stackTrace,
       );
-    }
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-    switch (permission) {
-      case LocationPermission.denied:
-      case LocationPermission.unableToDetermine:
-        throw const CampusLocationException(
-          '未获得定位权限，无法显示你的位置',
-          code: 'location_permission_denied',
-        );
-      case LocationPermission.deniedForever:
-        throw const CampusLocationException(
-          '定位权限已被拒绝，请在系统设置中允许',
-          code: 'location_permission_denied_forever',
-        );
-      case LocationPermission.whileInUse:
-      case LocationPermission.always:
-        break;
     }
   }
 
-  static LocationFix? _fixOf(Position? position) {
-    if (position == null) return null;
+  static LocationFix? _fixOf(Object? raw) {
+    if (raw is! Map) return null;
+    final latitude = raw['latitude'];
+    final longitude = raw['longitude'];
+    final accuracy = raw['accuracy'];
+    if (latitude is! num || longitude is! num) return null;
     final point = GeoPoint(
-      longitude: position.longitude,
-      latitude: position.latitude,
+      longitude: longitude.toDouble(),
+      latitude: latitude.toDouble(),
     );
     if (!point.isValid) return null;
-    return LocationFix(point: point, accuracyM: position.accuracy);
+    return LocationFix(
+      point: point,
+      accuracyM: accuracy is num ? accuracy.toDouble() : 0,
+    );
+  }
+
+  static DateTime? _timeOf(Object? raw) {
+    final stamp = raw is Map ? raw['timestamp'] : null;
+    return stamp is int ? DateTime.fromMillisecondsSinceEpoch(stamp) : null;
   }
 
   @override
   Future<bool> ready() async {
-    if (!await Geolocator.isLocationServiceEnabled()) return false;
-    final permission = await Geolocator.checkPermission();
-    return permission == LocationPermission.whileInUse ||
-        permission == LocationPermission.always;
+    try {
+      return await _serviceEnabled() &&
+          await _permission(request: false) == _Permission.granted;
+    } on PlatformException {
+      return false;
+    }
   }
 
   @override
   Future<LocationFix?> lastKnown() async {
     try {
-      return _fixOf(await Geolocator.getLastKnownPosition());
+      return _fixOf(await _channel.invokeMethod<Object?>('lastKnown'));
     } catch (_) {
       return null;
     }
   }
 
-  Future<LocationFix?> _attempt(
-    LocationAccuracy accuracy,
-    Duration limit,
-  ) async {
-    try {
-      return _fixOf(
-        await Geolocator.getCurrentPosition(
-          locationSettings: LocationSettings(
-            accuracy: accuracy,
-            timeLimit: limit,
-          ),
-        ),
-      );
-    } on TimeoutException catch (error, stackTrace) {
+  Future<LocationFix?> _attempt({
+    required bool high,
+    required Duration limit,
+  }) async {
+    final raw = await _channel.invokeMethod<Object?>('getCurrent', {
+      'high': high,
+      'timeoutMs': limit.inMilliseconds,
+    });
+    final fix = _fixOf(raw);
+    if (fix == null) {
       _log.debug(
         'fix.attempt_timed_out',
         fields: {
-          'stage': 'location.${accuracy.name}',
+          'stage': 'location.${high ? 'high' : 'medium'}',
           'timeout_ms': limit.inMilliseconds,
         },
-        error: error,
-        stackTrace: stackTrace,
       );
-      return null;
     }
+    return fix;
   }
 
   @override
   Future<LocationFix> currentFix() async {
     await _ensurePermission();
-    // 室内 GPS 往往搜不到星：高精度只等 8 秒，不行就用 Wi-Fi / 基站定位。
-    final fix =
-        await _attempt(LocationAccuracy.high, const Duration(seconds: 8)) ??
-        await _attempt(LocationAccuracy.medium, const Duration(seconds: 8));
-    if (fix != null) return fix;
-    final last = await Geolocator.getLastKnownPosition();
-    final fallback = _fixOf(last);
-    if (last != null &&
-        fallback != null &&
-        DateTime.now().difference(last.timestamp) < _staleAfter) {
-      _log.info('fix.cached_fallback', fields: {'outcome': 'cache_fallback'});
-      return fallback;
+    try {
+      // 室内 GPS 往往搜不到星：高精度只等 8 秒，不行就用 Wi-Fi / 基站定位。
+      final fix =
+          await _attempt(high: true, limit: const Duration(seconds: 8)) ??
+          await _attempt(high: false, limit: const Duration(seconds: 8));
+      if (fix != null) return fix;
+      final raw = await _channel.invokeMethod<Object?>('lastKnown');
+      final fallback = _fixOf(raw);
+      final at = _timeOf(raw);
+      if (fallback != null &&
+          at != null &&
+          DateTime.now().difference(at) < _staleAfter) {
+        _log.info('fix.cached_fallback', fields: {'outcome': 'cache_fallback'});
+        return fallback;
+      }
+    } on PlatformException catch (error, stackTrace) {
+      throw CampusLocationException(
+        '定位暂时不可用',
+        cause: error,
+        causeStackTrace: stackTrace,
+      );
     }
     throw const CampusLocationException('暂时没定位到，请到窗边或室外再试');
   }
@@ -168,10 +213,9 @@ class DeviceUserLocation implements LiveUserLocationSource {
   Future<GeoPoint> current() async => (await currentFix()).point;
 
   @override
-  Stream<LocationFix> watch() => Geolocator.getPositionStream(
-    locationSettings: const LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 3,
-    ),
-  ).map(_fixOf).where((fix) => fix != null).cast<LocationFix>();
+  Stream<LocationFix> watch() => _updates
+      .receiveBroadcastStream()
+      .map(_fixOf)
+      .where((fix) => fix != null)
+      .cast<LocationFix>();
 }

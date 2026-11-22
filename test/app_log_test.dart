@@ -776,6 +776,9 @@ void main() {
     expect(AppLog.verboseExpiresAt.value, isNull);
 
     final before = DateTime.now().toUtc();
+    // 设置页新增了「隐私」分组，日志模式行被推到视口外，先滚动到可见处。
+    await tester.ensureVisible(find.text('标准模式 · 关键步骤摘要，完整详情已保存'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('标准模式 · 关键步骤摘要，完整详情已保存'));
     await tester.pumpAndSettle();
 
@@ -792,6 +795,8 @@ void main() {
     );
     expect(AppLog.diagnosticsVisible.value, isTrue);
     expect(find.textContaining('详细控制台 · 剩余'), findsOneWidget);
+    await tester.ensureVisible(find.widgetWithText(TextButton, '关闭'));
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(TextButton, '关闭'));
     await tester.pumpAndSettle();
     expect(AppLog.verboseEnabled.value, isFalse);
@@ -1383,6 +1388,8 @@ Future<void> _openLogPreview(WidgetTester tester, ThemeData theme) async {
   }
   expect(tester.widget<ListTile>(viewRow).enabled, isTrue);
   await tester.ensureVisible(find.text('查看日志'));
+  // 设置页新增了「隐私」分组，日志入口被推到视口外，滚动后要先落定再点击。
+  await tester.pumpAndSettle();
   await tester.runAsync(() => tester.tap(find.text('查看日志')));
   for (
     var attempt = 0;
