@@ -96,9 +96,11 @@ jobs:
             PUBLISH=true
           fi
           {
-            echo "CHANNEL=$CHANNEL"
-            echo "BUILD_NAME=$BUILD_NAME"
-            echo "ARTIFACT_FILE=$ARTIFACT_FILE"
+            # 写入 GITHUB_ENV 的变量会传给后续所有步骤（包括第三方 Action），
+            # 统一加 NUIST_ 前缀，避免与 flutter-action 内部的 CHANNEL 等变量冲突。
+            echo "NUIST_APP_CHANNEL=$CHANNEL"
+            echo "NUIST_BUILD_NAME=$BUILD_NAME"
+            echo "NUIST_ARTIFACT_FILE=$ARTIFACT_FILE"
           } >> "$GITHUB_ENV"
           {
             echo "publish=$PUBLISH"
@@ -187,15 +189,15 @@ jobs:
           set -euo pipefail
           # 手动触发时版本号带短 SHA；tag 触发沿用 pubspec.yaml 的版本号。
           EXTRA_ARGS=()
-          if [ -n "$BUILD_NAME" ]; then
-            EXTRA_ARGS+=(--build-name="$BUILD_NAME")
+          if [ -n "$NUIST_BUILD_NAME" ]; then
+            EXTRA_ARGS+=(--build-name="$NUIST_BUILD_NAME")
           fi
           flutter build apk --release --target-platform android-arm64 --obfuscate \
             --split-debug-info=build/app/outputs/symbols \
-            --dart-define=APP_CHANNEL="$CHANNEL" "${EXTRA_ARGS[@]}"
+            --dart-define=APP_CHANNEL="$NUIST_APP_CHANNEL" "${EXTRA_ARGS[@]}"
 
       - name: Rename Release APK
-        run: mv build/app/outputs/flutter-apk/app-release.apk "build/app/outputs/flutter-apk/$ARTIFACT_FILE"
+        run: mv build/app/outputs/flutter-apk/app-release.apk "build/app/outputs/flutter-apk/$NUIST_ARTIFACT_FILE"
 
       - name: Clean up Keystore
         if: always()
@@ -205,7 +207,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-apk
-          path: build/app/outputs/flutter-apk/${{ env.ARTIFACT_FILE }}
+          path: build/app/outputs/flutter-apk/${{ env.NUIST_ARTIFACT_FILE }}
           if-no-files-found: error
 
   publish:
