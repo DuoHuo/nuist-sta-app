@@ -82,9 +82,14 @@ class _AppPageBasedRoute<T> extends PageRoute<T>
   @override
   RoutePopDisposition get popDisposition {
     // go_router 为所有常驻分支登记 PopScope，包括隐藏的详情栈。
-    // 壳根页没有上一级；先由 BackButtonListener 处理可见栏，耗尽后交给系统。
+    // 根路由按可见栈登记平台返回能力，不能让预加载分支取消 Android 回调。
+    // BackButtonListener 处理可见栏；可见栈耗尽后才交给系统退出。
     // 业务表单和全局弹层仍使用各自路由的 PopScope，不经过此例外。
-    if (_page.isShellRoot && isFirst) return RoutePopDisposition.bubble;
+    if (_page.isShellRoot && isFirst) {
+      return navigation?.canHandleBack == true
+          ? RoutePopDisposition.doNotPop
+          : RoutePopDisposition.bubble;
+    }
     return super.popDisposition;
   }
 }

@@ -50,6 +50,27 @@ Iterable<ImperativeRouteMatch> _imperativeMatches(
   }
 }
 
+List<bool> _recordFrameworkBack(WidgetTester tester) {
+  final requests = <bool>[];
+  final messenger = tester.binding.defaultBinaryMessenger;
+  final previousLifecycle = tester.binding.lifecycleState;
+  // 模拟 Activity 已恢复；Flutter 在未挂载／detached 状态不会向 Android 登记返回。
+  tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+  messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+    if (call.method == 'SystemNavigator.setFrameworkHandlesBack') {
+      requests.add(call.arguments as bool);
+    }
+    return null;
+  });
+  addTearDown(() {
+    tester.binding.handleAppLifecycleStateChanged(
+      previousLifecycle ?? AppLifecycleState.detached,
+    );
+    messenger.setMockMethodCallHandler(SystemChannels.platform, null);
+  });
+  return requests;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final ctl = TimetableController.instance;
@@ -237,6 +258,7 @@ void main() {
 
   for (final theme in [ThemeMode.light, ThemeMode.dark]) {
     testWidgets('冷小组件初始路由首帧显示课表且不等待平台回执，${theme.name} 保留首页返回栈', (tester) async {
+      final frameworkBack = _recordFrameworkBack(tester);
       AppThemeMode.instance.value = theme;
       tester.platformDispatcher.defaultRouteNameTestValue = '/apps/timetable';
       TimetableNotifyBridge.debugIsAndroid = true;
@@ -268,6 +290,11 @@ void main() {
       expect(route.transitionDuration, Duration.zero);
       expect(route.animation!.value, 1);
       expect(route.popGestureEnabled, isTrue);
+      expect(
+        frameworkBack.last,
+        isTrue,
+        reason: 'Android 必须先把返回交给 Flutter，才能回到首页',
+      );
 
       launch.complete('/apps/timetable');
       await tester.pumpAndSettle();
@@ -279,10 +306,13 @@ void main() {
       router.pop();
       await tester.pumpAndSettle();
       expect(router.routerDelegate.currentConfiguration.uri.path, '/');
+      expect(find.byType(HomePage), findsOneWidget);
+      expect(frameworkBack.last, isFalse, reason: '回到根页后应恢复系统退出');
       await tester.pumpWidget(const SizedBox.shrink());
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
     testWidgets('冷启动取走小组件路由直接显示，${theme.name} 取消返回保留课程且宫格仍有动画', (tester) async {
+      final frameworkBack = _recordFrameworkBack(tester);
       AppThemeMode.instance.value = theme;
       addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
       TimetableNotifyBridge.debugIsAndroid = true;
@@ -310,11 +340,19 @@ void main() {
       expect(route.transitionDuration, Duration.zero);
       expect(route.animation!.value, 1);
       expect(route.popGestureEnabled, isTrue);
+      expect(frameworkBack.last, isTrue, reason: '隐藏学习分支不能取消课表的系统返回登记');
       expect(
         _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
         hasLength(1),
       );
       Future<void> gesture(String method, [double progress = 0]) async {
+        if (method == 'startBackGesture') {
+          expect(
+            frameworkBack.last,
+            isTrue,
+            reason: '平台未登记时 Android 不会发送页面返回手势',
+          );
+        }
         await messenger.handlePlatformMessage(
           'flutter/backgesture',
           const StandardMethodCodec().encodeMethodCall(
@@ -336,11 +374,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(route.isCurrent, isTrue);
       expect(find.byType(TimetablePage), findsOneWidget);
+      expect(frameworkBack.last, isTrue);
       await gesture('startBackGesture');
       await gesture('updateBackGestureProgress', .4);
       await gesture('commitBackGesture');
       await tester.pumpAndSettle();
       expect(router.routerDelegate.currentConfiguration.uri.path, '/');
+      expect(find.byType(HomePage), findsOneWidget);
+      expect(frameworkBack.last, isFalse);
       await tester.ensureVisible(find.text('课表'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('课表'));
@@ -350,10 +391,12 @@ void main() {
               as PageRoute;
       expect(ordinary.transitionDuration, isNot(Duration.zero));
       expect(ordinary.popGestureEnabled, isTrue);
+      expect(frameworkBack.last, isTrue);
       await tester.pumpWidget(const SizedBox.shrink());
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
     testWidgets('小组件直接进入课表不播放入场动画，${theme.name} 仍支持返回取消和完成', (tester) async {
+      final frameworkBack = _recordFrameworkBack(tester);
       AppThemeMode.instance.value = theme;
       addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
       load(TimetableParser.parseKbRows([row(1, 2)]).courses);
@@ -374,7 +417,15 @@ void main() {
       expect(route.transitionDuration, Duration.zero);
       expect(route.animation!.value, 1);
       expect(route.popGestureEnabled, isTrue);
+      expect(frameworkBack.last, isTrue, reason: '热启动课表也必须保持平台返回登记');
       Future<void> gesture(String method, [double progress = 0]) async {
+        if (method == 'startBackGesture') {
+          expect(
+            frameworkBack.last,
+            isTrue,
+            reason: '平台未登记时 Android 不会发送页面返回手势',
+          );
+        }
         await messenger.handlePlatformMessage(
           'flutter/backgesture',
           const StandardMethodCodec().encodeMethodCall(
@@ -395,11 +446,14 @@ void main() {
       await gesture('cancelBackGesture');
       await tester.pumpAndSettle();
       expect(route.isCurrent, isTrue);
+      expect(frameworkBack.last, isTrue);
       await gesture('startBackGesture');
       await gesture('updateBackGestureProgress', 0.4);
       await gesture('commitBackGesture');
       await tester.pumpAndSettle();
       expect(find.byType(TimetablePage), findsNothing);
+      expect(find.byType(HomePage), findsOneWidget);
+      expect(frameworkBack.last, isFalse);
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));
   }
 

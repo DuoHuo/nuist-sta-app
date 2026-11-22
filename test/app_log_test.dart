@@ -1280,7 +1280,7 @@ void main() {
     expect(afterError, contains('urgent.error'));
   });
 
-  test('RotatingLogStore 在活跃日志文件被外部删除后可自动重建句柄并保留新日志', () async {
+  test('RotatingLogStore 外部删除活跃日志文件时保留后续日志', () async {
     final temp = await Directory.systemTemp.createTemp('log_recreate_test_');
     addTearDown(() async {
       if (await temp.exists()) await temp.delete(recursive: true);
@@ -1296,12 +1296,30 @@ void main() {
     final logFile = File('${temp.path}/app.log');
     expect(await logFile.exists(), isTrue);
 
-    await logFile.delete();
-    expect(await logFile.exists(), isFalse);
+    if (Platform.isWindows) {
+      // Windows 的打开句柄不共享删除权限；删除被拒绝后仍应保留后续写入。
+      await expectLater(
+        logFile.delete(),
+        throwsA(
+          isA<FileSystemException>().having(
+            (error) => error.osError?.errorCode,
+            'Windows 共享冲突',
+            32,
+          ),
+        ),
+      );
+      expect(await logFile.exists(), isTrue);
+    } else {
+      // Android、Linux 等平台允许删除活跃文件，需要验证句柄自动重建。
+      await logFile.delete();
+      expect(await logFile.exists(), isFalse);
+    }
 
     await store.append('{"event":"second"}', immediateFlush: true);
     expect(await logFile.exists(), isTrue);
-    expect(await logFile.readAsString(), contains('second'));
+    final content = await logFile.readAsString();
+    expect(content, contains('second'));
+    if (Platform.isWindows) expect(content, contains('first'));
   });
 
   test('业务代码不能绕过统一日志入口', () async {

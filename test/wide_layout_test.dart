@@ -109,11 +109,29 @@ Future<(GoRouter, AppNavigationController)> _pump(
   AppRegistry? registry,
   AnnouncementController? announcements,
   MediaQueryData Function(MediaQueryData)? media,
+  List<bool>? frameworkBack,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = Size(width, 900);
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
+  if (frameworkBack != null) {
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final previousLifecycle = tester.binding.lifecycleState;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'SystemNavigator.setFrameworkHandlesBack') {
+        frameworkBack.add(call.arguments as bool);
+      }
+      return null;
+    });
+    addTearDown(() {
+      tester.binding.handleAppLifecycleStateChanged(
+        previousLifecycle ?? AppLifecycleState.detached,
+      );
+      messenger.setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+  }
   final navigation = AppNavigationController();
   final notices =
       announcements ??
@@ -296,6 +314,71 @@ void main() {
   });
 
   for (final dark in [false, true]) {
+    testWidgets('${dark ? '深色' : '浅色'} Android 返回登记跟随可见栈，隐藏栏通知不影响系统退出', (
+      tester,
+    ) async {
+      final frameworkBack = <bool>[];
+      final (_, navigation) = await _pump(
+        tester,
+        dark: dark,
+        frameworkBack: frameworkBack,
+      );
+      expect(frameworkBack.last, isFalse);
+      await tester.tap(find.text('学习入口'));
+      await tester.pumpAndSettle();
+      expect(frameworkBack.last, isTrue);
+      // 另一可见栏的空栈通知不能取消学习详情的返回登记。
+      const NavigationNotification(canHandlePop: false)
+          .dispatch(tester.element(find.byType(HomePage)));
+      await tester.pump();
+      expect(frameworkBack.last, isTrue);
+      final studyContext = tester.element(find.text('详情1'));
+
+      await tester.tap(find.text('我的'));
+      await tester.pumpAndSettle();
+      expect(frameworkBack.last, isFalse);
+      expect(await navigation.handleBack(), isFalse);
+      const NavigationNotification(canHandlePop: true).dispatch(studyContext);
+      await tester.pump();
+      expect(frameworkBack.last, isFalse, reason: '隐藏详情不能阻止我的根页退出');
+
+      await tester.tap(find.text('设置'));
+      await tester.pumpAndSettle();
+      expect(frameworkBack.last, isTrue);
+      final settingsContext = tester.element(find.byType(SettingsPage));
+      tester.view.physicalSize = const Size(390, 900);
+      await tester.pumpAndSettle();
+      expect(frameworkBack.last, isTrue);
+      tester.view.physicalSize = const Size(800, 900);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('首页+学习'));
+      await tester.pumpAndSettle();
+      expect(frameworkBack.last, isTrue);
+      const NavigationNotification(canHandlePop: false)
+          .dispatch(settingsContext);
+      await tester.pump();
+      expect(frameworkBack.last, isTrue, reason: '隐藏设置页不能取消学习详情的返回登记');
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('详情1'), findsNothing);
+      expect(frameworkBack.last, isFalse);
+
+      unawaited(
+        showDialog<void>(
+          context: navigation.rootNavigatorKey.currentContext!,
+          useRootNavigator: true,
+          builder: (_) => const AlertDialog(content: Text('全局返回登记')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(frameworkBack.last, isTrue);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('全局返回登记'), findsNothing);
+      expect(frameworkBack.last, isFalse);
+      expect(tester.takeException(), isNull);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
     testWidgets('${dark ? '深色' : '浅色'}宽屏通知位于右上角，收窄后同一状态回到首页', (tester) async {
       final notices = AnnouncementController.test(
         fetch: ({etag, lastModified}) async => const AnnouncementFetchResult(
