@@ -336,6 +336,14 @@ class _SunshineRunPageState extends State<SunshineRunPage> {
                                     custom.count,
                                     custom: custom,
                                   ),
+                                _AddActivityTile(
+                                  key: const ValueKey('sunshine-add-custom'),
+                                  onPressed:
+                                      state.customActivities.length <
+                                          kSunshineRunMaxCustomActivities
+                                      ? _editCustom
+                                      : null,
+                                ),
                               ],
                             ),
                             const SizedBox(height: _RunSpacing.section),
@@ -382,7 +390,6 @@ class _SunshineRunPageState extends State<SunshineRunPage> {
                 ),
                 bottomNavigationBar: _ActionDock(
                   onBaseline: canEdit ? _editBaseline : null,
-                  onCustom: canEdit ? _editCustom : null,
                   onReset: canReset ? _reset : null,
                   onRules: () => showDialog<void>(
                     context: context,
@@ -959,63 +966,69 @@ class _DualRunRing extends StatelessWidget {
                     ),
                   ),
                   padding: EdgeInsets.all(size * 0.02),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: ShaderMask(
-                          blendMode: BlendMode.srcIn,
-                          shaderCallback: (bounds) => LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              Color.lerp(
-                                labelColor,
-                                palette.isDark
-                                    ? palette.titleText
-                                    : palette.surface,
-                                0.12,
-                              )!,
-                              labelColor,
-                            ],
-                          ).createShader(bounds),
-                          child: Text(
-                            '${result.percentage}%',
-                            style: TextStyle(
-                              fontSize: 36,
-                              height: 1.05,
-                              letterSpacing: -1.08,
-                              fontWeight: FontWeight.w900,
-                              color: palette.titleText,
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: SizedBox(
+                      width: size * 0.56,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: ShaderMask(
+                              blendMode: BlendMode.srcIn,
+                              shaderCallback: (bounds) => LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [
+                                  Color.lerp(
+                                    labelColor,
+                                    palette.isDark
+                                        ? palette.titleText
+                                        : palette.surface,
+                                    0.12,
+                                  )!,
+                                  labelColor,
+                                ],
+                              ).createShader(bounds),
+                              child: Text(
+                                '${result.percentage}%',
+                                style: TextStyle(
+                                  fontSize: 36,
+                                  height: 1.05,
+                                  letterSpacing: -1.08,
+                                  fontWeight: FontWeight.w900,
+                                  color: palette.titleText,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
-                        ),
+                          const SizedBox(height: 2),
+                          Text(
+                            result.status == SunshineRunStatus.exempt
+                                ? '免跑完成度'
+                                : '总次数完成率',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 10,
+                              height: 1.25,
+                              fontWeight: FontWeight.w500,
+                              color: colors.hint,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          _Pill(
+                            key: const ValueKey('sunshine-status'),
+                            label: statusText,
+                            color: statusColor,
+                            background: statusBg,
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        result.status == SunshineRunStatus.exempt
-                            ? '免跑完成度'
-                            : '总次数完成率',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 10,
-                          height: 1.25,
-                          fontWeight: FontWeight.w500,
-                          color: colors.hint,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      _Pill(
-                        key: const ValueKey('sunshine-status'),
-                        label: statusText,
-                        color: statusColor,
-                        background: statusBg,
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -1186,19 +1199,33 @@ class _ActivityGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
+      // 单卡至少容纳 32dp 图标、两个 44dp 操作按钮与两侧内边距。
+      // 列数只由可用宽度决定，系统字号变化不会把普通手机切成整行大卡片。
+      const minTileWidth = 32.0 + 44 * 2 + _RunSpacing.group * 2;
       final columns =
-          constraints.maxWidth >= 338 &&
-              MediaQuery.textScalerOf(context).scale(14) <= 19
-          ? 2
-          : 1;
-      final width =
-          (constraints.maxWidth - (columns - 1) * _RunSpacing.peer) / columns;
-      return Wrap(
+          constraints.maxWidth >= minTileWidth * 2 + _RunSpacing.peer ? 2 : 1;
+      return Column(
         key: const ValueKey('sunshine-activity-grid'),
-        spacing: _RunSpacing.peer,
-        runSpacing: _RunSpacing.peer,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          for (final child in children) SizedBox(width: width, child: child),
+          for (var start = 0; start < children.length; start += columns) ...[
+            if (start > 0) const SizedBox(height: _RunSpacing.peer),
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var column = 0; column < columns; column++) ...[
+                    if (column > 0) const SizedBox(width: _RunSpacing.peer),
+                    Expanded(
+                      child: start + column < children.length
+                          ? children[start + column]
+                          : const SizedBox.shrink(),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
         ],
       );
     },
@@ -1274,15 +1301,21 @@ class _ActivityTile extends StatelessWidget {
                       vertical: 6,
                     ),
                     child: Center(
-                      child: Text(
-                        '$count',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 16,
-                          height: 1.2,
-                          fontWeight: FontWeight.w700,
-                          color: count > 0 ? colors.action : palette.titleText,
-                          fontFeatures: const [FontFeature.tabularFigures()],
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          '$count',
+                          softWrap: false,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 16,
+                            height: 1.2,
+                            fontWeight: FontWeight.w700,
+                            color: count > 0
+                                ? colors.action
+                                : palette.titleText,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
                         ),
                       ),
                     ),
@@ -1356,35 +1389,75 @@ class _ActivityTile extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 4),
-            ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 38),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    activity.label,
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.3,
-                      fontWeight: FontWeight.w600,
-                      color: palette.titleText,
+            Expanded(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 38),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      activity.label,
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.3,
+                        fontWeight: FontWeight.w600,
+                        color: palette.titleText,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '总+${activity.total}${sunny ? ' · 晨+${activity.morning}' : ''}',
-                    style: TextStyle(
-                      fontSize: 11,
-                      height: 1.3,
-                      color: colors.hint,
+                    const SizedBox(height: 2),
+                    Text(
+                      '总+${activity.total}${sunny ? ' · 晨+${activity.morning}' : ''}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        height: 1.3,
+                        color: colors.hint,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: _RunSpacing.group),
             stepper,
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AddActivityTile extends StatelessWidget {
+  const _AddActivityTile({super.key, required this.onPressed});
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _RunColors(AppPalette.of(context));
+    return Semantics(
+      button: true,
+      enabled: onPressed != null,
+      label: '添加其他活动',
+      child: Tooltip(
+        message: '添加其他活动',
+        child: Material(
+          color: colors.accentSoft,
+          borderRadius: BorderRadius.circular(16),
+          child: InkWell(
+            onTap: onPressed,
+            borderRadius: BorderRadius.circular(16),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 154),
+              child: Center(
+                child: Icon(
+                  Icons.add_rounded,
+                  size: 36,
+                  color: onPressed == null
+                      ? colors.action.withValues(alpha: 0.4)
+                      : colors.action,
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -1514,12 +1587,10 @@ class _ExemptionChoices extends StatelessWidget {
 class _ActionDock extends StatelessWidget {
   const _ActionDock({
     required this.onBaseline,
-    required this.onCustom,
     required this.onReset,
     required this.onRules,
   });
   final VoidCallback? onBaseline;
-  final VoidCallback? onCustom;
   final VoidCallback? onReset;
   final VoidCallback onRules;
 
@@ -1545,17 +1616,6 @@ class _ActionDock extends StatelessWidget {
                   tooltip: '录入已有次数',
                   icon: Icons.edit_outlined,
                   onPressed: onBaseline,
-                ),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: _DockAction(
-                  key: const ValueKey('sunshine-add-custom'),
-                  label: '其他活动',
-                  tooltip: '添加其他活动',
-                  icon: Icons.add_rounded,
-                  accent: true,
-                  onPressed: onCustom,
                 ),
               ),
               const SizedBox(width: 4),
@@ -1593,13 +1653,11 @@ class _DockAction extends StatelessWidget {
     required this.tooltip,
     required this.icon,
     required this.onPressed,
-    this.accent = false,
   });
   final String label;
   final String tooltip;
   final IconData icon;
   final VoidCallback? onPressed;
-  final bool accent;
 
   @override
   Widget build(BuildContext context) {
@@ -1607,8 +1665,6 @@ class _DockAction extends StatelessWidget {
     final colors = _RunColors(palette);
     final color = onPressed == null
         ? colors.hint.withValues(alpha: 0.5)
-        : accent
-        ? colors.action
         : palette.labelText;
     return Semantics(
       button: true,
@@ -1617,7 +1673,7 @@ class _DockAction extends StatelessWidget {
       child: Tooltip(
         message: tooltip,
         child: Material(
-          color: accent ? colors.accentSoft : palette.surface,
+          color: palette.surface,
           borderRadius: BorderRadius.circular(12),
           child: InkWell(
             onTap: onPressed,

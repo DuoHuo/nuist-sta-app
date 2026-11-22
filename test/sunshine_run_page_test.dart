@@ -222,6 +222,15 @@ void _expectActivityColumns(WidgetTester tester, {required bool twoColumns}) {
     expect(tiles[0].left, closeTo(tiles[2].left, 0.01));
     expect(tiles[1].left, closeTo(tiles[3].left, 0.01));
     expect(tiles[0].width, closeTo(tiles[1].width, 0.01));
+    expect(tiles[0].height, closeTo(tiles[1].height, 0.01));
+    expect(tiles[2].height, closeTo(tiles[3].height, 0.01));
+    final fluorescent = tester.getRect(
+      find.byKey(const ValueKey('sunshine-count-fluorescent')),
+    );
+    final monday = tester.getRect(
+      find.byKey(const ValueKey('sunshine-count-monday')),
+    );
+    expect(fluorescent.center.dy, closeTo(monday.center.dy, 0.5));
     expect(tiles[1].left - tiles[0].right, closeTo(8, 0.01));
     expect(tiles[3].left - tiles[2].right, closeTo(8, 0.01));
     final firstRowBottom = tiles[0].bottom > tiles[1].bottom
@@ -329,7 +338,7 @@ void main() {
     expect(find.byTooltip('添加其他活动'), findsOneWidget);
     expect(find.byTooltip('重置记录'), findsOneWidget);
     expect(find.byTooltip('计算规则'), findsOneWidget);
-    expect(find.text('其他活动'), findsOneWidget);
+    expect(find.text('其他活动'), findsNothing);
     expect(find.text('重置'), findsOneWidget);
     expect(find.text('规则'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -342,21 +351,21 @@ void main() {
     for (final activity in kSunshineRunActivities) {
       await _tap(tester, find.byKey(ValueKey('sunshine-plus-${activity.id}')));
     }
-    expect(controller.result.total, 7);
-    expect(controller.result.morning, 6);
+    expect(controller.result.total, 6);
+    expect(controller.result.morning, 5);
     await _tap(
       tester,
       find.byKey(const ValueKey('sunshine-minus-fluorescent')),
     );
-    expect(controller.result.total, 5);
-    expect(controller.result.morning, 4);
+    expect(controller.result.total, 4);
+    expect(controller.result.morning, 3);
     await _tap(tester, find.byKey(const ValueKey('sunshine-count-morning')));
     await _tap(tester, find.widgetWithText(TextButton, '+5 场'));
     expect(controller.state.activities['morning'], 1);
     await _tap(tester, find.widgetWithText(FilledButton, '保存'));
     expect(controller.state.activities['morning'], 6);
-    expect(controller.result.total, 10);
-    expect(controller.result.morning, 9);
+    expect(controller.result.total, 9);
+    expect(controller.result.morning, 8);
     expect(tester.takeException(), isNull);
   });
 
@@ -401,6 +410,7 @@ void main() {
     final controller = _controller();
     addTearDown(controller.dispose);
     await _pumpPage(tester, controller);
+    expect(find.text('周一晨跑活动（2km）'), findsOneWidget);
     await _tap(tester, find.byKey(const ValueKey('sunshine-count-monday')));
     await tester.enterText(
       find.byKey(const ValueKey('sunshine-activity-input')),
@@ -409,8 +419,8 @@ void main() {
     await _tap(tester, find.widgetWithText(TextButton, '+10 场'));
     await _tap(tester, find.widgetWithText(FilledButton, '保存'));
     expect(controller.state.activities['monday'], 17);
-    expect(controller.result.total, 51);
-    expect(controller.result.morning, 51);
+    expect(controller.result.total, 34);
+    expect(controller.result.morning, 34);
     await _tap(tester, find.byKey(const ValueKey('sunshine-count-monday')));
     await tester.enterText(
       find.byKey(const ValueKey('sunshine-activity-input')),
@@ -743,8 +753,10 @@ void main() {
 
     for (final layout in const [
       (390.0, 1.0, true),
-      (320.0, 1.0, false),
-      (390.0, 2.0, false),
+      (320.0, 1.0, true),
+      (360.0, 1.4, true),
+      (390.0, 2.0, true),
+      (280.0, 1.0, false),
     ]) {
       testWidgets('${mode.name}下${layout.$1}px、${layout.$2}倍字号活动列数与8dp间距正确', (
         tester,
@@ -760,7 +772,7 @@ void main() {
         );
         expect(tester.takeException(), isNull);
         final dockTop = tester.getTopLeft(
-          find.byKey(const ValueKey('sunshine-add-custom')),
+          find.byKey(const ValueKey('sunshine-edit-baseline')),
         );
         await _show(
           tester,
@@ -771,12 +783,14 @@ void main() {
           _expectBottomStepper(tester, activity.id);
         }
         expect(
-          tester.getTopLeft(find.byKey(const ValueKey('sunshine-add-custom'))),
+          tester.getTopLeft(
+            find.byKey(const ValueKey('sunshine-edit-baseline')),
+          ),
           dockTop,
         );
         for (final key in [
           'sunshine-edit-baseline',
-          'sunshine-add-custom',
+          'sunshine-reset',
           'sunshine-rules',
         ]) {
           expect(find.byKey(ValueKey(key)).hitTestable(), findsOneWidget);
@@ -784,6 +798,104 @@ void main() {
         expect(tester.takeException(), isNull);
       });
     }
+
+    testWidgets('${mode.name}下加号卡片跟随自定义活动排列，添加后仍在网格末尾', (tester) async {
+      final controller = _controller(
+        initial: SunshineRunState.initial().withCustomAdded(
+          SunshineRunCustomActivity(
+            id: 'gymnastics',
+            label: '健身操',
+            total: 1,
+            morning: 0,
+            count: 1,
+          ),
+        ),
+      );
+      addTearDown(controller.dispose);
+      await _pumpPage(tester, controller, mode: mode);
+      final add = find.byKey(const ValueKey('sunshine-add-custom'));
+      await _show(tester, add);
+      final customRect = tester.getRect(
+        find.byKey(const ValueKey('sunshine-tile-gymnastics')),
+      );
+      final addRect = tester.getRect(add);
+      expect(addRect.left - customRect.right, closeTo(8, 0.01));
+      expect(addRect.top, closeTo(customRect.top, 0.01));
+      expect(addRect.height, closeTo(customRect.height, 0.01));
+      final icon = find.descendant(
+        of: add,
+        matching: find.byIcon(Icons.add_rounded),
+      );
+      expect(icon, findsOneWidget);
+      final material = tester.widget<Material>(
+        find.descendant(of: add, matching: find.byType(Material)),
+      );
+      expect(material.color!.b, greaterThan(material.color!.r));
+      expect(
+        find.descendant(of: find.byType(Scaffold), matching: add),
+        findsOneWidget,
+      );
+      final scaffold = tester.widget<Scaffold>(find.byType(Scaffold));
+      expect(
+        find.descendant(
+          of: find.byWidget(scaffold.bottomNavigationBar!),
+          matching: add,
+        ),
+        findsNothing,
+      );
+      await _tap(tester, add);
+      await tester.enterText(
+        find.byKey(const ValueKey('sunshine-custom-name')),
+        '健身房',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('sunshine-custom-total')),
+        '2',
+      );
+      await _tap(tester, find.widgetWithText(FilledButton, '添加'));
+      expect(controller.state.customActivities.length, 2);
+      final latest = controller.state.customActivities.last;
+      await _show(tester, add);
+      final latestRect = tester.getRect(
+        find.byKey(ValueKey('sunshine-tile-${latest.id}')),
+      );
+      final moved = tester.getRect(add);
+      expect(moved.top - latestRect.bottom, closeTo(8, 0.01));
+      expect(moved.left, closeTo(customRect.left, 0.01));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('${mode.name}下调整窗口与字号不会把手机活动卡片变为整行', (tester) async {
+      final initial = SunshineRunState.initial()
+          .withActivity('regular', 28)
+          .withActivity('morning', 6)
+          .withActivity('fluorescent', 5);
+      final controller = _controller(initial: initial);
+      addTearDown(controller.dispose);
+      for (final layout in const [
+        (390.0, 1.0),
+        (360.0, 1.4),
+        (320.0, 2.0),
+        (390.0, 1.0),
+      ]) {
+        await _pumpPage(
+          tester,
+          controller,
+          mode: mode,
+          width: layout.$1,
+          scale: layout.$2,
+        );
+        await _show(tester, find.byKey(const ValueKey('sunshine-tile-monday')));
+        _expectActivityColumns(tester, twoColumns: true);
+        for (final activity in kSunshineRunActivities) {
+          _expectBottomStepper(tester, activity.id);
+        }
+        expect(controller.state, initial);
+        expect(controller.result.total, 44);
+        expect(controller.result.morning, 16);
+        expect(tester.takeException(), isNull);
+      }
+    });
 
     for (final layout in const [(390.0, 1.0), (320.0, 2.0)]) {
       testWidgets('${mode.name}下${layout.$1}px、${layout.$2}倍字号完整显示长名称和大整数', (
@@ -857,6 +969,17 @@ void main() {
         expect(tester.takeException(), isNull);
       });
     }
+
+    testWidgets('${mode.name}下320px两倍字号的少量记录不会溢出环内文案', (tester) async {
+      final controller = _controller(
+        initial: SunshineRunState.initial().withActivity('regular', 1),
+      );
+      addTearDown(controller.dispose);
+      await _pumpPage(tester, controller, mode: mode, width: 320, scale: 2);
+      _expectRingProgress(tester, 2, 0);
+      expect(find.text('进行中'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
 
     testWidgets('${mode.name}下320px两倍字号及键盘弹层均可滚动访问', (tester) async {
       final controller = _controller(

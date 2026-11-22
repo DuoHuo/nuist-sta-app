@@ -43,12 +43,7 @@ const List<SunshineRunActivity> kSunshineRunActivities = [
   SunshineRunActivity(id: 'regular', label: '普通跑', total: 1, morning: 0),
   SunshineRunActivity(id: 'morning', label: '普通晨跑', total: 1, morning: 1),
   SunshineRunActivity(id: 'fluorescent', label: '3km荧光跑', total: 2, morning: 2),
-  SunshineRunActivity(
-    id: 'monday',
-    label: '周一晨跑活动（2+2）km',
-    total: 3,
-    morning: 3,
-  ),
+  SunshineRunActivity(id: 'monday', label: '周一晨跑活动（2km）', total: 2, morning: 2),
 ];
 
 const Map<String, int> _emptyActivities = {
