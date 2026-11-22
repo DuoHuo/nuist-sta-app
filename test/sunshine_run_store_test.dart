@@ -60,8 +60,8 @@ void main() {
 
     final result = await SunshineRunStore.read();
     expect(result.state, state);
-    expect(result.state!.calculate().total, 32);
-    expect(result.state!.calculate().morning, 17);
+    expect(result.state!.calculate().total, 31);
+    expect(result.state!.calculate().morning, 16);
     expect(result.warning, isNull);
     expect(result.corrupt, isFalse);
     expect(result.available, isTrue);

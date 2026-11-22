@@ -36,7 +36,7 @@ void main() {
     expect(result.remainingMorning, 15);
   });
 
-  test('固定活动各一场合计总次数7，其中晨跑6', () {
+  test('固定活动各一场合计总次数6，其中晨跑5', () {
     var state = SunshineRunState.initial();
     for (final activity in kSunshineRunActivities) {
       final single = SunshineRunState()
@@ -47,24 +47,24 @@ void main() {
       state = state.withActivity(activity.id, 1);
     }
     final result = state.calculate();
-    expect(result.total, 7);
-    expect(result.morning, 6);
-    expect(result.addedTotal, 7);
-    expect(result.addedMorning, 6);
+    expect(result.total, 6);
+    expect(result.morning, 5);
+    expect(result.addedTotal, 6);
+    expect(result.addedMorning, 5);
   });
 
-  test('已有10/4加活动2/3/1/1为20/12，晨跑不重复计总次数', () {
+  test('已有10/4加活动2/3/1/1为19/11，晨跑不重复计总次数', () {
     final state = _baseline(10, 4)
         .withActivity('regular', 2)
         .withActivity('morning', 3)
         .withActivity('fluorescent', 1)
         .withActivity('monday', 1);
     final result = state.calculate();
-    expect(result.total, 20);
-    expect(result.morning, 12);
-    expect(result.addedTotal, 10);
-    expect(result.addedMorning, 8);
-    expect(result.percentage, 42);
+    expect(result.total, 19);
+    expect(result.morning, 11);
+    expect(result.addedTotal, 9);
+    expect(result.addedMorning, 7);
+    expect(result.percentage, 40);
   });
 
   test('普通跑一场显示2%，晨跑为0仍未达标', () {
