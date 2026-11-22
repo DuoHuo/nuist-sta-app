@@ -118,8 +118,10 @@ lib/
 弹层、最近操作栏、另一可见栏，再交给系统；各栏通过 `maybePop` 保留原有内容保护和内部
 返回顺序。手势开始后冻结目标，取消或完成动画结束后才处理新的面板导航。
 
-壳根页的嵌套返回由 `BackButtonListener` 与协调器处理，不使用隐藏分支的嵌套
-`PopScope` 阻止系统退出；业务页面与全局弹层的 `PopScope` 不受此根页例外影响。
+壳根页的嵌套返回由 `BackButtonListener` 与协调器处理。根路由及壳的 `PopScope`
+按可见导航栈登记 Android 返回能力：有可见详情、内部保护或全局弹层时由 Flutter
+接管，耗尽后恢复系统退出。隐藏分支的导航通知被截断，不能取消可见详情的返回登记，
+也不能阻止根页退出；业务页面与全局弹层的 `PopScope` 保留各自的保护和解除条件。
 
 `fullscreenDialog: true` 会让 Flutter 的 `PageRoute.popGestureEnabled` 返回 `false`，
 也会阻断 Android 预测性返回。因此，全屏表单在 Android 上使用普通 Material 路由，

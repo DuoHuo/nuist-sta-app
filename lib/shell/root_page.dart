@@ -128,7 +128,7 @@ class _RootPageState extends State<RootPage> {
                 current: singleRect,
             };
             _lastRects.addAll(rects);
-            return Scaffold(
+            final scaffold = Scaffold(
               resizeToAvoidBottomInset: false,
               backgroundColor: palette.pageBg,
               body: Stack(
@@ -212,6 +212,9 @@ class _RootPageState extends State<RootPage> {
                     )
                   : null,
             );
+            // 面板切换只改变可见性，也要通知根路由更新系统返回登记。
+            // 仅有可见详情、内部保护或弹层时接管，耗尽后立即恢复系统退出。
+            return PopScope(canPop: !navigation.canHandleBack, child: scaffold);
           },
         ),
       ),
@@ -247,7 +250,13 @@ class _RootPageState extends State<RootPage> {
               onPointerDown: (_) => widget.navigation.interact(index),
               child: MediaQuery(
                 data: AppPaneLayout.mediaForRect(media, rect),
-                child: ClipRect(child: widget.children[index]),
+                child: ClipRect(
+                  child: NotificationListener<NavigationNotification>(
+                    // 隐藏分支的返回通知不能改写 Android 当前窗口的返回登记。
+                    onNotification: (_) => !visible,
+                    child: widget.children[index],
+                  ),
+                ),
               ),
             ),
           ),
