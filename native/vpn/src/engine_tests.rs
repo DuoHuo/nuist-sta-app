@@ -7,6 +7,46 @@ use smoltcp::socket::udp;
 
 const CERT: &[u8] = include_bytes!("../../../test/fixtures/vpn/certificate.der");
 const KEY: &[u8] = include_bytes!("../../../test/fixtures/vpn/private_key.der");
+
+fn proxy_request(
+    handle: &Handle,
+    host: &str,
+    port: u16,
+    auth: &str,
+) -> io::Result<(TcpStream, u16)> {
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, handle.proxy_port))?;
+    stream.set_read_timeout(Some(Duration::from_secs(12)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(12)))?;
+    stream.write_all(format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\nProxy-Authorization: {auth}\r\n\r\n").as_bytes())?;
+    let mut headers = Vec::new();
+    while !headers.ends_with(b"\r\n\r\n") {
+        let mut byte = [0u8];
+        stream
+            .read_exact(&mut byte)
+            .map_err(|_| error(io::ErrorKind::ConnectionAborted, "代理连接已关闭"))?;
+        headers.push(byte[0]);
+        if headers.len() > 8192 {
+            return Err(error(io::ErrorKind::InvalidData, "代理响应过长"));
+        }
+    }
+    let status = std::str::from_utf8(&headers)
+        .unwrap()
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
+    Ok((stream, status))
+}
+
+fn connect(handle: &Handle, host: &str, port: u16) -> io::Result<TcpStream> {
+    let (stream, status) = proxy_request(handle, host, port, &authorization(&handle.proxy_token))?;
+    if status != 200 {
+        return Err(error(io::ErrorKind::ConnectionAborted, "代理拒绝目标连接"));
+    }
+    Ok(stream)
+}
+
 const TARGET: Ipv4Addr = Ipv4Addr::new(10, 20, 30, 40);
 const CLIENT: Ipv4Addr = Ipv4Addr::new(10, 20, 30, 41);
 
@@ -26,7 +66,7 @@ impl Gateway {
         let port = listener.local_addr().unwrap().port();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
-        let worker = thread::spawn(move || serve(listener, stopped, None, false));
+        let worker = thread::spawn(move || serve(listener, stopped, None, false, false));
         Self {
             port,
             stop,
@@ -39,7 +79,20 @@ impl Gateway {
         let port = listener.local_addr().unwrap().port();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
-        let worker = thread::spawn(move || serve(listener, stopped, terminal_after, true));
+        let worker = thread::spawn(move || serve(listener, stopped, terminal_after, true, false));
+        Self {
+            port,
+            stop,
+            worker: Some(worker),
+        }
+    }
+
+    fn blackhole() -> Self {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
+        let worker = thread::spawn(move || serve(listener, stopped, None, false, true));
         Self {
             port,
             stop,
@@ -67,6 +120,7 @@ fn serve(
     stop: Arc<AtomicBool>,
     terminal_after: Option<(usize, bool)>,
     heartbeat_replies: bool,
+    blackhole: bool,
 ) -> (usize, bool) {
     listener.set_nonblocking(true).unwrap();
     let raw = loop {
@@ -171,7 +225,9 @@ fn serve(
                 4 => {
                     let packet = &wire[12..size];
                     // 丢掉第一个 TCP SYN，验证客户端能重传，而不是靠理想链路通过。
-                    if packet[9] == 17 && packet.windows(7).any(|bytes| bytes == b"blocked") {
+                    if blackhole
+                        || (packet[9] == 17 && packet.windows(7).any(|bytes| bytes == b"blocked"))
+                    {
                         // 合成黑洞 DNS，用于验证 stop 能释放全部在途目标连接。
                     } else if !dropped_syn && packet[9] == 6 {
                         dropped_syn = true;
@@ -268,16 +324,10 @@ fn tls_terminal_keeps_final_tcp_bytes_for_loopback_reader() {
             &json!({"host":"localhost", "port":gateway.port, "user":"synthetic", "token":"test-token"}),
             roots,
         ).unwrap();
-        let bridge = handle.open("campus.test".into(), 8080).unwrap();
-        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, bridge.port)).unwrap();
+        let mut stream = connect(&handle, "campus.test", 8080).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
-        let secret: Vec<_> = (0..64)
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&bridge.secret[i..i + 2], 16).unwrap())
-            .collect();
-        stream.write_all(&secret).unwrap();
         stream.write_all(&expected).unwrap();
         // 对端关闭时接收者尚未读取，确保终态不是只靠 TCP 已交付的字节通过。
         thread::sleep(Duration::from_millis(100));
@@ -296,7 +346,7 @@ fn tls_terminal_keeps_final_tcp_bytes_for_loopback_reader() {
 }
 
 #[test]
-fn tunnel_dns_tcp_secret_backpressure_and_half_close() {
+fn tunnel_dns_tcp_connect_authorization_backpressure_and_half_close() {
     let gateway = Gateway::new();
     let mut roots = RootCertStore::empty();
     roots.add(CertificateDer::from(CERT)).unwrap();
@@ -307,7 +357,7 @@ fn tunnel_dns_tcp_secret_backpressure_and_half_close() {
     .unwrap();
     assert_eq!(info.dns, Ipv4Addr::LOCALHOST);
     // 单条非法连接不能杀死已有隧道。
-    assert!(handle.open("0.0.0.0".into(), 8080).is_err());
+    assert!(connect(&handle, "0.0.0.0", 8080).is_err());
     assert!(handle.alive());
     // 以陈旧时钟模拟调度停顿；恢复后应收到心跳回复并继续使用同一隧道。
     thread::sleep(Duration::from_millis(100));
@@ -316,33 +366,20 @@ fn tunnel_dns_tcp_secret_backpressure_and_half_close() {
         .commands
         .send(Command::SimulateSuspend(sender))
         .unwrap();
+    handle.waker.wake().unwrap();
     receiver.recv_timeout(Duration::from_secs(2)).unwrap();
-    let bridge = handle.open("campus.test".into(), 8080).unwrap();
-    assert_eq!(handle.status()["healthy"], true);
-    assert!(handle.status()["heartbeats"].as_u64().unwrap() >= 2);
-    let mut intruder = TcpStream::connect((Ipv4Addr::LOCALHOST, bridge.port)).unwrap();
-    intruder
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    intruder.write_all(&[0; 32]).unwrap();
+    let (mut intruder, status) =
+        proxy_request(&handle, "campus.test", 8080, "Basic invalid").unwrap();
+    assert_eq!(status, 407);
     let result = intruder.read(&mut [0; 1]);
     assert!(
         matches!(result, Ok(0))
             || result.is_err_and(|e| e.kind() == io::ErrorKind::ConnectionReset)
     );
     drop(intruder);
-    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, bridge.port)).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
-    stream
-        .set_write_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
-    let secret: Vec<_> = (0..64)
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&bridge.secret[i..i + 2], 16).unwrap())
-        .collect();
-    stream.write_all(&secret).unwrap();
+    let mut stream = connect(&handle, "campus.test", 8080).unwrap();
+    assert_eq!(handle.status()["healthy"], true);
+    assert!(handle.status()["heartbeats"].as_u64().unwrap() >= 2);
     // 保持已鉴权的空闲连接，连接池不应让事件循环继续固定 200 Hz 轮询。
     thread::sleep(Duration::from_millis(200));
     let iterations = handle.status()["loopIterations"].as_u64().unwrap();
@@ -388,18 +425,12 @@ fn idle_tunnel_survives_receive_timeout_with_protocol_heartbeats() {
     let status = handle.status();
     assert_eq!(status["needsProbe"], true);
     assert!(status["heartbeats"].as_u64().unwrap() >= 4);
-    handle.probe("campus.test".into()).unwrap();
+    handle.probe("campus.test".into(), PROBE_TIMEOUT).unwrap();
     assert_eq!(handle.status()["healthy"], true);
-    let bridge = handle.open("campus.test".into(), 8080).unwrap();
-    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, bridge.port)).unwrap();
+    let mut stream = connect(&handle, "campus.test", 8080).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    let secret: Vec<_> = (0..64)
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&bridge.secret[i..i + 2], 16).unwrap())
-        .collect();
-    stream.write_all(&secret).unwrap();
     stream.write_all(b"after-long-idle").unwrap();
     let mut response = [0; 15];
     stream.read_exact(&mut response).unwrap();
@@ -423,7 +454,7 @@ fn stopping_tunnel_releases_all_inflight_open_waiters() {
         let handle = handle.clone();
         let sender = sender.clone();
         thread::spawn(move || {
-            let _ = sender.send(handle.open("blocked.campus.test".into(), 8080));
+            let _ = sender.send(connect(&handle, "blocked.campus.test", 8080));
         });
     }
     thread::sleep(Duration::from_millis(100));
@@ -438,7 +469,7 @@ fn stopping_tunnel_releases_all_inflight_open_waiters() {
 }
 
 #[test]
-fn cancelling_target_opens_keeps_tunnel_and_releases_reservations() {
+fn cancelling_local_connect_keeps_tunnel_and_releases_flow() {
     let gateway = Gateway::new();
     let mut roots = RootCertStore::empty();
     roots.add(CertificateDer::from(CERT)).unwrap();
@@ -447,58 +478,24 @@ fn cancelling_target_opens_keeps_tunnel_and_releases_reservations() {
         roots,
     )
     .unwrap();
-    let early = handle.prepare_open().unwrap();
-    handle.cancel_open(early);
-    assert!(handle
-        .open_reserved("blocked.campus.test".into(), 8080, early)
-        .is_err());
-    let (sender, receiver) = mpsc::sync_channel(8);
-    let mut ids = Vec::new();
-    for _ in 0..8 {
-        let id = handle.prepare_open().unwrap();
-        ids.push(id);
-        let handle = handle.clone();
-        let sender = sender.clone();
-        thread::spawn(move || {
-            let _ = sender.send(handle.open_reserved("blocked.campus.test".into(), 8080, id));
-        });
-    }
-    thread::sleep(Duration::from_millis(100));
-    let started = Instant::now();
-    for id in ids {
-        handle.cancel_open(id);
-    }
-    for _ in 0..8 {
-        assert!(receiver
-            .recv_timeout(Duration::from_secs(1))
-            .unwrap()
-            .is_err_and(|error| error.kind() == io::ErrorKind::ConnectionAborted));
-    }
-    assert!(started.elapsed() < Duration::from_secs(1));
-    assert!(handle.alive());
-    assert!(handle.opens.lock().unwrap().is_empty());
-    let retained = handle.prepare_open().unwrap();
-    let bridge = handle
-        .open_reserved("campus.test".into(), 8080, retained)
+    let mut cancelled = TcpStream::connect((Ipv4Addr::LOCALHOST, handle.proxy_port)).unwrap();
+    cancelled
+        .write_all(
+            format!(
+                "CONNECT blocked.campus.test:8080 HTTP/1.1\r\nProxy-Authorization: {}\r\n\r\n",
+                authorization(&handle.proxy_token)
+            )
+            .as_bytes(),
+        )
         .unwrap();
-    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, bridge.port)).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let secret: Vec<_> = (0..64)
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&bridge.secret[i..i + 2], 16).unwrap())
-        .collect();
-    stream.write_all(&secret).unwrap();
+    cancelled.shutdown(Shutdown::Both).unwrap();
+    drop(cancelled);
+    let mut stream = connect(&handle, "campus.test", 8080).unwrap();
     stream.write_all(b"after-cancel").unwrap();
     let mut reply = [0; 12];
     stream.read_exact(&mut reply).unwrap();
     assert_eq!(&reply, b"after-cancel");
-    // 已鉴权业务流不受迟到的目标建连取消影响，避免清理失败或 TTL 误伤payload。
-    handle.cancel_open(retained);
-    stream.write_all(b"after-cancel").unwrap();
-    stream.read_exact(&mut reply).unwrap();
-    assert_eq!(&reply, b"after-cancel");
+    assert!(handle.alive());
     handle.stop();
     gateway.finish();
 }
@@ -584,47 +581,23 @@ fn protocol_handshake_has_total_deadline_after_partial_response() {
 }
 
 #[test]
-fn running_flag_does_not_hide_stalled_worker() {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (_peer, _) = listener.accept().unwrap();
-    let (commands, receiver) = mpsc::sync_channel(1);
-    let now = Instant::now();
-    let handle = Handle {
-        opens: Arc::new(Mutex::new(HashMap::new())),
-        next_open: Arc::new(AtomicUsize::new(1)),
-        commands,
-        running: Arc::new(AtomicBool::new(true)),
-        exit_reason: Arc::new(Mutex::new(None)),
-        socket: Arc::new(socket),
-        health: Arc::new(Mutex::new(Health {
-            progress: now,
-            received: now,
-            heartbeats: 1,
-            received_bytes: 12,
-            recovering: false,
-            dns_timeouts: 0,
-            tcp_timeouts: 0,
-            loop_iterations: 0,
-        })),
-    };
+fn running_flag_does_not_hide_draining_or_recovery() {
+    let gateway = Gateway::new();
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(CERT)).unwrap();
+    let (handle, _) = start_with_roots(
+        &json!({"host":"localhost", "port":gateway.port, "user":"synthetic", "token":"test-token"}),
+        roots,
+    )
+    .unwrap();
     assert_eq!(handle.status()["healthy"], true);
-    handle.health.lock().unwrap().progress = now - Duration::from_secs(40);
-    assert_eq!(handle.status()["alive"], true);
-    assert_eq!(handle.status()["healthy"], false);
-    handle.health.lock().unwrap().progress = Instant::now();
     handle.health.lock().unwrap().recovering = true;
     assert_eq!(handle.status()["healthy"], false);
-    // 工作线程退出时 Open 的回执会断开，应保留连接错误而非伪装成超时。
-    let opening = handle.clone();
-    let worker = thread::spawn(move || opening.open("campus.test".into(), 8080));
-    drop(receiver.recv_timeout(Duration::from_secs(1)).unwrap());
-    assert!(worker
-        .join()
-        .unwrap()
-        .is_err_and(|error| { error.kind() == io::ErrorKind::ConnectionAborted }));
+    handle.health.lock().unwrap().recovering = false;
+    handle.health.lock().unwrap().draining = true;
+    assert_eq!(handle.status()["healthy"], false);
     handle.stop();
-    assert_eq!(handle.status()["alive"], false);
+    gateway.finish();
 }
 
 #[test]
@@ -702,10 +675,12 @@ fn coalesced_tls_burst_keeps_packets_until_ip_queue_has_capacity() {
         heartbeats: 0,
         received_bytes: 0,
         recovering: false,
+        draining: false,
         dns_timeouts: 0,
         tcp_timeouts: 0,
         loop_iterations: 0,
     }));
+    let tls = StreamOwned::new(tls.conn, mio::net::TcpStream::from_std(tls.sock));
     let mut runner = Runner::new(
         tls,
         &frame::AuthInfo {
@@ -757,6 +732,187 @@ fn coalesced_tls_burst_keeps_packets_until_ip_queue_has_capacity() {
         thread::sleep(Duration::from_millis(2));
     };
     assert_eq!(failure.kind(), io::ErrorKind::UnexpectedEof);
+    assert!(runner.health.lock().unwrap().draining);
+    assert!(!runner.health.lock().unwrap().recovering);
     let _ = release.send(());
     worker.join().unwrap();
+}
+
+static PUSHED_EVENTS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+extern "C" fn collect_event(pointer: *mut std::ffi::c_char, length: usize, _: u64) {
+    unsafe {
+        let bytes = std::slice::from_raw_parts(pointer as *const u8, length);
+        PUSHED_EVENTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(serde_json::from_slice(bytes).unwrap());
+        crate::nuist_vpn_result_free(pointer);
+    }
+}
+
+#[test]
+fn normal_poll_idle_beyond_progress_timeout_does_not_push_unhealthy() {
+    crate::nuist_vpn_set_event_callback(Some(collect_event));
+    let gateway = Gateway::without_heartbeat_replies();
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(CERT)).unwrap();
+    let (handle, _) = start_with_roots(
+        &json!({"host":"localhost", "port":gateway.port, "user":"synthetic", "token":"test-token"}),
+        roots,
+    )
+    .unwrap();
+    handle.set_id(93001);
+    // 跨过一次完整的十秒 Poll 等待，避免只验证尚未醒来的事件循环。
+    thread::sleep(HEARTBEAT_INTERVAL + Duration::from_secs(1));
+    assert!(handle.alive());
+    assert!(handle.status()["heartbeats"].as_u64().unwrap() >= 2);
+    assert_eq!(handle.status()["recovering"], false);
+    assert!(!PUSHED_EVENTS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|event| { event["engineId"] == 93001 && event["event"] == "unhealthy" }));
+    handle.stop();
+    gateway.finish();
+}
+
+#[test]
+fn recovery_timeout_exits_and_pushes_event_without_status_polling() {
+    crate::nuist_vpn_set_event_callback(Some(collect_event));
+    let gateway = Gateway::blackhole();
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(CERT)).unwrap();
+    let (handle, _) = start_with_roots(
+        &json!({"host":"localhost", "port":gateway.port, "user":"synthetic", "token":"test-token"}),
+        roots,
+    )
+    .unwrap();
+    handle.set_id(91001);
+    thread::sleep(Duration::from_millis(100));
+    let (sender, receiver) = mpsc::sync_channel(1);
+    handle
+        .commands
+        .send(Command::SimulateSuspend(sender))
+        .unwrap();
+    handle.waker.wake().unwrap();
+    receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    let started = Instant::now();
+    loop {
+        let exited = PUSHED_EVENTS.lock().unwrap().iter().any(|event| {
+            event["engineId"] == 91001
+                && event["event"] == "exited"
+                && event["reason"] == "recovery_timeout"
+        });
+        if exited {
+            break;
+        }
+        assert!(
+            started.elapsed() < RECOVERY_TIMEOUT + Duration::from_secs(2),
+            "恢复超时没有主动推送退出事件"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!handle.alive());
+    assert_eq!(handle.exit_reason().as_deref(), Some("recovery_timeout"));
+    gateway.finish();
+}
+
+#[test]
+fn two_connect_timeouts_trigger_builtin_dns_probe_and_blackhole_exit() {
+    let gateway = Gateway::blackhole();
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(CERT)).unwrap();
+    let (handle, _) = start_with_roots(
+        &json!({"host":"localhost", "port":gateway.port, "user":"synthetic", "token":"test-token"}),
+        roots,
+    )
+    .unwrap();
+    let (sender, receiver) = mpsc::sync_channel(2);
+    for _ in 0..2 {
+        let sender = sender.clone();
+        let handle = handle.clone();
+        thread::spawn(move || {
+            sender
+                .send(
+                    proxy_request(
+                        &handle,
+                        "blocked.campus.test",
+                        8080,
+                        &authorization(&handle.proxy_token),
+                    )
+                    .map(|(_, status)| status),
+                )
+                .unwrap();
+        });
+    }
+    for _ in 0..2 {
+        assert_eq!(
+            receiver
+                .recv_timeout(OPEN_TIMEOUT + Duration::from_secs(2))
+                .unwrap()
+                .unwrap(),
+            504
+        );
+    }
+    let started = Instant::now();
+    while handle.alive() {
+        assert!(
+            started.elapsed() < PROBE_TIMEOUT + Duration::from_secs(2),
+            "黑洞探活失败没有退出引擎"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(handle.exit_reason().as_deref(), Some("blackhole_detected"));
+    assert_eq!(handle.status()["dnsTimeouts"], 2);
+    gateway.finish();
+}
+
+#[test]
+fn connect_parser_rejects_missing_duplicate_credentials_and_invalid_target() {
+    let auth = authorization("123456");
+    assert_eq!(
+        parse_connect(b"CONNECT campus.test:80 HTTP/1.1\r\n\r\n", &auth),
+        Err(407)
+    );
+    assert_eq!(parse_connect(format!("CONNECT campus.test:80 HTTP/1.1\r\nProxy-Authorization: {auth}\r\nProxy-Authorization: {auth}\r\n\r\n").as_bytes(), &auth), Err(407));
+    assert_eq!(
+        parse_connect(
+            format!("CONNECT [::1]:80 HTTP/1.1\r\nProxy-Authorization: {auth}\r\n\r\n").as_bytes(),
+            &auth
+        ),
+        Err(400)
+    );
+    assert_eq!(
+        parse_connect(
+            format!("CONNECT campus.test:80 HTTP/1.1\r\nProxy-Authorization: {auth}\r\n\r\n")
+                .as_bytes(),
+            &auth
+        ),
+        Ok(("campus.test".into(), 80))
+    );
+}
+
+#[test]
+fn stopping_registered_engines_releases_slots_before_next_start() {
+    for cycle in 0..4u64 {
+        let gateway = Gateway::new();
+        let mut roots = RootCertStore::empty();
+        roots.add(CertificateDer::from(CERT)).unwrap();
+        let (handle, _) = start_with_roots(&json!({"host":"localhost", "port":gateway.port, "user":"synthetic", "token":"test-token"}), roots).unwrap();
+        let id = 92001 + cycle;
+        crate::ENGINES
+            .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+            .lock()
+            .unwrap()
+            .insert(id, handle.clone());
+        crate::dispatch(json!({"method": "stop", "id": id})).unwrap();
+        assert!(!crate::ENGINES
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .contains_key(&id));
+        assert!(!handle.alive());
+        gateway.finish();
+    }
 }

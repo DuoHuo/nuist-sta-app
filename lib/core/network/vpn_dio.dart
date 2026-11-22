@@ -24,7 +24,7 @@ Dio vpnDio({
   bool Function(X509Certificate, String, int)? onBadCertificate,
 }) {
   final dio = Dio(options);
-  dio.httpClientAdapter = VpnHttpClientAdapter(
+  final adapter = VpnHttpClientAdapter(
     connector: connector ?? VpnGateway.instance,
     forceVpn: forceVpn,
     detectCampusNetwork:
@@ -39,6 +39,8 @@ Dio vpnDio({
         HttpClient(context: securityContextProvider?.call() ?? securityContext)
           ..badCertificateCallback = onBadCertificate,
   );
+  dio.httpClientAdapter = adapter;
+  dio.interceptors.add(VpnIdempotentRetryInterceptor(dio, adapter));
   installHttpDiagnostics(dio);
   return dio;
 }

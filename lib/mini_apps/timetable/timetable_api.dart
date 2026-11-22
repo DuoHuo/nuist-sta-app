@@ -5,7 +5,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../core/auth/portal_exceptions.dart';
-import '../../core/auth/portal_http.dart';
+import '../../core/auth/service_auth_spec.dart';
+import '../../core/auth/portal_http.dart' show portalLog;
+import '../../core/auth/session_executor.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/logging/app_log.dart';
@@ -15,6 +17,8 @@ import 'timetable_multi_models.dart';
 import '../../core/auth/safe_message.dart';
 import 'timetable_exam_parser.dart';
 import 'timetable_schedule_event.dart';
+
+export '../../core/auth/service_auth_spec.dart' show JwxtUnexpectedHtmlError;
 
 /// 教务 EMAP「我的课表」应用（**wdkb**）接口。
 ///
@@ -43,14 +47,7 @@ class TimetableApi {
     '$_base/jwapp/sys/$_app/modules/xskcb/xswpkc.do',
   );
 
-  /// 当前学期 / 周次 / 作息（jshkcb）
-  /// 公共角色设置（网页端在 dqxnxq/dqzc 前调用）。默认不启用，见 [rolePreCallRoleId]。
-  static final Uri _setRoleUrl = Uri.parse(
-    '$_base/jwapp/sys/jwpubapp/pub/setJwCommonAppRole.do',
-  );
-
-  /// 预留：若端点更名后仍 403，再设置 ROLEID 以启用同步前的
-  /// `setJwCommonAppRole`（非致命）。默认 null = 不调用；ROLEID 不写死，需另行确定来源。
+  /// 已确认角色时在应用建会话阶段设置；默认不指定角色。
   @visibleForTesting
   static String? rolePreCallRoleId;
 
@@ -75,8 +72,12 @@ class TimetableApi {
     '$_base/jwapp/sys/$_app/modules/xskcb/cxxljc.do',
   );
 
-  /// 课表应用（wdkb）的首页与 Referer；`ready` = 本进程已进过应用首页。
-  static final _wdkb = _JwxtApp(_indexUrl, _referer);
+  static JwxtAppSpec get _wdkb => JwxtAppSpec(
+    appId: _app,
+    indexUrl: _indexUrl.toString(),
+    refererUrl: _referer,
+    roleId: rolePreCallRoleId,
+  );
 
   // ---- 我的考试安排（studentWdksapApp，第 11 条，见本目录 README.md）----
 
@@ -84,7 +85,11 @@ class TimetableApi {
   static final _examIndex = '$_base/jwapp/sys/$_examAppName/*default/index.do';
 
   /// 考试应用：先 GET 应用首页建立会话，XHR 的 Referer 为应用首页。
-  static final _examApp = _JwxtApp(Uri.parse(_examIndex), _examIndex);
+  static final _examApp = JwxtAppSpec(
+    appId: _examAppName,
+    indexUrl: _examIndex,
+    refererUrl: _examIndex,
+  );
   static final Uri _examListUrl = Uri.parse(
     '$_base/jwapp/sys/$_examAppName/WdksapController/cxxsksap.do',
   );
@@ -152,7 +157,6 @@ class TimetableApi {
     TimetableSettings? baseSettings,
     DateTime? now,
   }) async {
-    _reloginUsed = false;
     var settings = baseSettings ?? const TimetableSettings();
     if (settings.termCode.isEmpty) {
       settings = settings.copyWith(termCode: termCode);
@@ -191,17 +195,8 @@ class TimetableApi {
       _post(_unscheduledUrl, {'XNXQDM': termCode}),
       section: 'xswpkc',
     );
-    // 角色预调用在聚合等待前执行，提前消费必需请求错误以避免无人处理。
+    // 必需请求会在聚合等待前开始，提前消费错误以避免无人处理。
     unawaited(unscheduled.then<void>((_) {}, onError: (Object _) {}));
-
-    // 可选（默认关闭）：角色预调用
-    final roleId = rolePreCallRoleId;
-    if (roleId != null && roleId.isNotEmpty) {
-      await _optional(
-        'setJwCommonAppRole',
-        () => _post(_setRoleUrl, {'ROLEID': roleId}),
-      );
-    }
 
     // 可选：学期 / 节次 / 周次
     final parts = splitTermCode(termCode);
@@ -229,7 +224,6 @@ class TimetableApi {
 
   /// 查询教务可选学年学期列表（`jshkcb/xnxqcx.do`），按学期降序返回。
   static Future<List<JwxtTermOption>> fetchAvailableTerms() async {
-    _reloginUsed = false;
     final rows = await _postRows(
       _xnxqcxUrl,
       sectionKey: 'xnxqcx',
@@ -257,7 +251,6 @@ class TimetableApi {
     String termCode, {
     TimetableSettings? baseSettings,
   }) async {
-    _reloginUsed = false;
     final base = (baseSettings ?? const TimetableSettings()).copyWith(
       termCode: termCode,
       scheduleName: formatTermScheduleName(termCode),
@@ -516,109 +509,46 @@ class TimetableApi {
   )?
   debugPost;
 
-  /// 测试钩子：替换 [_postOnce] 内的原始 HTTP 响应（保留会话失效检测与单次重登逻辑）。
+  /// 测试时替换统一鉴权执行器，保留实际建会话与请求流程。
   @visibleForTesting
-  static Future<Response<dynamic>> Function(
-    Uri url,
-    Map<String, String> form, {
-    required bool force,
-  })?
-  debugPostResponse;
-
-  /// 测试钩子：替换门户客户端，保留应用首页检查和业务请求流程。
-  @visibleForTesting
-  static Future<PortalHttp> Function({required bool force})? debugClientFor;
-
-  /// 一次同步内最多强制重登一次。
-  static bool _reloginUsed = false;
-  static Future<void>? _reloginPending;
-  static int _loginRevision = 0;
+  static SessionExecutor? debugExecutor;
 
   static Future<Map<String, dynamic>?> _post(
     Uri url,
     Map<String, String> form, {
-    _JwxtApp? app,
+    JwxtAppSpec? app,
   }) async {
     final hook = debugPost;
     if (hook != null) return hook(url, form);
-
-    final revision = _loginRevision;
-    var result = await _postOnce(url, form, force: false, app: app);
-    if (result is _SessionExpired) {
-      final pending = _reloginPending;
-      if (pending != null) {
-        await pending;
-        // 并发请求共用恢复后的会话；每个请求仅重试自己一次。
-        result = await _postOnce(url, form, force: false, app: app);
-      } else if (revision != _loginRevision) {
-        result = await _postOnce(url, form, force: false, app: app);
-      } else if (_reloginUsed) {
-        throw const JwxtSessionExpiredError('教务会话失效且本次同步已重登过，请稍后再试');
-      } else {
-        _reloginUsed = true;
-        final restored = Completer<void>();
-        _reloginPending = restored.future;
-        // 消费共享失败，生产者与等待者仍分别收到原异常。
-        unawaited(restored.future.catchError((Object _) {}));
-        portalLog('session.expired', fields: {'service': 'jwxt'});
-        try {
-          result = await _postOnce(url, form, force: true, app: app);
-          if (result is _SessionExpired) {
-            throw const JwxtSessionExpiredError('重新登录后教务仍要求登录，请稍后再试');
-          }
-          _loginRevision++;
-          restored.complete();
-        } catch (error, stackTrace) {
-          restored.completeError(error, stackTrace);
-          rethrow;
-        } finally {
-          if (identical(_reloginPending, restored.future)) {
-            _reloginPending = null;
-          }
-        }
-      }
-      if (result is _SessionExpired) {
-        throw const JwxtSessionExpiredError('重新登录后教务仍要求登录，请稍后再试');
-      }
-    }
-    return (result as _Ok).json;
-  }
-
-  static Future<_PostResult> _postOnce(
-    Uri url,
-    Map<String, String> form, {
-    required bool force,
-    _JwxtApp? app,
-  }) async {
-    final a = app ?? _wdkb;
-    final rawHook = debugPostResponse;
-    final response = rawHook != null
-        ? await rawHook(url, form, force: force)
-        : await _postHttp(url, form, force: force, app: a);
+    final encoded = form.entries
+        .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
+        .join('&');
+    final response = await (debugExecutor ?? PortalSession.instance.executor)
+        .execute(
+          app ?? _wdkb,
+          () => RequestOptions(
+            path: url.toString(),
+            method: 'POST',
+            data: encoded,
+            contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
+            responseType: ResponseType.plain,
+            headers: {
+              'Accept': 'application/json, text/javascript, */*; q=0.01',
+              'X-Requested-With': 'XMLHttpRequest',
+              'Origin': _base,
+            },
+          ),
+          idempotent: true,
+        );
     final status = response.statusCode ?? 0;
-    // 分类顺序：
-    // 1) 5xx → 服务器错误（即使返回 HTML），绝不重登；
-    // 2) 401 / 403 / 跳到 authserver/login / 200 HTML 登录页 → 会话失效；
-    // 3) 200 HTML 但不是登录页（如 WebVPN 维护页）→ 未知错误，不重登；
-    // 4) 200 JSON code != "0" → 未知错误（见下方）。
-    if (status >= 500) {
-      throw JwxtHttpError(url.path.split('/').last, status);
-    }
-    if (status == 401 || status == 403 || _isSessionExpiredResponse(response)) {
-      a.ready = false;
-      return const _SessionExpired();
-    }
     if (status < 200 || status >= 300) {
       throw JwxtHttpError(url.path.split('/').last, status);
     }
-    if (_isHtmlResponse(response)) {
-      throw JwxtUnexpectedHtmlError(url.path.split('/').last);
-    }
     final raw = response.data;
-    if (raw == null) return const _Ok(null);
+    if (raw == null) return null;
     try {
       final decoded = raw is String ? jsonDecode(raw) : raw;
-      if (decoded is! Map<String, dynamic>) return const _Ok(null);
+      if (decoded is! Map<String, dynamic>) return null;
       final code = '${decoded['code'] ?? ''}';
       if (code.isNotEmpty && code != '0') {
         // 只记 code：响应正文可能含学号等个人信息，不打印。
@@ -641,7 +571,7 @@ class TimetableApi {
           },
         );
       }
-      return _Ok(decoded);
+      return decoded;
     } on FormatException catch (error, stackTrace) {
       throw DiagnosticException(
         '教务响应不是有效 JSON',
@@ -657,32 +587,6 @@ class TimetableApi {
     }
   }
 
-  static Future<Response<dynamic>> _postHttp(
-    Uri url,
-    Map<String, String> form, {
-    required bool force,
-    required _JwxtApp app,
-  }) async {
-    final http = await _client(force: force, app: app);
-    // dqxnxq / jc 抓包为空 body（Content-Length 0）
-    final encoded = form.entries
-        .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
-        .join('&');
-    return http.followRedirects(
-      await http.post(
-        url,
-        data: encoded,
-        contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
-        headers: {
-          'Accept': 'application/json, text/javascript, */*; q=0.01',
-          'X-Requested-With': 'XMLHttpRequest',
-          'Origin': _base,
-          'Referer': app.referer,
-        },
-      ),
-    );
-  }
-
   static Map<String, dynamic>? _findRowsSection(Map<String, dynamic> datas) {
     for (final value in datas.values) {
       if (value is Map<String, dynamic> && value['rows'] is List) {
@@ -691,124 +595,6 @@ class TimetableApi {
     }
     return null;
   }
-
-  static Future<PortalHttp> _client({
-    required bool force,
-    _JwxtApp? app,
-  }) async {
-    final a = app ?? _wdkb;
-    final session = PortalSession.instance;
-    final clientFor =
-        debugClientFor ??
-        ({required bool force}) =>
-            session.clientFor(PortalServices.jwxt, force: force);
-    final http = await clientFor(force: force);
-    if (a.ready && !force) return http;
-    if (!force && a.preparing != null) return a.preparing!;
-    final preparing = _prepareAppClient(a, http, force, clientFor);
-    a.preparing = preparing;
-    try {
-      return await preparing;
-    } finally {
-      if (identical(a.preparing, preparing)) a.preparing = null;
-    }
-  }
-
-  static Future<PortalHttp> _prepareAppClient(
-    _JwxtApp a,
-    PortalHttp http,
-    bool force,
-    Future<PortalHttp> Function({required bool force}) clientFor,
-  ) async {
-    final response = await http.followRedirects(
-      await http.get(
-        a.indexUrl,
-        headers: {'Accept': 'text/html,application/xhtml+xml'},
-      ),
-    );
-    if (_looksLikeLoginPage(response)) {
-      a.ready = false;
-      if (!force) {
-        if (_reloginUsed) {
-          throw const JwxtSessionExpiredError('教务会话失效且本次同步已重登过，请稍后再试');
-        }
-        _reloginUsed = true;
-        final fresh = await clientFor(force: true);
-        final retry = await fresh.followRedirects(
-          await fresh.get(
-            a.indexUrl,
-            headers: {'Accept': 'text/html,application/xhtml+xml'},
-          ),
-        );
-        if (_looksLikeLoginPage(retry)) {
-          throw const JwxtSessionExpiredError('重新登录后仍被教务拦回登录页，请稍后再试');
-        }
-        a.ready = true;
-        return fresh;
-      }
-      throw const JwxtSessionExpiredError('重新登录后仍被教务拦回登录页，请稍后再试');
-    }
-    a.ready = true;
-    return http;
-  }
-
-  /// Dio 跟随重定向后会话失效常以 200 到达：最终 URL 落在 authserver/login，
-  /// 或返回 text/html（非 JSON）登录页。
-  static bool _isSessionExpiredResponse(Response<dynamic> response) {
-    if (response.realUri.toString().contains('authserver/login')) return true;
-    for (final r in response.redirects) {
-      if (r.location.toString().contains('authserver/login')) return true;
-    }
-    final status = response.statusCode ?? 0;
-    if (status == 200 && _isHtmlResponse(response)) {
-      final body = response.data as String;
-      return body.contains('casLoginForm') || body.contains('authserver');
-    }
-    return false;
-  }
-
-  static bool _looksLikeLoginPage(Response<dynamic> response) {
-    if (response.statusCode == 401 || response.statusCode == 403) return true;
-    if (response.realUri.host.contains('authserver')) return true;
-    final body = response.data;
-    return body is String &&
-        body.contains('authserver/login') &&
-        (body.contains('name="execution"') || body.contains('casLoginForm'));
-  }
-
-  /// 响应体是 HTML（而不是 JSON）。按 content-type 或正文开头判断。
-  static bool _isHtmlResponse(Response<dynamic> response) {
-    final body = response.data;
-    if (body is! String) return false;
-    final t = body.trimLeft();
-    if (t.startsWith('{') || t.startsWith('[')) return false;
-    final ct = response.headers.value(Headers.contentTypeHeader) ?? '';
-    return ct.contains('text/html') ||
-        t.startsWith('<') ||
-        t.toLowerCase().contains('<html');
-  }
-}
-
-/// 教务接口返回 200 HTML 但不是登录页（如 WebVPN 维护页），归为未知错误。
-class JwxtUnexpectedHtmlError implements Exception, DiagnosticError {
-  const JwxtUnexpectedHtmlError(this.endpoint);
-
-  final String endpoint;
-
-  @override
-  Object? get cause => null;
-  @override
-  StackTrace? get causeStackTrace => null;
-  @override
-  Map<String, Object?> get diagnosticContext => {
-    'endpoint': 'timetable.$endpoint',
-    'service': 'jwxt',
-    'stage': 'response.validate',
-    'reason_code': 'unexpected_html',
-  };
-
-  @override
-  String toString() => '教务接口 $endpoint 返回了非预期的 HTML 页面';
 }
 
 /// 教务会话失效且单次重登后仍失效。
@@ -835,29 +621,4 @@ class JwxtHttpError implements Exception, DiagnosticError {
   };
   @override
   String toString() => '教务 $endpoint 返回 HTTP $status';
-}
-
-sealed class _PostResult {
-  const _PostResult();
-}
-
-class _Ok extends _PostResult {
-  const _Ok(this.json);
-  final Map<String, dynamic>? json;
-}
-
-class _SessionExpired extends _PostResult {
-  const _SessionExpired();
-}
-
-/// 一个教务 EMAP 应用：首页（进一次建立应用会话）与 XHR Referer。
-class _JwxtApp {
-  _JwxtApp(this.indexUrl, this.referer);
-
-  final Uri indexUrl;
-  final String referer;
-
-  /// 本进程已进过应用首页（会话失效时置回 false）。
-  bool ready = false;
-  Future<PortalHttp>? preparing;
 }

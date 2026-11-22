@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
-import 'dart:isolate';
 
 import '../logging/diagnostic_error.dart';
 import 'vpn_log.dart';
@@ -85,62 +84,115 @@ class VpnNativeException extends SocketException implements DiagnosticError {
   }
 }
 
-/// Rust 控制接口。阻塞的握手、DNS 和建连在后台 isolate 中执行。
+typedef _NativeCallback = Void Function(Pointer<Uint8>, UintPtr, Uint64);
+
+/// Rust 控制接口。原生后台线程执行阻塞控制操作，连接数据不跨 FFI。
 class VpnNative {
   const VpnNative();
 
-  /// 执行一条控制命令，业务流量不经过此接口。
+  static final _events = StreamController<Map<String, dynamic>>.broadcast();
+  static final _pending = <int, Completer<Map<String, dynamic>>>{};
+  static int _requestId = 0;
+  static final _bindings = _VpnBindings();
+  static final _callback = NativeCallable<_NativeCallback>.listener(_received)
+    ..keepIsolateAlive = false;
+
+  /// 原生状态推送。订阅不会加载动态库，首次控制调用才初始化。
+  Stream<Map<String, dynamic>> get events => _events.stream;
+
+  static void _received(Pointer<Uint8> pointer, int length, int requestId) {
+    final pending = requestId == 0 ? null : _pending.remove(requestId);
+    try {
+      if (pointer == nullptr || length == 0 || length > 1024 * 1024) {
+        throw const SocketException('VPN 原生接口未返回有效结果');
+      }
+      final response = jsonDecode(
+        utf8.decode(pointer.asTypedList(length)),
+      ) as Map<String, dynamic>;
+      if (requestId == 0) {
+        _events.add(response);
+      } else {
+        pending?.complete(response);
+      }
+    } catch (error, stackTrace) {
+      pending?.completeError(error, stackTrace);
+      if (requestId == 0) {
+        vpnLog('native.event_invalid', error: error, stackTrace: stackTrace);
+      }
+    } finally {
+      if (pointer != nullptr) _bindings.freeResult(pointer);
+    }
+  }
+
+  /// 执行一条控制命令；动态库和函数指针只在本进程首次调用时加载。
   Future<Map<String, dynamic>> call(Map<String, dynamic> request) async {
-    final method = request['method'];
-    final timeout = switch (method) {
-      'start' => const Duration(seconds: 30),
-      'open' => const Duration(seconds: 24),
-      'probe' => const Duration(seconds: 5),
-      _ => const Duration(seconds: 3),
-    };
+    final method = request['method'] as String;
+    final timeout = method == 'start'
+        ? const Duration(seconds: 30)
+        : method == 'probe'
+        ? const Duration(seconds: 5)
+        : const Duration(seconds: 3);
     final stage = 'native.$method';
-    // 只输出操作名，绝不展开 request/result。
     return vpnStage(
       stage,
       () async {
+        _bindings.register(_callback.nativeFunction);
+        final id = ++_requestId;
+        final pending = Completer<Map<String, dynamic>>();
+        _pending[id] = pending;
+        final bytes = utf8.encode(jsonEncode(request));
+        final input = _bindings.allocate(bytes.length);
+        if (input == nullptr) {
+          _pending.remove(id);
+          throw const SocketException('VPN 控制消息过大');
+        }
+        try {
+          input.asTypedList(bytes.length).setAll(0, bytes);
+          _bindings.callAsync(
+            input,
+            bytes.length,
+            id,
+            _callback.nativeFunction,
+          );
+        } catch (_) {
+          _pending.remove(id);
+          rethrow;
+        } finally {
+          bytes.fillRange(0, bytes.length, 0);
+          _bindings.free(input, bytes.length);
+        }
         var expired = false;
-        final work = Isolate.run(() => _call(request));
+        final work = pending.future.then((response) {
+          if (response['ok'] != true) {
+            throw VpnNativeException.fromResponse(response, method: method);
+          }
+          return response['data'] as Map<String, dynamic>;
+        });
         unawaited(
           work.then(
             (result) async {
-              // 即使 isolate 调度迟到，过期的启动结果也不能留下孤立隧道。
-              if (expired && method == 'start' && result['id'] is int) {
+              if (!expired) return;
+              final cleanup = method == 'start' && result['engineId'] is int
+                  ? {'method': 'stop', 'id': result['engineId']}
+                  : method == 'prepareStart' && result['startId'] is int
+                  ? {'method': 'cancelStart', 'startId': result['startId']}
+                  : null;
+              if (cleanup != null) {
                 try {
-                  await call({'method': 'stop', 'id': result['id']});
-                } catch (_) {}
-              }
-              if (expired &&
-                  method == 'prepareStart' &&
-                  result['startId'] is int) {
-                try {
-                  await call({
-                    'method': 'cancelStart',
-                    'startId': result['startId'],
-                  });
-                } catch (_) {}
-              }
-              if (expired &&
-                  method == 'prepareOpen' &&
-                  result['openId'] is int) {
-                try {
-                  await call({
-                    'method': 'cancelOpen',
-                    'id': request['id'],
-                    'openId': result['openId'],
-                  });
-                } catch (_) {}
+                  await call(cleanup);
+                } catch (error, stackTrace) {
+                  vpnLog(
+                    'native.late_cleanup_failed',
+                    error: error,
+                    stackTrace: stackTrace,
+                  );
+                }
               }
             },
             onError: (Object error, StackTrace stackTrace) {
               if (expired) {
                 vpnLog(
                   'native.late_failure',
-                  fields: {'stage': stage},
                   error: error,
                   stackTrace: stackTrace,
                 );
@@ -172,8 +224,11 @@ class VpnNative {
       },
     );
   }
+}
 
-  static Map<String, dynamic> _call(Map<String, dynamic> request) {
+/// 一次加载所有 C 符号；静态监听在进程结束前不关闭，防止原生线程调用失效指针。
+class _VpnBindings {
+  _VpnBindings() {
     const configured = String.fromEnvironment('VPN_NATIVE_LIBRARY');
     final name = configured.isNotEmpty
         ? configured
@@ -187,66 +242,70 @@ class VpnNative {
               stage: 'native.load',
             ),
           };
-    final DynamicLibrary library;
     try {
       library = DynamicLibrary.open(name);
+      allocate = library
+          .lookupFunction<
+            Pointer<Uint8> Function(UintPtr),
+            Pointer<Uint8> Function(int)
+          >('nuist_vpn_alloc');
+      free = library
+          .lookupFunction<
+            Void Function(Pointer<Uint8>, UintPtr),
+            void Function(Pointer<Uint8>, int)
+          >('nuist_vpn_free');
+      freeResult = library
+          .lookupFunction<
+            Void Function(Pointer<Uint8>),
+            void Function(Pointer<Uint8>)
+          >('nuist_vpn_result_free');
+      callAsync = library
+          .lookupFunction<
+            Void Function(
+              Pointer<Uint8>,
+              UintPtr,
+              Uint64,
+              Pointer<NativeFunction<_NativeCallback>>,
+            ),
+            void Function(
+              Pointer<Uint8>,
+              int,
+              int,
+              Pointer<NativeFunction<_NativeCallback>>,
+            )
+          >('nuist_vpn_call_async');
+      _setEventCallback = library
+          .lookupFunction<
+            Void Function(Pointer<NativeFunction<_NativeCallback>>),
+            void Function(Pointer<NativeFunction<_NativeCallback>>)
+          >('nuist_vpn_set_event_callback');
     } catch (error, stackTrace) {
       throw VpnNativeException(
-        '未找到校园 VPN 原生库，请使用包含 Rust 核心的构建',
+        '未找到校园 VPN 原生接口，请使用包含 Rust 核心的构建',
         code: 'native_library_load_failed',
         stage: 'native.load',
         cause: error,
         causeStackTrace: stackTrace,
       );
     }
-    final allocate = library
-        .lookupFunction<
-          Pointer<Uint8> Function(UintPtr),
-          Pointer<Uint8> Function(int)
-        >('nuist_vpn_alloc');
-    final free = library
-        .lookupFunction<
-          Void Function(Pointer<Uint8>, UintPtr),
-          void Function(Pointer<Uint8>, int)
-        >('nuist_vpn_free');
-    final call = library
-        .lookupFunction<
-          Pointer<Uint8> Function(Pointer<Uint8>, UintPtr),
-          Pointer<Uint8> Function(Pointer<Uint8>, int)
-        >('nuist_vpn_call');
-    final freeResult = library
-        .lookupFunction<
-          Void Function(Pointer<Uint8>),
-          void Function(Pointer<Uint8>)
-        >('nuist_vpn_result_free');
-    final bytes = utf8.encode(jsonEncode(request));
-    final input = allocate(bytes.length);
-    if (input == nullptr) throw const SocketException('VPN 控制消息过大');
-    Pointer<Uint8> result = nullptr;
-    try {
-      input.asTypedList(bytes.length).setAll(0, bytes);
-      result = call(input, bytes.length);
-      if (result == nullptr) throw const SocketException('VPN 原生接口未返回结果');
-      var length = 0;
-      while (length < 1024 * 1024 && (result + length).value != 0) {
-        length++;
-      }
-      if (length == 1024 * 1024) throw const SocketException('VPN 响应长度异常');
-      final response = jsonDecode(
-        utf8.decode(result.asTypedList(length)),
-      ) as Map<String, dynamic>;
-      if (response['ok'] != true) {
-        // 错误回到主 isolate 的阶段日志中归类，避免丢失业务 Trace。
-        throw VpnNativeException.fromResponse(
-          response,
-          method: request['method'] as String,
-        );
-      }
-      return response['data'] as Map<String, dynamic>;
-    } finally {
-      bytes.fillRange(0, bytes.length, 0);
-      free(input, bytes.length);
-      if (result != nullptr) freeResult(result);
-    }
+  }
+  late final DynamicLibrary library;
+  late final Pointer<Uint8> Function(int) allocate;
+  late final void Function(Pointer<Uint8>, int) free;
+  late final void Function(Pointer<Uint8>) freeResult;
+  late final void Function(
+    Pointer<Uint8>,
+    int,
+    int,
+    Pointer<NativeFunction<_NativeCallback>>,
+  )
+  callAsync;
+  late final void Function(Pointer<NativeFunction<_NativeCallback>>)
+  _setEventCallback;
+  bool _registered = false;
+  void register(Pointer<NativeFunction<_NativeCallback>> callback) {
+    if (_registered) return;
+    _setEventCallback(callback);
+    _registered = true;
   }
 }

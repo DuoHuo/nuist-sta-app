@@ -364,7 +364,7 @@ void main() {
     });
   });
 
-  test('元数据端点为 dqzc/dqxnxq；角色预调用默认关闭、开启后非致命', () async {
+  test('元数据端点为 dqzc/dqxnxq；角色由应用建会话处理', () async {
     final paths = <String>[];
     TimetableApi.debugPost = (url, form) async {
       paths.add(url.path);
@@ -396,11 +396,6 @@ void main() {
       isFalse,
     );
     expect(paths.any((p) => p.contains('setJwCommonAppRole')), isFalse);
-
-    paths.clear();
-    TimetableApi.rolePreCallRoleId = 'TEST_ROLE';
-    await TimetableApi.fetchTermSnapshot('2026-2027-1');
-    expect(paths, contains('/jwapp/sys/jwpubapp/pub/setJwCommonAppRole.do'));
   });
 
   testWidgets('开学日变化后 PageView 跟随 viewingWeek（顶栏与网格不错位）', (tester) async {

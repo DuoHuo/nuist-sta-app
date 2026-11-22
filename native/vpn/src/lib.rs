@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// 业务错误与诊断上下文分离，调用方无需解析中文错误消息。
+#[derive(Debug)]
 struct NativeFailure {
     message: String,
     diagnostic: Value,
@@ -19,22 +20,22 @@ struct NativeFailure {
 
 impl NativeFailure {
     fn io(error: std::io::Error, code: &str, stage: &str) -> Self {
-        let mut causes = Vec::new();
-        let mut source = std::error::Error::source(&error);
+        let diagnostic = Self::io_details(&error, code, stage);
+        Self {
+            message: error.to_string(),
+            diagnostic,
+        }
+    }
+
+    fn io_details(error: &std::io::Error, code: &str, stage: &str) -> Value {
+        let mut causes = vec![error.to_string()];
+        let mut source = std::error::Error::source(error);
         while let Some(cause) = source {
             causes.push(cause.to_string());
             source = cause.source();
         }
-        Self {
-            message: error.to_string(),
-            diagnostic: json!({
-                "code": code,
-                "stage": stage,
-                "native_kind": format!("{:?}", error.kind()),
-                "os_code": error.raw_os_error(),
-                "causes": causes,
-            }),
-        }
+        json!({"code": code, "stage": stage, "native_kind": format!("{:?}", error.kind()),
+            "os_code": error.raw_os_error(), "causes": causes})
     }
 }
 
@@ -62,9 +63,17 @@ fn dispatch(request: Value) -> Result<Value, NativeFailure> {
     let method = request["method"].as_str().ok_or("缺少操作名称")?;
     let starts = STARTS.get_or_init(|| Mutex::new(HashMap::new()));
     match method {
-        "version" => Ok(json!({"abi": 1})),
+        "version" => Ok(json!({"abi": 2})),
         "prepareStart" => {
-            let mut registry = starts.lock().map_err(|_| "VPN 启动注册表不可用")?;
+            let mut registry = starts.lock().unwrap_or_else(|e| e.into_inner());
+            registry.retain(|_, control| {
+                if control.status()["elapsedMs"].as_u64().unwrap_or(0) < 30000 {
+                    true
+                } else {
+                    control.cancel();
+                    false
+                }
+            });
             if registry.len() >= 4 {
                 return Err("VPN 启动任务数量超限".into());
             }
@@ -74,11 +83,7 @@ fn dispatch(request: Value) -> Result<Value, NativeFailure> {
         }
         "cancelStart" => {
             let id = request["startId"].as_u64().ok_or("缺少启动编号")?;
-            if let Some(control) = starts
-                .lock()
-                .map_err(|_| "VPN 启动注册表不可用")?
-                .remove(&id)
-            {
+            if let Some(control) = starts.lock().unwrap_or_else(|e| e.into_inner()).remove(&id) {
                 control.cancel();
             }
             Ok(json!({}))
@@ -87,7 +92,7 @@ fn dispatch(request: Value) -> Result<Value, NativeFailure> {
             let id = request["startId"].as_u64().ok_or("缺少启动编号")?;
             let control = starts
                 .lock()
-                .map_err(|_| "VPN 启动注册表不可用")?
+                .unwrap_or_else(|e| e.into_inner())
                 .get(&id)
                 .cloned();
             Ok(control
@@ -99,7 +104,7 @@ fn dispatch(request: Value) -> Result<Value, NativeFailure> {
             let control = match start_id {
                 Some(id) => starts
                     .lock()
-                    .map_err(|_| "VPN 启动注册表不可用")?
+                    .unwrap_or_else(|e| e.into_inner())
                     .get(&id)
                     .cloned()
                     .ok_or("VPN 启动已取消")?,
@@ -108,7 +113,7 @@ fn dispatch(request: Value) -> Result<Value, NativeFailure> {
             let outcome = engine::start_controlled(&request, control.clone());
             // 先检查取消、再释放登记；cancelStart 在握手完成边界也能阻止发布。
             if let Some(id) = start_id {
-                let mut registry = starts.lock().map_err(|_| "VPN 启动注册表不可用")?;
+                let mut registry = starts.lock().unwrap_or_else(|e| e.into_inner());
                 if !registry.contains_key(&id) {
                     if let Ok((handle, _)) = outcome {
                         handle.stop();
@@ -123,71 +128,136 @@ fn dispatch(request: Value) -> Result<Value, NativeFailure> {
                 NativeFailure::io(e, "native_start_failed", stage)
             })?;
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            let mut registry = engines.lock().map_err(|_| "VPN 注册表不可用")?;
+            let mut registry = engines.lock().unwrap_or_else(|e| e.into_inner());
+            registry.retain(|_, handle| {
+                if handle.alive() {
+                    true
+                } else {
+                    handle.stop();
+                    false
+                }
+            });
             if registry.len() >= 4 {
                 handle.stop();
                 return Err("VPN 实例数量超限".into());
             }
+            let result = json!({"engineId": id, "proxyPort": handle.proxy_port, "proxyToken": handle.proxy_token,
+                "virtualIp": info.address.to_string(), "dns": info.dns.to_string(), "startup": control.status()});
+            handle.set_id(id);
             registry.insert(id, handle);
-            Ok(
-                json!({"id": id, "virtualIp": info.address.to_string(), "dns": info.dns.to_string(), "startup": control.status()}),
-            )
+            Ok(result)
         }
         "stop" => {
             let id = request["id"].as_u64().ok_or("缺少 VPN 实例")?;
-            let handle = engines.lock().map_err(|_| "VPN 注册表不可用")?.remove(&id);
+            let handle = engines
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&id);
             if let Some(handle) = handle {
                 handle.stop();
             }
+            engines
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|_, handle| handle.alive());
             Ok(json!({}))
         }
-        "status" | "open" | "probe" | "prepareOpen" | "cancelOpen" | "releaseOpen" => {
+        "status" | "health" | "probe" => {
             let id = request["id"].as_u64().ok_or("缺少 VPN 实例")?;
             let handle = engines
                 .lock()
-                .map_err(|_| "VPN 注册表不可用")?
+                .unwrap_or_else(|e| e.into_inner())
                 .get(&id)
                 .cloned()
                 .ok_or("VPN 实例已关闭")?;
-            if method == "status" {
-                return Ok(handle.status());
-            }
-            if method == "prepareOpen" {
-                let open_id = handle.prepare_open().map_err(|e| {
-                    NativeFailure::io(e, "native_open_prepare_failed", "native.open")
-                })?;
-                return Ok(json!({"openId": open_id}));
-            }
-            if method == "cancelOpen" || method == "releaseOpen" {
-                let open_id = request["openId"].as_u64().ok_or("缺少目标连接编号")?;
-                if method == "cancelOpen" {
-                    handle.cancel_open(open_id);
-                } else {
-                    handle.release_open(open_id);
-                }
-                return Ok(json!({}));
-            }
-            let host = request["host"].as_str().ok_or("缺少目标主机")?;
             if method == "probe" {
+                let host = request["host"].as_str().ok_or("缺少目标主机")?;
+                let timeout = std::time::Duration::from_millis(
+                    request["timeoutMs"].as_u64().unwrap_or(3000).clamp(1, 3000),
+                );
                 handle
-                    .probe(host.to_owned())
+                    .probe(host.to_owned(), timeout)
                     .map_err(|e| NativeFailure::io(e, "native_probe_failed", "native.probe"))?;
-                return Ok(handle.status());
             }
-            let port = request["port"]
-                .as_u64()
-                .filter(|p| (1..=65535).contains(p))
-                .ok_or("目标端口不合法")? as u16;
-            let result = match request["openId"].as_u64() {
-                Some(open_id) => handle.open_reserved(host.to_owned(), port, open_id),
-                None => handle.open(host.to_owned(), port),
-            };
-            let bridge =
-                result.map_err(|e| NativeFailure::io(e, "native_open_failed", "native.open"))?;
-            Ok(json!({"port": bridge.port, "secret": bridge.secret}))
+            Ok(handle.status())
         }
         _ => Err("未知 VPN 操作".into()),
     }
+}
+
+/// 回调的 JSON 内存由 Dart 调用 nuist_vpn_result_free 释放，指针在异步回调处理前一直有效。
+type Callback = extern "C" fn(*mut c_char, usize, u64);
+static EVENT_CALLBACK: OnceLock<Mutex<Option<Callback>>> = OnceLock::new();
+
+pub(crate) fn emit_event(engine_id: u64, event: &str, reason: &str) {
+    emit_diagnostic_event(engine_id, event, reason, None);
+}
+
+pub(crate) fn emit_diagnostic_event(
+    engine_id: u64,
+    event: &str,
+    reason: &str,
+    error: Option<&std::io::Error>,
+) {
+    if engine_id == 0 {
+        return;
+    }
+    let callback = *EVENT_CALLBACK
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(callback) = callback {
+        let mut value = json!({"engineId": engine_id, "event": event, "reason": reason});
+        if let Some(error) = error {
+            value["diagnostic"] = NativeFailure::io_details(error, reason, "native.engine");
+        }
+        let bytes = value.to_string();
+        let length = bytes.len();
+        callback(
+            CString::new(bytes).expect("JSON 不包含裸零字节").into_raw(),
+            length,
+            0,
+        );
+    }
+}
+
+/// 注册进程内状态监听。调用方必须让函数指针在引擎整个生命周期保持有效。
+#[no_mangle]
+pub extern "C" fn nuist_vpn_set_event_callback(callback: Option<Callback>) {
+    *EVENT_CALLBACK
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = callback;
+}
+
+/// 异步执行控制命令，输入在返回前复制；阻塞的握手和探活不会阻塞 Dart UI。
+///
+/// # Safety
+/// pointer 必须指向至少 length 字节，callback 必须在结果回调完成前有效。
+#[no_mangle]
+pub unsafe extern "C" fn nuist_vpn_call_async(
+    pointer: *const u8,
+    length: usize,
+    request_id: u64,
+    callback: Callback,
+) {
+    let input = if !pointer.is_null() && length > 0 && length <= 1024 * 1024 {
+        std::slice::from_raw_parts(pointer, length).to_vec()
+    } else {
+        Vec::new()
+    };
+    // 控制操作低频；连接数据路径全部由常驻 mio 线程处理，不创建线程或跨 FFI。
+    std::thread::spawn(move || {
+        let mut input = input;
+        let response = nuist_vpn_call(input.as_ptr(), input.len());
+        input.fill(0);
+        let length = if response.is_null() {
+            0
+        } else {
+            std::ffi::CStr::from_ptr(response).to_bytes().len()
+        };
+        callback(response, length, request_id);
+    });
 }
 
 /// 分配桥接输入内存。调用方必须使用相同长度调用 nuist_vpn_free。
@@ -258,6 +328,24 @@ pub unsafe extern "C" fn nuist_vpn_call(pointer: *const u8, length: usize) -> *m
 #[cfg(test)]
 mod diagnostic_tests {
     use super::*;
+
+    #[test]
+    fn cancelled_start_reservations_do_not_permanently_exhaust_four_slots() {
+        for _ in 0..8 {
+            let ids: Vec<_> = (0..4)
+                .map(|_| {
+                    dispatch(json!({"method": "prepareStart"})).unwrap()["startId"]
+                        .as_u64()
+                        .unwrap()
+                })
+                .collect();
+            assert!(dispatch(json!({"method": "prepareStart"})).is_err());
+            for id in ids {
+                dispatch(json!({"method": "cancelStart", "startId": id})).unwrap();
+            }
+            assert!(STARTS.get().unwrap().lock().unwrap().is_empty());
+        }
+    }
 
     #[test]
     fn native_io_failure_keeps_kind_stage_and_original_message() {

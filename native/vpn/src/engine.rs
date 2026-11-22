@@ -1,16 +1,20 @@
 //! 单线程事件循环管理 TLS、用户态网络栈及回环桥接，避免每包跨 FFI。
 
 use crate::{frame, link::IpLink};
+use mio::{Events, Interest, Poll, Token, Waker};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde_json::{json, Value};
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::{dns, tcp};
 use smoltcp::time::{Duration as NetDuration, Instant as NetInstant};
 use smoltcp::wire::{DnsQueryType, HardwareAddress, IpAddress, IpCidr};
-use std::collections::{HashMap, VecDeque};
+use socket2::{SockRef, TcpKeepalive};
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(test)]
+use std::net::TcpListener;
+use std::net::{Ipv4Addr, Shutdown, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -18,7 +22,11 @@ use std::time::{Duration, Instant};
 
 const MAX_CONNECTIONS: usize = 64;
 const BUFFER_SIZE: usize = 64 * 1024;
-const OPEN_TIMEOUT: Duration = Duration::from_secs(20);
+const OPEN_TIMEOUT: Duration = Duration::from_secs(8);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const TUNNEL: Token = Token(0);
+const LISTENER: Token = Token(1);
+const CONTROL: Token = Token(2);
 // 原客户端为 500ms；测试阶段放宽到 10s，网关兼容性仍需实网验证。
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -88,7 +96,7 @@ impl StartControl {
     }
 
     pub fn status(&self) -> Value {
-        let progress = self.progress.lock().unwrap();
+        let progress = self.progress.lock().unwrap_or_else(|e| e.into_inner());
         json!({"stage": progress.stage, "stageElapsedMs": progress.changed.elapsed().as_millis(),
             "elapsedMs": progress.started.elapsed().as_millis(), "timings": progress.timings})
     }
@@ -182,7 +190,7 @@ fn resolve(
     }
     loop {
         control.check(deadline)?;
-        match receiver.recv_timeout(Duration::from_millis(50)) {
+        match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(result) => return result,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(_) => return Err(error(io::ErrorKind::BrokenPipe, "VPN DNS 解析线程已退出")),
@@ -196,6 +204,7 @@ struct Health {
     heartbeats: u32,
     received_bytes: u64,
     recovering: bool,
+    draining: bool,
     dns_timeouts: u64,
     tcp_timeouts: u64,
     loop_iterations: u64,
@@ -214,26 +223,10 @@ fn random<const N: usize>() -> io::Result<[u8; N]> {
     Ok(bytes)
 }
 
-pub struct Bridge {
-    pub port: u16,
-    pub secret: String,
-}
-
 enum Command {
-    Open(
-        String,
-        u16,
-        Arc<OpenControl>,
-        SyncSender<io::Result<Bridge>>,
-    ),
-    Probe(String, SyncSender<io::Result<()>>),
+    Probe(String, Duration, SyncSender<io::Result<()>>),
     #[cfg(test)]
     SimulateSuspend(SyncSender<()>),
-}
-
-struct OpenControl {
-    cancelled: AtomicBool,
-    created: Instant,
 }
 
 #[derive(Clone)]
@@ -243,128 +236,68 @@ pub struct Handle {
     exit_reason: Arc<Mutex<Option<String>>>,
     health: Arc<Mutex<Health>>,
     socket: Arc<TcpStream>,
-    opens: Arc<Mutex<HashMap<u64, Arc<OpenControl>>>>,
-    next_open: Arc<AtomicUsize>,
+    waker: Arc<Waker>,
+    engine_id: Arc<AtomicU64>,
+    pub proxy_port: u16,
+    pub proxy_token: String,
 }
 
 impl Handle {
     pub fn alive(&self) -> bool {
         self.running.load(Ordering::Acquire)
     }
-
     pub fn exit_reason(&self) -> Option<String> {
         self.exit_reason
             .lock()
-            .ok()
-            .and_then(|reason| reason.clone())
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
-
+    pub fn set_id(&self, id: u64) {
+        self.engine_id.store(id, Ordering::Release);
+        if !self.alive() {
+            crate::emit_event(
+                id,
+                "exited",
+                self.exit_reason().as_deref().unwrap_or("stopped"),
+            );
+        }
+    }
     pub fn stop(&self) {
         self.running.store(false, Ordering::Release);
         let _ = self.socket.shutdown(Shutdown::Both);
+        let _ = self.waker.wake();
     }
-
     pub fn status(&self) -> Value {
-        let health = self.health.lock().unwrap();
+        let health = self.health.lock().unwrap_or_else(|e| e.into_inner());
         let alive = self.alive();
-        json!({"alive": alive, "healthy": alive && health.progress.elapsed() < PROGRESS_TIMEOUT
-            && health.received.elapsed() < RECEIVE_TIMEOUT && !health.recovering,
-            "needsProbe": alive && (health.received.elapsed() >= RECEIVE_TIMEOUT || health.recovering
-                || health.progress.elapsed() >= PROGRESS_TIMEOUT),
+        json!({"alive": alive, "healthy": alive && !health.recovering && !health.draining,
+            "needsProbe": alive && (health.received.elapsed() >= RECEIVE_TIMEOUT || health.recovering),
             "exitReason": self.exit_reason(), "loopIdleMs": health.progress.elapsed().as_millis(),
             "rxIdleMs": health.received.elapsed().as_millis(), "heartbeats": health.heartbeats,
-            "receivedBytes": health.received_bytes, "recovering": health.recovering,
+            "receivedBytes": health.received_bytes, "recovering": health.recovering, "draining": health.draining,
             "dnsTimeouts": health.dns_timeouts, "tcpTimeouts": health.tcp_timeouts,
             "loopIterations": health.loop_iterations})
     }
-
-    pub fn probe(&self, host: String) -> io::Result<()> {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        self.commands
-            .try_send(Command::Probe(host, sender))
-            .map_err(|_| error(io::ErrorKind::WouldBlock, "VPN 探测队列不可用"))?;
-        receiver
-            .recv_timeout(Duration::from_secs(4))
-            .map_err(|_| error(io::ErrorKind::TimedOut, "VPN 恢复探测超时"))?
-    }
-
-    pub fn prepare_open(&self) -> io::Result<u64> {
-        let mut opens = self.opens.lock().unwrap();
-        opens.retain(|_, control| {
-            if control.created.elapsed() < Duration::from_secs(30) {
-                return true;
-            }
-            control.cancelled.store(true, Ordering::Release);
-            false
-        });
-        if opens.len() >= MAX_CONNECTIONS {
-            return Err(error(io::ErrorKind::WouldBlock, "VPN 目标连接登记已达上限"));
-        }
-        let id = self.next_open.fetch_add(1, Ordering::Relaxed) as u64;
-        opens.insert(
-            id,
-            Arc::new(OpenControl {
-                cancelled: AtomicBool::new(false),
-                created: Instant::now(),
-            }),
-        );
-        Ok(id)
-    }
-
-    pub fn cancel_open(&self, id: u64) {
-        if let Some(control) = self.opens.lock().unwrap().remove(&id) {
-            control.cancelled.store(true, Ordering::Release);
-        }
-    }
-
-    pub fn release_open(&self, id: u64) {
-        self.opens.lock().unwrap().remove(&id);
-    }
-
-    pub fn open(&self, host: String, port: u16) -> io::Result<Bridge> {
-        let id = self.prepare_open()?;
-        let result = self.open_reserved(host, port, id);
-        // 旧 ABI 不暴露取消编号，Flow 自行保留控制token，注册表不保留孤立编号。
-        self.opens.lock().unwrap().remove(&id);
-        result
-    }
-
-    pub fn open_reserved(&self, host: String, port: u16, id: u64) -> io::Result<Bridge> {
+    pub fn probe(&self, host: String, timeout: Duration) -> io::Result<()> {
         if !self.alive() {
-            return Err(error(io::ErrorKind::NotConnected, "VPN 隧道已断开"));
-        }
-        if host.is_empty() || host.len() > 253 || !host.is_ascii() || host.contains(':') {
-            return Err(error(
-                io::ErrorKind::InvalidInput,
-                "VPN 仅支持 IPv4 地址和 ASCII 域名",
-            ));
-        }
-        let control = self
-            .opens
-            .lock()
-            .unwrap()
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| error(io::ErrorKind::ConnectionAborted, "VPN 目标连接已取消"))?;
-        if control.cancelled.load(Ordering::Acquire) {
-            return Err(error(
-                io::ErrorKind::ConnectionAborted,
-                "VPN 目标连接已取消",
-            ));
+            return Err(error(io::ErrorKind::NotConnected, "VPN 隧道已关闭"));
         }
         let (sender, receiver) = mpsc::sync_channel(1);
         self.commands
-            .try_send(Command::Open(host, port, control, sender))
-            .map_err(|_| error(io::ErrorKind::WouldBlock, "VPN 连接队列已满或隧道已关闭"))?;
+            .try_send(Command::Probe(host, timeout, sender))
+            .map_err(|_| error(io::ErrorKind::WouldBlock, "VPN 探测队列不可用"))?;
+        self.waker.wake()?;
         receiver
-            .recv_timeout(OPEN_TIMEOUT + Duration::from_secs(1))
-            .map_err(|failure| match failure {
-                mpsc::RecvTimeoutError::Timeout => {
-                    error(io::ErrorKind::TimedOut, "VPN 建立目标连接超时")
-                }
-                mpsc::RecvTimeoutError::Disconnected => {
-                    error(io::ErrorKind::ConnectionAborted, "VPN 隧道已断开")
-                }
+            .recv_timeout(timeout + Duration::from_secs(1))
+            .map_err(|e| {
+                error(
+                    if matches!(e, mpsc::RecvTimeoutError::Timeout) {
+                        io::ErrorKind::TimedOut
+                    } else {
+                        io::ErrorKind::ConnectionAborted
+                    },
+                    "VPN 探测未完成",
+                )
             })?
     }
 }
@@ -451,7 +384,13 @@ fn start_with_deadline(
     }
     let raw = raw.ok_or_else(|| error(io::ErrorKind::NotConnected, "无法连接 VPN 网关"))?;
     raw.set_nodelay(true)?;
-    *control.socket.lock().unwrap() = Some(raw.try_clone()?);
+    SockRef::from(&raw).set_tcp_keepalive(
+        &TcpKeepalive::new()
+            .with_time(Duration::from_secs(15))
+            .with_interval(Duration::from_secs(5))
+            .with_retries(3),
+    )?;
+    *control.socket.lock().unwrap_or_else(|e| e.into_inner()) = Some(raw.try_clone()?);
     control.check(deadline)?;
     let mut connection =
         ClientConnection::new(Arc::new(tls), server_name).map_err(io::Error::other)?;
@@ -471,7 +410,11 @@ fn start_with_deadline(
     control.stage("协议鉴权");
     let info = frame::authenticate(&mut tunnel, user, token)?;
     control.check(deadline)?;
-    control.socket.lock().unwrap().take();
+    control
+        .socket
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
     let tunnel = StreamOwned::new(tunnel.conn, tunnel.sock.stream);
     tunnel.sock.set_read_timeout(None)?;
     tunnel.sock.set_write_timeout(None)?;
@@ -487,57 +430,85 @@ fn start_with_deadline(
         heartbeats: 0,
         received_bytes: 0,
         recovering: false,
+        draining: false,
         dns_timeouts: 0,
         tcp_timeouts: 0,
         loop_iterations: 0,
     }));
+    let control_socket = Arc::new(tunnel.sock.try_clone()?);
+    let tunnel = StreamOwned::new(tunnel.conn, mio::net::TcpStream::from_std(tunnel.sock));
+    let mut runner = Runner::new(tunnel, &info, receiver, running.clone(), health.clone())?;
+    let engine_id = runner.engine_id.clone();
     let handle = Handle {
         commands: sender,
         running: running.clone(),
         exit_reason: exit_reason.clone(),
-        health: health.clone(),
-        socket: Arc::new(tunnel.sock.try_clone()?),
-        opens: Arc::new(Mutex::new(HashMap::new())),
-        next_open: Arc::new(AtomicUsize::new(1)),
+        health,
+        socket: control_socket,
+        waker: runner.waker.clone(),
+        engine_id: engine_id.clone(),
+        proxy_port: runner.listener.local_addr()?.port(),
+        proxy_token: runner.proxy_token.clone(),
     };
-    let mut runner = Runner::new(tunnel, &info, receiver, running.clone(), health)?;
     thread::Builder::new()
         .name("nuist-vpn".into())
         .spawn(move || {
-            // 仅保留错误类别，绝不保存服务端数据；Dart 下次检查状态时输出 debug 日志。
             let outcome = runner.run();
-            if let Ok(mut reason) = exit_reason.lock() {
-                *reason = Some(match outcome {
-                    Ok(()) => "Stopped".to_owned(),
-                    Err(error) => format!("{:?}", error.kind()),
-                });
-            }
+            let reason = runner.exit_code.take().unwrap_or_else(|| match &outcome {
+                Ok(()) => "stopped".to_owned(),
+                Err(ref error) => format!("{:?}", error.kind()),
+            });
+            *exit_reason.lock().unwrap_or_else(|e| e.into_inner()) = Some(reason.clone());
             running.store(false, Ordering::Release);
+            crate::emit_diagnostic_event(
+                engine_id.load(Ordering::Acquire),
+                "exited",
+                &reason,
+                outcome.as_ref().err(),
+            );
         })?;
     control.stage("完成");
     Ok((handle, info))
 }
 
 struct Flow {
-    control: Arc<OpenControl>,
     query: Option<dns::QueryHandle>,
     tcp: Option<SocketHandle>,
     port: u16,
-    reply: Option<SyncSender<io::Result<Bridge>>>,
     deadline: Instant,
-    listener: Option<TcpListener>,
-    local: Option<TcpStream>,
-    secret: [u8; 32],
-    received_secret: Vec<u8>,
-    authenticated: bool,
+    local: mio::net::TcpStream,
+    token: Token,
+    interest: Interest,
+    headers: Vec<u8>,
+    pending: Vec<u8>,
+    pending_offset: usize,
+    ingress: Vec<u8>,
+    authorized: bool,
+    established: bool,
+    reject: bool,
     local_eof: bool,
     remote_eof: bool,
-    accepted_at: Instant,
     touched: Instant,
 }
 
+struct Probe {
+    query: dns::QueryHandle,
+    deadline: Instant,
+    reply: Option<SyncSender<io::Result<()>>>,
+    blackhole: bool,
+}
+
 struct Runner {
-    tunnel: StreamOwned<ClientConnection, TcpStream>,
+    tunnel: StreamOwned<ClientConnection, mio::net::TcpStream>,
+    tunnel_interest: Interest,
+    poll: Poll,
+    events: Events,
+    waker: Arc<Waker>,
+    listener: mio::net::TcpListener,
+    proxy_token: String,
+    proxy_authorization: String,
+    next_token: usize,
+    engine_id: Arc<AtomicU64>,
     device: IpLink,
     interface: Interface,
     sockets: SocketSet<'static>,
@@ -559,12 +530,90 @@ struct Runner {
     io_progress: u64,
     terminal: Option<io::Error>,
     drain_deadline: Option<Instant>,
-    probe: Option<(dns::QueryHandle, Instant, u64, SyncSender<io::Result<()>>)>,
+    probe: Option<Probe>,
+    consecutive_timeouts: u32,
+    exit_code: Option<String>,
+}
+
+/// CONNECT 凭据固定为 VPN 会话的随机口令，比较时不提前返回。
+fn authorization(token: &str) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let input = format!("vpn:{token}");
+    let mut encoded = String::new();
+    for bytes in input.as_bytes().chunks(3) {
+        let a = bytes[0] as usize;
+        let b = bytes.get(1).copied().unwrap_or(0) as usize;
+        let c = bytes.get(2).copied().unwrap_or(0) as usize;
+        encoded.push(TABLE[a >> 2] as char);
+        encoded.push(TABLE[((a & 3) << 4) | (b >> 4)] as char);
+        encoded.push(if bytes.len() > 1 {
+            TABLE[((b & 15) << 2) | (c >> 6)] as char
+        } else {
+            '='
+        });
+        encoded.push(if bytes.len() > 2 {
+            TABLE[c & 63] as char
+        } else {
+            '='
+        });
+    }
+    format!("Basic {encoded}")
+}
+
+fn parse_connect(headers: &[u8], expected: &str) -> Result<(String, u16), u16> {
+    let text = std::str::from_utf8(headers).map_err(|_| 400u16)?;
+    let mut lines = text.split("\r\n");
+    let mut request = lines.next().ok_or(400u16)?.split_whitespace();
+    if request.next() != Some("CONNECT") {
+        return Err(405);
+    }
+    let authority = request.next().ok_or(400u16)?;
+    if request.next() != Some("HTTP/1.1") || request.next().is_some() {
+        return Err(400);
+    }
+    let mut credential = None;
+    for line in lines.filter(|line| !line.is_empty()) {
+        let (name, value) = line.split_once(':').ok_or(400u16)?;
+        if name.eq_ignore_ascii_case("proxy-authorization") {
+            if credential.is_some() {
+                return Err(407);
+            }
+            credential = Some(value.trim());
+        }
+    }
+    let credential = credential.ok_or(407u16)?;
+    if credential.len() != expected.len()
+        || credential
+            .as_bytes()
+            .iter()
+            .zip(expected.as_bytes())
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            != 0
+    {
+        return Err(407);
+    }
+    let (host, port) = authority.rsplit_once(':').ok_or(400u16)?;
+    if host.is_empty()
+        || host.len() > 253
+        || !host.is_ascii()
+        || host.contains(':')
+        || host
+            .bytes()
+            .any(|b| b.is_ascii_whitespace() || b == b'/' || b == b'@')
+    {
+        return Err(400);
+    }
+    let port = port
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port > 0)
+        .ok_or(400u16)?;
+    Ok((host.to_owned(), port))
 }
 
 impl Runner {
     fn new(
-        tunnel: StreamOwned<ClientConnection, TcpStream>,
+        mut tunnel: StreamOwned<ClientConnection, mio::net::TcpStream>,
         info: &frame::AuthInfo,
         commands: Receiver<Command>,
         running: Arc<AtomicBool>,
@@ -577,20 +626,36 @@ impl Runner {
         interface.update_ip_addrs(|addresses| {
             addresses
                 .push(IpCidr::new(IpAddress::Ipv4(info.address), 32))
-                .unwrap();
+                .expect("固定单地址容量足够");
         });
-        // medium-ip 不需要 ARP；此路由使所有目标交给唯一的隧道链路。
         interface
             .routes_mut()
             .add_default_ipv4_route(info.address)
             .map_err(|_| error(io::ErrorKind::Other, "无法设置隧道路由"))?;
         let mut sockets = SocketSet::new(Vec::new());
-        // 这里的 127.0.0.1 属于隧道对端，绝不交给系统解析器。
-        let queries: Vec<_> = (0..MAX_CONNECTIONS).map(|_| None).collect();
+        let queries: Vec<_> = (0..MAX_CONNECTIONS + 1).map(|_| None).collect();
         let dns = sockets.add(dns::Socket::new(&[IpAddress::Ipv4(info.dns)], queries));
+        let poll = Poll::new()?;
+        poll.registry()
+            .register(&mut tunnel.sock, TUNNEL, Interest::READABLE)?;
+        let mut listener = mio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0).into())?;
+        poll.registry()
+            .register(&mut listener, LISTENER, Interest::READABLE)?;
+        let waker = Arc::new(Waker::new(poll.registry(), CONTROL)?);
+        let proxy_token: String = random::<32>()?.iter().map(|b| format!("{b:02x}")).collect();
+        let proxy_authorization = authorization(&proxy_token);
         let now = Instant::now();
         Ok(Self {
             tunnel,
+            tunnel_interest: Interest::READABLE,
+            poll,
+            events: Events::with_capacity(128),
+            waker,
+            listener,
+            proxy_token,
+            proxy_authorization,
+            next_token: 3,
+            engine_id: Arc::new(AtomicU64::new(0)),
             device,
             interface,
             sockets,
@@ -598,14 +663,12 @@ impl Runner {
             commands,
             running,
             flows: Vec::new(),
-            // 不同隧道避免从完全相同的源端口序列开始，仍检查存活 socket。
             local_port: 49152 + (u16::from_le_bytes(random()?) % 16384),
             decoder: frame::Decoder::default(),
             output: VecDeque::new(),
             output_offset: 0,
             started: now,
             last_received: now,
-            // 握手后首轮立即发送，之后按固定周期保活。
             last_heartbeat: now - HEARTBEAT_INTERVAL,
             heartbeat: 0,
             health,
@@ -615,6 +678,8 @@ impl Runner {
             terminal: None,
             drain_deadline: None,
             probe: None,
+            consecutive_timeouts: 0,
+            exit_code: None,
         })
     }
 
@@ -643,238 +708,343 @@ impl Runner {
         Ok(self.sockets.add(socket))
     }
 
-    fn accept_command(
-        &mut self,
-        host: String,
-        port: u16,
-        control: Arc<OpenControl>,
-        reply: SyncSender<io::Result<Bridge>>,
-    ) -> io::Result<()> {
-        if self.flows.len() >= MAX_CONNECTIONS {
-            let _ = reply.send(Err(error(
-                io::ErrorKind::WouldBlock,
-                "VPN 并发连接数已达上限",
-            )));
+    fn accept_clients(&mut self) -> io::Result<()> {
+        if self.terminal.is_some() {
             return Ok(());
         }
-        let mut flow = Flow {
-            control,
-            query: None,
-            tcp: None,
-            port,
-            reply: Some(reply),
-            deadline: Instant::now() + OPEN_TIMEOUT,
-            listener: None,
-            local: None,
-            secret: random()?,
-            received_secret: Vec::new(),
-            authenticated: false,
-            local_eof: false,
-            remote_eof: false,
-            accepted_at: Instant::now(),
-            touched: Instant::now(),
+        loop {
+            match self.listener.accept() {
+                Ok((mut local, _)) => {
+                    if self.flows.len() >= MAX_CONNECTIONS {
+                        let _ = local.write_all(
+                            b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n",
+                        );
+                        continue;
+                    }
+                    local.set_nodelay(true)?;
+                    let token = Token(self.next_token);
+                    self.next_token = self.next_token.wrapping_add(1).max(3);
+                    self.poll
+                        .registry()
+                        .register(&mut local, token, Interest::READABLE)?;
+                    self.flows.push(Flow {
+                        query: None,
+                        tcp: None,
+                        port: 0,
+                        deadline: Instant::now() + OPEN_TIMEOUT,
+                        local,
+                        token,
+                        interest: Interest::READABLE,
+                        headers: Vec::new(),
+                        pending: Vec::new(),
+                        pending_offset: 0,
+                        ingress: Vec::new(),
+                        authorized: false,
+                        established: false,
+                        reject: false,
+                        local_eof: false,
+                        remote_eof: false,
+                        touched: Instant::now(),
+                    });
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    fn respond(flow: &mut Flow, status: u16) {
+        let phrase = match status {
+            200 => "Connection Established",
+            407 => "Proxy Authentication Required",
+            504 => "Gateway Timeout",
+            405 => "Method Not Allowed",
+            400 => "Bad Request",
+            _ => "Bad Gateway",
         };
-        if let Ok(ip) = host.parse::<Ipv4Addr>() {
-            match self.connect_tcp(IpAddress::Ipv4(ip), port) {
-                Ok(tcp) => flow.tcp = Some(tcp),
-                Err(e) => {
-                    self.remove(flow, Some(e));
-                    return Ok(());
+        let challenge = if status == 407 {
+            "Proxy-Authenticate: Basic realm=\"vpn\"\r\n"
+        } else {
+            ""
+        };
+        flow.pending = format!("HTTP/1.1 {status} {phrase}\r\n{challenge}\r\n").into_bytes();
+        flow.pending_offset = 0;
+        flow.reject = status != 200;
+    }
+
+    fn start_probe(
+        &mut self,
+        host: &str,
+        timeout: Duration,
+        reply: Option<SyncSender<io::Result<()>>>,
+        blackhole: bool,
+    ) -> io::Result<()> {
+        if self.terminal.is_some() || self.probe.is_some() {
+            if let Some(reply) = reply {
+                let _ = reply.send(Err(error(io::ErrorKind::WouldBlock, "VPN 探测不可用")));
+            }
+            if blackhole {
+                if let Some(probe) = self.probe.as_mut() {
+                    probe.blackhole = true;
                 }
             }
-        } else {
-            match self.sockets.get_mut::<dns::Socket>(self.dns).start_query(
-                self.interface.context(),
-                &host,
-                DnsQueryType::A,
-            ) {
-                Ok(query) => flow.query = Some(query),
-                Err(_) => {
-                    let _ = flow.reply.take().unwrap().send(Err(error(
+            return Ok(());
+        }
+        match self.sockets.get_mut::<dns::Socket>(self.dns).start_query(
+            self.interface.context(),
+            host,
+            DnsQueryType::A,
+        ) {
+            Ok(query) => {
+                self.probe = Some(Probe {
+                    query,
+                    deadline: Instant::now() + timeout,
+                    reply,
+                    blackhole,
+                })
+            }
+            Err(_) => {
+                if let Some(reply) = reply {
+                    let _ = reply.send(Err(error(
                         io::ErrorKind::InvalidInput,
-                        "无法创建隧道 DNS 查询",
+                        "VPN 探测主机不合法",
                     )));
-                    return Ok(());
+                }
+                if blackhole {
+                    self.exit_code = Some("blackhole_detected".into());
+                    return Err(error(io::ErrorKind::TimedOut, "VPN 黑洞探测无法启动"));
                 }
             }
         }
-        self.flows.push(flow);
         Ok(())
     }
 
     fn advance(&mut self, flow: &mut Flow) -> io::Result<bool> {
         let now = Instant::now();
-        if !flow.authenticated && flow.control.cancelled.load(Ordering::Acquire) {
-            return Err(error(
-                io::ErrorKind::ConnectionAborted,
-                "VPN 目标连接已取消",
-            ));
+        if !flow.established && !flow.reject && now >= flow.deadline {
+            if flow.authorized {
+                let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
+                if flow.query.is_some() {
+                    health.dns_timeouts += 1;
+                } else {
+                    health.tcp_timeouts += 1;
+                }
+                drop(health);
+                self.consecutive_timeouts += 1;
+                if self.consecutive_timeouts >= 2 {
+                    self.start_probe("vpn-probe.invalid", PROBE_TIMEOUT, None, true)?;
+                }
+            }
+            Self::respond(flow, 504);
         }
-        if self.terminal.is_some() && !flow.authenticated {
+        if self.terminal.is_some() && !flow.established {
             return Ok(false);
         }
-        if !flow.authenticated && now >= flow.deadline {
-            let mut health = self.health.lock().unwrap();
-            let stage = if flow.query.is_some() {
-                health.dns_timeouts += 1;
-                "VPN 目标 DNS 超时"
-            } else if flow.reply.is_some() {
-                health.tcp_timeouts += 1;
-                "VPN 目标 TCP 握手超时"
-            } else {
-                "VPN 回环鉴权超时"
-            };
-            return Err(error(io::ErrorKind::TimedOut, stage));
-        }
-        if let Some(query) = flow.query {
-            match self
-                .sockets
-                .get_mut::<dns::Socket>(self.dns)
-                .get_query_result(query)
-            {
-                Ok(addresses) => {
-                    flow.query = None;
-                    let ip = *addresses
-                        .first()
-                        .ok_or_else(|| error(io::ErrorKind::NotFound, "隧道 DNS 未返回 IPv4"))?;
-                    flow.tcp = Some(self.connect_tcp(ip, flow.port)?);
+        if !flow.authorized && !flow.reject {
+            let mut bytes = [0u8; 1024];
+            loop {
+                match flow.local.read(&mut bytes) {
+                    Ok(0) => return Ok(false),
+                    Ok(count) => flow.headers.extend_from_slice(&bytes[..count]),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) => return Err(e),
                 }
-                Err(dns::GetQueryResultError::Pending) => return Ok(true),
-                Err(_) => {
-                    flow.query = None;
-                    return Err(error(io::ErrorKind::NotFound, "隧道 DNS 查询失败"));
-                }
-            }
-        }
-        let socket = self.sockets.get_mut::<tcp::Socket>(flow.tcp.unwrap());
-        if socket.state() == tcp::State::Closed && self.terminal.is_none() {
-            return Err(error(
-                io::ErrorKind::ConnectionAborted,
-                "隧道内 TCP 连接已关闭",
-            ));
-        }
-        if flow.reply.is_some() && socket.state() == tcp::State::Established {
-            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-            listener.set_nonblocking(true)?;
-            let bridge = Bridge {
-                port: listener.local_addr()?.port(),
-                secret: flow
-                    .secret
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect(),
-            };
-            flow.listener = Some(listener);
-            flow.deadline = now + Duration::from_secs(10);
-            if flow.reply.take().unwrap().send(Ok(bridge)).is_err() {
-                return Ok(false);
-            }
-        }
-        if flow.local.is_none() {
-            if let Some(listener) = &flow.listener {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        stream.set_nonblocking(true)?;
-                        stream.set_nodelay(true)?;
-                        flow.local = Some(stream);
-                        flow.accepted_at = now;
+                if let Some(end) = flow
+                    .headers
+                    .windows(4)
+                    .position(|bytes| bytes == b"\r\n\r\n")
+                {
+                    let end = end + 4;
+                    match parse_connect(&flow.headers[..end], &self.proxy_authorization) {
+                        Ok((host, port)) => {
+                            flow.port = port;
+                            flow.authorized = true;
+                            flow.ingress = flow.headers.split_off(end);
+                            flow.headers.fill(0);
+                            flow.headers.clear();
+                            if let Ok(ip) = host.parse::<Ipv4Addr>() {
+                                match self.connect_tcp(ip.into(), port) {
+                                    Ok(tcp) => flow.tcp = Some(tcp),
+                                    Err(_) => Self::respond(flow, 502),
+                                }
+                            } else {
+                                match self.sockets.get_mut::<dns::Socket>(self.dns).start_query(
+                                    self.interface.context(),
+                                    &host,
+                                    DnsQueryType::A,
+                                ) {
+                                    Ok(query) => flow.query = Some(query),
+                                    Err(_) => Self::respond(flow, 502),
+                                }
+                            }
+                        }
+                        Err(status) => Self::respond(flow, status),
                     }
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                    break;
+                }
+                if flow.headers.len() >= 8192 {
+                    Self::respond(flow, 400);
+                    break;
+                }
+            }
+        }
+        if flow.authorized && !flow.established && !flow.reject {
+            let mut bytes = [0u8; 1024];
+            while flow.ingress.len() < BUFFER_SIZE {
+                match flow.local.read(&mut bytes) {
+                    Ok(0) => return Ok(false),
+                    Ok(count) => flow.ingress.extend_from_slice(&bytes[..count]),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                     Err(e) => return Err(e),
                 }
             }
         }
-        let Some(local) = &mut flow.local else {
-            return Ok(true);
-        };
-        if !flow.authenticated {
-            let mut bytes = [0; 32];
-            match local.read(&mut bytes[..32 - flow.received_secret.len()]) {
-                Ok(0) => {
-                    flow.local = None;
-                    flow.received_secret.clear();
-                    return Ok(true);
-                }
-                Ok(count) => flow.received_secret.extend_from_slice(&bytes[..count]),
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                Err(_) => {
-                    flow.local = None;
-                    flow.received_secret.clear();
-                    return Ok(true);
+        if !flow.reject {
+            if let Some(query) = flow.query {
+                match self
+                    .sockets
+                    .get_mut::<dns::Socket>(self.dns)
+                    .get_query_result(query)
+                {
+                    Ok(addresses) => {
+                        flow.query = None;
+                        if let Some(ip) = addresses.first() {
+                            match self.connect_tcp(*ip, flow.port) {
+                                Ok(tcp) => flow.tcp = Some(tcp),
+                                Err(_) => Self::respond(flow, 502),
+                            }
+                        } else {
+                            Self::respond(flow, 502);
+                        }
+                    }
+                    Err(dns::GetQueryResultError::Pending) => {}
+                    Err(_) => {
+                        flow.query = None;
+                        Self::respond(flow, 502);
+                    }
                 }
             }
-            if flow.received_secret.len() == 32 {
-                let difference = flow
-                    .received_secret
-                    .iter()
-                    .zip(flow.secret)
-                    .fold(0u8, |diff, (a, b)| diff | (a ^ b));
-                if difference != 0 {
-                    flow.local = None;
-                    flow.received_secret.clear();
-                    return Ok(true);
+            if let Some(tcp) = flow.tcp {
+                let socket = self.sockets.get_mut::<tcp::Socket>(tcp);
+                if socket.state() == tcp::State::Closed && self.terminal.is_none() {
+                    if flow.established {
+                        // 已切换为原始字节流，远端 RST 只能关闭连接，不能把 HTTP 错误混进正文。
+                        return Err(error(io::ErrorKind::ConnectionAborted, "隧道内 TCP 已关闭"));
+                    }
+                    Self::respond(flow, 502);
+                } else if !flow.established && socket.state() == tcp::State::Established {
+                    flow.established = true;
+                    self.consecutive_timeouts = 0;
+                    Self::respond(flow, 200);
                 }
-                flow.authenticated = true;
-                flow.listener = None;
-                flow.secret.fill(0);
-                flow.received_secret.fill(0);
-            } else {
-                if now.duration_since(flow.accepted_at) > Duration::from_secs(2) {
-                    flow.local = None;
-                    flow.received_secret.clear();
-                }
-                return Ok(true);
             }
         }
-        if self.terminal.is_none() && !flow.local_eof && socket.can_send() {
-            let mut bytes = [0; 16 * 1024];
-            let capacity = (socket.send_capacity() - socket.send_queue()).min(bytes.len());
-            match local.read(&mut bytes[..capacity]) {
-                Ok(0) => {
-                    flow.local_eof = true;
-                    socket.close();
-                }
+        while flow.pending_offset < flow.pending.len() {
+            match flow.local.write(&flow.pending[flow.pending_offset..]) {
+                Ok(0) => return Ok(false),
                 Ok(count) => {
-                    let sent = socket
-                        .send_slice(&bytes[..count])
-                        .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道写入失败"))?;
-                    if sent != count {
-                        return Err(error(io::ErrorKind::WriteZero, "隧道发送缓冲不足"));
-                    }
-                    flow.touched = now;
+                    flow.pending_offset += count;
                     self.io_progress = self.io_progress.wrapping_add(1);
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) => return Err(e),
             }
         }
-        if socket.can_recv() {
-            let written = socket
-                .recv(|bytes| match local.write(bytes) {
-                    Ok(count) => (count, Ok(count)),
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => (0, Ok(0)),
-                    Err(e) => (0, Err(e)),
-                })
-                .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道读取失败"))??;
-            if written > 0 {
+        if flow.pending_offset == flow.pending.len() {
+            flow.pending.clear();
+            flow.pending_offset = 0;
+            if flow.reject {
+                return Ok(false);
+            }
+        }
+        if flow.established && flow.pending.is_empty() {
+            let socket = self
+                .sockets
+                .get_mut::<tcp::Socket>(flow.tcp.expect("建连后 TCP 存在"));
+            if self.terminal.is_none() && !flow.local_eof {
+                if !flow.ingress.is_empty() && socket.can_send() {
+                    let sent = socket
+                        .send_slice(&flow.ingress)
+                        .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道发送失败"))?;
+                    flow.ingress.drain(..sent);
+                }
+                for _ in 0..16 {
+                    if !flow.ingress.is_empty() || !socket.can_send() {
+                        break;
+                    }
+                    let mut bytes = [0u8; 16384];
+                    let capacity = (socket.send_capacity() - socket.send_queue()).min(bytes.len());
+                    if capacity == 0 {
+                        break;
+                    }
+                    match flow.local.read(&mut bytes[..capacity]) {
+                        Ok(0) => {
+                            flow.local_eof = true;
+                            socket.close();
+                            break;
+                        }
+                        Ok(count) => {
+                            socket
+                                .send_slice(&bytes[..count])
+                                .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道发送失败"))?;
+                            flow.touched = now;
+                            self.io_progress = self.io_progress.wrapping_add(1);
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+            for _ in 0..16 {
+                if !socket.can_recv() {
+                    break;
+                }
+                let written = socket
+                    .recv(|bytes| match flow.local.write(bytes) {
+                        Ok(count) => (count, Ok(count)),
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => (0, Ok(0)),
+                        Err(e) => (0, Err(e)),
+                    })
+                    .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道接收失败"))??;
+                if written == 0 {
+                    break;
+                }
                 flow.touched = now;
                 self.io_progress = self.io_progress.wrapping_add(1);
             }
+            if !socket.may_recv() && !flow.remote_eof {
+                let _ = flow.local.shutdown(Shutdown::Write);
+                flow.remote_eof = true;
+            }
+            if self.terminal.is_some() && !socket.can_recv() {
+                let _ = flow.local.shutdown(Shutdown::Write);
+                return Ok(false);
+            }
+            if socket.state() == tcp::State::Closed {
+                return Ok(false);
+            }
         }
-        if !socket.may_recv() && !flow.remote_eof {
-            let _ = local.shutdown(Shutdown::Write);
-            flow.remote_eof = true;
+        let wants_write = !flow.pending.is_empty()
+            || flow
+                .tcp
+                .is_some_and(|tcp| self.sockets.get::<tcp::Socket>(tcp).can_recv());
+        let interest = if wants_write {
+            Interest::READABLE.add(Interest::WRITABLE)
+        } else {
+            Interest::READABLE
+        };
+        if interest != flow.interest {
+            self.poll
+                .registry()
+                .reregister(&mut flow.local, flow.token, interest)?;
+            flow.interest = interest;
         }
-        if self.terminal.is_some() && !socket.can_recv() {
-            // 所有已收的尾字节交付后关闭回环，不能在外层 TLS 已断时等待远端 FIN。
-            let _ = local.shutdown(Shutdown::Write);
-            return Ok(false);
-        }
-        // 保留 socket 到 FIN 握手完成；过早 abort/remove 会丢掉尚未发出的 FIN/ACK。
         Ok(now.duration_since(flow.touched) < Duration::from_secs(180))
     }
 
-    fn remove(&mut self, mut flow: Flow, failure: Option<io::Error>) {
+    fn remove(&mut self, mut flow: Flow) {
+        let _ = self.poll.registry().deregister(&mut flow.local);
         if let Some(query) = flow.query.take() {
             self.sockets
                 .get_mut::<dns::Socket>(self.dns)
@@ -883,11 +1053,6 @@ impl Runner {
         if let Some(handle) = flow.tcp.take() {
             self.sockets.get_mut::<tcp::Socket>(handle).abort();
             self.sockets.remove(handle);
-        }
-        if let Some(reply) = flow.reply.take() {
-            let _ = reply.send(Err(failure.unwrap_or_else(|| {
-                error(io::ErrorKind::ConnectionAborted, "VPN 连接已关闭")
-            })));
         }
     }
 
@@ -923,13 +1088,22 @@ impl Runner {
                         for packet in self.decoder.push(&bytes[..count])? {
                             self.device.inject(packet);
                         }
-                        let mut health = self.health.lock().unwrap();
+                        let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
                         health.received_bytes += count as u64;
                         if completed != self.decoder.completed_frames() {
                             self.last_received = Instant::now();
                             health.received = self.last_received;
+                            let recovered = health.recovering;
                             health.recovering = false;
                             self.recovery_deadline = None;
+                            drop(health);
+                            if recovered {
+                                crate::emit_event(
+                                    self.engine_id.load(Ordering::Acquire),
+                                    "healthy",
+                                    "complete_frame_received",
+                                );
+                            }
                         }
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
@@ -963,7 +1137,10 @@ impl Runner {
         // 发起一次有界 DNS 探测。真正 TLS/TCP EOF 仍走终态清理。
         if self.last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL && self.output.len() < 256 {
             self.heartbeat = self.heartbeat.wrapping_add(1);
-            self.health.lock().unwrap().heartbeats = self.heartbeat;
+            self.health
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .heartbeats = self.heartbeat;
             self.output
                 .push_back(frame::heartbeat(self.heartbeat).to_vec());
             self.last_heartbeat = Instant::now();
@@ -1003,65 +1180,62 @@ impl Runner {
         Ok(())
     }
 
-    fn receive_terminal(&mut self, error: io::Error) {
-        self.terminal = Some(error);
+    fn receive_terminal(&mut self, failure: io::Error) {
+        if self.terminal.is_some() {
+            return;
+        }
+        self.terminal = Some(failure);
         self.drain_deadline = Some(Instant::now() + TERMINAL_DRAIN_TIMEOUT);
-        self.health.lock().unwrap().recovering = true;
+        let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
+        health.draining = true;
+        health.recovering = false;
+        self.recovery_deadline = None;
+        drop(health);
+        crate::emit_diagnostic_event(
+            self.engine_id.load(Ordering::Acquire),
+            "draining",
+            "receive_terminal",
+            self.terminal.as_ref(),
+        );
     }
 
     fn update_progress(&mut self) {
         let now = Instant::now();
-        if now.duration_since(self.last_progress) > PROGRESS_TIMEOUT
+        if self.terminal.is_none()
+            && now.duration_since(self.last_progress) > PROGRESS_TIMEOUT
             && self.recovery_deadline.is_none()
         {
-            // 调度停顿不能直接当成网关死亡；先读缓存并发一次心跳探测。
             self.recovery_deadline = Some(now + RECOVERY_TIMEOUT);
             self.last_heartbeat = now - HEARTBEAT_INTERVAL;
-            self.health.lock().unwrap().recovering = true;
+            self.health
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .recovering = true;
+            crate::emit_event(
+                self.engine_id.load(Ordering::Acquire),
+                "unhealthy",
+                "scheduler_stall",
+            );
         }
         self.last_progress = now;
-        let mut health = self.health.lock().unwrap();
+        let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
         health.progress = now;
         health.loop_iterations = health.loop_iterations.saturating_add(1);
     }
 
     fn command(&mut self, command: Command) -> io::Result<()> {
         match command {
-            Command::Open(host, port, control, reply) => {
-                self.accept_command(host, port, control, reply)
-            }
-            Command::Probe(host, reply) => {
-                if self.terminal.is_some() || self.probe.is_some() {
-                    let _ = reply.send(Err(error(io::ErrorKind::WouldBlock, "VPN 探测不可用")));
-                    return Ok(());
-                }
-                match self.sockets.get_mut::<dns::Socket>(self.dns).start_query(
-                    self.interface.context(),
-                    &host,
-                    DnsQueryType::A,
-                ) {
-                    Ok(query) => {
-                        self.probe = Some((
-                            query,
-                            Instant::now() + Duration::from_secs(3),
-                            self.decoder.completed_frames(),
-                            reply,
-                        ));
-                    }
-                    Err(_) => {
-                        let _ = reply.send(Err(error(
-                            io::ErrorKind::InvalidInput,
-                            "VPN 探测主机不合法",
-                        )));
-                    }
-                }
-                Ok(())
+            Command::Probe(host, timeout, reply) => {
+                self.start_probe(&host, timeout, Some(reply), false)
             }
             #[cfg(test)]
             Command::SimulateSuspend(reply) => {
                 self.last_received = Instant::now() - Duration::from_secs(40);
                 self.last_progress = self.last_received;
-                self.health.lock().unwrap().received = self.last_received;
+                self.health
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .received = self.last_received;
                 self.update_progress();
                 let _ = reply.send(());
                 Ok(())
@@ -1069,62 +1243,99 @@ impl Runner {
         }
     }
 
+    fn advance_probe(&mut self) -> io::Result<()> {
+        if let Some(probe) = self.probe.as_ref() {
+            let result = self
+                .sockets
+                .get_mut::<dns::Socket>(self.dns)
+                .get_query_result(probe.query);
+            let answered = !matches!(result, Err(dns::GetQueryResultError::Pending));
+            if answered || Instant::now() >= probe.deadline || self.terminal.is_some() {
+                let probe = self.probe.take().expect("探活存在");
+                if !answered {
+                    self.sockets
+                        .get_mut::<dns::Socket>(self.dns)
+                        .cancel_query(probe.query);
+                }
+                if let Some(reply) = probe.reply {
+                    let _ = reply.send(if answered {
+                        Ok(())
+                    } else {
+                        Err(error(io::ErrorKind::TimedOut, "VPN DNS 探测超时"))
+                    });
+                }
+                if probe.blackhole && !answered {
+                    self.exit_code = Some("blackhole_detected".into());
+                    return Err(error(io::ErrorKind::TimedOut, "VPN 静默黑洞探测失败"));
+                }
+                if answered {
+                    self.consecutive_timeouts = 0;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn poll_timeout(&mut self, timestamp: NetInstant) -> Duration {
+        let now = Instant::now();
+        let mut deadline = self.last_heartbeat + HEARTBEAT_INTERVAL;
+        if let Some(recovery) = self.recovery_deadline {
+            deadline = deadline.min(recovery);
+        }
+        if let Some(drain) = self.drain_deadline {
+            deadline = deadline.min(drain);
+        }
+        if let Some(probe) = self.probe.as_ref() {
+            deadline = deadline.min(probe.deadline);
+        }
+        for flow in &self.flows {
+            deadline = deadline.min(if flow.established || flow.reject {
+                flow.touched + Duration::from_secs(180)
+            } else {
+                flow.deadline
+            });
+        }
+        let timer = deadline.saturating_duration_since(now);
+        // 终态不再发送协议栈报文；排空只等待本地写就绪及一秒期限，避免未发 ACK 忙等。
+        if self.terminal.is_some() {
+            return timer;
+        }
+        self.interface
+            .poll_delay(timestamp, &self.sockets)
+            .map(|delay| Duration::from_millis(delay.total_millis()))
+            .map(|delay| delay.min(timer))
+            .unwrap_or(timer)
+    }
+
     fn run(&mut self) -> io::Result<()> {
-        let mut idle_rounds = 0u32;
-        let mut pending_command = None;
         while self.running.load(Ordering::Acquire) {
             self.update_progress();
-            let progress = self.io_progress;
-            if let Some(command) = pending_command.take() {
-                match command {
-                    Command::Open(_, _, _, reply) if self.terminal.is_some() => {
-                        let _ = reply.send(Err(error(
-                            io::ErrorKind::ConnectionAborted,
-                            "VPN 隧道已断开",
-                        )));
-                    }
-                    command => self.command(command)?,
-                }
+            if self
+                .recovery_deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                self.exit_code = Some("recovery_timeout".into());
+                return Err(error(io::ErrorKind::TimedOut, "VPN 恢复期限耗尽"));
             }
             for _ in 0..MAX_CONNECTIONS {
                 match self.commands.try_recv() {
-                    Ok(Command::Open(_, _, _, reply)) if self.terminal.is_some() => {
-                        let _ = reply.send(Err(error(
-                            io::ErrorKind::ConnectionAborted,
-                            "VPN 隧道已断开",
-                        )));
-                    }
                     Ok(command) => self.command(command)?,
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
                 }
             }
+            self.accept_clients()?;
+            let progress = self.io_progress;
             self.pump_tls()?;
-            if let Some((query, deadline, completed, _)) = self.probe.as_ref() {
-                let success = self.decoder.completed_frames() != *completed;
-                if success || Instant::now() >= *deadline || self.terminal.is_some() {
-                    let query = *query;
-                    let (_, _, _, reply) = self.probe.take().unwrap();
-                    self.sockets
-                        .get_mut::<dns::Socket>(self.dns)
-                        .cancel_query(query);
-                    let _ = reply.send(if success {
-                        Ok(())
-                    } else {
-                        Err(error(io::ErrorKind::TimedOut, "VPN DNS 恢复探测超时"))
-                    });
-                }
-            }
             let timestamp = NetInstant::from_millis(self.started.elapsed().as_millis() as i64);
             self.interface
                 .poll(timestamp, &mut self.device, &mut self.sockets);
+            self.advance_probe()?;
             let mut flows = std::mem::take(&mut self.flows);
-            // 倒序删除保留原有 Vec 容量，避免每轮重建所有存活连接的数组。
             for index in (0..flows.len()).rev() {
                 match self.advance(&mut flows[index]) {
                     Ok(true) => {}
-                    Ok(false) => self.remove(flows.swap_remove(index), None),
-                    Err(e) => self.remove(flows.swap_remove(index), Some(e)),
+                    Ok(false) | Err(_) => self.remove(flows.swap_remove(index)),
                 }
             }
             self.flows = flows;
@@ -1137,31 +1348,35 @@ impl Runner {
                         .drain_deadline
                         .is_some_and(|deadline| Instant::now() >= deadline))
             {
-                return Err(self.terminal.take().unwrap());
+                return Err(self.terminal.take().expect("终态存在"));
             }
-            if self.io_progress != progress {
-                idle_rounds = 0;
-                // 有数据进展时继续搬运，协议栈和 TLS 的缓冲负责背压。
-                // 每轮已限制工作量；让出调度机会，避免固定休眠限制上传吞吐。
-                thread::yield_now();
+            let interest = if self.tunnel.conn.wants_write() {
+                Interest::READABLE.add(Interest::WRITABLE)
+            } else {
+                Interest::READABLE
+            };
+            if interest != self.tunnel_interest {
+                self.poll
+                    .registry()
+                    .reregister(&mut self.tunnel.sock, TUNNEL, interest)?;
+                self.tunnel_interest = interest;
+            }
+            // 仅当本轮搬运了缓冲数据时继续处理，空闲及背压等待 OS 事件或协议期限。
+            if self.io_progress != progress
+                && (!self.device.incoming.is_empty() || !self.device.outgoing.is_empty())
+            {
                 continue;
             }
-            idle_rounds = idle_rounds.saturating_add(1).min(6);
-            let ceiling = if self.flows.is_empty() { 50 } else { 25 };
-            let mut wait = Duration::from_millis((1u64 << idle_rounds).min(ceiling));
-            let now = NetInstant::from_millis(self.started.elapsed().as_millis() as i64);
-            if let Some(delay) = self.interface.poll_delay(now, &self.sockets) {
-                // poll_at 为 Now 却无法推进时，链路可能正在背压，继续退避。
-                // 正数期限仍需准时处理，避免延迟 ACK、重传与 keepalive。
-                if delay.total_millis() > 0 {
-                    wait = wait.min(Duration::from_millis(delay.total_millis()));
-                }
+            let timeout = self.poll_timeout(timestamp);
+            let expected = Instant::now() + timeout;
+            match self.poll.poll(&mut self.events, Some(timeout)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
             }
-            // 连接命令直接唤醒等待，无需等下一次轮询。
-            match self.commands.recv_timeout(wait) {
-                Ok(command) => pending_command = Some(command),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            // 正常 Poll 等待可超过五秒；仅比预期醒来时间迟五秒以上才保留陈旧进度。
+            if Instant::now() <= expected + PROGRESS_TIMEOUT {
+                self.last_progress = Instant::now();
             }
         }
         Ok(())

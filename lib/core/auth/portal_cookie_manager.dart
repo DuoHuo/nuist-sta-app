@@ -1,132 +1,53 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 
-import '../config/campus_config.dart';
 import '../logging/app_log.dart';
-import '../network/vpn_log.dart';
-import 'portal_exceptions.dart';
+import 'portal_cookie_store.dart';
 
-/// 门户与 VPN 共用的 Cookie 拦截器，只按响应来源保存 Cookie。
-///
-/// dio_cookie_manager 会把重定向响应的 Cookie 另存到 Location 目标，导致
-/// host-only Cookie 跨域混用，或无 Path 的 Cookie 被复制到另一条路径。
-/// 手动跟随重定向时，每一跳只保存自己的 Cookie，下一跳按作用域取用。
-///
-/// 顺带兼容学校个别平台下发的非法 Cookie：劳动教育平台等站点会在 HTTPS
-/// 响应里下发 `SameSite=None` 却不带 `Secure`，dart:io 按 RFC 6265bis 直接
-/// 抛 HttpException，父类会把**整条响应**判为保存失败（同一响应里合法的
-/// Cookie 也一起丢掉），CAS 登录因此中断。原生客户端本来就不实现 SameSite
-/// 语义，这里去掉该属性；实在无法解析的 Cookie 单独丢弃，不再拖垮整次请求。
+/// 只负责 Cookie 读写和学校响应中畸形 Set-Cookie 的规范化。
 class PortalCookieManager extends CookieManager {
   static final _log = AppLog.logger('core.auth.cookie_manager');
-  PortalCookieManager(
-    super.cookieJar, {
-    this.beforeRequest,
-    this.checkSession,
-    this.preparationTimeout = const Duration(seconds: 70),
-  }) {
-    // 兜住加载路径（请求头里的 Cookie）以及保存时漏网的 HttpException；
-    // FormatException 不会在这里被忽略，所以在 [_normalizeSetCookie] 里提前过滤。
+  PortalCookieManager(super.cookieJar, {this.store, this.checkSession}) {
     ignoreInvalidCookies = true;
   }
 
-  /// 装入 Cookie 前准备网络和证书，确保使用 VPN 登录后更新的会话。
-  final Future<void> Function()? beforeRequest;
-
-  /// 解绑后拒绝旧请求和旧响应，包含没有 Set-Cookie 的响应。
+  /// Cookie 的账号和域代次来源，防止旧响应覆盖重登后的 Cookie。
+  final PortalCookieStore? store;
   final void Function()? checkSession;
-
-  /// 请求准备阶段包含 VPN 启动和 Cookie 读取，不受 Dio 传输超时保护。
-  final Duration preparationTimeout;
+  static const _revisionKey = 'portal.cookieHostRevision';
+  static const _generationKey = 'portal.cookieAccountGeneration';
 
   @override
   Future<void> onRequest(
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    final log = VpnRequestLog.start(options, managedByInterceptor: true);
     try {
-      final preparation = log!.run(
-        () => vpnStage(
-          'request.prepare',
-          () async {
-            checkSession?.call();
-            await beforeRequest?.call();
-            checkSession?.call();
-            final cookies = await loadCookies(options);
-            final uri = options.uri;
-            if (uri.scheme == 'https' &&
-                uri.host == CampusHosts.library &&
-                uri.port == 443 &&
-                uri.path.startsWith('/meta-local/opac/users/')) {
-              // 移动站从 Cookie 读取同名令牌，并随读者接口请求发送。
-              final mobileCookies = await cookieJar.loadForRequest(
-                uri.resolve('/mspace/'),
-              );
-              for (final cookie in mobileCookies) {
-                if (cookie.name == 'CSRF-TOKEN') {
-                  try {
-                    options.headers['X-CSRF-TOKEN'] = Uri.decodeComponent(
-                      cookie.value,
-                    );
-                  } on ArgumentError {
-                    // 浏览器同样忽略无法解码的 Cookie。
-                  } on FormatException {
-                    // 例如百分号编码不是合法的 UTF-8。
-                  }
-                  break;
-                }
-              }
-            }
-            return cookies;
-          },
-          timeout: preparationTimeout,
-          fields: log.requestFields,
-        ),
-      );
-      final cancelled = options.cancelToken?.whenCancel.then<String>((error) {
-        throw error;
-      });
-      final cookies = await (cancelled == null
-          ? preparation
-          : Future.any([preparation, cancelled]));
+      checkSession?.call();
+      options.extra[_revisionKey] = store?.hostRevision(options.uri.host);
+      options.extra[_generationKey] = store?.generation;
+      final cookies = await loadCookies(options);
       checkSession?.call();
       if (options.cancelToken?.isCancelled == true) {
         throw options.cancelToken!.cancelError!;
       }
-      log.preparationMs = log.watch.elapsedMilliseconds;
-      log.route = '直连';
       options.headers[HttpHeaders.cookieHeader] = cookies.isNotEmpty
           ? cookies
           : null;
       handler.next(options);
     } catch (error, stackTrace) {
-      log?.fail(error);
       handler.reject(
         error is DioException
             ? error
             : DioException(
                 requestOptions: options,
-                error: error is TimeoutException
-                    ? PortalNetworkError(
-                        '校园网络准备超时，请检查网络后重试',
-                        code: 'request_preparation_timeout',
-                        stage: 'request.prepare',
-                        cause: error,
-                        causeStackTrace: stackTrace,
-                        context: {
-                          'timeout_ms': preparationTimeout.inMilliseconds,
-                        },
-                      )
-                    : error,
+                error: error,
                 stackTrace: stackTrace,
               ),
         true,
       );
-      return;
     }
   }
 
@@ -137,8 +58,14 @@ class PortalCookieManager extends CookieManager {
   ) async {
     try {
       checkSession?.call();
+      final expected = response.requestOptions.extra[_revisionKey];
+      if (store != null &&
+          expected != store!.hostRevision(response.requestOptions.uri.host)) {
+        // 业务层仍可查看失效响应，用 revision 合并恢复；旧 Cookie 不再写回。
+        handler.next(response);
+        return;
+      }
     } catch (error, stackTrace) {
-      VpnRequestLog.of(response.requestOptions)?.fail(error);
       handler.reject(
         DioException(
           requestOptions: response.requestOptions,
@@ -157,8 +84,6 @@ class PortalCookieManager extends CookieManager {
     DioException err,
     ErrorInterceptorHandler handler,
   ) async {
-    VpnRequestLog.of(err.requestOptions)
-        ?.fail(err, status: err.response?.statusCode);
     await super.onError(err, handler);
   }
 
@@ -241,6 +166,26 @@ class PortalCookieManager extends CookieManager {
                 ]
               : entry.value,
     };
+    if (store case final store?) {
+      final expected = response.requestOptions.extra[_revisionKey];
+      final generation = response.requestOptions.extra[_generationKey];
+      if (expected is int && generation is int) {
+        final cookies = <Cookie>[
+          for (final entry in headers.entries)
+            if (entry.key.toLowerCase() == HttpHeaders.setCookieHeader)
+              for (final value in entry.value)
+                for (final part in value.split(_setCookieSeparator))
+                  if (part.trim().isNotEmpty) Cookie.fromSetCookieValue(part),
+        ];
+        await store.saveForRevision(
+          response.requestOptions.uri,
+          cookies,
+          generation: generation,
+          hostRevision: expected,
+        );
+        return;
+      }
+    }
     await super.saveCookies(
       Response<dynamic>(
         requestOptions: response.requestOptions,
@@ -251,11 +196,6 @@ class PortalCookieManager extends CookieManager {
           preserveHeaderCase: response.headers.preserveHeaderCase,
         ),
       ),
-    );
-    VpnRequestLog.of(response.requestOptions)?.complete(
-      response.statusCode,
-      response.realUri,
-      response.headers.value(HttpHeaders.locationHeader),
     );
   }
 }

@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:asn1lib/asn1lib.dart';
 import 'package:pointycastle/digests/sha256.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:path_provider/path_provider.dart';
 
 import '../logging/app_log.dart';
 import 'portal_http.dart';
@@ -24,6 +25,13 @@ import 'portal_http.dart';
 /// 拉到的中间证书会落盘到 [resolveCacheDir] 给的目录，下次冷启动 [preload] 直接预热，省掉
 /// 首次握手失败 + 一次网络往返。缓存文件出于同样的理由不需要防篡改。
 class AiaTrust {
+  /// CAS、VPN 引导与校园业务共用同一证书缓存和信任上下文。
+  static final shared = AiaTrust(resolveCacheDir: _sharedCacheDir);
+  static Future<Directory?> _sharedCacheDir() async {
+    final base = await getApplicationSupportDirectory();
+    return Directory('${base.path}${Platform.pathSeparator}aia_certs');
+  }
+
   static final _log = AppLog.logger('core.auth.certificate');
   AiaTrust({
     bool withTrustedRoots = true,

@@ -75,6 +75,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   DateTime? _lastUpdatedAt;
   StreamSubscription<List<ConnectivityResult>>? _networkSubscription;
   String? _network;
+  Timer? _networkDebounce;
 
   String? _initialTimetableRoute() {
     final route = WidgetsBinding.instance.platformDispatcher.defaultRouteName;
@@ -140,9 +141,24 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
             final current = names.join(',');
             final previous = _network;
             _network = current;
-            if (previous != null && previous != current) {
+            if (previous != current) {
+              _networkDebounce?.cancel();
+              final gateway = VpnGateway.instance;
+              if (results.every(
+                (result) => result == ConnectivityResult.none,
+              )) {
+                unawaited(gateway.disconnected());
+                return;
+              }
+              // 在事件发生时记录会话，迟到的防抖不能掐断后来启动的新会话。
+              final observed = gateway.state;
+              if (observed is! VpnReady && observed is! VpnConnecting) return;
               _log.info('network.changed', fields: {'connection_types': names});
-              unawaited(VpnGateway.instance.networkChanged());
+              _networkDebounce = Timer(const Duration(milliseconds: 400), () {
+                if (identical(gateway.state, observed)) {
+                  unawaited(gateway.networkChanged());
+                }
+              });
             }
           },
           onError: (Object error, StackTrace stackTrace) {
@@ -292,9 +308,12 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _log.debug('state.changed', fields: {'state': state.name});
-    unawaited(
-      VpnGateway.instance.setForeground(state == AppLifecycleState.resumed),
-    );
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      unawaited(VpnGateway.instance.setForeground(false));
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(VpnGateway.instance.setForeground(true));
+    }
     if (state == AppLifecycleState.resumed) {
       unawaited(AppLog.collectNativeDiagnostics());
       unawaited(_updates.onResumed());
@@ -306,6 +325,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     SilentRefresh.updated.removeListener(_onRefreshUpdated);
     WidgetsBinding.instance.removeObserver(this);
     _networkSubscription?.cancel();
+    _networkDebounce?.cancel();
     if (_listenForUpdates) {
       _updateBridge.setOpenHandler(null);
     }

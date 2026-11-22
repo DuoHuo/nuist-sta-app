@@ -13,7 +13,6 @@ import '../auth/portal_cookie_manager.dart';
 import '../auth/portal_exceptions.dart';
 import '../auth/portal_http.dart';
 import '../config/campus_config.dart';
-import '../logging/http_diagnostics.dart';
 import 'vpn_spa.dart';
 import 'vpn_log.dart';
 
@@ -61,7 +60,7 @@ class VpnAuth {
     _cookieGeneration = generation;
     _jar = _cas.cookies.openJar();
     if (createHttp case final factory?) return _client = factory(_jar);
-    final trust = AiaTrust();
+    final trust = AiaTrust.shared;
     // 这是建立 VPN 所必需的引导出口，不能使用 vpnDio。
     final dio = Dio(BaseOptions(connectTimeout: const Duration(seconds: 10)))
       ..interceptors.add(
@@ -78,7 +77,6 @@ class VpnAuth {
       ..httpClientAdapter = IOHttpClientAdapter(
         createHttpClient: trust.createHttpClient,
       );
-    installHttpDiagnostics(dio);
     return _client = PortalHttp(dio, trust: trust);
   }
 
@@ -106,7 +104,13 @@ class VpnAuth {
     }
     final http = _http;
     final jar = _jar;
-    final reused = await _obtainWithSession(bundle, http, jar, check);
+    final reused = await _obtainWithSession(
+      bundle,
+      http,
+      jar,
+      check,
+      reusingSession: true,
+    );
     check();
     if (reused != null) {
       vpnLog('authentication.session_reused');
@@ -118,16 +122,31 @@ class VpnAuth {
       timeout: const Duration(seconds: 10),
     );
     check();
-    final target = await _cas.authenticate(
+    var authentication = await _cas.authenticateResult(
       service,
       onStage: (stage) =>
           vpnLog('authentication.stage', fields: {'stage': stage}),
     );
     check();
-    final response = await http.followRedirects(
-      await http.get(Uri.parse(target)),
+    var response = await http.followRedirects(
+      await http.get(authentication.landingUri),
     );
     check();
+    if (authentication.ssoReused && PortalHttp.isLoginResponse(response)) {
+      await _clearController();
+      check();
+      authentication = await _cas.authenticateResult(
+        service,
+        forceFreshWebAuthn: true,
+        onStage: (stage) =>
+            vpnLog('authentication.stage', fields: {'stage': stage}),
+      );
+      check();
+      response = await http.followRedirects(
+        await http.get(authentication.landingUri),
+      );
+      check();
+    }
     if (PortalHttp.isLoginResponse(response) ||
         (response.statusCode ?? 0) >= 400) {
       throw PortalLoginError(
@@ -141,7 +160,13 @@ class VpnAuth {
       );
     }
     vpnLog('authentication.cas_completed');
-    final fresh = await _obtainWithSession(bundle, http, jar, check);
+    final fresh = await _obtainWithSession(
+      bundle,
+      http,
+      jar,
+      check,
+      reusingSession: false,
+    );
     check();
     if (fresh == null) {
       throw const PortalLoginError(
@@ -157,8 +182,9 @@ class VpnAuth {
     PasskeyBundle bundle,
     PortalHttp http,
     CookieJar jar,
-    void Function() check,
-  ) async {
+    void Function() check, {
+    required bool reusingSession,
+  }) async {
     check();
     final cookies = await vpnStage(
       'vpn.read_controller',
@@ -210,21 +236,31 @@ class VpnAuth {
       );
       return null;
     }
+    Object? lastCause;
+    StackTrace? lastStack;
+    int? lastStatus;
+    String? lastCode;
     for (var attempt = 0; attempt < 6; attempt++) {
       check();
       vpnLog('authentication.attempt', fields: {'attempt': attempt + 1});
-      final response = await http.get(
-        Uri.parse('$controller/enlink/api/client/user/terminal/rules/$uid'),
-      );
-      check();
-      if (PortalHttp.isLoginResponse(response)) {
-        vpnLog(
-          'authentication.session_rejected',
-          fields: {'reason_code': 'controller_login_redirect'},
+      Response<dynamic> response;
+      try {
+        response = await http.send(
+          () => http.dio.get<dynamic>(
+            '$controller/enlink/api/client/user/terminal/rules/$uid',
+            options: PortalHttp.options()
+              ..validateStatus = (status) => status != null,
+          ),
         );
-        return null;
+      } catch (error, stackTrace) {
+        // HTTP 错误仍保留正文证据；网络失败不伪装为 Cookie 失效。
+        if (error is! DioException || error.response == null) rethrow;
+        response = error.response!;
+        lastCause = error;
+        lastStack = stackTrace;
       }
-      final Map<String, dynamic> body;
+      check();
+      Map<String, dynamic>? body;
       try {
         body =
             (response.data is String
@@ -232,30 +268,25 @@ class VpnAuth {
                     : response.data)
                 as Map<String, dynamic>;
       } catch (error, stackTrace) {
-        throw PortalLoginError(
-          'VPN 控制器返回格式不正确',
-          code: 'vpn_controller_response_invalid',
-          stage: 'vpn.rules.parse',
-          cause: error,
-          causeStackTrace: stackTrace,
-          context: {'attempt': attempt + 1, 'status_code': response.statusCode},
-        );
+        lastCause = error;
+        lastStack = stackTrace;
       }
-      final data = body['data'];
-      final code = '${body['code']}';
-      if (code == '401' ||
-          (code == '1000' && '${body['messages']}'.contains('请重新登录'))) {
+      lastStatus = response.statusCode;
+      lastCode = body?['code']?.toString();
+      final accepted = response.statusCode == 200 && lastCode == '200';
+      if (!accepted && reusingSession) {
+        vpnLog(
+          'authentication.session_rejected',
+          fields: {
+            'reason_code': 'controller_rules_rejected',
+            'status_code': lastStatus,
+            'response_code': lastCode,
+          },
+        );
         return null;
       }
-      if ('${body['code']}' != '200') {
-        throw PortalLoginError(
-          'VPN 控制器未正常返回隧道凭据，请稍后再试',
-          code: 'vpn_controller_rules_rejected',
-          stage: 'vpn.rules.validate',
-          context: {'response_code': code, 'attempt': attempt + 1},
-        );
-      }
-      if ('${body['code']}' == '200' &&
+      final data = body?['data'];
+      if (accepted &&
           data is Map &&
           data['token'] is String &&
           (data['token'] as String).isNotEmpty) {
@@ -297,13 +328,24 @@ class VpnAuth {
           token: data['token'] as String,
         );
       }
-      if (attempt < 5) await Future<void>.delayed(const Duration(seconds: 2));
+      if (reusingSession) return null;
+      if (attempt < 5) {
+        await Future<void>.delayed(
+          Duration(milliseconds: 200 << attempt.clamp(0, 2)),
+        );
+      }
     }
-    throw const PortalLoginError(
-      '无法取得 VPN token，账号可能正被其他会话占用',
-      code: 'vpn_token_retry_exhausted',
+    throw PortalLoginError(
+      'VPN 控制器未正常返回隧道凭据，请稍后再试',
+      code: 'vpn_controller_rules_rejected',
       stage: 'vpn.rules',
-      context: {'attempt': 6},
+      cause: lastCause,
+      causeStackTrace: lastStack,
+      context: {
+        'attempt': 6,
+        'status_code': lastStatus,
+        'response_code': lastCode,
+      },
     );
   }
 

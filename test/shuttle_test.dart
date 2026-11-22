@@ -197,6 +197,46 @@ void main() {
     dio.close();
   });
 
+  for (final status in [401, 403]) {
+    test('状态接口$status重建独立jsession后只重试一次', () async {
+      final dio = Dio();
+      var logins = 0;
+      var queries = 0;
+      final adapter = FakeAdapter((request) {
+        expect(
+          request.headers.keys.map((key) => key.toLowerCase()),
+          isNot(contains('cookie')),
+        );
+        if (request.uri.host == Uri.parse(kCampusShuttlePageUrl).host) {
+          return ResponseBody.fromString(
+            'var url = "http://${CampusHosts.shuttleApi}:8080/StandardApiAction_login.action?account=synthetic";',
+            200,
+          );
+        }
+        if (request.uri.path.endsWith('login.action')) {
+          return response({'jsession': 'synthetic-${++logins}'});
+        }
+        queries++;
+        if (queries == 1) return ResponseBody.fromString('', status);
+        expect(request.uri.queryParameters['jsession'], 'synthetic-2');
+        return response({
+          'result': 0,
+          'status': [row('NXD4')],
+        });
+      });
+      dio.httpClientAdapter = adapter;
+      final api = ShuttleApi(dio: dio);
+      try {
+        expect((await api.load()).single.id, 'NXD4');
+        expect(logins, 2);
+        expect(queries, 2);
+      } finally {
+        api.close();
+        dio.close(force: true);
+      }
+    });
+  }
+
   test('批量查询全部一位两位NXD编号，筛选完整编号并按vid去重', () async {
     final dio = Dio();
     final adapter = FakeAdapter((request) {

@@ -8,9 +8,7 @@ import '../../core/config/campus_config.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/logging/diagnostic_error.dart';
 import '../../core/logging/http_diagnostics.dart';
-import '../../core/network/vpn_dio.dart';
-import '../../core/network/vpn_gateway.dart';
-import '../../core/network/vpn_log.dart';
+import '../../core/auth/campus_transport.dart';
 import 'campus_building_model.dart';
 import 'campus_map_data.dart';
 import 'campus_map_photos.dart';
@@ -70,11 +68,10 @@ class CampusMapApi
   }) : _baseUrl = (baseUrl ?? _defaultBaseUrl).replaceFirst(RegExp(r'/+$'), ''),
        _bundledStyle =
            bundledStyle ?? (() => rootBundle.loadString(kCampusBundledStyle)),
-       _dio =
-           dio ??
-           (vpnDio(
-             options: BaseOptions(connectTimeout: const Duration(seconds: 10)),
-           )..interceptors.add(_CampusVpnPreparation())),
+       _dio = CampusTransport.stateless(
+         dio: dio,
+         options: BaseOptions(connectTimeout: const Duration(seconds: 10)),
+       ).dio,
        _ownsDio = dio == null {
     installHttpDiagnostics(_dio);
   }
@@ -169,6 +166,7 @@ class CampusMapApi
     Map<String, dynamic>? data,
     Map<String, dynamic>? headers,
     bool raw = false,
+    bool idempotent = true,
   }) async {
     if (_closed) {
       throw const CampusMapApiException('地图连接已关闭');
@@ -180,6 +178,7 @@ class CampusMapApi
         data: data,
         options: Options(
           method: method,
+          extra: {'idempotent': idempotent},
           headers: headers,
           responseType: ResponseType.plain,
           sendTimeout: const Duration(seconds: 20),
@@ -713,6 +712,7 @@ class CampusMapApi
     '/fingerprints',
     method: 'POST',
     data: sample,
+    idempotent: false,
     headers: {'X-Collect-Token': ?collectToken},
   );
 
@@ -835,36 +835,4 @@ class CampusMapApi
   static Map<String, dynamic> _collection(
     List<Map<String, dynamic>> features,
   ) => {'type': 'FeatureCollection', 'features': features};
-}
-
-/// 照课表（[PortalSession] 的客户端）的做法：每个请求发出前先
-/// `VpnGateway.instance.prepare()` 把校园 VPN 连好，再交给 [vpnDio] 选路
-/// （在校直连、校外走 VPN）。地图服务器不是学校系统，这里不带任何门户 Cookie。
-class _CampusVpnPreparation extends Interceptor {
-  @override
-  Future<void> onRequest(
-    RequestOptions options,
-    RequestInterceptorHandler handler,
-  ) async {
-    try {
-      await vpnStage(
-        'map.prepare',
-        VpnGateway.instance.prepare,
-        timeout: const Duration(seconds: 70),
-        fields: {'host': options.uri.host},
-      );
-      handler.next(options);
-    } catch (error) {
-      handler.reject(
-        error is DioException
-            ? error
-            : DioException(
-                requestOptions: options,
-                type: DioExceptionType.connectionError,
-                error: error,
-              ),
-        true,
-      );
-    }
-  }
 }
