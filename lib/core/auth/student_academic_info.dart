@@ -1,5 +1,3 @@
-import 'package:flutter/foundation.dart';
-
 /// 跨小程序使用的学生学年信息，不公开姓名、学号或门户凭据。
 class StudentAcademicInfo {
   const StudentAcademicInfo({
@@ -61,19 +59,13 @@ class StudentAcademicInfo {
   }
 }
 
-/// 学生信息模块实现的只读学年来源；使用方只依赖 core 接口。
-abstract interface class StudentAcademicSource implements Listenable {
-  /// 当前快照及其来源、身份确认状态。
-  StudentAcademicInfo get value;
-
-  /// 初始化学生信息；重复调用复用同一次初始化。
-  Future<void> ensureStarted();
-
-  /// 通过已有门户会话刷新学生信息，不增加网络出口。
-  Future<void> refresh();
+/// 学生信息模块实现的本地学年来源，调用方只依赖 core 接口。
+abstract interface class StudentAcademicSource {
+  /// 仅读已有本地缓存并核对当前绑定，不启动模块或发起门户请求。
+  Future<StudentAcademicInfo> readLocal();
 }
 
-/// 由应用启动时登记的学生学年来源；未登记时允许离线手动选择。
+/// 由应用启动时登记的本地学年来源；未登记时由调用方提供离线默认行为。
 abstract final class StudentAcademics {
   static StudentAcademicSource? source;
 }

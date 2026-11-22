@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/student_academic_info.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
@@ -22,12 +21,11 @@ void main() {
       h.controller.ensureStarted(),
     ]);
     expect(h.reads, 1);
-    expect(h.controller.state, saved);
+    expect(h.controller.state, saved.copyWith(grade: 2));
     expect(h.controller.result.total, 18);
     expect(h.controller.restoringState, isFalse);
     expect(h.controller.canUndo, isFalse);
     expect(h.saved, isEmpty);
-    expect(h.controller.gradeMessage, contains('手动选择'));
   });
 
   test('恢复期间相对加一保留旧基数、各活动和自定义定义', () async {
@@ -288,7 +286,10 @@ void main() {
                 count: 3,
               ),
             );
-    final h = _Harness(restored: SunshineRunStoreReadResult(state: cached));
+    final h = _Harness(
+      restored: SunshineRunStoreReadResult(state: cached),
+      source: _AcademicSource(value: _knownGrade(1)),
+    );
     addTearDown(h.controller.dispose);
     await h.controller.ensureStarted();
     await h.controller.resetActivities();
@@ -343,163 +344,404 @@ void main() {
       ),
       throwsFormatException,
     );
-    expect(() => h.controller.setGrade(3), throwsFormatException);
     expect(h.controller.state, SunshineRunState.initial());
     expect(h.controller.canUndo, isFalse);
     expect(h.saved, isEmpty);
   });
 
-  test('后台学年识别不会阻塞本机恢复或编辑，并说明缓存来源', () async {
-    final source = _AcademicSource(initialGate: Completer<void>());
-    final h = _Harness(source: source);
-    addTearDown(h.controller.dispose);
-    addTearDown(source.dispose);
-    await h.controller.ensureStarted();
-    expect(h.controller.restoringState, isFalse);
-    expect(h.controller.identifyingGrade, isTrue);
-    await h.controller.setBaseline(9, 4);
-    source.set(_knownGrade(1, fromCache: true));
-    expect(h.controller.state.grade, 1);
-    expect(h.controller.state.baseTotal, 9);
-    expect(h.controller.gradeMessage, contains('本机缓存'));
-    expect(h.controller.gradeMessage, contains('2025—2026'));
-    source.initialGate!.complete();
-    await _flush();
-    expect(h.controller.identifyingGrade, isFalse);
-    await h.controller.undo();
-    expect(h.controller.state.grade, 1);
-    expect(h.controller.result.total, 0);
+  test('可靠本地大一大二信息可用，自动年级不创建撤销点', () async {
+    for (final grade in [1, 2]) {
+      final source = _AcademicSource(value: _knownGrade(grade));
+      final h = _Harness(source: source);
+      addTearDown(h.controller.dispose);
+      await h.controller.ensureStarted();
+      await _flush();
+      expect(h.controller.state.grade, grade);
+      expect(h.controller.result.fullTotal, grade == 1 ? 36 : 48);
+      expect(h.controller.canUndo, isFalse);
+      expect(source.reads, 1);
+      expect(h.reads, 1);
+    }
   });
 
-  test('手动年级优先于晚到自动来源，明确重新识别后可更新', () async {
-    final source = _AcademicSource(initialGate: Completer<void>());
-    final h = _Harness(source: source);
-    addTearDown(h.controller.dispose);
-    addTearDown(source.dispose);
-    await h.controller.ensureStarted();
-    await h.controller.setGrade(2);
-    source.set(_knownGrade(1));
-    source.initialGate!.complete();
-    await _flush();
-    expect(h.controller.state.grade, 2);
-    expect(h.controller.gradeMessage, contains('手动选择'));
-    await h.controller.identifyGrade();
-    expect(h.controller.state.grade, 1);
-    expect(h.controller.gradeMessage, contains('门户信息'));
-  });
-
-  test('等待本机恢复时发起识别不能覆盖随后手动年级', () async {
-    final read = Completer<SunshineRunStoreReadResult>();
-    final source = _AcademicSource(value: _knownGrade(1));
-    final h = _Harness(source: source, readOverride: () => read.future);
-    addTearDown(h.controller.dispose);
-    addTearDown(source.dispose);
-    final identifying = h.controller.identifyGrade();
-    final manual = h.controller.setGrade(2);
-    read.complete(
-      SunshineRunStoreReadResult(
-        state: SunshineRunState(grade: 1, baseTotal: 11, baseMorning: 3),
+  test('缺失、不可靠或不支持的本地信息统一大二，不沿用旧手选年级', () async {
+    final cached = SunshineRunState(
+      grade: 1,
+      baseTotal: 12,
+      baseMorning: 6,
+      exemption: SunshineRunExemption.half,
+      customActivities: [
+        SunshineRunCustomActivity(id: 'saved-custom', total: 2, count: 3),
+      ],
+    ).withActivity('morning', 2);
+    for (final info in [
+      const StudentAcademicInfo(),
+      const StudentAcademicInfo(
+        identityMatches: true,
+        undergraduate: true,
+        academicYear: 2025,
+        enrollmentYear: 2025,
       ),
-    );
-    await Future.wait([identifying, manual]);
-    expect(h.controller.state.grade, 2);
-    expect(h.controller.state.baseTotal, 11);
-    expect(source.refreshes, 0);
-    expect(h.controller.gradeMessage, contains('手动选择'));
-  });
-
-  test('在途重新识别期间手动年级不会被结果或finally覆盖', () async {
-    final source = _AcademicSource(
-      value: _knownGrade(2),
-      refreshGate: Completer<void>(),
-    );
-    final h = _Harness(source: source);
-    addTearDown(h.controller.dispose);
-    addTearDown(source.dispose);
-    await h.controller.ensureStarted();
-    final identifying = h.controller.identifyGrade();
-    await _flush();
-    await h.controller.setGrade(2);
-    source.set(_knownGrade(1));
-    source.refreshGate!.complete();
-    await identifying;
-    expect(h.controller.state.grade, 2);
-    expect(h.controller.identifyingGrade, isFalse);
-    expect(h.controller.gradeMessage, contains('手动选择'));
-  });
-
-  test('来源缺失或年级不支持时沿用当前选择并说明原因', () async {
-    final source = _AcademicSource();
-    final h = _Harness(
-      source: source,
-      restored: SunshineRunStoreReadResult(
-        state: SunshineRunState(grade: 1, baseTotal: 12, baseMorning: 6),
+      const StudentAcademicInfo(
+        portalBound: true,
+        undergraduate: true,
+        academicYear: 2025,
+        enrollmentYear: 2025,
       ),
-    );
-    addTearDown(h.controller.dispose);
-    addTearDown(source.dispose);
-    await h.controller.ensureStarted();
-    await _flush();
-    expect(h.controller.gradeMessage, contains('未绑定'));
-    source.set(_knownGrade(3));
-    expect(h.controller.state.grade, 1);
-    expect(h.controller.gradeMessage, contains('范围'));
-    source.set(
-      const StudentAcademicInfo(portalBound: true, identityMatches: false),
-    );
-    expect(h.controller.gradeMessage, contains('当前账号'));
-    source.set(
-      const StudentAcademicInfo(portalBound: true, identityMatches: true),
-    );
-    expect(h.controller.gradeMessage, contains('用户类别'));
-    source.set(
+      const StudentAcademicInfo(
+        portalBound: true,
+        identityMatches: true,
+        academicYear: 2025,
+        enrollmentYear: 2025,
+      ),
       const StudentAcademicInfo(
         portalBound: true,
         identityMatches: true,
         undergraduate: true,
       ),
-    );
-    expect(h.controller.gradeMessage, contains('不完整'));
-    expect(h.controller.result.total, 12);
+      const StudentAcademicInfo(
+        portalBound: true,
+        identityMatches: true,
+        undergraduate: true,
+        academicYear: 2024,
+        enrollmentYear: 2025,
+      ),
+      const StudentAcademicInfo(
+        portalBound: true,
+        identityMatches: true,
+        undergraduate: true,
+        academicYear: 2200,
+        enrollmentYear: 2025,
+      ),
+      const StudentAcademicInfo(
+        portalBound: true,
+        identityMatches: true,
+        undergraduate: true,
+        academicYear: 2025,
+        enrollmentYear: 2025,
+        loading: true,
+      ),
+      const StudentAcademicInfo(
+        portalBound: true,
+        identityMatches: true,
+        undergraduate: true,
+        academicYear: 2025,
+        enrollmentYear: 2025,
+        error: '合成本地信息错误',
+      ),
+      _knownGrade(3),
+    ]) {
+      final source = _AcademicSource(value: info);
+      final h = _Harness(
+        source: source,
+        restored: SunshineRunStoreReadResult(state: cached),
+      );
+      addTearDown(h.controller.dispose);
+      await h.controller.ensureStarted();
+      await _flush();
+      expect(h.controller.state, cached.copyWith(grade: 2));
+      expect(h.controller.result.total, cached.calculate().total);
+      expect(h.controller.canUndo, isFalse);
+      expect(h.saved, isEmpty);
+      expect(source.reads, 1);
+    }
   });
 
-  test('解绑保留记录，旧绑定回调不重启识别，重新绑定可更新年级', () async {
+  test('重进仅读本地年级，不重新恢复次数，失效缓存回退大二', () async {
+    final source = _AcademicSource(value: _knownGrade(1));
+    final h = _Harness(
+      source: source,
+      restored: SunshineRunStoreReadResult(
+        state: SunshineRunState(baseTotal: 9, baseMorning: 4),
+      ),
+    );
+    addTearDown(h.controller.dispose);
+    await h.controller.ensureStarted();
+    await _flush();
+    expect(h.controller.state.grade, 1);
+    await h.controller.adjustActivityCount('morning', 2);
+    source.value = _knownGrade(2);
+    await h.controller.ensureStarted();
+    expect(h.controller.state.grade, 2);
+    source.value = _knownGrade(1);
+    await h.controller.ensureStarted();
+    expect(h.controller.state.grade, 1);
+    source.value = const StudentAcademicInfo();
+    await h.controller.ensureStarted();
+    expect(h.controller.state.grade, 2);
+    expect(h.controller.result.total, 11);
+    expect(h.controller.result.morning, 6);
+    expect(h.controller.state.activities['morning'], 2);
+    expect(h.reads, 1);
+    expect(source.reads, 4);
+  });
+
+  test('并发进入合并同一份本地读取，完成后再次进入会重新核对', () async {
+    final local = Completer<StudentAcademicInfo>();
+    final source = _AcademicSource(readOverride: () => local.future);
+    final h = _Harness(source: source);
+    addTearDown(h.controller.dispose);
+    await h.controller.ensureStarted();
+    final first = h.controller.ensureStarted();
+    final second = h.controller.ensureStarted();
+    expect(source.reads, 1);
+    local.complete(_knownGrade(1));
+    await Future.wait([first, second]);
+    expect(h.controller.state.grade, 1);
+    expect(source.reads, 1);
+    await h.controller.ensureStarted();
+    expect(source.reads, 2);
+    expect(h.reads, 1);
+  });
+
+  test('延迟本地年级不阻塞次数编辑，晚到结果保留新记录及撤销内容', () async {
+    final local = Completer<StudentAcademicInfo>();
+    final source = _AcademicSource(readOverride: () => local.future);
+    final cached = SunshineRunState(
+      baseTotal: 7,
+      baseMorning: 3,
+    ).withActivity('morning', 1);
+    final h = _Harness(
+      source: source,
+      restored: SunshineRunStoreReadResult(state: cached),
+    );
+    addTearDown(h.controller.dispose);
+    await h.controller.ensureStarted();
+    expect(h.controller.restoringState, isFalse);
+    expect(h.controller.state.grade, 2);
+    expect(await h.controller.adjustActivityCount('morning', 2), isTrue);
+    expect(h.controller.result.total, 10);
+    expect(h.controller.result.morning, 6);
+    local.complete(_knownGrade(1));
+    await _flush();
+    expect(h.controller.state.grade, 1);
+    expect(h.controller.result.total, 10);
+    expect(h.controller.state.baseTotal, 7);
+    expect(h.controller.state.activities['morning'], 3);
+    await h.controller.undo();
+    expect(h.controller.state, cached.copyWith(grade: 1));
+    expect(h.controller.canUndo, isFalse);
+    expect(source.reads, 1);
+  });
+
+  test('绑定变化使旧本地结果失效，旧读取完成不能清掉新在途读取', () async {
+    for (final oldCompletesFirst in [true, false]) {
+      final oldLocal = Completer<StudentAcademicInfo>();
+      final newLocal = Completer<StudentAcademicInfo>();
+      var calls = 0;
+      final source = _AcademicSource(
+        readOverride: () => ++calls == 1 ? oldLocal.future : newLocal.future,
+      );
+      final h = _Harness(source: source);
+      addTearDown(h.controller.dispose);
+      await h.controller.ensureStarted();
+      expect(source.reads, 1);
+      final rebinding = h.controller.onPortalBindingChanged(true);
+      expect(source.reads, 2);
+      expect(await h.controller.setBaseline(13, 5), isTrue);
+      if (oldCompletesFirst) {
+        oldLocal.complete(_knownGrade(1));
+        await _flush();
+        expect(h.controller.state.grade, 2);
+        final entering = h.controller.ensureStarted();
+        expect(source.reads, 2);
+        newLocal.complete(_knownGrade(2));
+        await Future.wait([rebinding, entering]);
+      } else {
+        newLocal.complete(_knownGrade(2));
+        await rebinding;
+        oldLocal.complete(_knownGrade(1));
+        await _flush();
+      }
+      expect(h.controller.state.grade, 2);
+      expect(h.controller.result.total, 13);
+      expect(h.controller.result.morning, 5);
+      expect(source.reads, 2);
+      expect(h.reads, 1);
+      expect(h.saved.single.baseTotal, 13);
+    }
+  });
+
+  test('恢复期间多次绑定变化只用最新本地身份，不以初始状态覆盖旧次数', () async {
+    final read = Completer<SunshineRunStoreReadResult>();
+    final source = _AcademicSource(value: _knownGrade(1));
+    final cached = SunshineRunState(
+      grade: 1,
+      baseTotal: 13,
+      baseMorning: 5,
+    ).withActivity('regular', 4);
+    final h = _Harness(source: source, readOverride: () => read.future);
+    addTearDown(h.controller.dispose);
+    final starting = h.controller.ensureStarted();
+    final binding = h.controller.onPortalBindingChanged(true);
+    final unbinding = h.controller.onPortalBindingChanged(false);
+    final rebinding = h.controller.onPortalBindingChanged(true);
+    final editing = h.controller.adjustActivityCount('regular', 1);
+    expect(h.saved, isEmpty);
+    expect(source.reads, 0);
+    read.complete(SunshineRunStoreReadResult(state: cached));
+    await Future.wait([starting, binding, unbinding, rebinding, editing]);
+    expect(h.controller.state.grade, 1);
+    expect(h.controller.state.baseTotal, 13);
+    expect(h.controller.state.activities['regular'], 5);
+    expect(h.controller.result.total, 18);
+    expect(source.reads, 1);
+    expect(h.reads, 1);
+    expect(h.saved, isNotEmpty);
+    expect(h.saved.every((state) => state.baseTotal == 13), isTrue);
+    await h.controller.undo();
+    expect(h.controller.state, cached);
+  });
+
+  test('解绑保留记录并回退大二，重进不读取，重新绑定仅读本地缓存', () async {
+    final source = _AcademicSource(value: _knownGrade(1));
+    final cached = SunshineRunState(baseTotal: 9, baseMorning: 3);
+    final h = _Harness(
+      source: source,
+      restored: SunshineRunStoreReadResult(state: cached),
+    );
+    addTearDown(h.controller.dispose);
+    await h.controller.ensureStarted();
+    await _flush();
+    await h.controller.adjustActivityCount('morning', 2);
+    expect(h.controller.state.grade, 1);
+    await h.controller.onPortalBindingChanged(false);
+    expect(h.controller.state.grade, 2);
+    expect(h.controller.result.total, 11);
+    await h.controller.ensureStarted();
+    expect(source.reads, 1);
+    await h.controller.onPortalBindingChanged(true);
+    expect(source.reads, 2);
+    expect(h.controller.state.grade, 1);
+    expect(h.controller.result.total, 11);
+    expect(h.reads, 1);
+    await h.controller.undo();
+    expect(h.controller.state, cached.copyWith(grade: 1));
+    expect(h.controller.canUndo, isFalse);
+  });
+
+  test('初始恢复期间解绑阻止本地读取，旧绑定回调不重启读取', () async {
     final read = Completer<SunshineRunStoreReadResult>();
     final source = _AcademicSource(value: _knownGrade(1));
     final h = _Harness(source: source, readOverride: () => read.future);
     addTearDown(h.controller.dispose);
-    addTearDown(source.dispose);
     final binding = h.controller.onPortalBindingChanged(true);
     final unbinding = h.controller.onPortalBindingChanged(false);
     read.complete(
       SunshineRunStoreReadResult(
-        state: SunshineRunState(baseTotal: 13, baseMorning: 5),
+        state: SunshineRunState(grade: 1, baseTotal: 13, baseMorning: 5),
       ),
     );
     await Future.wait([binding, unbinding]);
     expect(h.controller.state.grade, 2);
-    expect(h.controller.gradeMessage, contains('未绑定'));
-    expect(source.starts, 0);
+    expect(source.reads, 0);
     expect(h.controller.result.total, 13);
+    expect(h.saved, isEmpty);
     await h.controller.onPortalBindingChanged(true);
-    await _flush();
     expect(h.controller.state.grade, 1);
+    expect(source.reads, 1);
     expect(h.controller.result.total, 13);
   });
 
-  test('重新识别失败明确降级并保留已选择年级', () async {
-    final source = _AcademicSource(
-      value: _knownGrade(2),
-      refreshFailure: StateError('合成年级刷新失败'),
-    );
+  test('自动年级不会成为撤销项，次数快照始终使用最新年级', () async {
+    final source = _AcademicSource(value: _knownGrade(2));
     final h = _Harness(source: source);
     addTearDown(h.controller.dispose);
-    addTearDown(source.dispose);
     await h.controller.ensureStarted();
-    await h.controller.identifyGrade();
+    await _flush();
+    await h.controller.setBaseline(8, 3);
+    await h.controller.adjustActivityCount('morning', 2);
+    source.value = _knownGrade(1);
+    await h.controller.ensureStarted();
+    expect(h.controller.result.total, 10);
+    expect(h.controller.state.grade, 1);
+    await h.controller.undo();
+    expect(
+      h.controller.state,
+      SunshineRunState(grade: 1, baseTotal: 8, baseMorning: 3),
+    );
+    source.value = const StudentAcademicInfo();
+    await h.controller.ensureStarted();
+    await h.controller.undo();
+    expect(h.controller.state, SunshineRunState.initial());
+    expect(h.controller.canUndo, isFalse);
+    await h.controller.undo();
     expect(h.controller.state.grade, 2);
-    expect(h.controller.identifyingGrade, isFalse);
-    expect(h.controller.gradeMessage, contains('暂不可用'));
+  });
+
+  test('自动年级变化不中断长按的业务Trace或增加撤销点', () async {
+    final local = Completer<StudentAcademicInfo>();
+    final source = _AcademicSource(readOverride: () => local.future);
+    final h = _Harness(source: source);
+    addTearDown(h.controller.dispose);
+    await h.controller.ensureStarted();
+    await h.controller.adjustActivityCount('fluorescent', 1);
+    final adjustmentTrace = h.traceIds.single;
+    local.complete(_knownGrade(1));
+    await _flush();
+    expect(h.controller.state.grade, 1);
+    await h.controller.adjustActivityCount('fluorescent', 1, recordUndo: false);
+    expect(h.traceIds.last, adjustmentTrace);
+    expect(h.controller.result.total, 4);
+    h.controller.finishActivityAdjustment();
+    await h.controller.undo();
+    expect(h.controller.state, SunshineRunState(grade: 1));
+    expect(h.controller.canUndo, isFalse);
+  });
+
+  test('本地年级读取异常或超时默认大二，迟到结果不改变计数', () async {
+    final failed = _AcademicSource(
+      readOverride: () async => throw StateError('合成本地年级读取失败'),
+    );
+    final failedHarness = _Harness(
+      source: failed,
+      restored: SunshineRunStoreReadResult(
+        state: SunshineRunState(grade: 1, baseTotal: 11, baseMorning: 4),
+      ),
+    );
+    addTearDown(failedHarness.controller.dispose);
+    await failedHarness.controller.ensureStarted();
+    await _flush();
+    expect(failedHarness.controller.state.grade, 2);
+    expect(failedHarness.controller.result.total, 11);
+    expect(failedHarness.saved, isEmpty);
+
+    final delayed = Completer<StudentAcademicInfo>();
+    final timed = _AcademicSource(readOverride: () => delayed.future);
+    final timedHarness = _Harness(
+      source: timed,
+      gradeReadTimeout: const Duration(milliseconds: 1),
+    );
+    addTearDown(timedHarness.controller.dispose);
+    await timedHarness.controller.ensureStarted();
+    await timedHarness.controller.ensureStarted();
+    expect(timedHarness.controller.state.grade, 2);
+    expect(timed.reads, 1);
+    await timedHarness.controller.setBaseline(9, 3);
+    delayed.complete(_knownGrade(1));
+    await _flush();
+    expect(timedHarness.controller.state.grade, 2);
+    expect(timedHarness.controller.result.total, 9);
+  });
+
+  test('恢复失败后的本地年级更新不会自动覆盖未知跑步记录', () async {
+    final source = _AcademicSource(value: _knownGrade(1));
+    final h = _Harness(
+      source: source,
+      restored: const SunshineRunStoreReadResult(available: false),
+    );
+    addTearDown(h.controller.dispose);
+    await h.controller.ensureStarted();
+    await _flush();
+    expect(h.controller.state.grade, 1);
+    expect(h.controller.storageWarning, isNotNull);
+    expect(h.saved, isEmpty);
+    expect(await h.controller.adjustActivityCount('morning', 2), isFalse);
+    expect(h.saved, isEmpty);
+    expect(await h.controller.retrySave(), isTrue);
+    expect(h.replacements, [true]);
+    expect(h.saved.single.grade, 1);
+    expect(h.saved.single.activities['morning'], 2);
   });
 
   test('业务日志不会记录自定义活动名称', () async {
@@ -522,11 +764,10 @@ void main() {
     );
   });
 
-  test('dispose后晚到恢复和后台识别不会通知或保存', () async {
+  test('dispose后晚到恢复不会通知、保存或启动本地来源', () async {
     final read = Completer<SunshineRunStoreReadResult>();
     final source = _AcademicSource(value: _knownGrade(1));
     final h = _Harness(source: source, readOverride: () => read.future);
-    addTearDown(source.dispose);
     var notifications = 0;
     h.controller.addListener(() => notifications++);
     final starting = h.controller.ensureStarted();
@@ -537,9 +778,34 @@ void main() {
     );
     await starting;
     expect(await editing, isFalse);
-    source.set(_knownGrade(2));
     expect(notifications, 0);
     expect(h.saved, isEmpty);
+    expect(source.reads, 0);
+  });
+
+  test('dispose后晚到本地年级不会通知、保存或重新读取', () async {
+    final local = Completer<StudentAcademicInfo>();
+    final source = _AcademicSource(readOverride: () => local.future);
+    final h = _Harness(
+      source: source,
+      restored: SunshineRunStoreReadResult(
+        state: SunshineRunState(baseTotal: 7),
+      ),
+    );
+    var notifications = 0;
+    h.controller.addListener(() => notifications++);
+    await h.controller.ensureStarted();
+    final beforeDispose = notifications;
+    h.controller.dispose();
+    local.complete(_knownGrade(1));
+    await _flush();
+    await h.controller.ensureStarted();
+    await h.controller.onPortalBindingChanged(true);
+    expect(h.controller.state.grade, 2);
+    expect(h.controller.result.total, 7);
+    expect(notifications, beforeDispose);
+    expect(h.saved, isEmpty);
+    expect(source.reads, 1);
   });
 
   test('恢复尚未完成就dispose后撤销与重试立即结束，不递归等待', () async {
@@ -549,7 +815,7 @@ void main() {
     h.controller.dispose();
     expect(await h.controller.undo(), isFalse);
     expect(await h.controller.retrySave(), isFalse);
-    await h.controller.identifyGrade();
+    await h.controller.onPortalBindingChanged(true);
     read.complete(const SunshineRunStoreReadResult());
     await starting;
     expect(h.saved, isEmpty);
@@ -558,61 +824,41 @@ void main() {
 
 Future<void> _flush() => Future<void>.delayed(Duration.zero);
 
-StudentAcademicInfo _knownGrade(int grade, {bool fromCache = false}) =>
-    StudentAcademicInfo(
-      portalBound: true,
-      identityMatches: true,
-      undergraduate: true,
-      academicYear: 2025 + grade - 1,
-      enrollmentYear: 2025,
-      fromCache: fromCache,
-    );
+StudentAcademicInfo _knownGrade(int grade) => StudentAcademicInfo(
+  portalBound: true,
+  identityMatches: true,
+  undergraduate: true,
+  academicYear: 2025 + grade - 1,
+  enrollmentYear: 2025,
+  fromCache: true,
+);
 
-class _AcademicSource extends ChangeNotifier implements StudentAcademicSource {
+class _AcademicSource implements StudentAcademicSource {
   _AcademicSource({
-    this._value = const StudentAcademicInfo(),
-    this.initialGate,
-    this.refreshGate,
-    this.refreshFailure,
+    this.value = const StudentAcademicInfo(),
+    this.readOverride,
   });
 
-  StudentAcademicInfo _value;
-  final Completer<void>? initialGate;
-  final Completer<void>? refreshGate;
-  final Object? refreshFailure;
-  int starts = 0;
-  int refreshes = 0;
+  StudentAcademicInfo value;
+  final Future<StudentAcademicInfo> Function()? readOverride;
+  int reads = 0;
 
   @override
-  StudentAcademicInfo get value => _value;
-
-  void set(StudentAcademicInfo value) {
-    _value = value;
-    notifyListeners();
-  }
-
-  @override
-  Future<void> ensureStarted() {
-    starts++;
-    return initialGate?.future ?? Future.value();
-  }
-
-  @override
-  Future<void> refresh() async {
-    refreshes++;
-    if (refreshFailure case final failure?) throw failure;
-    await refreshGate?.future;
+  Future<StudentAcademicInfo> readLocal() async {
+    reads++;
+    return readOverride == null ? value : await readOverride!();
   }
 }
 
 class _Harness {
   _Harness({
     SunshineRunStoreReadResult restored = const SunshineRunStoreReadResult(),
-    _AcademicSource? source,
+    StudentAcademicSource? source,
     Future<SunshineRunStoreReadResult> Function()? readOverride,
     Future<bool> Function(SunshineRunState, {bool replaceCorrupt})?
     saveOverride,
     Duration restoreTimeout = const Duration(seconds: 5),
+    Duration gradeReadTimeout = const Duration(seconds: 2),
   }) {
     controller = SunshineRunController.forTesting(
       read: () async {
@@ -629,6 +875,7 @@ class _Harness {
       },
       gradeSource: source,
       restoreTimeout: restoreTimeout,
+      gradeReadTimeout: gradeReadTimeout,
     );
   }
 
