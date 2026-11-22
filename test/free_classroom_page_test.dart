@@ -6,10 +6,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:nuist_sta_app/core/colors.dart';
 import 'package:nuist_sta_app/mini_apps/free_classroom/free_classroom_controller.dart';
 import 'package:nuist_sta_app/mini_apps/free_classroom/free_classroom_models.dart';
 import 'package:nuist_sta_app/mini_apps/free_classroom/free_classroom_page.dart';
 import 'package:nuist_sta_app/mini_apps/free_classroom/free_classroom_sheets.dart';
+import 'package:nuist_sta_app/mini_apps/free_classroom/free_classroom_widgets.dart';
 
 ClassroomDay _fakeDay() {
   final now = DateTime.now();
@@ -280,10 +282,175 @@ void main() {
       of: find.text('文德N201'),
       matching: find.byType(InkWell),
     );
-    final cells = tester.widgetList<Opacity>(
+    expect(
       find.descendant(of: row, matching: find.byType(Opacity)),
+      findsNothing,
+    );
+    final palette = AppPalette.of(tester.element(row));
+    final cells = tester.widgetList<Container>(
+      find.descendant(
+        of: row,
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w is Container &&
+              w.decoration is BoxDecoration &&
+              (w.decoration! as BoxDecoration).borderRadius ==
+                  BorderRadius.circular(6),
+        ),
+      ),
     );
     expect(cells.length, 5);
-    expect(cells.map((o) => o.opacity), everyElement(1.0));
+    expect(
+      cells.map((c) => (c.decoration as BoxDecoration).color),
+      everyElement(palette.success.withValues(alpha: 0.4)),
+    );
+  });
+
+  testWidgets('状态格在未暗化、暗化未过、暗化已过三种状态下无 Opacity 且颜色 alpha 正确', (tester) async {
+    tester.view.physicalSize = const Size(360, 780);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    const building = Building(code: '1-120', name: '文德楼');
+    const groups = [
+      // 00:00 结束在一天中任何时刻均已过，24:00 结束在一天中任何时刻均未过。
+      PeriodGroup(start: 1, end: 2, startTime: '00:00', endTime: '00:00'),
+      PeriodGroup(start: 3, end: 4, startTime: '00:00', endTime: '24:00'),
+      PeriodGroup(start: 5, end: 6, startTime: '00:00', endTime: '24:00'),
+    ];
+    final calendar = TermCalendar(
+      termCode: '2026-2027-1',
+      week: 4,
+      weekday: today.weekday,
+      groups: groups,
+    );
+    Classroom makeRoom(String name, List<String?> jc) => Classroom.fromRow({
+      'JASMC': name,
+      'JASLXDM_DISPLAY': '多媒体教室',
+      'LC': 1,
+      'SKZWS': 60,
+      for (var i = 0; i < jc.length; i++) 'JC${i + 1}': jc[i],
+    }, 6);
+
+    final day = ClassroomDay(
+      date: today,
+      building: building,
+      calendar: calendar,
+      rooms: [
+        // 分别覆盖：已过=全空 / 未过=部分 / 已选=全空
+        makeRoom('测试N101', [null, null, '1_01', null, null, null]),
+        // 分别覆盖：已过=部分 / 未过=全占用 / 已选=部分
+        makeRoom('测试N102', ['1_01', null, '1_01', '1_01', '1_01', null]),
+        // 分别覆盖：已过=全占用 / 未过=全空 / 已选=全空
+        makeRoom('测试N103', ['1_01', '1_01', null, null, null, null]),
+      ],
+      fetchedAt: now,
+    );
+
+    final c = FreeClassroomController.instance;
+    c.debugSetResult(day, buildings: [building]);
+    c.setZone(null);
+    c.setFloor(null);
+    c.setType(null);
+    c.setMinSeats(0);
+    // 先回到仅选中未过时段 {1, 2}，再取消选中时段 1，形成 {2} 选中：
+    // 下标 0 为暗化且已过 (0.45)，下标 1 为暗化且未过 (0.6)，下标 2 为未暗化 (1.0)。
+    c.selectUpcomingGroups();
+    c.toggleGroup(1);
+    addTearDown(c.selectUpcomingGroups);
+
+    await tester.pumpWidget(const MaterialApp(home: FreeClassroomPage()));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Opacity), findsNothing);
+
+    List<Container> rowCells(String roomName) {
+      final row = find.ancestor(
+        of: find.text(roomName),
+        matching: find.byType(InkWell),
+      );
+      return tester
+          .widgetList<Container>(
+            find.descendant(
+              of: row,
+              matching: find.byWidgetPredicate(
+                (w) =>
+                    w is Container &&
+                    w.decoration is BoxDecoration &&
+                    (w.decoration! as BoxDecoration).borderRadius ==
+                        BorderRadius.circular(6),
+              ),
+            ),
+          )
+          .toList();
+    }
+
+    Color cellBg(Container cell) => (cell.decoration as BoxDecoration).color!;
+
+    Text cellText(Container cell) => tester.widget<Text>(
+      find.descendant(of: find.byWidget(cell), matching: find.byType(Text)),
+    );
+
+    final palette = AppPalette.of(tester.element(find.text('测试N101')));
+    final fullFreeBase = palette.success.withValues(alpha: 0.4);
+    final partialBase = palette.warning.withValues(alpha: 0.18);
+    final busyBase = ClassroomFillColors.busy(palette);
+
+    final cells101 = rowCells('测试N101');
+    final cells102 = rowCells('测试N102');
+    final cells103 = rowCells('测试N103');
+    expect(cells101, hasLength(3));
+    expect(cells102, hasLength(3));
+    expect(cells103, hasLength(3));
+
+    // 下标 2：未暗化 (factor = 1.0)
+    expect(cellBg(cells101[2]), fullFreeBase);
+    expect(cellBg(cells102[2]), partialBase);
+    expect(cellText(cells102[2]).style?.color, palette.warning);
+
+    // 下标 1：暗化且未过 (factor = 0.6)
+    expect(
+      cellBg(cells103[1]),
+      fullFreeBase.withValues(alpha: fullFreeBase.a * 0.6),
+    );
+    expect(
+      cellBg(cells101[1]),
+      partialBase.withValues(alpha: partialBase.a * 0.6),
+    );
+    expect(
+      cellText(cells101[1]).style?.color,
+      palette.warning.withValues(alpha: palette.warning.a * 0.6),
+    );
+    expect(cellBg(cells102[1]), busyBase.withValues(alpha: busyBase.a * 0.6));
+
+    // 下标 0：暗化且已过 (factor = 0.45)
+    expect(
+      cellBg(cells101[0]),
+      fullFreeBase.withValues(alpha: fullFreeBase.a * 0.45),
+    );
+    expect(
+      cellBg(cells102[0]),
+      partialBase.withValues(alpha: partialBase.a * 0.45),
+    );
+    expect(
+      cellText(cells102[0]).style?.color,
+      palette.warning.withValues(alpha: palette.warning.a * 0.45),
+    );
+    expect(cellBg(cells103[0]), busyBase.withValues(alpha: busyBase.a * 0.45));
+
+    // 全选所有时段（包含已过时段 0）：下标 0 恢复为未暗化原色。
+    c.selectAllGroups();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Opacity), findsNothing);
+    final all101 = rowCells('测试N101');
+    final all102 = rowCells('测试N102');
+    final all103 = rowCells('测试N103');
+    expect(cellBg(all101[0]), fullFreeBase);
+    expect(cellBg(all102[0]), partialBase);
+    expect(cellText(all102[0]).style?.color, palette.warning);
+    expect(cellBg(all103[0]), busyBase);
   });
 }

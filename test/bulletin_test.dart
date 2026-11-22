@@ -7,8 +7,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_api.dart';
+import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_controller.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_detail_page.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_models.dart';
+import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_page.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_store.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_tagger.dart';
 
@@ -496,6 +498,190 @@ void main() {
       expect(await file.readAsString(), 'synthetic attachment bytes');
     });
   });
+
+  test('BulletinController 按分类缓存列表并在翻页、强刷和切分类时准确失效', () async {
+    const b1 = Bulletin(
+      id: '1',
+      title: '公告 1',
+      url: 'https://bulletin.campus.invalid/info/1/1.htm',
+      officialCategory: '教学考试',
+      publisher: '教务处',
+      publishedAt: '2026-10-01',
+    );
+    const b2 = Bulletin(
+      id: '2',
+      title: '公告 2',
+      url: 'https://bulletin.campus.invalid/info/1/2.htm',
+      officialCategory: '教学考试',
+      publisher: '教务处',
+      publishedAt: '2026-10-02',
+    );
+    const b3 = Bulletin(
+      id: '3',
+      title: '公告 3',
+      url: 'https://bulletin.campus.invalid/info/1/3.htm',
+      officialCategory: '科研信息',
+      publisher: '科研处',
+      publishedAt: '2026-10-03',
+    );
+    const b4 = Bulletin(
+      id: '4',
+      title: '文件公告 1',
+      url: 'https://bulletin.campus.invalid/info/1/4.htm',
+      officialCategory: '文件公告',
+      publisher: '党政办',
+      publishedAt: '2026-10-04',
+    );
+    const b4Updated = Bulletin(
+      id: '4-new',
+      title: '文件公告更新',
+      url: 'https://bulletin.campus.invalid/info/1/4-new.htm',
+      officialCategory: '文件公告',
+      publisher: '党政办',
+      publishedAt: '2026-10-05',
+    );
+
+    final allCategory = BulletinCategory.all.first;
+    final docCategory = BulletinCategory.all[1];
+    final nextPageUrl = 'https://bulletin.campus.invalid/index_2.htm';
+
+    final pages = <String, BulletinListPage>{
+      allCategory.uri.toString(): BulletinListPage(
+        items: const [b1, b2],
+        pageNumber: 1,
+        nextUrl: nextPageUrl,
+      ),
+      nextPageUrl: const BulletinListPage(
+        // 包含重复 id=2，验证翻页合并时去重与顺序保持。
+        items: [b2, b3],
+        pageNumber: 2,
+      ),
+      docCategory.uri.toString(): const BulletinListPage(
+        items: [b4],
+        pageNumber: 1,
+      ),
+    };
+    final api = _PagedFixtureApi(pages);
+    final controller = BulletinController(api: api, store: _MemoryStore());
+    addTearDown(controller.dispose);
+
+    await controller.loadCategory(allCategory);
+    final firstRead = controller.items;
+    final secondRead = controller.items;
+    expect(identical(firstRead, secondRead), isTrue);
+    expect(firstRead.map((b) => b.id), ['1', '2']);
+
+    await controller.loadMore();
+    final afterLoadMore = controller.items;
+    expect(identical(afterLoadMore, firstRead), isFalse);
+    expect(identical(controller.items, afterLoadMore), isTrue);
+    expect(afterLoadMore.map((b) => b.id), ['1', '2', '3']);
+
+    await controller.selectCategory(docCategory);
+    final docFirstRead = controller.items;
+    expect(docFirstRead.map((b) => b.id), ['4']);
+    expect(identical(controller.items, docFirstRead), isTrue);
+
+    // 切回全部分类直接命中已缓存列表。
+    await controller.selectCategory(allCategory);
+    expect(identical(controller.items, afterLoadMore), isTrue);
+
+    // 强刷文件公告后缓存失效并返回新数据。
+    pages[docCategory.uri.toString()] = const BulletinListPage(
+      items: [b4Updated],
+      pageNumber: 1,
+    );
+    await controller.selectCategory(docCategory);
+    await controller.loadCategory(docCategory, forceRefresh: true);
+    expect(identical(controller.items, docFirstRead), isFalse);
+    expect(controller.items.map((b) => b.id), ['4-new']);
+  });
+
+  testWidgets('BulletinPage 长列表按需懒构建且支持搜索过滤与分类切换', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final allCategory = BulletinCategory.all.first;
+    final docCategory = BulletinCategory.all[1];
+    final longItems = List.generate(
+      80,
+      (i) => Bulletin(
+        id: 'item-$i',
+        title: i == 75 ? 'SpecialNotice Beta' : '合成公告 $i',
+        url: 'https://bulletin.campus.invalid/info/1/$i.htm',
+        officialCategory: '通知',
+        publisher: i == 42 ? 'AlphaLab' : '测试单位',
+        publishedAt: '2026-10-01',
+      ),
+    );
+    const docItems = [
+      Bulletin(
+        id: 'doc-1',
+        title: '文件公告条目 1',
+        url: 'https://bulletin.campus.invalid/info/2/1.htm',
+        officialCategory: '文件公告',
+        publisher: '校办',
+        publishedAt: '2026-10-02',
+      ),
+    ];
+
+    final api = _PagedFixtureApi({
+      allCategory.uri.toString(): BulletinListPage(
+        items: longItems,
+        pageNumber: 1,
+      ),
+      docCategory.uri.toString(): const BulletinListPage(
+        items: docItems,
+        pageNumber: 1,
+      ),
+    });
+    final controller = BulletinController(api: api, store: _MemoryStore());
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(home: BulletinPage(controller: controller)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('合成公告 0'), findsOneWidget);
+    expect(find.text('合成公告 79', skipOffstage: false), findsNothing);
+
+    // 大小写不敏感匹配标题与发布单位。
+    await tester.enterText(find.byType(TextField), 'specialnotice');
+    await tester.pump();
+    expect(find.text('SpecialNotice Beta'), findsOneWidget);
+    expect(find.text('合成公告 0'), findsNothing);
+
+    await tester.enterText(find.byType(TextField), 'alphalab');
+    await tester.pump();
+    expect(find.text('合成公告 42'), findsOneWidget);
+    expect(find.text('SpecialNotice Beta'), findsNothing);
+
+    await tester.tap(find.byTooltip('清空搜索'));
+    await tester.pump();
+    expect(find.text('合成公告 0'), findsOneWidget);
+
+    // 切换分类后展示新分类条目，再切回全部分类继续验证滚动懒加载。
+    await tester.tap(find.widgetWithText(ChoiceChip, docCategory.name));
+    await tester.pumpAndSettle();
+    expect(find.text('文件公告条目 1'), findsOneWidget);
+    expect(find.text('合成公告 0'), findsNothing);
+
+    await tester.tap(find.widgetWithText(ChoiceChip, allCategory.name));
+    await tester.pumpAndSettle();
+    expect(find.text('合成公告 0'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('合成公告 79'),
+      600,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('合成公告 79'), findsOneWidget);
+    expect(find.text('已经看到当前分类的全部公告'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 List<String> _captureClipboard() {
@@ -549,4 +735,29 @@ class _BulletinAdapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) {}
+}
+
+class _PagedFixtureApi extends BulletinApi {
+  _PagedFixtureApi(this.pages);
+
+  final Map<String, BulletinListPage> pages;
+
+  @override
+  Future<BulletinListPage> fetchPage(Uri uri, {required int pageNumber}) async {
+    final page = pages[uri.toString()];
+    if (page == null) {
+      throw StateError('Unexpected bulletin page request: $uri');
+    }
+    return page;
+  }
+}
+
+class _MemoryStore extends BulletinStore {
+  BulletinLocalData data = const BulletinLocalData();
+
+  @override
+  Future<BulletinLocalData> read() async => data;
+
+  @override
+  Future<void> save(BulletinLocalData data) async => this.data = data;
 }

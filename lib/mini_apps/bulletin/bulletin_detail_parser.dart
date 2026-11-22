@@ -1,5 +1,59 @@
 import 'bulletin_models.dart';
 
+const _excludedContentKeywords = ['header', 'footer', 'nav', 'menu', 'sidebar'];
+const _skippedAttachmentTags = {'head', 'header', 'aside'};
+const _httpSchemes = {'http', 'https'};
+const _headingTags = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'};
+const _blockTags = {
+  'address',
+  'article',
+  'body',
+  'caption',
+  'dd',
+  'div',
+  'dl',
+  'dt',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'header',
+  'hr',
+  'li',
+  'main',
+  'nav',
+  'ol',
+  'p',
+  'pre',
+  'section',
+  'table',
+  'td',
+  'th',
+  'tr',
+  'ul',
+};
+
+final _whitespacePattern = RegExp(r'\s+');
+final _attachmentExtensionPattern = RegExp(
+  r'\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|txt|wps|jpg|jpeg|png)$',
+);
+final _horizontalWhitespacePattern = RegExp(r'[ \t\r\f]+');
+final _leadingLineWhitespacePattern = RegExp(r'\n[ \t]+');
+final _extraNewlinesPattern = RegExp(r'\n{3,}');
+final _htmlTokenPattern = RegExp(r'<!--[\s\S]*?-->|<![^>]*>|<[^>]+>|[^<]+');
+final _closingTagPattern = RegExp(r'</\s*([\w:-]+)', caseSensitive: false);
+final _openingTagPattern = RegExp(
+  r'<\s*([\w:-]+)([\s\S]*?)(/?)>',
+  caseSensitive: false,
+);
+final _attributePattern = RegExp(
+  r'''([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))''',
+);
+final _numericEntityPattern = RegExp(
+  r'&#(x[0-9a-f]+|\d+);',
+  caseSensitive: false,
+);
+
 /// 将公告详情 HTML 解析为适合 Flutter 原生渲染的正文和附件。
 BulletinDetailDocument? parseBulletinDetail(
   String html, {
@@ -53,7 +107,7 @@ _HtmlNode _findContentNode(_HtmlNode root) {
     if (name.contains('content')) score += 45;
     if (name.contains('article')) score += 35;
     if (name.contains('detail') || name.contains('main')) score += 20;
-    if (['header', 'footer', 'nav', 'menu', 'sidebar'].any(name.contains)) {
+    if (_excludedContentKeywords.any(name.contains)) {
       score -= 100;
     }
     if (score > 0) candidates.add(_ContentCandidate(score, order, node));
@@ -72,7 +126,7 @@ _HtmlNode _findAttachmentScope(_HtmlNode document, _HtmlNode content) {
   // 正文保持原来的提取范围，附件扩大到文章容器，避免混入其他公告的链接。
   for (_HtmlNode? node = content; node != null; node = node.parent) {
     final classes = (node.attributes['class'] ?? '').toLowerCase().split(
-      RegExp(r'\s+'),
+      _whitespacePattern,
     );
     if (node.tag == 'article' ||
         classes.contains('article') ||
@@ -85,7 +139,7 @@ _HtmlNode _findAttachmentScope(_HtmlNode document, _HtmlNode content) {
 }
 
 Iterable<_HtmlNode> _attachmentElements(_HtmlNode node) sync* {
-  if (_isHidden(node) || {'head', 'header', 'aside'}.contains(node.tag)) return;
+  if (_isHidden(node) || _skippedAttachmentTags.contains(node.tag)) return;
   if (!node.isText) yield node;
   for (final child in node.children) {
     yield* _attachmentElements(child);
@@ -121,7 +175,9 @@ String _attachmentName(String label, String url) {
 }
 
 bool _isAttachmentLink(_HtmlNode node, String url) {
-  final label = _nodeText(node).replaceAll(RegExp(r'\s+'), '').toLowerCase();
+  final label = _nodeText(node)
+      .replaceAll(_whitespacePattern, '')
+      .toLowerCase();
   final metadata =
       '${node.attributes['class'] ?? ''} '
               '${node.attributes['id'] ?? ''}'
@@ -135,10 +191,8 @@ bool _isAttachmentLink(_HtmlNode node, String url) {
   final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
   // CMS 使用下载接口而非文件地址，链接文案也可能没有后缀或「附件」字样。
   if (path.endsWith('/system/_content/download.jsp')) return true;
-  final fileExtension = RegExp(
-    r'\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|txt|wps|jpg|jpeg|png)$',
-  );
-  return fileExtension.hasMatch(path) || fileExtension.hasMatch(label);
+  return _attachmentExtensionPattern.hasMatch(path) ||
+      _attachmentExtensionPattern.hasMatch(label);
 }
 
 String? _resolveUrl(String? raw, Uri base) {
@@ -146,7 +200,7 @@ String? _resolveUrl(String? raw, Uri base) {
   final value = _decodeEntities(raw.trim());
   if (value.startsWith('#') || value.startsWith('javascript:')) return null;
   final resolved = base.resolve(value);
-  if (!['http', 'https'].contains(resolved.scheme)) return null;
+  if (!_httpSchemes.contains(resolved.scheme)) return null;
   return resolved.toString();
 }
 
@@ -156,7 +210,7 @@ List<BulletinDetailBlock> _extractBlocks(_HtmlNode root, Uri currentUri) {
   void visit(_HtmlNode node) {
     if (node.isText || _isHidden(node)) return;
     final tag = node.tag;
-    if ({'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}.contains(tag)) {
+    if (_headingTags.contains(tag)) {
       final text = _cleanText(_nodeText(node, currentUri: currentUri));
       if (text.isNotEmpty) {
         blocks.add(
@@ -257,34 +311,7 @@ List<BulletinDetailBlock> _extractBlocks(_HtmlNode root, Uri currentUri) {
   return blocks;
 }
 
-bool _isBlockTag(String tag) => {
-  'address',
-  'article',
-  'body',
-  'caption',
-  'dd',
-  'div',
-  'dl',
-  'dt',
-  'figcaption',
-  'figure',
-  'footer',
-  'form',
-  'header',
-  'hr',
-  'li',
-  'main',
-  'nav',
-  'ol',
-  'p',
-  'pre',
-  'section',
-  'table',
-  'td',
-  'th',
-  'tr',
-  'ul',
-}.contains(tag);
+bool _isBlockTag(String tag) => _blockTags.contains(tag);
 
 bool _isHidden(_HtmlNode node) =>
     node.tag == 'script' ||
@@ -319,9 +346,9 @@ String _nodeText(_HtmlNode node, {Uri? currentUri}) {
 }
 
 String _cleanText(String text) => text
-    .replaceAll(RegExp(r'[ \t\r\f]+'), ' ')
-    .replaceAll(RegExp(r'\n[ \t]+'), '\n')
-    .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+    .replaceAll(_horizontalWhitespacePattern, ' ')
+    .replaceAll(_leadingLineWhitespacePattern, '\n')
+    .replaceAll(_extraNewlinesPattern, '\n\n')
     .trim();
 
 Iterable<_HtmlNode> _elements(_HtmlNode root) sync* {
@@ -367,15 +394,14 @@ class _HtmlParser {
   _HtmlNode parse() {
     final root = _HtmlNode.element('document', const {});
     final stack = <_HtmlNode>[root];
-    final tokenPattern = RegExp(r'<!--[\s\S]*?-->|<![^>]*>|<[^>]+>|[^<]+');
-    for (final match in tokenPattern.allMatches(html)) {
+    for (final match in _htmlTokenPattern.allMatches(html)) {
       final token = match.group(0)!;
       if (token.startsWith('<!--') || token.startsWith('<!')) continue;
       if (token.startsWith('</')) {
-        final closing = RegExp(
-          r'</\s*([\w:-]+)',
-          caseSensitive: false,
-        ).firstMatch(token)?.group(1)?.toLowerCase();
+        final closing = _closingTagPattern
+            .firstMatch(token)
+            ?.group(1)
+            ?.toLowerCase();
         if (closing == null) continue;
         for (var index = stack.length - 1; index > 0; index--) {
           if (stack[index].tag == closing) {
@@ -386,10 +412,7 @@ class _HtmlParser {
         continue;
       }
       if (token.startsWith('<')) {
-        final opening = RegExp(
-          r'<\s*([\w:-]+)([\s\S]*?)(/?)>',
-          caseSensitive: false,
-        ).firstMatch(token);
+        final opening = _openingTagPattern.firstMatch(token);
         if (opening == null) continue;
         final tag = opening.group(1)!.toLowerCase();
         final node = _HtmlNode.element(
@@ -430,10 +453,7 @@ const _voidTags = {
 
 Map<String, String> _parseAttributes(String source) {
   final attributes = <String, String>{};
-  final pattern = RegExp(
-    r'''([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))''',
-  );
-  for (final match in pattern.allMatches(source)) {
+  for (final match in _attributePattern.allMatches(source)) {
     attributes[match.group(1)!.toLowerCase()] =
         match.group(2) ?? match.group(3) ?? match.group(4) ?? '';
   }
@@ -448,15 +468,12 @@ String _decodeEntities(String text) {
       .replaceAll('&lt;', '<')
       .replaceAll('&gt;', '>')
       .replaceAll('&amp;', '&');
-  value = value.replaceAllMapped(
-    RegExp(r'&#(x[0-9a-f]+|\d+);', caseSensitive: false),
-    (match) {
-      final code = match.group(1)!;
-      final number = code.toLowerCase().startsWith('x')
-          ? int.tryParse(code.substring(1), radix: 16)
-          : int.tryParse(code);
-      return number == null ? match.group(0)! : String.fromCharCode(number);
-    },
-  );
+  value = value.replaceAllMapped(_numericEntityPattern, (match) {
+    final code = match.group(1)!;
+    final number = code.toLowerCase().startsWith('x')
+        ? int.tryParse(code.substring(1), radix: 16)
+        : int.tryParse(code);
+    return number == null ? match.group(0)! : String.fromCharCode(number);
+  });
   return value;
 }

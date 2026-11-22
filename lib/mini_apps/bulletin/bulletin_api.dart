@@ -12,6 +12,53 @@ import 'bulletin_detail_parser.dart';
 import 'bulletin_models.dart';
 import 'bulletin_tagger.dart';
 
+const _nonAttachmentExtensions = {'jsp', 'aspx', 'php', 'cgi'};
+
+final _invalidFileNameCharsPattern = RegExp(r'''[\\/:*?"<>|\x00-\x1f]''');
+final _fileExtensionPattern = RegExp(
+  r'\.([a-z0-9]{1,10})$',
+  caseSensitive: false,
+);
+final _utf8FileNamePattern = RegExp(
+  r"^utf-8'[^']*'(.*)$",
+  caseSensitive: false,
+);
+final _pathSeparatorPattern = RegExp(r'[/\\]');
+final _newsRowPattern = RegExp(
+  r'''<li\b[^>]*class=["'][^"']*\bnews\b[^"']*["'][^>]*>([\s\S]*?)</li>''',
+  caseSensitive: false,
+);
+final _anchorPattern = RegExp(
+  r'<a\b([^>]*)>([\s\S]*?)</a>',
+  caseSensitive: false,
+);
+final _articlePathPattern = RegExp(r'/info/[^/]+/(\d+)\.htm');
+final _pagingDivPattern = RegExp(
+  r'''<div\b[^>]*class=["'][^"']*\bwp_paging\b[^"']*["'][^>]*>([\s\S]*?)</div>''',
+  caseSensitive: false,
+);
+final _totalCountPattern = RegExp(r'总共\s*(?:&nbsp;\s*)?(\d+)');
+final _spanPatterns = <String, RegExp>{
+  'wjj': _buildSpanPattern('wjj'),
+  'news_org': _buildSpanPattern('news_org'),
+  'news_date': _buildSpanPattern('news_date'),
+};
+final _attributePattern = RegExp(
+  r'''([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')''',
+);
+final _brTagPattern = RegExp(r'<br\s*/?>', caseSensitive: false);
+final _htmlTagPattern = RegExp(r'<[^>]*>');
+final _whitespacePattern = RegExp(r'\s+');
+final _numericEntityPattern = RegExp(
+  r'&#(x[0-9a-f]+|\d+);',
+  caseSensitive: false,
+);
+
+RegExp _buildSpanPattern(String className) => RegExp(
+  """<span\\b[^>]*class=["'][^"']*\\b$className\\b[^"']*["'][^>]*>([\\s\\S]*?)</span>""",
+  caseSensitive: false,
+);
+
 /// 信息公告栏官网首页地址（主机名由 `campus_config.dart` 的校园根域派生）。
 final bulletinHomeUri = 'https://${CampusHosts.bulletin}/';
 
@@ -25,6 +72,7 @@ bool isOfficialBulletinUri(Uri uri) =>
 /// 从学校官网读取公告列表。
 class BulletinApi {
   static final _log = AppLog.logger('bulletin.api');
+  static const _redirectCodes = {301, 302, 303, 307, 308};
 
   /// 创建公告接口客户端，可注入 Dio 实例。
   BulletinApi({Dio? dio})
@@ -78,7 +126,6 @@ class BulletinApi {
   Future<BulletinDetailDocument?> fetchDetail(Bulletin bulletin) async {
     var uri = Uri.parse(bulletin.url);
     final official = isOfficialBulletinUri(uri);
-    const redirectCodes = {301, 302, 303, 307, 308};
     Response<String> response;
     for (var redirects = 0; ; redirects++) {
       response = await _dio.getUri<String>(
@@ -90,11 +137,11 @@ class BulletinApi {
               ? (status) =>
                     status != null &&
                     (status >= 200 && status < 300 ||
-                        redirectCodes.contains(status))
+                        _redirectCodes.contains(status))
               : null,
         ),
       );
-      if (!official || !redirectCodes.contains(response.statusCode)) break;
+      if (!official || !_redirectCodes.contains(response.statusCode)) break;
       final location = response.headers.value(HttpHeaders.locationHeader);
       if (redirects >= 5 || location == null || location.isEmpty) return null;
       final next = uri.resolve(location);
@@ -130,7 +177,7 @@ class BulletinApi {
         if (extension != null && _fileExtension(name) == null) {
           name += '.$extension';
         }
-        name = name.replaceAll(RegExp(r'''[\\/:*?"<>|\x00-\x1f]'''), '_');
+        name = name.replaceAll(_invalidFileNameCharsPattern, '_');
         file = File('${target.path}${separator}nuist-announcement-$name');
         return file.path;
       }, deleteOnError: true);
@@ -147,12 +194,12 @@ class BulletinApi {
 }
 
 String? _fileExtension(String name) {
-  final extension = RegExp(
-    r'\.([a-z0-9]{1,10})$',
-    caseSensitive: false,
-  ).firstMatch(name)?.group(1)?.toLowerCase();
+  final extension = _fileExtensionPattern
+      .firstMatch(name)
+      ?.group(1)
+      ?.toLowerCase();
   // CMS 下载接口的后缀属于网页，并不代表附件格式。
-  return {'jsp', 'aspx', 'php', 'cgi'}.contains(extension) ? null : extension;
+  return _nonAttachmentExtensions.contains(extension) ? null : extension;
 }
 
 String? _attachmentFileName(Headers headers) {
@@ -164,10 +211,9 @@ String? _attachmentFileName(Headers headers) {
       preserveBackslash: true,
     ).parameters;
     var fileName = parameters['filename'];
-    final parts = RegExp(
-      r"^utf-8'[^']*'(.*)$",
-      caseSensitive: false,
-    ).firstMatch(parameters['filename*'] ?? '');
+    final parts = _utf8FileNamePattern.firstMatch(
+      parameters['filename*'] ?? '',
+    );
     if (parts != null) {
       try {
         fileName = Uri.decodeComponent(parts.group(1)!);
@@ -177,7 +223,7 @@ String? _attachmentFileName(Headers headers) {
         // 不完整的百分号编码也会被拒绝。
       }
     }
-    final name = fileName?.split(RegExp(r'[/\\]')).last.trim();
+    final name = fileName?.split(_pathSeparatorPattern).last.trim();
     return name == null || name.isEmpty || name == '.' || name == '..'
         ? null
         : name;
@@ -207,23 +253,16 @@ BulletinListPage parseBulletinPage(
 }) {
   final items = <Bulletin>[];
   final seenIds = <String>{};
-  final rows = RegExp(
-    r'''<li\b[^>]*class=["'][^"']*\bnews\b[^"']*["'][^>]*>([\s\S]*?)</li>''',
-    caseSensitive: false,
-  ).allMatches(html);
+  final rows = _newsRowPattern.allMatches(html);
 
   for (final rowMatch in rows) {
     final row = rowMatch.group(1) ?? '';
-    final anchors = RegExp(
-      r'<a\b([^>]*)>([\s\S]*?)</a>',
-      caseSensitive: false,
-    ).allMatches(row);
+    final anchors = _anchorPattern.allMatches(row);
     RegExpMatch? articleAnchor;
     for (final anchor in anchors) {
       final attributes = _attributes(anchor.group(1) ?? '');
       final href = _decodeHtml(attributes['href'] ?? '');
-      if (href.contains('wbnewsid=') ||
-          RegExp(r'/info/[^/]+/\d+\.htm').hasMatch(href)) {
+      if (href.contains('wbnewsid=') || _articlePathPattern.hasMatch(href)) {
         articleAnchor = anchor;
         break;
       }
@@ -255,17 +294,9 @@ BulletinListPage parseBulletinPage(
     items.add(tagBulletin(bulletin));
   }
 
-  final paging =
-      RegExp(
-        r'''<div\b[^>]*class=["'][^"']*\bwp_paging\b[^"']*["'][^>]*>([\s\S]*?)</div>''',
-        caseSensitive: false,
-      ).firstMatch(html)?.group(1) ??
-      '';
+  final paging = _pagingDivPattern.firstMatch(html)?.group(1) ?? '';
   String? nextUrl;
-  for (final anchor in RegExp(
-    r'<a\b([^>]*)>([\s\S]*?)</a>',
-    caseSensitive: false,
-  ).allMatches(paging)) {
+  for (final anchor in _anchorPattern.allMatches(paging)) {
     final label = _plainText(anchor.group(2) ?? '').trim();
     final href = _attributes(anchor.group(1) ?? '')['href'] ?? '';
     if (label.contains('下页') &&
@@ -275,9 +306,7 @@ BulletinListPage parseBulletinPage(
       break;
     }
   }
-  final totalText = RegExp(r'总共\s*(?:&nbsp;\s*)?(\d+)')
-      .firstMatch(paging)
-      ?.group(1);
+  final totalText = _totalCountPattern.firstMatch(paging)?.group(1);
 
   return BulletinListPage(
     items: items,
@@ -290,22 +319,21 @@ BulletinListPage parseBulletinPage(
 String _articleId(Uri uri) {
   final queryId = uri.queryParameters['wbnewsid'];
   if (queryId != null && queryId.isNotEmpty) return queryId;
-  return RegExp(r'/info/[^/]+/(\d+)\.htm').firstMatch(uri.path)?.group(1) ??
-      uri.toString();
+  return _articlePathPattern.firstMatch(uri.path)?.group(1) ?? uri.toString();
 }
 
 String _spanText(String html, String className) {
-  final match = RegExp(
-    """<span\\b[^>]*class=["'][^"']*\\b$className\\b[^"']*["'][^>]*>([\\s\\S]*?)</span>""",
-    caseSensitive: false,
-  ).firstMatch(html);
+  final pattern = _spanPatterns.putIfAbsent(
+    className,
+    () => _buildSpanPattern(className),
+  );
+  final match = pattern.firstMatch(html);
   return _plainText(match?.group(1) ?? '').trim();
 }
 
 Map<String, String> _attributes(String source) {
   final attributes = <String, String>{};
-  final pattern = RegExp(r'''([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')''');
-  for (final match in pattern.allMatches(source)) {
+  for (final match in _attributePattern.allMatches(source)) {
     attributes[match.group(1)!.toLowerCase()] =
         match.group(2) ?? match.group(3) ?? '';
   }
@@ -313,10 +341,8 @@ Map<String, String> _attributes(String source) {
 }
 
 String _plainText(String html) => _decodeHtml(
-  html
-      .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), ' ')
-      .replaceAll(RegExp(r'<[^>]*>'), ' '),
-).replaceAll(RegExp(r'\s+'), ' ');
+  html.replaceAll(_brTagPattern, ' ').replaceAll(_htmlTagPattern, ' '),
+).replaceAll(_whitespacePattern, ' ');
 
 String _decodeHtml(String text) {
   var value = text
@@ -325,15 +351,12 @@ String _decodeHtml(String text) {
       .replaceAll('&#39;', "'")
       .replaceAll('&lt;', '<')
       .replaceAll('&gt;', '>');
-  value = value.replaceAllMapped(
-    RegExp(r'&#(x[0-9a-f]+|\d+);', caseSensitive: false),
-    (match) {
-      final code = match.group(1)!;
-      final value = code.toLowerCase().startsWith('x')
-          ? int.tryParse(code.substring(1), radix: 16)
-          : int.tryParse(code);
-      return value == null ? match.group(0)! : String.fromCharCode(value);
-    },
-  );
+  value = value.replaceAllMapped(_numericEntityPattern, (match) {
+    final code = match.group(1)!;
+    final value = code.toLowerCase().startsWith('x')
+        ? int.tryParse(code.substring(1), radix: 16)
+        : int.tryParse(code);
+    return value == null ? match.group(0)! : String.fromCharCode(value);
+  });
   return value.replaceAll('&amp;', '&');
 }

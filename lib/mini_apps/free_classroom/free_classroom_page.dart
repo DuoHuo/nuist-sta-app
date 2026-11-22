@@ -1125,38 +1125,39 @@ class _StatusCell extends StatelessWidget {
     final palette = AppPalette.of(context);
     final free = room.freeCountIn(group);
     final total = group.periods.length;
-    final Color bg;
+    // 用户特意把已过的时段勾回来，这一列就得和其他选中列一样清楚。
+    final factor = !dimmed ? 1.0 : (over ? 0.45 : 0.6);
+    final Color baseBg;
     final Widget? mark;
     if (free == total) {
-      bg = palette.success.withValues(alpha: 0.4);
+      baseBg = palette.success.withValues(alpha: 0.4);
       mark = null;
     } else if (free > 0) {
-      bg = palette.warning.withValues(alpha: 0.18);
+      baseBg = palette.warning.withValues(alpha: 0.18);
       mark = _FitText(
         '$free/$total',
         style: TextStyle(
           fontSize: 9,
           height: 1,
           fontWeight: FontWeight.w700,
-          color: palette.warning,
+          color: dimmed
+              ? palette.warning.withValues(alpha: palette.warning.a * factor)
+              : palette.warning,
         ),
       );
     } else {
-      bg = ClassroomFillColors.busy(palette);
+      baseBg = ClassroomFillColors.busy(palette);
       mark = null;
     }
-    return Opacity(
-      // 用户特意把已过的时段勾回来，这一列就得和其他选中列一样清楚。
-      opacity: !dimmed ? 1 : (over ? 0.45 : 0.6),
-      child: Container(
-        width: width,
-        height: 26,
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: mark == null ? null : Center(child: mark),
+    final bg = dimmed ? baseBg.withValues(alpha: baseBg.a * factor) : baseBg;
+    return Container(
+      width: width,
+      height: 26,
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
       ),
+      child: mark == null ? null : Center(child: mark),
     );
   }
 }

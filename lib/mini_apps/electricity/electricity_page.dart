@@ -422,11 +422,49 @@ class _ActionRow extends StatelessWidget {
 }
 
 /// 高度从 0 展开的同时淡入；收起时随高度一起裁掉。
-class _Expandable extends StatelessWidget {
+class _Expandable extends StatefulWidget {
   const _Expandable({required this.expanded, required this.child});
 
   final bool expanded;
   final Widget child;
+
+  @override
+  State<_Expandable> createState() => _ExpandableState();
+}
+
+class _ExpandableState extends State<_Expandable>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 320),
+  );
+  late final CurvedAnimation _fade = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOut,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.expanded) _controller.forward(from: 0);
+  }
+
+  @override
+  void didUpdateWidget(covariant _Expandable oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.expanded && !oldWidget.expanded) {
+      _controller.forward(from: 0);
+    } else if (!widget.expanded && oldWidget.expanded) {
+      _controller.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _fade.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -434,15 +472,8 @@ class _Expandable extends StatelessWidget {
       duration: const Duration(milliseconds: 280),
       curve: Curves.easeOutCubic,
       alignment: Alignment.topCenter,
-      child: expanded
-          ? TweenAnimationBuilder<double>(
-              tween: Tween(begin: 0, end: 1),
-              duration: const Duration(milliseconds: 320),
-              curve: Curves.easeOut,
-              builder: (_, opacity, child) =>
-                  Opacity(opacity: opacity, child: child),
-              child: child,
-            )
+      child: widget.expanded
+          ? FadeTransition(opacity: _fade, child: widget.child)
           : const SizedBox(width: double.infinity),
     );
   }

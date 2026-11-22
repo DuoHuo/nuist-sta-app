@@ -33,6 +33,7 @@ class BulletinController extends ChangeNotifier {
   final _automaticCategoryAttempts = <String, DateTime>{};
   static const automaticRefreshInterval = Duration(minutes: 15);
   final Map<String, BulletinListPage> _pages = {};
+  final Map<String, List<Bulletin>> _categoryItemsCache = {};
   final Set<String> _loadingCategories = {};
   final Map<String, String> _categoryErrors = {};
 
@@ -59,18 +60,20 @@ class BulletinController extends ChangeNotifier {
 
   List<Bulletin> get items {
     final key = _categoryKey(_category);
-    final pages =
-        _pages.entries
-            .where((entry) => entry.key.startsWith('$key|'))
-            .map((entry) => entry.value)
-            .toList()
-          ..sort((a, b) => a.pageNumber.compareTo(b.pageNumber));
-    final seen = <String>{};
-    return [
-      for (final page in pages)
-        for (final item in page.items)
-          if (seen.add(item.id)) item,
-    ];
+    return _categoryItemsCache.putIfAbsent(key, () {
+      final pages =
+          _pages.entries
+              .where((entry) => entry.key.startsWith('$key|'))
+              .map((entry) => entry.value)
+              .toList()
+            ..sort((a, b) => a.pageNumber.compareTo(b.pageNumber));
+      final seen = <String>{};
+      return List.unmodifiable([
+        for (final page in pages)
+          for (final item in page.items)
+            if (seen.add(item.id)) item,
+      ]);
+    });
   }
 
   bool get hasMore {
@@ -91,6 +94,7 @@ class BulletinController extends ChangeNotifier {
     _pages
       ..clear()
       ..addAll(local.pages);
+    _categoryItemsCache.clear();
     _subscription = local.subscription;
     _feed = _recentMatches([...?_cachedFirstPage?.items, ...local.feed]);
     notifyListeners();
@@ -133,6 +137,7 @@ class BulletinController extends ChangeNotifier {
           final page = await _api.fetchPage(category.uri, pageNumber: 1);
           _pages.removeWhere((entryKey, _) => entryKey.startsWith('$key|'));
           _pages[cacheKey] = page;
+          _categoryItemsCache.remove(key);
           await _save();
         },
         fields: {'force_refresh': forceRefresh},
@@ -171,6 +176,7 @@ class BulletinController extends ChangeNotifier {
             pageNumber: (previous?.pageNumber ?? 0) + 1,
           );
           _pages[_pageKey(category, page.pageNumber)] = page;
+          _categoryItemsCache.remove(key);
           await _save();
         },
         successLevel: AppLogLevel.debug,
@@ -242,6 +248,7 @@ class BulletinController extends ChangeNotifier {
           }
           _feed = latest.feed;
           _pages[_pageKey(BulletinCategory.all.first, 1)] = latest.firstPage;
+          _categoryItemsCache.remove(_categoryKey(BulletinCategory.all.first));
           _feedUnavailable = false;
           await _save();
           return true;

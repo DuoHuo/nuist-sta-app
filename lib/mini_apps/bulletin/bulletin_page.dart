@@ -12,16 +12,21 @@ import 'bulletin_models.dart';
 /// 学校公告浏览与订阅管理页。
 class BulletinPage extends StatefulWidget {
   /// 创建公告阅读与订阅设置页面。
-  const BulletinPage({super.key});
+  const BulletinPage({super.key, this.controller});
+
+  /// 可选状态控制器；未传入时使用全局单例。
+  final BulletinController? controller;
 
   @override
   State<BulletinPage> createState() => _BulletinPageState();
 }
 
 class _BulletinPageState extends State<BulletinPage> {
-  final _controller = BulletinController.instance;
+  late final BulletinController _controller =
+      widget.controller ?? BulletinController.instance;
   final _searchController = TextEditingController();
   String _query = '';
+  String _queryLower = '';
 
   @override
   void initState() {
@@ -215,6 +220,46 @@ class _BulletinPageState extends State<BulletinPage> {
     );
   }
 
+  void _onSearchChanged(String value) {
+    final trimmed = value.trim();
+    if (trimmed == _query && value.isEmpty == _query.isEmpty) return;
+    setState(() {
+      _query = trimmed;
+      _queryLower = trimmed.toLowerCase();
+    });
+  }
+
+  Widget _buildFooter(AppPalette palette, List<Bulletin> items) {
+    if (_controller.isLoadingCategory && items.isNotEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 14),
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+    if (_controller.hasMore && _query.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: OutlinedButton.icon(
+          onPressed: _controller.loadMore,
+          icon: const Icon(Icons.expand_more),
+          label: const Text('加载更多公告'),
+        ),
+      );
+    }
+    if (items.isNotEmpty && !_controller.hasMore) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        child: Center(
+          child: Text(
+            '已经看到当前分类的全部公告',
+            style: TextStyle(fontSize: 12, color: palette.hint),
+          ),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
@@ -238,124 +283,142 @@ class _BulletinPageState extends State<BulletinPage> {
       body: ListenableBuilder(
         listenable: _controller,
         builder: (context, _) {
-          final items = _controller.items
-              .where(
-                (item) =>
-                    _query.isEmpty ||
-                    item.title.toLowerCase().contains(_query.toLowerCase()) ||
-                    item.publisher.toLowerCase().contains(_query.toLowerCase()),
-              )
-              .toList();
+          final allItems = _controller.items;
+          final items = _queryLower.isEmpty
+              ? allItems
+              : allItems
+                    .where(
+                      (item) =>
+                          item.title.toLowerCase().contains(_queryLower) ||
+                          item.publisher.toLowerCase().contains(_queryLower),
+                    )
+                    .toList();
           return RefreshIndicator(
             onRefresh: _refresh,
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-              children: [
-                _IntroCard(
-                  enabled: _controller.subscription.enabled,
-                  onManage: _openSubscriptionSettings,
-                ),
-                const SizedBox(height: 12),
-                _SearchBox(
-                  controller: _searchController,
-                  onChanged: (value) => setState(() => _query = value.trim()),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  height: 38,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: BulletinCategory.all.length,
-                    separatorBuilder: (context, index) =>
-                        const SizedBox(width: 8),
-                    itemBuilder: (context, index) {
-                      final category = BulletinCategory.all[index];
-                      final selected =
-                          category.path == _controller.category.path;
-                      return ChoiceChip(
-                        label: Text(category.name),
-                        selected: selected,
-                        showCheckmark: false,
-                        selectedColor: palette.accent,
-                        backgroundColor: palette.surface,
-                        // 选中时底是实心强调色，白字在两套主题下都成立。
-                        labelStyle: TextStyle(
-                          color: selected ? Colors.white : palette.labelText,
-                          fontSize: 12,
-                          fontWeight: selected
-                              ? FontWeight.w600
-                              : FontWeight.w400,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _IntroCard(
+                          enabled: _controller.subscription.enabled,
+                          onManage: _openSubscriptionSettings,
                         ),
-                        side: BorderSide(
-                          color: selected ? palette.accent : palette.divider,
+                        const SizedBox(height: 12),
+                        _SearchBox(
+                          controller: _searchController,
+                          onChanged: _onSearchChanged,
                         ),
-                        onSelected: (_) => _selectCategory(category),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (_controller.categoryError != null)
-                  _ErrorCard(
-                    message: _controller.categoryError!,
-                    onRetry: () => _controller.loadCategory(
-                      _controller.category,
-                      forceRefresh: true,
-                    ),
-                  ),
-                if (items.isEmpty && _controller.isLoadingCategory)
-                  const _LoadingCard()
-                else if (items.isEmpty && _query.isNotEmpty)
-                  const _EmptyCard(
-                    icon: Icons.search_off,
-                    title: '没有找到匹配公告',
-                    subtitle: '试试更短的标题或发布单位关键词。',
-                  )
-                else if (items.isEmpty && _controller.categoryError == null)
-                  const _EmptyCard(
-                    icon: Icons.campaign_outlined,
-                    title: '暂时没有公告',
-                    subtitle: '下拉刷新，稍后再来看看吧。',
-                  )
-                else
-                  for (final item in items)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _BulletinTile(
-                        bulletin: item,
-                        onTap: () => Navigator.of(context).push(
-                          AppPageRoute<void>(
-                            builder: (_) => BulletinDetailPage(bulletin: item),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          height: 38,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: BulletinCategory.all.length,
+                            separatorBuilder: (context, index) =>
+                                const SizedBox(width: 8),
+                            itemBuilder: (context, index) {
+                              final category = BulletinCategory.all[index];
+                              final selected =
+                                  category.path == _controller.category.path;
+                              return ChoiceChip(
+                                label: Text(category.name),
+                                selected: selected,
+                                showCheckmark: false,
+                                selectedColor: palette.accent,
+                                backgroundColor: palette.surface,
+                                // 选中时底是实心强调色，白字在两套主题下都成立。
+                                labelStyle: TextStyle(
+                                  color: selected
+                                      ? Colors.white
+                                      : palette.labelText,
+                                  fontSize: 12,
+                                  fontWeight: selected
+                                      ? FontWeight.w600
+                                      : FontWeight.w400,
+                                ),
+                                side: BorderSide(
+                                  color: selected
+                                      ? palette.accent
+                                      : palette.divider,
+                                ),
+                                onSelected: (_) => _selectCategory(category),
+                              );
+                            },
                           ),
                         ),
-                      ),
-                    ),
-                if (_controller.isLoadingCategory && items.isNotEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 14),
-                    child: Center(
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                else if (_controller.hasMore && _query.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: OutlinedButton.icon(
-                      onPressed: _controller.loadMore,
-                      icon: const Icon(Icons.expand_more),
-                      label: const Text('加载更多公告'),
-                    ),
-                  )
-                else if (items.isNotEmpty && !_controller.hasMore)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    child: Center(
-                      child: Text(
-                        '已经看到当前分类的全部公告',
-                        style: TextStyle(fontSize: 12, color: palette.hint),
-                      ),
+                        const SizedBox(height: 12),
+                        if (_controller.categoryError != null)
+                          _ErrorCard(
+                            message: _controller.categoryError!,
+                            onRetry: () => _controller.loadCategory(
+                              _controller.category,
+                              forceRefresh: true,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
+                ),
+                if (items.isEmpty && _controller.isLoadingCategory)
+                  const SliverPadding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    sliver: SliverToBoxAdapter(child: _LoadingCard()),
+                  )
+                else if (items.isEmpty && _query.isNotEmpty)
+                  const SliverPadding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    sliver: SliverToBoxAdapter(
+                      child: _EmptyCard(
+                        icon: Icons.search_off,
+                        title: '没有找到匹配公告',
+                        subtitle: '试试更短的标题或发布单位关键词。',
+                      ),
+                    ),
+                  )
+                else if (items.isEmpty && _controller.categoryError == null)
+                  const SliverPadding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    sliver: SliverToBoxAdapter(
+                      child: _EmptyCard(
+                        icon: Icons.campaign_outlined,
+                        title: '暂时没有公告',
+                        subtitle: '下拉刷新，稍后再来看看吧。',
+                      ),
+                    ),
+                  )
+                else if (items.isNotEmpty)
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    sliver: SliverList.builder(
+                      itemCount: items.length,
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _BulletinTile(
+                            bulletin: item,
+                            onTap: () => Navigator.of(context).push(
+                              AppPageRoute<void>(
+                                builder: (_) =>
+                                    BulletinDetailPage(bulletin: item),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                  sliver: SliverToBoxAdapter(
+                    child: _buildFooter(palette, items),
+                  ),
+                ),
               ],
             ),
           );
