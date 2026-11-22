@@ -78,6 +78,26 @@ void main() {
       expect(TimetableSettings.fromJson({'homeMaxItems': 9}).homeMaxItems, 2);
     });
 
+    test('homeMaxExams：缺省/非法回落 2，1–4 保留，序列化与覆盖偏好一致', () {
+      expect(TimetableSettings().homeMaxExams, 2);
+      expect(TimetableSettings.sanitizeHomeMaxExams(null), 2);
+      expect(TimetableSettings.sanitizeHomeMaxExams('x'), 2);
+      expect(TimetableSettings.sanitizeHomeMaxExams(0), 2);
+      expect(TimetableSettings.sanitizeHomeMaxExams(5), 2);
+      expect(TimetableSettings.sanitizeHomeMaxExams(1.2), 1);
+      expect(TimetableSettings.sanitizeHomeMaxExams(4), 4);
+      expect(TimetableSettings.fromJson({'homeMaxExams': 3}).homeMaxExams, 3);
+      expect(TimetableSettings.fromJson({'homeMaxExams': 9}).homeMaxExams, 2);
+      final copied = const TimetableSettings().copyWith(homeMaxExams: 4);
+      expect(copied.homeMaxExams, 4);
+      expect(copied.toJson()['homeMaxExams'], 4);
+      expect(TimetableSettings.fromJson(copied.toJson()).homeMaxExams, 4);
+      final withPrefs = const TimetableSettings(termCode: '2026-2027-1')
+          .withDisplayPrefsFrom(copied);
+      expect(withPrefs.homeMaxExams, 4);
+      expect(withPrefs.termCode, '2026-2027-1');
+    });
+
     test('提前时间只接受 5/10/15/30，其他回落 15', () {
       int f(Object? v) => TimetableSettings.sanitizeLeadMinutes(v);
       expect(TimetableSettings.reminderLeadOptions, [5, 10, 15, 30]);

@@ -6,6 +6,7 @@ import 'timetable_notify_bridge.dart';
 abstract final class TtSettingsText {
   // ---- 外观页 ----
   static const homeMaxItems = '首页显示课程数量';
+  static const homeMaxExams = '首页显示考试数量';
   static const headerFontSize = '表头字号';
   static const periodShowTime = '节次显示时间';
 

@@ -237,6 +237,7 @@ void main() {
         matching: find.text(text),
       );
       expect(inGroup('home', TtSettingsText.homeMaxItems), findsOneWidget);
+      expect(inGroup('home', TtSettingsText.homeMaxExams), findsOneWidget);
       expect(inGroup('home', '显示明天的课'), findsOneWidget);
       for (final t in [
         TtSettingsText.reminderSwitch,
@@ -459,6 +460,11 @@ void main() {
         findsOneWidget,
       );
       await tester.tap(find.byKey(const Key('tt_settings_show_tomorrow')));
+      await tester.tap(find.byKey(const Key('tt_settings_home_max_exams')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(of: find.byType(BottomSheet), matching: find.text('4')),
+      );
       await settleIo(tester);
       final s = _c.settings;
       expect(s.showLocation, isFalse);
@@ -466,12 +472,14 @@ void main() {
       expect(s.fontScale, CellFontScale.large);
       expect(s.weekStartsOnMonday, isFalse);
       expect(s.showTomorrowOnHome, isFalse);
+      expect(s.homeMaxExams, 4);
       final stored = (await tester.runAsync(TimetableStore.readSettings))!;
       expect(stored.showLocation, isFalse);
       expect(stored.showTeacher, isTrue);
       expect(stored.fontScale, CellFontScale.large);
       expect(stored.weekStartsOnMonday, isFalse);
       expect(stored.showTomorrowOnHome, isFalse);
+      expect(stored.homeMaxExams, 4);
     });
 
     testWidgets('ST12 不透明度滑块 30–100、步长 10', (tester) async {

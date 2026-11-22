@@ -1508,6 +1508,7 @@ class TimetableController extends ChangeNotifier {
     'showTomorrowOnHome',
     'cellTextColor',
     'homeMaxItems',
+    'homeMaxExams',
     'headerTextSize',
     'showPeriodTimes',
   };

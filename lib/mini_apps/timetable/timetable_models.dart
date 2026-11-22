@@ -511,6 +511,9 @@ const int kDefaultExamColor = 0xFFC62828;
 /// 首页今日课表最多显示条数默认值（spec-next-1020 item 4）。
 const int kDefaultHomeMaxItems = 2;
 
+/// 首页考试安排最多显示条数默认值。
+const int kDefaultHomeMaxExams = 2;
+
 /// 周视图表头文字大小默认值（spec-next-1020b：约 11sp，范围 10–14）。
 const double kDefaultHeaderTextSize = 11;
 
@@ -548,6 +551,7 @@ class TimetableSettings {
     this.examColor = kDefaultExamColor,
     this.cellTextColor = CellTextColorMode.auto,
     this.homeMaxItems = kDefaultHomeMaxItems,
+    this.homeMaxExams = kDefaultHomeMaxExams,
     this.headerTextSize = kDefaultHeaderTextSize,
     this.showPeriodTimes = true,
     this.widgetShowTeacher = true,
@@ -623,6 +627,9 @@ class TimetableSettings {
   /// spec-next-1020 item 4：首页今日课表最多显示条数（1–4，默认 2）。
   final int homeMaxItems;
 
+  /// 首页考试安排卡片最多显示条数（1–4，默认 2）。
+  final int homeMaxExams;
+
   /// spec-next-1020b：周视图表头文字大小（sp，10–14，默认 11）。
   final double headerTextSize;
 
@@ -687,6 +694,7 @@ class TimetableSettings {
     int? examColor,
     CellTextColorMode? cellTextColor,
     int? homeMaxItems,
+    int? homeMaxExams,
     double? headerTextSize,
     bool? showPeriodTimes,
     bool? widgetShowTeacher,
@@ -730,6 +738,7 @@ class TimetableSettings {
     examColor: examColor ?? this.examColor,
     cellTextColor: cellTextColor ?? this.cellTextColor,
     homeMaxItems: homeMaxItems ?? this.homeMaxItems,
+    homeMaxExams: homeMaxExams ?? this.homeMaxExams,
     headerTextSize: headerTextSize ?? this.headerTextSize,
     showPeriodTimes: showPeriodTimes ?? this.showPeriodTimes,
     widgetShowTeacher: widgetShowTeacher ?? this.widgetShowTeacher,
@@ -763,6 +772,7 @@ class TimetableSettings {
     examColor: o.examColor,
     cellTextColor: o.cellTextColor,
     homeMaxItems: o.homeMaxItems,
+    homeMaxExams: o.homeMaxExams,
     headerTextSize: o.headerTextSize,
     showPeriodTimes: o.showPeriodTimes,
     widgetShowTeacher: o.widgetShowTeacher,
@@ -801,6 +811,7 @@ class TimetableSettings {
     'examColor': examColor,
     'cellTextColor': cellTextColor.name,
     'homeMaxItems': homeMaxItems,
+    'homeMaxExams': homeMaxExams,
     'headerTextSize': headerTextSize,
     'showPeriodTimes': showPeriodTimes,
     'widgetShowTeacher': widgetShowTeacher,
@@ -841,6 +852,9 @@ class TimetableSettings {
     if (v < 1 || v > 4) return kDefaultHomeMaxItems;
     return v;
   }
+
+  /// 首页考试最多显示：1–4 整数；缺失 / 非整数 / 越界 → 默认 2。
+  static int sanitizeHomeMaxExams(Object? raw) => sanitizeHomeMaxItems(raw);
 
   /// 表头文字大小：数字钳到 10–14；非数字/非有限值 → 11。
   static double sanitizeHeaderTextSize(Object? raw) {
@@ -906,6 +920,7 @@ class TimetableSettings {
         examColor: parseExamColor(json['examColor']),
         cellTextColor: parseCellTextColor(json['cellTextColor']),
         homeMaxItems: sanitizeHomeMaxItems(json['homeMaxItems']),
+        homeMaxExams: sanitizeHomeMaxExams(json['homeMaxExams']),
         headerTextSize: sanitizeHeaderTextSize(json['headerTextSize']),
         showPeriodTimes: _bool(json['showPeriodTimes'], true),
         widgetShowTeacher: _bool(json['widgetShowTeacher'], true),

@@ -7,7 +7,7 @@ import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_layout.dart';
 import 'timetable_theme.dart';
 
-/// 课表考试在主页的直观入口（issue #30）：列出今天起往后的全部考试。
+/// 课表考试在主页的直观入口（issue #30）：列出今天起往后的考试（最多显示 [TimetableSettings.homeMaxExams] 场，标题仍显示近期总场次并可跳转全部考试列表）。
 /// 数据直接复用 [TimetableController.scheduleEvents]（课表同步时已从教务拉取），
 /// 不重复请求，点击单场考试定位到课表中的对应安排。
 ///
@@ -89,6 +89,7 @@ class _TimetableExamsCardState extends State<TimetableExamsCard> {
         final exams = upcomingExams(_controller, today: now);
         // 一场近期考试都没有：整张卡片隐藏。
         if (exams.isEmpty) return const SizedBox.shrink();
+        final visibleExams = exams.take(_controller.settings.homeMaxExams);
 
         final colors = TimetableTheme.colorsOf(context);
         return Material(
@@ -106,7 +107,7 @@ class _TimetableExamsCardState extends State<TimetableExamsCard> {
               children: [
                 _Header(count: exams.length, onTap: _openExams),
                 const SizedBox(height: 6),
-                for (final e in exams)
+                for (final e in visibleExams)
                   _ExamRow(
                     controller: _controller,
                     event: e,

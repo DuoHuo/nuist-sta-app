@@ -152,6 +152,7 @@ void main() {
       await pumpSettings(tester);
       expect(find.widgetWithText(AppBar, '设置'), findsOneWidget);
       expect(inGroup('home', TtSettingsText.homeMaxItems), findsOneWidget);
+      expect(inGroup('home', TtSettingsText.homeMaxExams), findsOneWidget);
       expect(inGroup('home', '显示明天的课'), findsOneWidget);
       expect(find.text('教务账号'), findsNothing);
       expect(inGroup('management', '课表管理'), findsOneWidget);
@@ -245,7 +246,12 @@ void main() {
       final semantics = tester.ensureSemantics();
       _load();
       await pumpSettings(tester);
-      for (final l in ['首页与桌面，首页显示课程数量，2', '首页与桌面，显示明天的课', '课表管理']) {
+      for (final l in [
+        '首页与桌面，首页显示课程数量，2',
+        '首页与桌面，首页显示考试数量，2',
+        '首页与桌面，显示明天的课',
+        '课表管理',
+      ]) {
         expect(
           find.bySemanticsLabel(RegExp('^${RegExp.escape(l)}(\$|\\n)')),
           findsOneWidget,
