@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -182,11 +183,12 @@ class _SunshineRunPageState extends State<SunshineRunPage> {
     );
   }
 
-  Widget _activityRow(
+  Widget _activityTile(
     SunshineRunActivity activity,
     int count, {
     SunshineRunCustomActivity? custom,
-  }) => _ActivityRow(
+  }) => _ActivityTile(
+    key: ValueKey('sunshine-tile-${activity.id}'),
     activity: activity,
     count: count,
     custom: custom != null,
@@ -217,22 +219,27 @@ class _SunshineRunPageState extends State<SunshineRunPage> {
   );
 
   @override
+  void dispose() {
+    _controller.finishActivityAdjustment();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     final colors = _RunColors(palette);
+    final textScaler = MediaQuery.textScalerOf(context);
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
         final state = _controller.state;
         final result = _controller.result;
+        final canEdit = !_controller.restoringState;
         final canReset =
-            !_controller.restoringState &&
+            canEdit &&
             (result.total > 0 ||
                 state.customActivities.isNotEmpty ||
                 state.exemption != SunshineRunExemption.none);
-        final compact =
-            MediaQuery.sizeOf(context).width < 360 ||
-            MediaQuery.textScalerOf(context).scale(14) > 19;
         return Shortcuts(
           shortcuts: const {
             SingleActivator(LogicalKeyboardKey.keyZ, control: true):
@@ -244,7 +251,7 @@ class _SunshineRunPageState extends State<SunshineRunPage> {
             actions: {
               _UndoRunIntent: CallbackAction<_UndoRunIntent>(
                 onInvoke: (_) {
-                  if (!_controller.restoringState &&
+                  if (canEdit &&
                       _controller.canUndo &&
                       (ModalRoute.of(context)?.isCurrent ?? false)) {
                     unawaited(
@@ -260,192 +267,127 @@ class _SunshineRunPageState extends State<SunshineRunPage> {
               child: Scaffold(
                 backgroundColor: palette.pageBg,
                 appBar: AppBar(
-                  title: const Text('阳光跑计算器'),
                   centerTitle: false,
                   titleSpacing: 0,
-                  actions: [
-                    if (compact) ...[
-                      IconButton(
-                        tooltip: '重置记录',
-                        onPressed: canReset ? _reset : null,
-                        icon: const Icon(Icons.restart_alt_rounded, size: 21),
-                      ),
-                      IconButton(
-                        tooltip: '计算规则',
-                        onPressed: () => showDialog<void>(
-                          context: context,
-                          useRootNavigator: false,
-                          builder: (_) => _RulesDialog(state: state),
-                        ),
-                        icon: Icon(
-                          Icons.info_outline_rounded,
-                          color: colors.action,
-                          size: 21,
-                        ),
-                      ),
-                    ] else ...[
-                      TextButton.icon(
-                        onPressed: canReset ? _reset : null,
-                        icon: const Icon(Icons.restart_alt_rounded, size: 16),
-                        label: const Text('重置'),
-                        style: TextButton.styleFrom(
-                          foregroundColor: palette.labelText,
-                        ),
-                      ),
-                      TextButton.icon(
-                        onPressed: () => showDialog<void>(
-                          context: context,
-                          useRootNavigator: false,
-                          builder: (_) => _RulesDialog(state: state),
-                        ),
-                        icon: const Icon(Icons.info_outline_rounded, size: 16),
-                        label: const Text('规则'),
-                        style: TextButton.styleFrom(
-                          foregroundColor: colors.action,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(width: 4),
-                  ],
+                  toolbarHeight: math.max(
+                    64,
+                    textScaler.scale(16) * 1.3 + textScaler.scale(11) * 2.6 + 8,
+                  ),
+                  title: _RunHeading(result: result),
                 ),
                 body: SafeArea(
                   top: false,
-                  child: IgnorePointer(
-                    ignoring: _controller.restoringState,
-                    child: ListView(
-                      key: const PageStorageKey('sunshine-run-scroll'),
-                      padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
-                      children: [
-                        if (_controller.restoringState) ...[
-                          Text(
-                            '正在恢复本机记录…',
-                            style: TextStyle(fontSize: 12, color: colors.hint),
-                          ),
-                          const SizedBox(height: 12),
-                        ],
-                        _GradeBar(controller: _controller),
-                        const SizedBox(height: 12),
-                        if (_controller.storageWarning case final warning?) ...[
-                          _StorageWarning(
-                            message: warning,
-                            corrupt: _controller.storageCorrupt,
-                            onRetry: () => _perform(
-                              _controller.retrySave,
-                              '已保存当前记录',
-                              undo: false,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                        ],
-                        _RunSummary(
-                          state: state,
-                          result: result,
-                          onEditBaseline: _editBaseline,
-                        ),
-                        const SizedBox(height: 12),
-                        _RunCard(
-                          child: Column(
-                            children: [
-                              const _SectionHeading(
-                                title: '活动计数',
-                                note: '点击数字可直接输入，长按 ± 连续增减',
-                              ),
-                              for (final activity in kSunshineRunActivities)
-                                _activityRow(
-                                  activity,
-                                  state.activities[activity.id]!,
-                                ),
-                              for (final custom in state.customActivities)
-                                _activityRow(
-                                  SunshineRunActivity(
-                                    id: custom.id,
-                                    label: custom.label,
-                                    total: custom.total,
-                                    morning: custom.morning,
-                                  ),
-                                  custom.count,
-                                  custom: custom,
-                                ),
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  2,
-                                  16,
-                                  14,
-                                ),
-                                child: SizedBox(
-                                  width: double.infinity,
-                                  child: OutlinedButton.icon(
-                                    onPressed: _editCustom,
-                                    icon: const Icon(
-                                      Icons.add_rounded,
-                                      size: 18,
-                                    ),
-                                    label: const Text(
-                                      '添加其他活动（自定义总次数与晨跑）',
-                                      textAlign: TextAlign.center,
-                                    ),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: colors.action,
-                                      backgroundColor: colors.accentSoft,
-                                      side: BorderSide(
-                                        color: palette.accent.withValues(
-                                          alpha: 0.35,
-                                        ),
-                                      ),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 12,
-                                      ),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      textStyle: const TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        _ExemptionCard(
-                          state: state,
-                          onChanged: (value) => _perform(
-                            () => _controller.toggleExemption(value),
-                            state.exemption == value
-                                ? '已取消减免'
-                                : '已设置${value == SunshineRunExemption.half ? '半免' : '全免'}',
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                  bottom: false,
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 720),
+                      child: IgnorePointer(
+                        ignoring: !canEdit,
+                        child: ListView(
+                          key: const PageStorageKey('sunshine-run-scroll'),
+                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                           children: [
-                            Icon(
-                              Icons.lock_outline_rounded,
-                              size: 14,
-                              color: colors.hint,
-                            ),
-                            const SizedBox(width: 6),
-                            Flexible(
-                              child: Text(
-                                _controller.storageWarning == null
-                                    ? '记录自动保存在本机'
-                                    : '当前记录尚未保存',
+                            if (_controller.restoringState) ...[
+                              Text(
+                                '正在恢复本机记录…',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: colors.hint,
                                 ),
                               ),
+                              const SizedBox(height: 8),
+                            ],
+                            if (_controller.storageWarning
+                                case final warning?) ...[
+                              _StorageWarning(
+                                message: warning,
+                                corrupt: _controller.storageCorrupt,
+                                onRetry: () => _perform(
+                                  _controller.retrySave,
+                                  '已保存当前记录',
+                                  undo: false,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                            ],
+                            _RunSummary(result: result),
+                            const SizedBox(height: _RunSpacing.section),
+                            const _SectionHeading(
+                              title: '活动计数',
+                              note: '点数字可直填 · 长按 ± 连增减',
+                            ),
+                            const SizedBox(height: _RunSpacing.group),
+                            _ActivityGrid(
+                              children: [
+                                for (final activity in kSunshineRunActivities)
+                                  _activityTile(
+                                    activity,
+                                    state.activities[activity.id]!,
+                                  ),
+                                for (final custom in state.customActivities)
+                                  _activityTile(
+                                    SunshineRunActivity(
+                                      id: custom.id,
+                                      label: custom.label,
+                                      total: custom.total,
+                                      morning: custom.morning,
+                                    ),
+                                    custom.count,
+                                    custom: custom,
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: _RunSpacing.section),
+                            _ExemptionCard(
+                              state: state,
+                              onChanged: (value) => _perform(
+                                () => _controller.toggleExemption(value),
+                                state.exemption == value
+                                    ? '已取消减免'
+                                    : '已设置${value == SunshineRunExemption.half ? '半免' : '全免'}',
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Semantics(
+                              liveRegion: _controller.storageWarning != null,
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.lock_outline_rounded,
+                                    size: 13,
+                                    color: colors.hint,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Flexible(
+                                    child: Text(
+                                      _controller.storageWarning == null
+                                          ? '记录自动保存在本机'
+                                          : '当前记录尚未保存',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: colors.hint,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
-                      ],
+                      ),
                     ),
+                  ),
+                ),
+                bottomNavigationBar: _ActionDock(
+                  onBaseline: canEdit ? _editBaseline : null,
+                  onCustom: canEdit ? _editCustom : null,
+                  onReset: canReset ? _reset : null,
+                  onRules: () => showDialog<void>(
+                    context: context,
+                    useRootNavigator: false,
+                    builder: (_) => _RulesDialog(state: state),
                   ),
                 ),
               ),
@@ -461,7 +403,15 @@ class _UndoRunIntent extends Intent {
   const _UndoRunIntent();
 }
 
-/// 从应用色板派生小字号操作色和柔和背景，避免局部假定浅色。
+/// 紧密内容、同级元素、内容分组与独立模块使用不同的间距。
+abstract final class _RunSpacing {
+  static const tight = 4.0;
+  static const peer = 8.0;
+  static const group = 12.0;
+  static const section = 16.0;
+}
+
+/// 从应用色板派生操作色、渐变和背景，跟随应用的明暗设置。
 class _RunColors {
   _RunColors(this.palette);
   final AppPalette palette;
@@ -498,6 +448,64 @@ class _RunColors {
     palette.danger.withValues(alpha: palette.isDark ? 0.14 : 0.08),
     palette.surface,
   );
+  Color get onGradient => palette.isDark ? palette.pageBg : palette.surface;
+
+  // 从应用语义色派生柔亮的蓝橙渐变，深色下保持清晰的环带。
+  Color _ringTint(Color base, int red, int green, int blue) => Color.from(
+    alpha: base.a,
+    red: (base.r + red / 255).clamp(0.0, 1.0),
+    green: (base.g + green / 255).clamp(0.0, 1.0),
+    blue: (base.b + blue / 255).clamp(0.0, 1.0),
+    colorSpace: base.colorSpace,
+  );
+
+  (Color, Color) get ringBlue => palette.isDark
+      ? (
+          _ringTint(palette.accent, 22, 25, 10),
+          _ringTint(palette.accent, 10, -7, 10),
+        )
+      : (
+          Color.lerp(
+            _ringTint(palette.accent, 46, 46, 5),
+            palette.surface,
+            0.4,
+          )!,
+          Color.lerp(
+            _ringTint(palette.accent, 59, 20, -6),
+            palette.surface,
+            0.2,
+          )!,
+        );
+  (Color, Color) get ringSun => palette.isDark
+      ? (
+          _ringTint(palette.warning, 0, 48, 83),
+          _ringTint(palette.warning, 0, 8, 47),
+        )
+      : (
+          Color.lerp(
+            _ringTint(palette.warning, -24, 56, 115),
+            palette.surface,
+            0.25,
+          )!,
+          Color.lerp(
+            _ringTint(palette.warning, -29, 23, 74),
+            palette.surface,
+            0.12,
+          )!,
+        );
+  (Color, Color) get ringGreen => palette.isDark
+      ? (
+          _ringTint(palette.success, 113, 50, 117),
+          _ringTint(palette.success, 39, 26, 80),
+        )
+      : (
+          _ringTint(palette.success, 83, 41, 107),
+          _ringTint(palette.success, 27, 8, 70),
+        );
+  Color get ringTrack => Color.alphaBlend(
+    palette.accent.withValues(alpha: palette.isDark ? 0.04 : 0.065),
+    Color.lerp(palette.pageBg, palette.surface, palette.isDark ? 0.7 : 0.3)!,
+  );
 }
 
 class _RunCard extends StatelessWidget {
@@ -510,199 +518,69 @@ class _RunCard extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: palette.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: palette.divider),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: palette.divider.withValues(alpha: 0.65)),
       ),
       child: child,
     );
   }
 }
 
-class _GradeBar extends StatelessWidget {
-  const _GradeBar({required this.controller});
-  final SunshineRunController controller;
+class _RunHeading extends StatelessWidget {
+  const _RunHeading({required this.result});
+  final SunshineRunResult result;
 
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     final colors = _RunColors(palette);
-    final result = controller.result;
-    final meta = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    final showIcon =
+        MediaQuery.sizeOf(context).width >= 360 &&
+        MediaQuery.textScalerOf(context).scale(14) <= 19;
+    return Row(
       children: [
-        Text(
-          '当前年级',
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: palette.titleText,
+        if (showIcon) ...[
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: colors.sunSoft,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              Icons.directions_run_rounded,
+              size: 20,
+              color: colors.sun,
+            ),
           ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          result.status == SunshineRunStatus.exempt
-              ? '当前已全免 · 无需完成跑步'
-              : '满分 ${result.fullTotal} 次 · 晨跑 ${result.requiredMorning} 次',
-          style: TextStyle(fontSize: 12, color: colors.hint),
-        ),
-        if (controller.gradeMessage case final message?) ...[
-          const SizedBox(height: 3),
-          Text(
-            message,
-            key: const ValueKey('sunshine-grade-source'),
-            style: TextStyle(fontSize: 11, color: colors.hint),
-          ),
+          const SizedBox(width: 8),
         ],
-      ],
-    );
-    final select = Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _ChoiceGroup<int>(
-          values: const [1, 2],
-          selected: controller.state.grade,
-          labels: const ['大一', '大二'],
-          onChanged: (grade) => unawaited(controller.setGrade(grade)),
-          label: '选择年级',
-        ),
-        IconButton(
-          tooltip: '重新识别年级',
-          onPressed: controller.identifyingGrade
-              ? null
-              : controller.identifyGrade,
-          icon: Icon(Icons.sync_rounded, size: 18, color: colors.hint),
-          constraints: const BoxConstraints(minWidth: 36, minHeight: 44),
-          padding: const EdgeInsets.all(8),
-        ),
-      ],
-    );
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        if (constraints.maxWidth < 350 ||
-            MediaQuery.textScalerOf(context).scale(14) > 19) {
-          return Column(
+        Expanded(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              meta,
-              const SizedBox(height: 8),
-              Align(alignment: Alignment.centerRight, child: select),
-            ],
-          );
-        }
-        return Row(
-          children: [
-            Expanded(child: meta),
-            const SizedBox(width: 8),
-            select,
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _ChoiceGroup<T> extends StatelessWidget {
-  const _ChoiceGroup({
-    required this.values,
-    required this.selected,
-    required this.labels,
-    required this.onChanged,
-    required this.label,
-    this.exemption = false,
-  });
-  final List<T> values;
-  final T? selected;
-  final List<String> labels;
-  final ValueChanged<T> onChanged;
-  final String label;
-  final bool exemption;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = AppPalette.of(context);
-    final colors = _RunColors(palette);
-    return Semantics(
-      label: label,
-      child: Container(
-        padding: const EdgeInsets.all(3),
-        decoration: BoxDecoration(
-          color: palette.rowDivider,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: palette.divider),
-        ),
-        child: Row(
-          mainAxisSize: exemption ? MainAxisSize.max : MainAxisSize.min,
-          children: [
-            for (var index = 0; index < values.length; index++) ...[
-              if (index > 0) const SizedBox(width: 3),
-              if (exemption)
-                Expanded(child: _button(context, index, palette, colors))
-              else
-                _button(context, index, palette, colors),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _button(
-    BuildContext context,
-    int index,
-    AppPalette palette,
-    _RunColors colors,
-  ) {
-    final active = values[index] == selected;
-    final color = exemption && active
-        ? (palette.isDark ? palette.titleText : palette.surface)
-        : active
-        ? colors.action
-        : palette.labelText;
-    final button = TextButton(
-      onPressed: () => onChanged(values[index]),
-      style: TextButton.styleFrom(
-        foregroundColor: color,
-        backgroundColor: active && !exemption ? palette.surface : null,
-        minimumSize: const Size(64, 40),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
-        textStyle: TextStyle(
-          fontSize: 13,
-          fontWeight: active ? FontWeight.w600 : FontWeight.w500,
-        ),
-      ),
-      child: Text(labels[index], textAlign: TextAlign.center),
-    );
-    final base = values[index] == SunshineRunExemption.half
-        ? palette.warning
-        : palette.accent;
-    return Semantics(
-      selected: active,
-      child: exemption && active
-          ? DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(7),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color.lerp(
-                      base,
-                      palette.titleText,
-                      palette.isDark ? 0 : 0.12,
-                    )!,
-                    Color.lerp(
-                      base,
-                      palette.isDark ? palette.pageBg : palette.titleText,
-                      palette.isDark ? 0.25 : 0.36,
-                    )!,
-                  ],
+              Text(
+                '阳光跑计算器',
+                style: TextStyle(
+                  fontSize: 16,
+                  height: 1.3,
+                  fontWeight: FontWeight.w700,
+                  color: palette.titleText,
                 ),
               ),
-              child: button,
-            )
-          : button,
+              const SizedBox(height: 2),
+              Text(
+                result.status == SunshineRunStatus.exempt
+                    ? '已开启全免 · 无需跑步'
+                    : '满分 ${result.fullTotal} 次 · 晨跑 ${result.requiredMorning} 次',
+                style: TextStyle(fontSize: 11, height: 1.3, color: colors.hint),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+      ],
     );
   }
 }
@@ -726,7 +604,7 @@ class _StorageWarning extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
         decoration: BoxDecoration(
           color: colors.dangerSoft,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: colors.danger),
         ),
         child: Column(
@@ -749,14 +627,8 @@ class _StorageWarning extends StatelessWidget {
 }
 
 class _RunSummary extends StatelessWidget {
-  const _RunSummary({
-    required this.state,
-    required this.result,
-    required this.onEditBaseline,
-  });
-  final SunshineRunState state;
+  const _RunSummary({required this.result});
   final SunshineRunResult result;
-  final VoidCallback onEditBaseline;
 
   String get _detail {
     switch (result.status) {
@@ -785,377 +657,367 @@ class _RunSummary extends StatelessWidget {
     final palette = AppPalette.of(context);
     final colors = _RunColors(palette);
     final exempt = result.status == SunshineRunStatus.exempt;
-    final morningMet = result.morning >= result.requiredMorning;
-    final (statusText, statusColor, statusBg) = switch (result.status) {
-      SunshineRunStatus.incomplete => ('未达标', colors.sun, colors.sunSoft),
-      SunshineRunStatus.passed => ('已达标', colors.success, colors.successSoft),
-      SunshineRunStatus.full => ('已满分', colors.action, colors.accentSoft),
-      SunshineRunStatus.exempt => ('已全免', colors.action, colors.accentSoft),
-    };
-    final numberSize =
-        (48 - (result.total.toString().length - 3).clamp(0, 8) * 3).toDouble();
-    return _RunCard(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                Text(
-                  '累计总次数',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: palette.labelText,
-                    fontWeight: FontWeight.w500,
+    final totalColors = result.status == SunshineRunStatus.passed
+        ? colors.ringGreen
+        : colors.ringBlue;
+    final morningColors = exempt
+        ? colors.ringBlue
+        : result.remainingMorning == 0
+        ? colors.ringGreen
+        : colors.ringSun;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DecoratedBox(
+          key: const ValueKey('sunshine-summary'),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color.alphaBlend(
+                  colors.ringBlue.$1.withValues(
+                    alpha: palette.isDark ? 0.15 : 0.23,
                   ),
+                  palette.surface,
                 ),
-                TextButton.icon(
-                  key: const ValueKey('sunshine-edit-baseline'),
-                  onPressed: onEditBaseline,
-                  icon: const Icon(Icons.edit_outlined, size: 14),
-                  label: Text(
-                    state.baseTotal > 0 ? '已有 ${state.baseTotal} 次' : '录入已有次数',
+                palette.surface,
+                Color.alphaBlend(
+                  colors.ringSun.$1.withValues(
+                    alpha: palette.isDark ? 0.09 : 0.15,
                   ),
-                  style: TextButton.styleFrom(
-                    foregroundColor: colors.action,
-                    backgroundColor: colors.accentSoft,
-                    side: state.baseTotal > 0
-                        ? BorderSide(color: palette.accent)
-                        : null,
-                    minimumSize: const Size(0, 34),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    textStyle: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
+                  palette.surface,
                 ),
               ],
+              stops: const [0, 0.5, 1],
             ),
-            const SizedBox(height: 6),
-            LayoutBuilder(
+            boxShadow: [
+              BoxShadow(
+                color: palette.labelText.withValues(
+                  alpha: palette.isDark ? 0.05 : 0.035,
+                ),
+                blurRadius: 24,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(_RunSpacing.section),
+            child: LayoutBuilder(
               builder: (context, constraints) {
-                final metric = Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(
-                        text: '${result.total}',
-                        style: TextStyle(
-                          fontSize: numberSize,
-                          color: palette.titleText,
-                          fontWeight: FontWeight.w700,
-                          height: 1.1,
-                          fontFeatures: const [FontFeature.tabularFigures()],
-                        ),
-                      ),
-                      TextSpan(
-                        text: exempt ? ' 次 · 已免跑' : ' / ${result.fullTotal} 次',
-                        style: TextStyle(
-                          fontSize: 15,
-                          color: colors.hint,
-                          height: 1.4,
-                        ),
-                      ),
-                    ],
+                final textScaler = MediaQuery.textScalerOf(context);
+                final metrics = [
+                  _RunMetric(
+                    label: '累计总次数',
+                    value: result.total,
+                    target: result.fullTotal,
+                    color: totalColors.$1,
+                    endColor: totalColors.$2,
+                    exempt: exempt,
+                    valueKey: const ValueKey('sunshine-total'),
                   ),
-                  key: const ValueKey('sunshine-total'),
-                );
-                final percentage = Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
+                  _RunMetric(
+                    label: '其中晨跑',
+                    value: result.morning,
+                    target: result.requiredMorning,
+                    color: morningColors.$1,
+                    endColor: morningColors.$2,
+                    exempt: exempt,
+                    valueKey: const ValueKey('sunshine-morning'),
+                  ),
+                ];
+                final stacked =
+                    constraints.maxWidth < 280 ||
+                    textScaler.scale(12) > 17 ||
+                    '${result.total}'.length > 10 ||
+                    '${result.morning}'.length > 10;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text(
-                      '${result.percentage}%',
-                      key: const ValueKey('sunshine-percentage'),
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                        color: result.status == SunshineRunStatus.passed
-                            ? colors.success
-                            : colors.action,
+                    Center(
+                      child: _DualRunRing(
+                        result: result,
+                        size: math.min(
+                          constraints.maxWidth - 16,
+                          math.max(228, textScaler.scale(28) * 4.5),
+                        ),
                       ),
                     ),
-                    Text(
-                      exempt ? '免跑完成度' : '总次数完成率',
-                      style: TextStyle(fontSize: 11, color: colors.hint),
-                    ),
-                  ],
-                );
-                if (MediaQuery.textScalerOf(context).scale(14) > 19 ||
-                    result.total.toString().length > 6) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      metric,
-                      const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: percentage,
+                    const SizedBox(height: _RunSpacing.section),
+                    if (stacked)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          metrics[0],
+                          const SizedBox(height: _RunSpacing.peer),
+                          metrics[1],
+                        ],
+                      )
+                    else
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(child: metrics[0]),
+                          const SizedBox(width: _RunSpacing.peer),
+                          Expanded(child: metrics[1]),
+                        ],
                       ),
-                    ],
-                  );
-                }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(child: metric),
-                    const SizedBox(width: 8),
-                    percentage,
                   ],
                 );
               },
             ),
-            const SizedBox(height: 14),
-            _ProgressTrack(
-              percentage: result.percentage,
-              color: result.status == SunshineRunStatus.passed
-                  ? colors.success
-                  : palette.accent,
-              label: exempt ? '免跑完成度' : '总次数完成率',
-              marker: !exempt && result.passingTotal != null
-                  ? result.passingTotal! / result.fullTotal
-                  : null,
-            ),
-            if (!exempt) ...[
-              const SizedBox(height: 5),
-              Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                spacing: 8,
-                runSpacing: 3,
-                children: [
-                  Text('0', style: TextStyle(fontSize: 11, color: colors.hint)),
-                  Text(
-                    result.passingTotal == null
-                        ? '达标仅看晨跑'
-                        : '达标线 ${result.passingTotal} 次',
-                    style: TextStyle(fontSize: 11, color: palette.labelText),
+          ),
+        ),
+        const SizedBox(height: _RunSpacing.group),
+        Text(
+          _detail,
+          key: const ValueKey('sunshine-status-detail'),
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 11, height: 1.4, color: colors.hint),
+        ),
+      ],
+    );
+  }
+}
+
+class _RunMetric extends StatelessWidget {
+  const _RunMetric({
+    required this.label,
+    required this.value,
+    required this.target,
+    required this.color,
+    this.endColor,
+    required this.exempt,
+    required this.valueKey,
+  });
+  final String label;
+  final int value;
+  final int target;
+  final Color color;
+  final Color? endColor;
+  final bool exempt;
+  final Key valueKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    final colors = _RunColors(palette);
+    return Container(
+      padding: const EdgeInsets.all(_RunSpacing.group),
+      decoration: BoxDecoration(
+        color: palette.surface.withValues(alpha: palette.isDark ? 0.65 : 0.76),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [color, endColor ?? color],
                   ),
-                  Text(
-                    '满分 ${result.fullTotal} 次',
-                    style: TextStyle(fontSize: 11, color: colors.hint),
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: _RunSpacing.tight),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: palette.labelText,
                   ),
-                ],
+                ),
               ),
             ],
-            const SizedBox(height: 12),
-            Semantics(
-              liveRegion: true,
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 11,
-                  vertical: 9,
-                ),
-                decoration: BoxDecoration(
-                  color: statusBg,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 8,
-                  runSpacing: 5,
-                  children: [
-                    _Pill(
-                      label: statusText,
-                      color: statusColor,
-                      background: palette.surface,
-                    ),
-                    Text(
-                      _detail,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.4,
-                        fontWeight: FontWeight.w500,
-                        color: statusColor,
-                      ),
-                    ),
-                  ],
+          ),
+          const SizedBox(height: _RunSpacing.peer),
+          Wrap(
+            spacing: _RunSpacing.tight,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                '$value',
+                key: valueKey,
+                style: TextStyle(
+                  fontSize: 19,
+                  height: 1.2,
+                  color: palette.titleText,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
-            ),
-            const SizedBox(height: 14),
-            Divider(height: 1, color: palette.rowDivider),
-            const SizedBox(height: 13),
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.wb_twilight_rounded,
-                      size: 18,
-                      color: colors.sun,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '其中晨跑',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: palette.labelText,
-                      ),
-                    ),
-                  ],
-                ),
-                Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(
-                        text: '${result.morning}',
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          color: palette.titleText,
-                        ),
-                      ),
-                      TextSpan(
-                        text: exempt
-                            ? ' 次 · 无需晨跑'
-                            : ' / ${result.requiredMorning} 次',
-                        style: TextStyle(fontSize: 12, color: colors.hint),
-                      ),
-                    ],
-                  ),
-                  key: const ValueKey('sunshine-morning'),
-                ),
-                _Pill(
-                  label: exempt
-                      ? '已免跑'
-                      : morningMet
-                      ? '已达标'
-                      : '差 ${result.remainingMorning} 次',
-                  color: exempt
-                      ? colors.action
-                      : morningMet
-                      ? colors.success
-                      : colors.sun,
-                  background: exempt
-                      ? colors.accentSoft
-                      : morningMet
-                      ? colors.successSoft
-                      : colors.sunSoft,
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            _ProgressTrack(
-              percentage: result.morningPercentage,
-              color: exempt
-                  ? palette.accent
-                  : morningMet
-                  ? colors.success
-                  : colors.sun,
-              label: '晨跑完成率',
-              height: 6,
-            ),
-            const SizedBox(height: 9),
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              spacing: 8,
-              runSpacing: 3,
-              children: [
-                Text(
-                  result.total > 0
-                      ? '已有 ${state.baseTotal} 次 + 新增 ${result.addedTotal} 次'
-                      : '晨跑已计入总次数',
-                  style: TextStyle(fontSize: 12, color: colors.hint),
-                ),
-                if (result.total > 0)
-                  Text(
-                    result.addedMorning > 0
-                        ? '新增含晨跑 ${result.addedMorning} 次'
-                        : '晨跑已计入总次数',
-                    style: TextStyle(fontSize: 12, color: colors.hint),
-                  ),
-              ],
-            ),
-          ],
-        ),
+              Text(
+                exempt ? '次 · 已免跑' : '/ $target 次',
+                style: TextStyle(fontSize: 12, color: colors.hint),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 }
 
-class _ProgressTrack extends StatelessWidget {
-  const _ProgressTrack({
-    required this.percentage,
-    required this.color,
-    required this.label,
-    this.height = 9,
-    this.marker,
-  });
-  final int percentage;
-  final Color color;
-  final String label;
-  final double height;
-  final double? marker;
+class _DualRunRing extends StatelessWidget {
+  const _DualRunRing({required this.result, required this.size});
+  final SunshineRunResult result;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
-    return Semantics(
-      label: label,
-      value: '$percentage%',
-      child: ExcludeSemantics(
-        child: LayoutBuilder(
-          builder: (context, constraints) => ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: SizedBox(
-              height: height,
-              child: Stack(
-                children: [
-                  Positioned.fill(child: ColoredBox(color: palette.rowDivider)),
-                  TweenAnimationBuilder<double>(
-                    tween: Tween(end: percentage / 100),
-                    duration: const Duration(milliseconds: 220),
-                    builder: (context, value, _) => Align(
-                      alignment: Alignment.centerLeft,
-                      child: FractionallySizedBox(
-                        widthFactor: value,
-                        heightFactor: 1,
-                        child: ColoredBox(color: color),
-                      ),
+    final colors = _RunColors(palette);
+    final totalColors = result.status == SunshineRunStatus.passed
+        ? colors.ringGreen
+        : colors.ringBlue;
+    final morningColors = result.status == SunshineRunStatus.exempt
+        ? colors.ringBlue
+        : result.remainingMorning == 0
+        ? colors.ringGreen
+        : colors.ringSun;
+    final (statusText, statusColor, statusBg) = switch (result.status) {
+      SunshineRunStatus.incomplete => (
+        result.percentage == 100 ? '未达标' : '进行中',
+        colors.sun,
+        colors.sunSoft,
+      ),
+      SunshineRunStatus.passed => ('已达标', colors.success, colors.successSoft),
+      SunshineRunStatus.full => ('已满分', colors.action, colors.accentSoft),
+      SunshineRunStatus.exempt => ('已全免', colors.action, colors.accentSoft),
+    };
+    final labelColor = result.status == SunshineRunStatus.passed
+        ? palette.success
+        : palette.accent;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: palette.surface.withValues(alpha: palette.isDark ? 0.7 : 0.86),
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: palette.accent.withValues(
+              alpha: palette.isDark ? 0.07 : 0.045,
+            ),
+            blurRadius: 22,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Semantics(
+          key: const ValueKey('sunshine-dual-ring'),
+          excludeSemantics: true,
+          label: result.status == SunshineRunStatus.exempt
+              ? '免跑完成度'
+              : '跑步完成度，${result.status == SunshineRunStatus.incomplete ? '未达标' : statusText}',
+          value:
+              '总完成率 ${result.percentage}%，晨跑完成率 ${result.morningPercentage}%',
+          child: SizedBox.square(
+            dimension: size,
+            child: CustomPaint(
+              painter: _RunRingPainter(
+                totalProgress: result.percentage / 100,
+                morningProgress: result.morningPercentage / 100,
+                totalColor: totalColors.$1,
+                totalEndColor: totalColors.$2,
+                morningColor: morningColors.$1,
+                morningEndColor: morningColors.$2,
+                trackColor: colors.ringTrack,
+              ),
+              child: Center(
+                child: Container(
+                  width: size * 0.64,
+                  height: size * 0.64,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        palette.surface,
+                        Color.alphaBlend(
+                          colors.ringSun.$1.withValues(
+                            alpha: palette.isDark ? 0.04 : 0.035,
+                          ),
+                          palette.surface,
+                        ),
+                      ],
+                    ),
+                    border: Border.all(
+                      color: palette.surface.withValues(alpha: 0.7),
+                      width: size * 0.02,
                     ),
                   ),
-                  if (marker case final marker?)
-                    Positioned(
-                      left:
-                          (constraints.maxWidth * marker).clamp(
-                            1,
-                            constraints.maxWidth - 2,
-                          ) -
-                          1,
-                      width: 2,
-                      top: 0,
-                      bottom: 0,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: palette.surface,
-                          border: Border.symmetric(
-                            vertical: BorderSide(
-                              color: palette.divider,
-                              width: 0.5,
+                  padding: EdgeInsets.all(size * 0.02),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: ShaderMask(
+                          blendMode: BlendMode.srcIn,
+                          shaderCallback: (bounds) => LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              Color.lerp(
+                                labelColor,
+                                palette.isDark
+                                    ? palette.titleText
+                                    : palette.surface,
+                                0.12,
+                              )!,
+                              labelColor,
+                            ],
+                          ).createShader(bounds),
+                          child: Text(
+                            '${result.percentage}%',
+                            style: TextStyle(
+                              fontSize: 36,
+                              height: 1.05,
+                              letterSpacing: -1.08,
+                              fontWeight: FontWeight.w900,
+                              color: palette.titleText,
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
                             ),
                           ),
                         ),
                       ),
-                    ),
-                ],
+                      const SizedBox(height: 2),
+                      Text(
+                        result.status == SunshineRunStatus.exempt
+                            ? '免跑完成度'
+                            : '总次数完成率',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 10,
+                          height: 1.25,
+                          fontWeight: FontWeight.w500,
+                          color: colors.hint,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      _Pill(
+                        key: const ValueKey('sunshine-status'),
+                        label: statusText,
+                        color: statusColor,
+                        background: statusBg,
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
@@ -1165,8 +1027,99 @@ class _ProgressTrack extends StatelessWidget {
   }
 }
 
+class _RunRingPainter extends CustomPainter {
+  const _RunRingPainter({
+    required this.totalProgress,
+    required this.morningProgress,
+    required this.totalColor,
+    required this.totalEndColor,
+    required this.morningColor,
+    required this.morningEndColor,
+    required this.trackColor,
+  });
+  final double totalProgress;
+  final double morningProgress;
+  final Color totalColor;
+  final Color totalEndColor;
+  final Color morningColor;
+  final Color morningEndColor;
+  final Color trackColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final scale = size.shortestSide / 128;
+    final track = Paint()
+      ..color = trackColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 21 * scale;
+    canvas.drawCircle(center, 53.5 * scale, track);
+
+    void ring(
+      double radius,
+      double width,
+      double progress,
+      List<Color> colors,
+    ) {
+      if (progress <= 0) return;
+      final rect = Rect.fromCircle(center: center, radius: radius);
+      final arc = Paint()
+        ..shader = _fadedGradient(progress, colors).createShader(rect)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = width;
+      canvas.drawCircle(center, radius, arc);
+    }
+
+    // 对应 HTML 的 128px 双环遮罩，两条环带在半径 53px 处相接。
+    ring(58.5 * scale, 11 * scale, totalProgress, [totalColor, totalEndColor]);
+    ring(48 * scale, 10 * scale, morningProgress, [
+      morningColor,
+      morningEndColor,
+    ]);
+  }
+
+  SweepGradient _fadedGradient(double progress, List<Color> colors) {
+    if (progress >= 1) {
+      return SweepGradient(
+        colors: [colors.first, colors.last, colors.first],
+        stops: const [0, 0.5, 1],
+        transform: const GradientRotation(-math.pi / 2),
+      );
+    }
+    final degrees = math.max(4.0, progress * 360);
+    double rounded(double value) => (value * 10).round() / 10;
+    final startFade = rounded(math.min(18.0, degrees * 0.24));
+    final endFade = rounded(
+      math.max(startFade, degrees - math.min(26.0, degrees * 0.3)),
+    );
+    // 原稿以透明度淡入、淡出端点，不添加圆角端头或额外环间空隙。
+    return SweepGradient(
+      colors: [
+        colors.first.withValues(alpha: 0),
+        colors.first,
+        colors.last,
+        colors.last.withValues(alpha: 0),
+        colors.last.withValues(alpha: 0),
+      ],
+      stops: [0, startFade / 360, endFade / 360, rounded(degrees) / 360, 1],
+      transform: const GradientRotation(-math.pi / 2),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_RunRingPainter oldDelegate) =>
+      totalProgress != oldDelegate.totalProgress ||
+      morningProgress != oldDelegate.morningProgress ||
+      totalColor != oldDelegate.totalColor ||
+      totalEndColor != oldDelegate.totalEndColor ||
+      morningColor != oldDelegate.morningColor ||
+      morningEndColor != oldDelegate.morningEndColor ||
+      trackColor != oldDelegate.trackColor;
+}
+
 class _Pill extends StatelessWidget {
   const _Pill({
+    super.key,
     required this.label,
     required this.color,
     required this.background,
@@ -1177,14 +1130,22 @@ class _Pill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+    padding: const EdgeInsets.symmetric(
+      horizontal: _RunSpacing.peer,
+      vertical: _RunSpacing.tight,
+    ),
     decoration: BoxDecoration(
       color: background,
-      borderRadius: BorderRadius.circular(5),
+      borderRadius: BorderRadius.circular(20),
     ),
     child: Text(
       label,
-      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
+      style: TextStyle(
+        fontSize: 10,
+        height: 1.2,
+        fontWeight: FontWeight.w600,
+        color: color,
+      ),
     ),
   );
 }
@@ -1197,38 +1158,56 @@ class _SectionHeading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: palette.rowDivider)),
-      ),
-      child: Wrap(
-        alignment: WrapAlignment.spaceBetween,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 6,
-        runSpacing: 4,
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-              color: palette.titleText,
-            ),
+    final colors = _RunColors(palette);
+    return Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: _RunSpacing.peer,
+      runSpacing: _RunSpacing.tight,
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: palette.titleText,
           ),
-          Text(
-            note,
-            style: TextStyle(fontSize: 12, color: _RunColors(palette).hint),
-          ),
-        ],
-      ),
+        ),
+        Text(note, style: TextStyle(fontSize: 11, color: colors.hint)),
+      ],
     );
   }
 }
 
-class _ActivityRow extends StatelessWidget {
-  const _ActivityRow({
+class _ActivityGrid extends StatelessWidget {
+  const _ActivityGrid({required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final columns =
+          constraints.maxWidth >= 338 &&
+              MediaQuery.textScalerOf(context).scale(14) <= 19
+          ? 2
+          : 1;
+      final width =
+          (constraints.maxWidth - (columns - 1) * _RunSpacing.peer) / columns;
+      return Wrap(
+        key: const ValueKey('sunshine-activity-grid'),
+        spacing: _RunSpacing.peer,
+        runSpacing: _RunSpacing.peer,
+        children: [
+          for (final child in children) SizedBox(width: width, child: child),
+        ],
+      );
+    },
+  );
+}
+
+class _ActivityTile extends StatelessWidget {
+  const _ActivityTile({
+    super.key,
     required this.activity,
     required this.count,
     required this.custom,
@@ -1251,8 +1230,9 @@ class _ActivityRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     final colors = _RunColors(palette);
-    final sunnyIcon =
-        activity.id == 'morning' || (custom && activity.morning > 0);
+    final sunny = activity.morning > 0;
+    final color = sunny ? colors.sun : colors.action;
+    final soft = sunny ? colors.sunSoft : colors.accentSoft;
     final icon = custom
         ? Icons.auto_awesome_outlined
         : switch (activity.id) {
@@ -1261,224 +1241,409 @@ class _ActivityRow extends StatelessWidget {
             'fluorescent' => Icons.nights_stay_outlined,
             _ => Icons.emoji_events_outlined,
           };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+    final stepper = Container(
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: palette.rowDivider)),
+        color: palette.pageBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: palette.divider),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: sunnyIcon ? colors.sunSoft : colors.accentSoft,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  icon,
-                  size: 21,
-                  color: sunnyIcon ? colors.sun : colors.action,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      spacing: 6,
-                      runSpacing: 3,
-                      children: [
-                        Text(
-                          activity.label,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: palette.titleText,
-                          ),
-                        ),
-                        if (count > 0)
-                          _Pill(
-                            label: '已计 +${count * activity.total} 次',
-                            color: activity.morning > 0
-                                ? colors.sun
-                                : colors.action,
-                            background: activity.morning > 0
-                                ? colors.sunSoft
-                                : colors.accentSoft,
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Wrap(
-                      spacing: 5,
-                      runSpacing: 3,
-                      children: [
-                        _Pill(
-                          label: '每场总次数 +${activity.total}',
-                          color: palette.labelText,
-                          background: palette.rowDivider,
-                        ),
-                        if (activity.morning > 0)
-                          _Pill(
-                            label: '晨跑 +${activity.morning}',
-                            color: colors.sun,
-                            background: colors.sunSoft,
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              if (custom) ...[
-                IconButton(
-                  tooltip: '修改${activity.label}设置',
-                  onPressed: onEdit,
-                  icon: Icon(Icons.edit_outlined, size: 17, color: colors.hint),
-                  padding: const EdgeInsets.all(7),
-                  constraints: const BoxConstraints(
-                    minWidth: 34,
-                    minHeight: 40,
-                  ),
-                ),
-                IconButton(
-                  tooltip: '删除${activity.label}',
-                  onPressed: onRemove,
-                  icon: Icon(
-                    Icons.delete_outline_rounded,
-                    size: 18,
-                    color: colors.danger,
-                  ),
-                  padding: const EdgeInsets.all(7),
-                  constraints: const BoxConstraints(
-                    minWidth: 34,
-                    minHeight: 40,
-                  ),
-                ),
-              ],
-            ],
+          _StepButton(
+            key: ValueKey('sunshine-minus-${activity.id}'),
+            enabled: count > 0,
+            label: '减少${activity.label}1场',
+            icon: Icons.remove_rounded,
+            onStep: (undo, feedback) => onStep(-1, undo, feedback),
+            onRepeatEnd: onRepeatEnd,
           ),
-          const SizedBox(height: 11),
-          Row(
-            children: [
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(2),
-                  decoration: BoxDecoration(
-                    color: palette.pageBg,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: palette.divider),
-                  ),
-                  child: Row(
-                    children: [
-                      _StepButton(
-                        key: ValueKey('sunshine-minus-${activity.id}'),
-                        enabled: count > 0,
-                        label: '减少${activity.label}1场',
-                        icon: Icons.remove_rounded,
-                        onStep: (undo, feedback) => onStep(-1, undo, feedback),
-                        onRepeatEnd: onRepeatEnd,
-                      ),
-                      Expanded(
-                        child: Semantics(
-                          button: true,
-                          label: '直接修改${activity.label}场次',
-                          value: '$count 场',
-                          child: InkWell(
-                            key: ValueKey('sunshine-count-${activity.id}'),
-                            onTap: onEditCount,
-                            borderRadius: BorderRadius.circular(7),
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(minHeight: 44),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 4,
-                                  vertical: 6,
-                                ),
-                                child: Center(
-                                  child: Text.rich(
-                                    TextSpan(
-                                      children: [
-                                        TextSpan(
-                                          text: '$count',
-                                          style: TextStyle(
-                                            fontSize:
-                                                count.toString().length > 5
-                                                ? 15
-                                                : 20,
-                                            fontWeight: FontWeight.w600,
-                                            color: count > 0
-                                                ? colors.action
-                                                : palette.titleText,
-                                            fontFeatures: const [
-                                              FontFeature.tabularFigures(),
-                                            ],
-                                          ),
-                                        ),
-                                        TextSpan(
-                                          text: ' 场',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            color: colors.hint,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
+          Expanded(
+            child: Semantics(
+              button: true,
+              label: '直接修改${activity.label}场次',
+              value: '$count 场',
+              child: InkWell(
+                key: ValueKey('sunshine-count-${activity.id}'),
+                onTap: onEditCount,
+                borderRadius: BorderRadius.circular(7),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 44),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 6,
+                    ),
+                    child: Center(
+                      child: Text(
+                        '$count',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 16,
+                          height: 1.2,
+                          fontWeight: FontWeight.w700,
+                          color: count > 0 ? colors.action : palette.titleText,
+                          fontFeatures: const [FontFeature.tabularFigures()],
                         ),
                       ),
-                      _StepButton(
-                        key: ValueKey('sunshine-plus-${activity.id}'),
-                        enabled: true,
-                        label: '增加${activity.label}1场',
-                        icon: Icons.add_rounded,
-                        onStep: (undo, feedback) => onStep(1, undo, feedback),
-                        onRepeatEnd: onRepeatEnd,
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              Semantics(
-                label: '快速增加${activity.label}5场',
-                button: true,
-                child: TextButton(
-                  key: ValueKey('sunshine-quick-${activity.id}'),
-                  onPressed: () => onStep(5, true, true),
-                  style: TextButton.styleFrom(
-                    foregroundColor: colors.action,
-                    backgroundColor: colors.accentSoft,
-                    minimumSize: const Size(52, 44),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(9),
-                    ),
-                    textStyle: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  child: const Text('+5'),
-                ),
-              ),
-            ],
+            ),
+          ),
+          _StepButton(
+            key: ValueKey('sunshine-plus-${activity.id}'),
+            enabled: true,
+            label: '增加${activity.label}1场',
+            icon: Icons.add_rounded,
+            onStep: (undo, feedback) => onStep(1, undo, feedback),
+            onRepeatEnd: onRepeatEnd,
           ),
         ],
+      ),
+    );
+    return _RunCard(
+      child: Padding(
+        padding: const EdgeInsets.all(_RunSpacing.group),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: soft,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, size: 20, color: color),
+                ),
+                const Spacer(),
+                if (custom) ...[
+                  IconButton(
+                    tooltip: '修改${activity.label}设置',
+                    onPressed: onEdit,
+                    icon: Icon(
+                      Icons.edit_outlined,
+                      size: 17,
+                      color: colors.hint,
+                    ),
+                    padding: const EdgeInsets.all(8),
+                    constraints: const BoxConstraints(
+                      minWidth: 44,
+                      minHeight: 44,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  IconButton(
+                    tooltip: '删除${activity.label}',
+                    onPressed: onRemove,
+                    icon: Icon(
+                      Icons.delete_outline_rounded,
+                      size: 18,
+                      color: colors.danger,
+                    ),
+                    padding: const EdgeInsets.all(8),
+                    constraints: const BoxConstraints(
+                      minWidth: 44,
+                      minHeight: 44,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 4),
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 38),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    activity.label,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.3,
+                      fontWeight: FontWeight.w600,
+                      color: palette.titleText,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '总+${activity.total}${sunny ? ' · 晨+${activity.morning}' : ''}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      height: 1.3,
+                      color: colors.hint,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: _RunSpacing.group),
+            stepper,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ExemptionCard extends StatelessWidget {
+  const _ExemptionCard({required this.state, required this.onChanged});
+  final SunshineRunState state;
+  final ValueChanged<SunshineRunExemption> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _RunColors(AppPalette.of(context));
+    return _RunCard(
+      child: Padding(
+        padding: const EdgeInsets.all(_RunSpacing.group),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const _SectionHeading(title: '比赛减免', note: '再次点击可取消'),
+            const SizedBox(height: _RunSpacing.group),
+            _ExemptionChoices(selected: state.exemption, onChanged: onChanged),
+            const SizedBox(height: _RunSpacing.peer),
+            Text(switch (state.exemption) {
+              SunshineRunExemption.none => '按完整标准计算总次数与晨跑要求。',
+              SunshineRunExemption.half => '总次数要求减半，晨跑要求不变。',
+              SunshineRunExemption.full => '无需完成跑步要求，已录入记录继续保留。',
+            }, style: TextStyle(fontSize: 11, height: 1.4, color: colors.hint)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ExemptionChoices extends StatelessWidget {
+  const _ExemptionChoices({required this.selected, required this.onChanged});
+  final SunshineRunExemption selected;
+  final ValueChanged<SunshineRunExemption> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    final colors = _RunColors(palette);
+    return Semantics(
+      label: '选择比赛减免',
+      child: Container(
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: palette.rowDivider,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: palette.divider),
+        ),
+        child: Row(
+          children: [
+            for (final value in [
+              SunshineRunExemption.half,
+              SunshineRunExemption.full,
+            ]) ...[
+              if (value == SunshineRunExemption.full) const SizedBox(width: 3),
+              Expanded(
+                child: Semantics(
+                  selected: selected == value,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(9),
+                      gradient: selected == value
+                          ? LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                value == SunshineRunExemption.half
+                                    ? colors.sun
+                                    : colors.action,
+                                Color.lerp(
+                                  value == SunshineRunExemption.half
+                                      ? colors.sun
+                                      : colors.action,
+                                  palette.isDark
+                                      ? palette.accent
+                                      : palette.titleText,
+                                  0.18,
+                                )!,
+                              ],
+                            )
+                          : null,
+                    ),
+                    child: TextButton(
+                      onPressed: () => onChanged(value),
+                      style: TextButton.styleFrom(
+                        foregroundColor: selected == value
+                            ? colors.onGradient
+                            : palette.labelText,
+                        minimumSize: const Size(44, 44),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 10,
+                        ),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(9),
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      child: Text(
+                        value == SunshineRunExemption.half
+                            ? '半免 50%'
+                            : '全免 100%',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionDock extends StatelessWidget {
+  const _ActionDock({
+    required this.onBaseline,
+    required this.onCustom,
+    required this.onReset,
+    required this.onRules,
+  });
+  final VoidCallback? onBaseline;
+  final VoidCallback? onCustom;
+  final VoidCallback? onReset;
+  final VoidCallback onRules;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: palette.surface,
+        border: Border(top: BorderSide(color: palette.rowDivider)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: _DockAction(
+                  key: const ValueKey('sunshine-edit-baseline'),
+                  label: '已有次数',
+                  tooltip: '录入已有次数',
+                  icon: Icons.edit_outlined,
+                  onPressed: onBaseline,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: _DockAction(
+                  key: const ValueKey('sunshine-add-custom'),
+                  label: '其他活动',
+                  tooltip: '添加其他活动',
+                  icon: Icons.add_rounded,
+                  accent: true,
+                  onPressed: onCustom,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: _DockAction(
+                  key: const ValueKey('sunshine-reset'),
+                  label: '重置',
+                  tooltip: '重置记录',
+                  icon: Icons.restart_alt_rounded,
+                  onPressed: onReset,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: _DockAction(
+                  key: const ValueKey('sunshine-rules'),
+                  label: '规则',
+                  tooltip: '计算规则',
+                  icon: Icons.info_outline_rounded,
+                  onPressed: onRules,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DockAction extends StatelessWidget {
+  const _DockAction({
+    super.key,
+    required this.label,
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    this.accent = false,
+  });
+  final String label;
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final bool accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    final colors = _RunColors(palette);
+    final color = onPressed == null
+        ? colors.hint.withValues(alpha: 0.5)
+        : accent
+        ? colors.action
+        : palette.labelText;
+    return Semantics(
+      button: true,
+      enabled: onPressed != null,
+      label: label,
+      child: Tooltip(
+        message: tooltip,
+        child: Material(
+          color: accent ? colors.accentSoft : palette.surface,
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            onTap: onPressed,
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 20, color: color),
+                  const SizedBox(height: 4),
+                  Text(
+                    label,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 11,
+                      height: 1.25,
+                      fontWeight: FontWeight.w600,
+                      color: color,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1567,57 +1732,6 @@ class _StepButtonState extends State<_StepButton> {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _ExemptionCard extends StatelessWidget {
-  const _ExemptionCard({required this.state, required this.onChanged});
-  final SunshineRunState state;
-  final ValueChanged<SunshineRunExemption> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = AppPalette.of(context);
-    final colors = _RunColors(palette);
-    return _RunCard(
-      child: Column(
-        children: [
-          const _SectionHeading(title: '比赛减免', note: '再次点击可取消，半免与全免互斥'),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _ChoiceGroup<SunshineRunExemption>(
-                  values: const [
-                    SunshineRunExemption.half,
-                    SunshineRunExemption.full,
-                  ],
-                  selected: state.exemption,
-                  labels: const ['半免 50%', '全免 100%'],
-                  onChanged: onChanged,
-                  label: '选择比赛减免',
-                  exemption: true,
-                ),
-                const SizedBox(height: 9),
-                Text(
-                  switch (state.exemption) {
-                    SunshineRunExemption.none => '按当前年级完整标准计算总次数与晨跑要求。',
-                    SunshineRunExemption.half => '总次数要求减半，晨跑要求不变。',
-                    SunshineRunExemption.full => '无需完成跑步要求，已录入记录继续保留。',
-                  },
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.5,
-                    color: colors.hint,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }

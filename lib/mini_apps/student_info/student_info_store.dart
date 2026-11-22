@@ -15,18 +15,22 @@ class StudentInfoStore {
 
   static const _file = 'profile.json';
 
-  static Future<File?> _resolve() async {
+  static Future<File?> _resolve({bool createDirectory = false}) async {
     try {
       final base = await getApplicationDocumentsDirectory();
       final dir = Directory(
         '${base.path}${Platform.pathSeparator}student_info',
       );
-      if (!await dir.exists()) await dir.create(recursive: true);
+      if (createDirectory && !await dir.exists()) {
+        await dir.create(recursive: true);
+      }
       return File('${dir.path}${Platform.pathSeparator}$_file');
-    } catch (error) {
-      _log.debug(
+    } catch (error, stackTrace) {
+      _log.warning(
         'storage.unavailable',
-        fields: {'error_type': error.runtimeType.toString()},
+        error: error,
+        stackTrace: stackTrace,
+        fields: {'reason_code': 'storage_unavailable'},
       );
       // widget 测试等没有平台通道的环境，退化成「没有存储」。
       return null;
@@ -44,7 +48,9 @@ class StudentInfoStore {
       final fetchedAt = DateTime.tryParse(
         decoded['fetchedAt']?.toString() ?? '',
       );
-      if (fetchedAt == null) return null;
+      if (fetchedAt == null) {
+        throw const FormatException('学生缓存获取时间格式无效');
+      }
       return StudentInfo.fromJson(decoded, fetchedAt: fetchedAt);
     } catch (error, stackTrace) {
       _log.warning('cache.read_failed', error: error, stackTrace: stackTrace);
@@ -53,7 +59,7 @@ class StudentInfoStore {
   });
 
   static Future<void> save(StudentInfo info) => _log.inSpan(() async {
-    final file = await _resolve();
+    final file = await _resolve(createDirectory: true);
     if (file == null) {
       SilentRefresh.degradeCurrent(reason: 'storage_unavailable');
       AppLog.reportOutcome('degraded', reason: 'storage_unavailable');

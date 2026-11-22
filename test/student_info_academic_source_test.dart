@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/enrollment_year.dart' as core_year;
+import 'package:nuist_sta_app/core/auth/student_academic_info.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
-import 'package:nuist_sta_app/core/refresh/silent_refresh.dart';
 import 'package:nuist_sta_app/mini_apps/student_info/student_info_academic_source.dart';
-import 'package:nuist_sta_app/mini_apps/student_info/student_info_controller.dart';
 import 'package:nuist_sta_app/mini_apps/student_info/student_info_models.dart';
+import 'package:nuist_sta_app/mini_apps/student_info/student_info_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_multi_models.dart'
     as timetable;
 
@@ -39,55 +42,36 @@ StudentInfo _info({
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  const pathProviderChannel = MethodChannel('plugins.flutter.io/path_provider');
 
-  late StudentInfoController controller;
   late StudentInfoAcademicSource source;
   late StudentInfo? cached;
-  late StudentInfo nextFetch;
-  late bool bound;
   late String? account;
-  late bool sourceDisposed;
   late int cacheReads;
-  late int fetches;
-  late List<StudentInfo> saved;
+  late int accountReads;
+  late List<Directory> directories;
+  late List<String> platformCalls;
   Future<StudentInfo?> Function()? readCache;
-  Future<StudentInfo> Function()? fetch;
   Future<String?> Function()? readAccount;
 
   setUp(() async {
     await AppLog.resetForTesting();
-    SilentRefresh.updated.value = 0;
     cached = _info();
-    nextFetch = _info();
-    bound = true;
     account = _studentId;
-    sourceDisposed = false;
     cacheReads = 0;
-    fetches = 0;
-    saved = [];
+    accountReads = 0;
+    directories = [];
+    platformCalls = [];
     readCache = null;
-    fetch = null;
     readAccount = null;
-    controller = StudentInfoController.forTesting(
+    source = StudentInfoAcademicSource.forTesting(
       readCache: () async {
         cacheReads++;
         final callback = readCache;
         return callback == null ? cached : await callback();
       },
-      saveCache: (info) async {
-        saved.add(info);
-        cached = info;
-      },
-      fetch: () async {
-        fetches++;
-        final callback = fetch;
-        return callback == null ? nextFetch : await callback();
-      },
-      bindingCheck: () async => bound,
-    );
-    source = StudentInfoAcademicSource.forTesting(
-      controller: controller,
       readBoundAccount: () async {
+        accountReads++;
         final callback = readAccount;
         return callback == null ? account : await callback();
       },
@@ -95,11 +79,35 @@ void main() {
   });
 
   tearDown(() async {
-    if (!sourceDisposed) source.dispose();
-    controller.dispose();
-    SilentRefresh.updated.value = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProviderChannel, null);
     await AppLog.resetForTesting();
+    for (final directory in directories) {
+      expect(
+        directory.absolute.path.toLowerCase(),
+        startsWith(Directory.systemTemp.absolute.path.toLowerCase()),
+      );
+      if (await directory.exists()) await directory.delete(recursive: true);
+    }
   });
+
+  Future<Directory> localDirectory() async {
+    final directory = await Directory.systemTemp.createTemp(
+      'student_academic_local_',
+    );
+    directories.add(directory);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProviderChannel, (call) async {
+          platformCalls.add(call.method);
+          return call.method == 'getApplicationDocumentsDirectory'
+              ? directory.path
+              : null;
+        });
+    return directory;
+  }
+
+  File profileFile(Directory directory) =>
+      File.fromUri(directory.uri.resolve('student_info/profile.json'));
 
   test('core 入学年 helper 保留课表原有导出与年份解析行为', () {
     final cases = <String?, int?>{
@@ -127,35 +135,55 @@ void main() {
     2024: null,
     2101: null,
   }.entries) {
-    test('根据门户学年 ${entry.key} 与入学年计算年级 ${entry.value}', () async {
-      cached = _info(academicYear: entry.key);
+    final year = entry.key;
+    final grade = entry.value;
+    test('只读本地学年 $year，得到年级 $grade', () async {
+      cached = _info(academicYear: year);
+      final StudentAcademicSource localSource = source;
 
-      await source.ensureStarted();
+      final result = await localSource.readLocal();
 
-      expect(source.value.portalBound, isTrue);
-      expect(source.value.identityMatches, isTrue);
-      expect(source.value.undergraduate, isTrue);
-      expect(source.value.academicYear, entry.key);
-      expect(source.value.enrollmentYear, 2025);
-      expect(source.value.grade, entry.value);
-      expect(source.value.loading, isFalse);
-      expect(source.value.error, isNull);
-      expect(fetches, 0);
+      expect(result.portalBound, isTrue);
+      expect(result.identityMatches, isTrue);
+      expect(result.undergraduate, isTrue);
+      expect(result.academicYear, year);
+      expect(result.enrollmentYear, 2025);
+      expect(result.grade, grade);
+      expect(result.fromCache, isTrue);
+      expect(result.loading, isFalse);
+      expect(result.error, isNull);
+      expect(cacheReads, 1);
+      expect(accountReads, 2);
     });
   }
 
-  test('缺失校历学年时不根据本机日期推测年级', () async {
-    cached = _info(hasSemester: false);
+  test('没有本地缓存时返回未知年级，不补拉学生信息', () async {
+    cached = null;
 
-    await source.ensureStarted();
+    final result = await source.readLocal();
 
-    expect(source.value.identityMatches, isTrue);
-    expect(source.value.academicYear, isNull);
-    expect(source.value.enrollmentYear, 2025);
-    expect(source.value.grade, isNull);
+    expect(result.portalBound, isTrue);
+    expect(result.identityMatches, isFalse);
+    expect(result.academicYear, isNull);
+    expect(result.enrollmentYear, isNull);
+    expect(result.grade, isNull);
+    expect(result.loading, isFalse);
+    expect(cacheReads, 1);
+    expect(accountReads, 2);
   });
 
-  test('门户校历年份格式损坏时不识别年级', () async {
+  test('缺失本地校历学年时不根据本机日期推测', () async {
+    cached = _info(hasSemester: false);
+
+    final result = await source.readLocal();
+
+    expect(result.identityMatches, isTrue);
+    expect(result.academicYear, isNull);
+    expect(result.enrollmentYear, 2025);
+    expect(result.grade, isNull);
+  });
+
+  test('本地校历年份格式损坏时不识别年级', () async {
     cached = StudentInfo.fromJson({
       'user': _info().user.toJson(),
       'semester': {
@@ -167,263 +195,326 @@ void main() {
       },
     }, fetchedAt: DateTime.now());
 
-    await source.ensureStarted();
+    final result = await source.readLocal();
 
-    expect(source.value.identityMatches, isTrue);
-    expect(source.value.academicYear, isNull);
-    expect(source.value.grade, isNull);
+    expect(result.identityMatches, isTrue);
+    expect(result.academicYear, isNull);
+    expect(result.grade, isNull);
   });
 
   for (final category in ['学生/研究生', '学生/非本科生', '']) {
-    test('用户类别「$category」没有明确本科生层级时不识别年级', () async {
+    test('用户类别「$category」没有本科生层级时返回未知年级', () async {
       cached = _info(category: category);
 
-      await source.ensureStarted();
+      final result = await source.readLocal();
 
-      expect(source.value.identityMatches, isTrue);
-      expect(source.value.undergraduate, isFalse);
-      expect(source.value.grade, isNull);
+      expect(result.identityMatches, isTrue);
+      expect(result.undergraduate, isFalse);
+      expect(result.grade, isNull);
     });
   }
 
-  test('身份字段两端空格及本科生层级空格可正常核对', () async {
+  for (final studentId in ['2025', '']) {
+    test('缓存学号「$studentId」格式不完整时不视为可靠身份', () async {
+      cached = _info(studentId: studentId);
+      account = studentId.isEmpty ? _studentId : studentId;
+
+      final result = await source.readLocal();
+
+      expect(result.portalBound, isTrue);
+      expect(result.identityMatches, isFalse);
+      expect(result.academicYear, isNull);
+      expect(result.enrollmentYear, isNull);
+      expect(result.fetchedAt, isNull);
+      expect(result.grade, isNull);
+    });
+  }
+
+  test('缓存账号与绑定账号不一致时不暴露年份和获取时间', () async {
+    account = 'different-account';
+
+    final result = await source.readLocal();
+
+    expect(result.portalBound, isTrue);
+    expect(result.identityMatches, isFalse);
+    expect(result.academicYear, isNull);
+    expect(result.enrollmentYear, isNull);
+    expect(result.fetchedAt, isNull);
+    expect(result.grade, isNull);
+  });
+
+  test('两次账号核验均去除空格，本科生层级也允许两端空格', () async {
     cached = _info(studentId: ' $_studentId ', category: ' 学生 / 本科生 ');
     account = ' $_studentId ';
 
-    await source.ensureStarted();
+    final result = await source.readLocal();
 
-    expect(source.value.identityMatches, isTrue);
-    expect(source.value.undergraduate, isTrue);
-    expect(source.value.grade, 2);
+    expect(result.identityMatches, isTrue);
+    expect(result.undergraduate, isTrue);
+    expect(result.grade, 2);
+    expect(accountReads, 2);
   });
 
-  test('学号只有年份前缀时不能因 helper 能解析就视为可靠身份', () async {
-    cached = _info(studentId: '2025');
-    account = '2025';
+  for (final emptyAccount in <String?>[null, '', '  ']) {
+    test('绑定账号「$emptyAccount」为空时直接返回未知年级，不读缓存', () async {
+      account = emptyAccount;
 
-    await source.ensureStarted();
+      final result = await source.readLocal();
 
-    expect(source.value.portalBound, isTrue);
-    expect(source.value.identityMatches, isFalse);
-    expect(source.value.enrollmentYear, isNull);
-    expect(source.value.academicYear, isNull);
-    expect(source.value.fetchedAt, isNull);
-    expect(source.value.grade, isNull);
+      expect(result.portalBound, isFalse);
+      expect(result.identityMatches, isFalse);
+      expect(result.grade, isNull);
+      expect(result.loading, isFalse);
+      expect(cacheReads, 0);
+      expect(accountReads, 1);
+    });
+  }
+
+  test('过了自然日的本地缓存仍只读一次，不触发过期刷新', () async {
+    final oldInfo = _info(
+      academicYear: 2025,
+      fetchedAt: DateTime.now().subtract(const Duration(days: 8)),
+    );
+    cached = oldInfo;
+
+    final result = await source.readLocal();
+
+    expect(result.grade, 1);
+    expect(result.fetchedAt, oldInfo.fetchedAt);
+    expect(result.fromCache, isTrue);
+    expect(cacheReads, 1);
+    expect(accountReads, 2);
+    expect(platformCalls, isEmpty);
   });
 
-  test('缓存账号与当前绑定账号不一致时撤回年份和获取时间', () async {
-    account = 'different-account';
+  test('再次读取采用最新本地缓存，不沿用来源的旧内存状态', () async {
+    cached = _info(academicYear: 2025);
+    final previous = await source.readLocal();
+    expect(previous.grade, 1);
 
-    await source.ensureStarted();
-
-    expect(source.value.portalBound, isTrue);
-    expect(source.value.identityMatches, isFalse);
-    expect(source.value.academicYear, isNull);
-    expect(source.value.enrollmentYear, isNull);
-    expect(source.value.fetchedAt, isNull);
-    expect(source.value.grade, isNull);
-  });
-
-  test('安全存储没有当前绑定账号时不信任缓存身份', () async {
-    account = null;
-
-    await source.ensureStarted();
-
-    expect(source.value.portalBound, isFalse);
-    expect(source.value.identityMatches, isFalse);
-    expect(source.value.academicYear, isNull);
-    expect(source.value.enrollmentYear, isNull);
-    expect(source.value.grade, isNull);
-  });
-
-  test('未绑定门户时即使缓存身份有效也不识别年级', () async {
-    bound = false;
-
-    await source.ensureStarted();
-
-    expect(source.value.portalBound, isFalse);
-    expect(source.value.identityMatches, isFalse);
-    expect(source.value.grade, isNull);
-    expect(fetches, 0);
-    expect(saved, isEmpty);
-  });
-
-  test('解绑时立即撤回已确认年级并保留学生卡缓存', () async {
-    await source.ensureStarted();
-    final cachedIdentity = controller.info;
-    expect(source.value.grade, 2);
-
-    bound = false;
-    account = null;
-    await controller.onPortalBindingChanged(false);
-
-    expect(source.value.portalBound, isFalse);
-    expect(source.value.identityMatches, isFalse);
-    expect(source.value.grade, isNull);
-    expect(source.value.loading, isFalse);
-    expect(controller.info, same(cachedIdentity));
-  });
-
-  test('没有缓存且学生信息拉取失败时不返回猜测的年级', () async {
     cached = null;
-    fetch = () async => throw const FormatException('synthetic invalid info');
+    final missing = await source.readLocal();
+    expect(missing.grade, isNull);
+    cached = _info(academicYear: 2026);
+    final latest = await source.readLocal();
 
-    await source.ensureStarted();
-
-    expect(source.value.grade, isNull);
-    expect(source.value.identityMatches, isFalse);
-    expect(source.value.academicYear, isNull);
-    expect(source.value.enrollmentYear, isNull);
-    expect(source.value.loading, isFalse);
-    expect(saved, isEmpty);
+    expect(latest.grade, 2);
+    expect(latest.fromCache, isTrue);
+    expect(previous.grade, 1);
+    expect(cacheReads, 3);
   });
 
-  test('缓存恢复标记来源为缓存，成功刷新后切换为本次拉取', () async {
-    final cachedInfo = _info(academicYear: 2025);
-    final freshInfo = _info(academicYear: 2026);
-    cached = cachedInfo;
-    nextFetch = freshInfo;
+  test('解绑后重绑同一账号，可以直接使用仍匹配的本地缓存', () async {
+    cached = _info(academicYear: 2025);
+    expect((await source.readLocal()).grade, 1);
 
-    await source.ensureStarted();
-    expect(source.value.fromCache, isTrue);
-    expect(source.value.fetchedAt, cachedInfo.fetchedAt);
-    expect(source.value.grade, 1);
-    expect(cacheReads, 1);
-    expect(fetches, 0);
+    account = null;
+    expect((await source.readLocal()).grade, isNull);
+    account = _studentId;
 
-    await source.refresh();
-    expect(source.value.fromCache, isFalse);
-    expect(source.value.fetchedAt, freshInfo.fetchedAt);
-    expect(source.value.grade, 2);
-    expect(fetches, 1);
-    expect(saved, [freshInfo]);
+    expect((await source.readLocal()).grade, 1);
+    expect(cacheReads, 2);
+    expect(accountReads, 5);
   });
 
-  test('初始化合并调用只读取一次缓存', () async {
-    await Future.wait([source.ensureStarted(), source.ensureStarted()]);
+  for (final after in <String?>[null, 'different-account']) {
+    test('读缓存期间绑定变为「$after」时拒绝旧记录', () async {
+      final delayedCache = Completer<StudentInfo?>();
+      final cacheStarted = Completer<void>();
+      readCache = () {
+        cacheStarted.complete();
+        return delayedCache.future;
+      };
+      final pending = source.readLocal();
+      await cacheStarted.future;
 
-    expect(cacheReads, 1);
-    expect(fetches, 0);
-    expect(source.value.grade, 2);
-  });
+      account = after;
+      delayedCache.complete(_info(academicYear: 2025));
+      final result = await pending;
 
-  test('晚到的旧绑定读取不能覆盖重新核对后的身份状态', () async {
-    await source.ensureStarted();
+      expect(result.portalBound, after != null);
+      expect(result.identityMatches, isFalse);
+      expect(result.academicYear, isNull);
+      expect(result.enrollmentYear, isNull);
+      expect(result.fetchedAt, isNull);
+      expect(result.grade, isNull);
+      expect(result.loading, isFalse);
+      expect(accountReads, 2);
+    });
+  }
+
+  test('首次账号读取晚到时，第二次核验仍阻止旧绑定穿透', () async {
     final delayedAccount = Completer<String?>();
-    var deferNext = true;
-    account = 'different-account';
+    final beforeStarted = Completer<void>();
+    var first = true;
     readAccount = () {
-      if (deferNext) {
-        deferNext = false;
+      if (first) {
+        first = false;
+        beforeStarted.complete();
         return delayedAccount.future;
       }
       return Future.value(account);
     };
-    var notifications = 0;
-    source.addListener(() => notifications++);
+    final pending = source.readLocal();
+    await beforeStarted.future;
 
-    await source.refresh();
-    final current = source.value;
-    final completedNotifications = notifications;
-    expect(current.identityMatches, isFalse);
-    expect(current.grade, isNull);
-
+    account = 'different-account';
     delayedAccount.complete(_studentId);
-    await Future<void>.delayed(Duration.zero);
+    final result = await pending;
 
-    expect(source.value, same(current));
-    expect(source.value.identityMatches, isFalse);
-    expect(source.value.grade, isNull);
-    expect(notifications, completedNotifications);
+    expect(result.identityMatches, isFalse);
+    expect(result.grade, isNull);
+    expect(accountReads, 2);
   });
 
-  test('解绑后晚到的绑定读取不能重新恢复年级', () async {
-    await source.ensureStarted();
-    final delayedAccount = Completer<String?>();
-    final readStarted = Completer<void>();
-    readAccount = () {
-      if (!readStarted.isCompleted) readStarted.complete();
-      return delayedAccount.future;
-    };
-    final refresh = source.refresh();
-    await readStarted.future;
+  for (final stage in [
+    'bound_account_before',
+    'cache_read',
+    'bound_account_after',
+  ]) {
+    test('本地读取阶段 $stage 失败时返回未知年级并保留原始诊断', () async {
+      final records = <Map<String, Object?>>[];
+      AppLog.recordListenerForTesting = records.add;
+      if (stage == 'cache_read') {
+        readCache = () async => throw const FormatException('synthetic cache');
+      } else {
+        var reads = 0;
+        readAccount = () async {
+          reads++;
+          if (stage == 'bound_account_before' || reads == 2) {
+            throw StateError('synthetic binding failure');
+          }
+          return _studentId;
+        };
+      }
 
-    bound = false;
-    account = null;
-    await controller.onPortalBindingChanged(false);
-    expect(source.value.portalBound, isFalse);
-    expect(source.value.grade, isNull);
+      final result = await source.readLocal();
 
-    delayedAccount.complete(_studentId);
-    await refresh;
+      expect(result.grade, isNull);
+      expect(result.error, isNotEmpty);
+      expect(result.error, isNot(contains(_studentId)));
+      expect(result.loading, isFalse);
+      expect(result.fromCache, isTrue);
+      final failure = records.singleWhere(
+        (record) => record['event'] == 'grade_source.unavailable',
+      );
+      final attrs = failure['attrs'] as Map;
+      expect(attrs['stage'], stage);
+      expect(attrs['error_chain'], isNotEmpty);
+      expect(attrs['stack_trace'], isNotEmpty);
+    });
+  }
 
-    expect(source.value.portalBound, isFalse);
-    expect(source.value.identityMatches, isFalse);
-    expect(source.value.grade, isNull);
-    expect(source.value.loading, isFalse);
+  test('实际本地缓存不存在时，读取不创建学生信息目录', () async {
+    final directory = await localDirectory();
+    final profileDirectory = Directory.fromUri(
+      directory.uri.resolve('student_info/'),
+    );
+
+    final result = await StudentInfoStore.read();
+
+    expect(result, isNull);
+    expect(await profileDirectory.exists(), isFalse);
+    expect(await directory.list().toList(), isEmpty);
+    expect(platformCalls, ['getApplicationDocumentsDirectory']);
   });
 
-  test('绑定读取失败时保留诊断并提示手动选择年级', () async {
+  test('实际本地缓存读完保持原始文件，来源仍进行两次绑定核验', () async {
+    final directory = await localDirectory();
+    final file = profileFile(directory);
+    await file.parent.create(recursive: true);
+    final originalInfo = _info(academicYear: 2025);
+    final original = jsonEncode(originalInfo.toJson());
+    await file.writeAsString(original);
+    readCache = StudentInfoStore.read;
+
+    final result = await source.readLocal();
+
+    expect(result.grade, 1);
+    expect(result.fromCache, isTrue);
+    expect(result.fetchedAt, originalInfo.fetchedAt);
+    expect(await file.readAsString(), original);
+    expect(await file.parent.list().toList(), hasLength(1));
+    expect(accountReads, 2);
+    expect(platformCalls, ['getApplicationDocumentsDirectory']);
+  });
+
+  test('损坏本地 JSON 降级为未知年级且不改写原件', () async {
+    final directory = await localDirectory();
+    final file = profileFile(directory);
+    await file.parent.create(recursive: true);
+    await file.writeAsString('{broken');
+    readCache = StudentInfoStore.read;
     final records = <Map<String, Object?>>[];
     AppLog.recordListenerForTesting = records.add;
-    readAccount = () async => throw StateError('synthetic unavailable binding');
 
-    await source.ensureStarted();
+    final result = await source.readLocal();
 
-    expect(source.value.grade, isNull);
-    expect(source.value.error, isNotEmpty);
-    expect(source.value.loading, isFalse);
-    final failure = records.lastWhere(
-      (record) => record['event'] == 'grade_source.unavailable',
+    expect(result.grade, isNull);
+    expect(await file.readAsString(), '{broken');
+    final failure = records.singleWhere(
+      (record) => record['event'] == 'cache.read_failed',
     );
     final attrs = failure['attrs'] as Map;
     expect(attrs['error_chain'], isNotEmpty);
     expect(attrs['stack_trace'], isNotEmpty);
   });
 
-  test('dispose 后晚到的绑定错误不会通知或恢复状态', () async {
-    await source.ensureStarted();
-    final delayedAccount = Completer<String?>();
-    final readStarted = Completer<void>();
-    readAccount = () {
-      if (!readStarted.isCompleted) readStarted.complete();
-      return delayedAccount.future;
-    };
-    var notifications = 0;
-    source.addListener(() => notifications++);
-    final refresh = source.refresh();
-    await readStarted.future;
-    final beforeDispose = source.value;
-    final completedNotifications = notifications;
+  for (final fetchedAt in <String?>[null, 'invalid-time']) {
+    test('本地缓存获取时间「$fetchedAt」无效时拒绝记录并保留诊断', () async {
+      final directory = await localDirectory();
+      final file = profileFile(directory);
+      await file.parent.create(recursive: true);
+      final data = _info().toJson()..['fetchedAt'] = fetchedAt;
+      final original = jsonEncode(data);
+      await file.writeAsString(original);
+      final records = <Map<String, Object?>>[];
+      AppLog.recordListenerForTesting = records.add;
 
-    source.dispose();
-    sourceDisposed = true;
-    delayedAccount.completeError(StateError('synthetic late binding failure'));
-    await refresh;
+      expect(await StudentInfoStore.read(), isNull);
+      expect(await file.readAsString(), original);
+      final failure = records.singleWhere(
+        (record) => record['event'] == 'cache.read_failed',
+      );
+      final attrs = failure['attrs'] as Map;
+      expect(attrs['error_type'], 'FormatException');
+      expect(attrs['error_chain'], isNotEmpty);
+      expect(attrs['stack_trace'], isNotEmpty);
+    });
+  }
 
-    expect(source.value, same(beforeDispose));
-    expect(notifications, completedNotifications);
-    final completedFetches = fetches;
-    await source.ensureStarted();
-    await source.refresh();
-    expect(fetches, completedFetches);
+  test('本地目录平台不可用时保留系统原因及堆栈', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          pathProviderChannel,
+          (_) async => throw PlatformException(code: 'synthetic_unavailable'),
+        );
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+
+    expect(await StudentInfoStore.read(), isNull);
+
+    final failure = records.singleWhere(
+      (record) =>
+          record['scope'] == 'student_info.store' &&
+          record['event'] == 'storage.unavailable',
+    );
+    final attrs = failure['attrs'] as Map;
+    expect(attrs['error_type'], 'PlatformException');
+    expect(attrs['error_chain'], isNotEmpty);
+    expect(attrs['stack_trace'], isNotEmpty);
   });
 
-  test('缓存启动尚未完成时 dispose，晚到结果不会通知已释放来源', () async {
-    final delayedCache = Completer<StudentInfo?>();
-    readCache = () => delayedCache.future;
-    var notifications = 0;
-    source.addListener(() => notifications++);
+  test('学生卡正常保存仍会创建本地目录且可恢复', () async {
+    final directory = await localDirectory();
+    final info = _info();
 
-    final startup = source.ensureStarted();
-    final completedNotifications = notifications;
-    source.dispose();
-    sourceDisposed = true;
-    delayedCache.complete(_info());
-    await startup;
+    await StudentInfoStore.save(info);
+    final restored = await StudentInfoStore.read();
 
-    expect(notifications, completedNotifications);
-    expect(cacheReads, 1);
-    expect(fetches, 0);
+    expect(await profileFile(directory).exists(), isTrue);
+    expect(restored?.user.studentId, _studentId);
+    expect(restored?.semester?.year, info.semester?.year);
+    expect(restored?.fetchedAt, info.fetchedAt);
   });
 }

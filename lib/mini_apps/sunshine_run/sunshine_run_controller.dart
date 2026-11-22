@@ -7,14 +7,15 @@ import '../../core/logging/app_log.dart';
 import 'sunshine_run_models.dart';
 import 'sunshine_run_store.dart';
 
-/// 阳光跑本机计算状态；编辑即时生效，持久化串行执行，年级来自 core 只读来源。
+/// 阳光跑本机计算状态；编辑即时生效，持久化串行执行，年级只读本地缓存。
 class SunshineRunController extends ChangeNotifier {
   SunshineRunController._()
     : _read = SunshineRunStore.read,
       _save = SunshineRunStore.save,
       _injectedGradeSource = null,
       _useRegisteredGradeSource = true,
-      _restoreTimeout = const Duration(seconds: 5);
+      _restoreTimeout = const Duration(seconds: 5),
+      _gradeReadTimeout = const Duration(seconds: 2);
 
   /// 测试使用独立状态和存储，不读取真实跑步记录或门户身份。
   @visibleForTesting
@@ -23,6 +24,7 @@ class SunshineRunController extends ChangeNotifier {
     required this._save,
     StudentAcademicSource? gradeSource,
     this._restoreTimeout = const Duration(seconds: 5),
+    this._gradeReadTimeout = const Duration(seconds: 2),
   }) : _injectedGradeSource = gradeSource,
        _useRegisteredGradeSource = false;
 
@@ -37,22 +39,20 @@ class SunshineRunController extends ChangeNotifier {
   final StudentAcademicSource? _injectedGradeSource;
   final bool _useRegisteredGradeSource;
   final Duration _restoreTimeout;
+  final Duration _gradeReadTimeout;
   final List<SunshineRunState> _undo = [];
   SunshineRunState _state = SunshineRunState.initial();
-  StudentAcademicSource? _gradeSource;
   Future<void>? _starting;
+  Future<void>? _gradeReading;
   Future<void> _writeTail = Future.value();
   bool _started = false;
   bool _restoringState = true;
   bool _disposed = false;
   bool _storageCorrupt = false;
   bool _storageUnavailable = false;
-  bool _manualGrade = false;
   bool _bindingBlocked = false;
-  bool _gradeRefreshing = false;
-  bool _identifyingGrade = false;
   String? _storageWarning;
-  String? _gradeMessage = '年级尚未识别，请确认当前年级。';
+  int _resolvedGrade = 2;
   int _revision = 0;
   int _gradeGeneration = 0;
   int _customSequence = 0;
@@ -74,19 +74,17 @@ class SunshineRunController extends ChangeNotifier {
   /// 原始记录损坏时保留文件，直到用户明确重试保存。
   bool get storageCorrupt => _storageCorrupt;
 
-  /// 年级来源或无法识别的原因。
-  String? get gradeMessage => _gradeMessage;
-
-  /// 年级正在确认；不影响计算器的离线编辑。
-  bool get identifyingGrade => _identifyingGrade;
-
   /// 仅本机记录尚未恢复时暂停编辑；失败或超时后也会恢复离线计算。
   bool get restoringState => _restoringState;
 
-  /// 先恢复本机记录；学生信息及绑定读取在后台启动，不阻塞离线计算。
+  /// 首次恢复跑步记录；每次进入仅读本地年级，不发起门户请求。
+  ///
+  /// 首次年级读取在后台执行，延迟或失败都不阻塞离线编辑。
   Future<void> ensureStarted() {
     if (_disposed) return Future.value();
-    if (_started) return _starting ?? Future.value();
+    if (_started) {
+      return _restoringState ? _starting ?? Future.value() : _readLocalGrade();
+    }
     _started = true;
     return _starting = _start();
   }
@@ -110,7 +108,8 @@ class SunshineRunController extends ChangeNotifier {
       );
       if (_disposed) return;
       if (revision == _revision && restored.state != null) {
-        _state = restored.state!;
+        // 旧文件中的手选年级不再作为来源，其余次数与活动原样恢复。
+        _state = restored.state!.copyWith(grade: _resolvedGrade);
       }
       _storageCorrupt = restored.corrupt;
       _storageUnavailable = !restored.available;
@@ -136,92 +135,60 @@ class SunshineRunController extends ChangeNotifier {
       _restoringState = false;
     }
     _notify();
-    _attachGradeSource();
-    unawaited(_startGradeSource());
+    unawaited(_readLocalGrade());
   }
 
-  void _attachGradeSource() {
+  Future<void> _readLocalGrade() {
+    if (_disposed || _bindingBlocked) return Future.value();
+    if (_gradeReading case final pending?) return pending;
     final source =
         _injectedGradeSource ??
         (_useRegisteredGradeSource ? StudentAcademics.source : null);
-    if (identical(source, _gradeSource)) return;
-    _gradeSource?.removeListener(_onAcademicInfoChanged);
-    _gradeSource = source;
-    source?.addListener(_onAcademicInfoChanged);
-  }
-
-  Future<void> _startGradeSource() async {
-    if (_disposed || _bindingBlocked) return;
-    final generation = _gradeGeneration;
-    final source = _gradeSource;
     if (source == null) {
-      if (!_manualGrade) {
-        _gradeMessage = '暂无学生信息来源，请手动选择年级。';
-        _identifyingGrade = false;
-        _notify();
-      }
-      return;
+      _applyDerivedGrade(null);
+      return Future.value();
     }
-    if (!_manualGrade && !_bindingBlocked) {
-      _identifyingGrade = true;
-      _gradeMessage = '正在识别年级，可先手动选择。';
-      _notify();
-    }
-    try {
-      await source.ensureStarted();
-      if (!_disposed) _onAcademicInfoChanged();
-    } catch (error, stackTrace) {
-      _log.warning('grade.source_failed', error: error, stackTrace: stackTrace);
-      if (!_disposed &&
-          generation == _gradeGeneration &&
-          !_manualGrade &&
-          !_bindingBlocked) {
-        _identifyingGrade = false;
-        _gradeMessage = '学生信息暂不可用，请手动选择年级。';
-        _notify();
-      }
-    }
+    final generation = _gradeGeneration;
+    late final Future<void> reading;
+    reading = _readGrade(source, generation).whenComplete(() {
+      // 旧绑定的读取完成时不能清除新绑定正在进行的读取。
+      if (identical(_gradeReading, reading)) _gradeReading = null;
+    });
+    _gradeReading = reading;
+    return reading;
   }
 
-  void _onAcademicInfoChanged() {
-    if (_disposed || _manualGrade || _bindingBlocked) return;
-    final info = _gradeSource?.value;
-    if (info == null) return;
-    _identifyingGrade = _gradeRefreshing || info.loading;
-    if (info.loading) {
-      _gradeMessage = '正在识别年级，可先手动选择。';
-      _notify();
-      return;
+  Future<void> _readGrade(StudentAcademicSource source, int generation) async {
+    StudentAcademicInfo? info;
+    try {
+      info = await source.readLocal().timeout(_gradeReadTimeout);
+    } catch (error, stackTrace) {
+      _log.warning(
+        'grade.local_source_failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
-    final grade = info.grade;
-    if (info.error != null) {
-      _gradeMessage = info.error;
-    } else if (!info.portalBound) {
-      _gradeMessage = '门户未绑定，请手动选择年级。';
-    } else if (!info.identityMatches) {
-      _gradeMessage = '暂无与当前账号一致的学生信息，请手动选择年级。';
-    } else if (!info.undergraduate) {
-      _gradeMessage = '暂不支持自动识别该用户类别，请手动选择年级。';
-    } else if (grade != 1 && grade != 2) {
-      _gradeMessage = grade == null
-          ? '学生学年信息不完整，请手动选择年级。'
-          : '当前识别年级不在大一、大二范围内，请手动选择。';
-    } else {
-      final source = info.fromCache ? '本机缓存' : '门户信息';
-      _gradeMessage =
-          '依据$source中的 ${info.academicYear}—${info.academicYear! + 1} 学年识别为${grade == 1 ? '大一' : '大二'}。';
-      if (_state.grade != grade) {
-        unawaited(
-          _edit(
-            (state) => state.copyWith(grade: grade),
-            event: 'grade.identified',
-            recordUndo: false,
-          ),
-        );
-        return;
-      }
+    if (_disposed || _bindingBlocked || generation != _gradeGeneration) return;
+    _applyDerivedGrade(
+      info == null || info.loading || info.error != null ? null : info.grade,
+    );
+  }
+
+  void _applyDerivedGrade(int? grade) {
+    if (_disposed) return;
+    final resolved = grade == 1 ? 1 : 2;
+    _resolvedGrade = resolved;
+    // 年级由当前本地身份推导，不属于撤销内容。
+    for (var index = 0; index < _undo.length; index++) {
+      _undo[index] = _undo[index].copyWith(grade: resolved);
     }
+    if (_restoringState || _state.grade == resolved) return;
+    _state = _state.copyWith(grade: resolved);
+    final revision = ++_revision;
     _notify();
+    // 自动年级变化不结束长按，也不占用其撤销点或业务 Trace。
+    unawaited(_queueSave(_state, revision, event: 'grade.local_update'));
   }
 
   /// 修改使用前已有的总次数和晨跑次数；晨跑不能超过总次数。
@@ -335,36 +302,14 @@ class SunshineRunController extends ChangeNotifier {
     event: 'exemption.update',
   );
 
-  /// 手动选择年级；已在途的自动识别不能覆盖这次选择。
-  Future<bool> setGrade(int grade) {
-    // 先校验年级再改变来源标记，非法输入不影响正在进行的识别。
-    _state.copyWith(grade: grade);
-    _manualGrade = true;
-    _gradeGeneration++;
-    _gradeRefreshing = false;
-    _identifyingGrade = false;
-    _gradeMessage = '已手动选择${grade == 1 ? '大一' : '大二'}，可重新识别。';
-    return _edit(
-      (state) => state.copyWith(grade: grade),
-      event: 'grade.select',
-    );
-  }
-
-  /// 恢复上一次用户操作的完整快照，并重新保存。
+  /// 撤销上一次用户操作的次数与活动，始终沿用当前本地年级。
   Future<bool> undo() {
     if (_disposed) return Future.value(false);
     if (_restoringState) {
       return ensureStarted().then((_) => undo());
     }
     if (_undo.isEmpty) return Future.value(_storageWarning == null);
-    final previous = _undo.removeLast();
-    if (previous.grade != _state.grade) {
-      _manualGrade = true;
-      _gradeGeneration++;
-      _gradeRefreshing = false;
-      _identifyingGrade = false;
-      _gradeMessage = '已恢复${previous.grade == 1 ? '大一' : '大二'}设置，可重新识别。';
-    }
+    final previous = _undo.removeLast().copyWith(grade: _resolvedGrade);
     return _edit((_) => previous, event: 'state.undo', recordUndo: false);
   }
 
@@ -390,68 +335,16 @@ class SunshineRunController extends ChangeNotifier {
     );
   }
 
-  /// 使用现有学生信息来源重新识别；手动修改会使旧请求结果失效。
-  Future<void> identifyGrade() async {
+  /// 绑定变化只重新核对本地年级，次数与活动保留，未知时回退大二。
+  Future<void> onPortalBindingChanged(bool bound) async {
     if (_disposed) return;
     final generation = ++_gradeGeneration;
-    _manualGrade = false;
-    _gradeRefreshing = true;
-    _identifyingGrade = true;
-    _gradeMessage = '正在识别年级，可先手动选择。';
-    _notify();
-    await ensureStarted();
-    if (_disposed || generation != _gradeGeneration || _manualGrade) return;
-    _attachGradeSource();
-    final source = _gradeSource;
-    if (source == null) {
-      _gradeMessage = '暂无学生信息来源，请手动选择年级。';
-      _gradeRefreshing = false;
-      _identifyingGrade = false;
-      _notify();
-      return;
-    }
-    _bindingBlocked = false;
-    var failed = false;
-    try {
-      await _log.operation('grade.identify', source.refresh);
-    } catch (error, stackTrace) {
-      _log.warning(
-        'grade.identify_failed',
-        error: error,
-        stackTrace: stackTrace,
-      );
-      if (!_disposed && generation == _gradeGeneration && !_manualGrade) {
-        failed = true;
-        _gradeMessage = '学生信息暂不可用，请手动选择年级。';
-      }
-    } finally {
-      if (!_disposed && generation == _gradeGeneration && !_manualGrade) {
-        _gradeRefreshing = false;
-        if (failed) {
-          _identifyingGrade = false;
-          _notify();
-        } else {
-          _onAcademicInfoChanged();
-        }
-      }
-    }
-  }
-
-  /// 绑定变化只重新核对年级来源，不清除跑步记录或手动年级。
-  Future<void> onPortalBindingChanged(bool bound) async {
-    final generation = ++_gradeGeneration;
     _bindingBlocked = !bound;
-    _gradeRefreshing = false;
-    if (!bound) {
-      _identifyingGrade = false;
-      _gradeMessage = _manualGrade ? '门户未绑定，当前按手动选择的年级计算。' : '门户未绑定，请手动选择年级。';
-      _notify();
-    }
+    _gradeReading = null;
+    _applyDerivedGrade(null);
     await ensureStarted();
     if (_disposed || !bound || generation != _gradeGeneration) return;
-    _attachGradeSource();
-    // 学生信息自己的绑定回调负责刷新；这里订阅结果，避免重复拉取。
-    unawaited(_startGradeSource());
+    await _gradeReading;
   }
 
   Future<bool> _edit(
@@ -479,11 +372,6 @@ class SunshineRunController extends ChangeNotifier {
     if (recordUndo) {
       _undo.add(_state);
       if (_undo.length > _undoLimit) _undo.removeAt(0);
-    } else if (event == 'grade.identified') {
-      // 自动来源更新不属于用户撤销操作，旧次数快照沿用新识别的年级。
-      for (var index = 0; index < _undo.length; index++) {
-        _undo[index] = _undo[index].copyWith(grade: next.grade);
-      }
     }
     _state = next;
     final revision = ++_revision;
@@ -519,6 +407,7 @@ class SunshineRunController extends ChangeNotifier {
     Future<bool> write() async {
       await previous;
       await _starting;
+      if (_disposed) return false;
       if (_storageUnavailable && !replaceCorrupt) {
         // 初始恢复失败时还不知道原文件内容，不能用空基线自动覆盖它。
         AppLog.reportOutcome('degraded', reason: 'initial_storage_unavailable');
@@ -568,8 +457,8 @@ class SunshineRunController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _gradeGeneration++;
+    _gradeReading = null;
     finishActivityAdjustment();
-    _gradeSource?.removeListener(_onAcademicInfoChanged);
     super.dispose();
   }
 }

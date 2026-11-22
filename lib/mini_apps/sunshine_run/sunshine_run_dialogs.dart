@@ -11,7 +11,7 @@ class _DialogFrame extends StatelessWidget {
     return Dialog(
       backgroundColor: palette.surface,
       surfaceTintColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(color: palette.divider),
@@ -20,7 +20,7 @@ class _DialogFrame extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 440),
         child: SingleChildScrollView(
           child: Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(16),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -51,13 +51,13 @@ class _DialogFrame extends StatelessWidget {
                       ),
                       padding: const EdgeInsets.all(8),
                       constraints: const BoxConstraints(
-                        minHeight: 40,
-                        minWidth: 40,
+                        minHeight: 44,
+                        minWidth: 44,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
                 child,
               ],
             ),
@@ -640,7 +640,7 @@ class _ResetDialog extends StatelessWidget {
             enabled: added > 0,
           ),
           const SizedBox(height: 10),
-          option('all', '清空全部跑步记录', '将已有次数与所有活动场次归零，保留年级设置', danger: true),
+          option('all', '清空全部跑步记录', '清空已有次数与活动场次，移除其他活动并取消减免', danger: true),
           const SizedBox(height: 12),
           Align(
             alignment: Alignment.centerRight,
@@ -742,7 +742,7 @@ class _RulesDialog extends StatelessWidget {
           heading('使用说明'),
           line('总次数完成率最高显示 100%，达标与满分仍会校验晨跑次数。'),
           line('“已有次数”作为基数，下方活动场次累加在其上。'),
-          line('年级自动使用现有身份与校历信息识别；信息不可用时可手动选择。切换年级或减免不会修改跑步记录。'),
+          line('比赛减免仅调整计算目标，不会修改已录入的跑步记录。'),
           line('支持提示中的“撤销”，以及外接键盘 Ctrl/⌘+Z。'),
           const SizedBox(height: 10),
           Align(
