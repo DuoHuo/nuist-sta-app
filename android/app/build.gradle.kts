@@ -1,6 +1,4 @@
 import java.net.URI
-import java.security.MessageDigest
-import java.util.zip.ZipFile
 
 plugins {
     id("com.android.application")
@@ -40,7 +38,8 @@ android {
         applicationId = "dev.duohuo.nuist_sta_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Apache POI 使用 MethodHandle，需要 Android 8.0 及以上。
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
@@ -60,8 +59,6 @@ android {
     // 强行排除非 arm64-v8a 的所有 .so 库
     packaging {
         jniLibs {
-            // 压缩体积较大的离线 Word 转换引擎，系统安装时解包。
-            useLegacyPackaging = true
             excludes += listOf(
                 "lib/armeabi-v7a/**",
                 "lib/x86/**",
@@ -101,114 +98,6 @@ android {
     }
 }
 
-abstract class PrepareBulletinWordEngine : DefaultTask() {
-    @get:Input
-    abstract val sha256: Property<String>
-
-    @get:Input
-    abstract val packageUrls: ListProperty<String>
-
-    @get:Optional
-    @get:InputFile
-    @get:PathSensitive(PathSensitivity.NONE)
-    abstract val localApk: RegularFileProperty
-
-    @get:Internal
-    abstract val downloadCache: RegularFileProperty
-
-    @get:OutputDirectory
-    abstract val assets: DirectoryProperty
-
-    @get:OutputDirectory
-    abstract val nativeLibraries: DirectoryProperty
-
-    private fun verified(file: File): Boolean {
-        if (!file.isFile) return false
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().buffered().use { input ->
-            val buffer = ByteArray(128 * 1024)
-            while (true) {
-                val count = input.read(buffer)
-                if (count == -1) break
-                digest.update(buffer, 0, count)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) } == sha256.get()
-    }
-
-    private fun inputApk(): File {
-        localApk.orNull?.asFile?.let {
-            check(verified(it)) { "LibreOffice Android 运行包校验失败" }
-            return it
-        }
-        val apk = downloadCache.get().asFile
-        if (verified(apk)) return apk
-        apk.parentFile.mkdirs()
-        val partial = File(apk.parentFile, "${apk.name}.part")
-        for (source in packageUrls.get()) {
-            try {
-                val connection = URI(source).toURL().openConnection().apply {
-                    connectTimeout = 15_000
-                    readTimeout = 60_000
-                }
-                connection.getInputStream().use { input ->
-                    partial.outputStream().buffered().use { input.copyTo(it) }
-                }
-                if (verified(partial)) {
-                    partial.copyTo(apk, overwrite = true)
-                    return apk
-                }
-            } catch (_: java.io.IOException) {
-                // 换用下一个 F-Droid 镜像，所有来源都校验同一个包。
-            } finally {
-                partial.delete()
-            }
-        }
-        error("无法获得校验通过的 LibreOffice Android 运行包")
-    }
-
-    @TaskAction
-    fun prepare() {
-        val apk = inputApk()
-        ZipFile(apk).use { archive ->
-            for (entry in archive.entries()) {
-                if (entry.isDirectory) continue
-                val name = entry.name
-                val output = when {
-                    name.startsWith("lib/arm64-v8a/") && name.endsWith(".so") &&
-                        !name.endsWith("/libc++_shared.so") ->
-                        nativeLibraries.get().asFile.resolve(name.removePrefix("lib/"))
-                    listOf("assets/program/", "assets/share/", "assets/unpack/").any(name::startsWith) ->
-                        assets.get().asFile.resolve(name.removePrefix("assets/"))
-                    else -> continue
-                }
-                output.parentFile.mkdirs()
-                archive.getInputStream(entry).use { input ->
-                    output.outputStream().buffered().use { input.copyTo(it) }
-                }
-            }
-        }
-    }
-}
-
-val prepareBulletinWordEngine by tasks.registering(PrepareBulletinWordEngine::class) {
-    sha256.set("e921bfb14170824572eb1e33643538803681226427948c245084f5e6356c3775")
-    packageUrls.set(listOf(
-        "https://f-droid.org/repo/org.documentfoundation.libreoffice_135.apk",
-        "https://mirrors.tuna.tsinghua.edu.cn/fdroid/repo/org.documentfoundation.libreoffice_135.apk",
-        "https://mirror.kumi.systems/fdroid/repo/org.documentfoundation.libreoffice_135.apk",
-    ))
-    localApk.fileProvider(providers.environmentVariable("BULLETIN_WORD_ENGINE_APK").map(::File))
-    downloadCache.set(layout.buildDirectory.file("downloads/LibreOffice-26.2.7.3-arm64.apk"))
-    assets.set(layout.buildDirectory.dir("generated/bulletinWord/assets"))
-    nativeLibraries.set(layout.buildDirectory.dir("generated/bulletinWord/jniLibs"))
-}
-
-androidComponents.onVariants { variant ->
-    variant.sources.assets?.addGeneratedSourceDirectory(prepareBulletinWordEngine) { it.assets }
-    variant.sources.jniLibs?.addGeneratedSourceDirectory(prepareBulletinWordEngine) { it.nativeLibraries }
-}
-
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
@@ -222,6 +111,9 @@ flutter {
 dependencies {
     implementation("app.opendocument:odr-core-android:7.7.0")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    // 旧版 Word（.doc）由 HWPF 转成静态 HTML 预览。
+    implementation("org.apache.poi:poi:5.5.1")
+    implementation("org.apache.poi:poi-scratchpad:5.5.1")
     implementation("net.sourceforge.jexcelapi:jxl:2.6.12") {
         // JExcelAPI 在没有 Log4j 时使用自带日志后端。
         exclude(group = "log4j", module = "log4j")

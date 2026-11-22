@@ -103,13 +103,9 @@ bool isBulletinLegacyExcel(String? mimeType) =>
 bool isBulletinSearchableWorkbook(String? mimeType) =>
     isBulletinLegacyExcel(mimeType) || mimeType == _officeMimeTypes['xlsx'];
 
-/// 将旧版 Word 附件交给后台 PDF 转换。
+/// 旧版 Word 附件先在后台转成 HTML，再交给离线阅读视图。
 bool isBulletinLegacyWord(String? mimeType) =>
     mimeType == _legacyOfficeMimeTypes['doc'];
-
-/// 对有版面的 Word 正文生成带文字层的 PDF。
-bool isBulletinSearchableWord(String? mimeType) =>
-    isBulletinLegacyWord(mimeType) || mimeType == _officeMimeTypes['docx'];
 
 /// 文件名无法识别时，通过 Office 包内的元数据识别类型。
 Future<String?> detectBulletinOfficeMimeType(File file) async {
@@ -126,8 +122,8 @@ Future<String?> detectBulletinOfficeMimeType(File file) async {
   }
 }
 
-/// 导出保有文字层的 PDF，供现有的 PDF 阅读界面打开。
-Future<File> renderBulletinWordPdf(File source) async {
+/// 把旧版 Word 转成静态 HTML，供离线阅读视图打开。
+Future<File> renderBulletinWordHtml(File source) async {
   final path = await _previewChannel
       .invokeMethod<String>('convertWord', {'path': source.path})
       .timeout(const Duration(seconds: 60));

@@ -13,10 +13,14 @@ import java.io.File
 import java.util.concurrent.Executors
 import java.util.zip.ZipFile
 
-/** 通过原生引擎生成静态 HTML，WebView 只负责显示。 */
+/**
+ * 通过原生引擎生成静态 HTML，WebView 只负责显示。
+ * [convertedWord] 为真时 [file] 是旧版 Word 已转换好的 HTML，直接作为唯一视图。
+ */
 internal class BulletinOfficeRenderer(
     private val file: File,
     private val dark: Boolean,
+    private val convertedWord: Boolean = false,
 ) {
     private val lock = Any()
     private var session: Session? = null
@@ -24,6 +28,13 @@ internal class BulletinOfficeRenderer(
 
     fun metadata(width: Int): String? = synchronized(lock) {
         if (closed) return null
+        if (convertedWord) {
+            return JSONObject()
+                .put("mime", BulletinWordHtml.MIME_TYPE)
+                .put("sheets", false)
+                .put("views", JSONArray().put(""))
+                .toString()
+        }
         val active = session ?: open(width)?.also { session = it } ?: return null
         val views = JSONArray()
         for (view in active.views) views.put(view.name)
@@ -36,6 +47,10 @@ internal class BulletinOfficeRenderer(
 
     fun render(index: Int): ByteArray? = synchronized(lock) {
         if (closed) return null
+        if (convertedWord) {
+            if (index != 0 || file.length() > BulletinWordHtml.MAX_HTML_BYTES) return null
+            return file.readBytes()
+        }
         val active = session ?: return null
         val view = active.views.getOrNull(index) ?: return null
         active.service.write(view.path).takeIf { it.size <= MAX_HTML_BYTES }

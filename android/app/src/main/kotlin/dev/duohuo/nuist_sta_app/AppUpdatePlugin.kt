@@ -91,7 +91,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
                 "requestNotificationPermission" -> requestNotifications(result)
                 "openInstallSettings" -> {
                     val activity = foregroundActivity()
-                    if (Build.VERSION.SDK_INT >= 26 && !AppUpdateStore.installAllowed(app)) {
+                    if (!AppUpdateStore.installAllowed(app)) {
                         activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                             Uri.parse("package:${app.packageName}")))
                     }
@@ -135,7 +135,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         val intent = Intent(app, AppUpdateService::class.java).putExtra(AppUpdateService.EXTRA_TOKEN, token)
         try {
             AppUpdateStore.update(token, "downloading")
-            if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(intent) else app.startService(intent)
+            app.startForegroundService(intent)
         } catch (failure: AppUpdateFailure) {
             // 状态落盘失败时服务尚未启动，仍须在内存中恢复可重试状态。
             AppUpdateStore.update(token, "paused", error = failure.code, save = false)
@@ -205,7 +205,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
                 val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
                     setAppPackageName(item.packageName)
                     setSize(item.size)
-                    if (Build.VERSION.SDK_INT >= 26) setInstallReason(PackageManager.INSTALL_REASON_USER)
+                    setInstallReason(PackageManager.INSTALL_REASON_USER)
                     if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
                 }
                 sessionId = installer.createSession(params)

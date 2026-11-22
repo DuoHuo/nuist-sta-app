@@ -12,7 +12,6 @@ import 'bulletin_models.dart';
 import 'bulletin_office_engine_view.dart';
 import 'bulletin_office_view.dart';
 import 'bulletin_pdf_view.dart';
-import 'bulletin_word_preview_cache.dart';
 
 /// 附件预览窗口，支持在其他应用中打开下载的文件。
 class BulletinAttachmentPreviewDialog extends StatefulWidget {
@@ -50,7 +49,9 @@ class _BulletinAttachmentPreviewDialogState
   File? _file;
   BulletinPreviewKind? _kind;
   BulletinPdfDocument? _pdf;
-  File? _convertedWord;
+
+  /// 旧版 Word 转换出的 HTML；为空时离线阅读视图直接读取原附件。
+  File? _engineFile;
   Uint8List? _firstPdfPage;
   BulletinOfficeDocument? _office;
   String? _engineMimeType;
@@ -63,7 +64,6 @@ class _BulletinAttachmentPreviewDialogState
   bool _searchExpanded = false;
 
   File? get _searchFile => switch (_kind) {
-    BulletinPreviewKind.pdf => _convertedWord,
     BulletinPreviewKind.office
         when isBulletinSearchableWorkbook(_office?.mimeType) =>
       _file,
@@ -93,7 +93,7 @@ class _BulletinAttachmentPreviewDialogState
     final File file;
     try {
       file = await Future<File>.sync(
-        () => BulletinWordPreviewCache.source(widget.attachment, widget.api),
+        () => widget.api.downloadAttachment(widget.attachment),
       );
     } catch (_) {
       _download = null;
@@ -140,27 +140,13 @@ class _BulletinAttachmentPreviewDialogState
           stage = 'attachment.read_text';
           _text = await readBulletinPreviewText(file);
         case BulletinPreviewKind.office:
-          if (isBulletinSearchableWord(mimeType)) {
-            try {
-              stage = 'attachment.convert_word';
-              final converted = await renderBulletinWordPdf(file);
-              if (!mounted) return;
-              await _openPdf(converted, updateStage);
-              if (!mounted) return;
-              _convertedWord = converted;
-              displayKind = BulletinPreviewKind.pdf;
-              break;
-            } catch (error, stackTrace) {
-              if (!mounted) return;
-              // 新版 Word 转换异常时，继续使用原来的 Office 预览。
-              if (Platform.isAndroid && isBulletinLegacyWord(mimeType)) rethrow;
-              _log.warning(
-                'preview.failed',
-                fields: {'stage': stage, 'outcome': 'degraded'},
-                error: error,
-                stackTrace: stackTrace,
-              );
-            }
+          if (Platform.isAndroid && isBulletinLegacyWord(mimeType)) {
+            // 转换失败时由外层改为提示用其他应用打开。
+            stage = 'attachment.convert_word';
+            _engineFile = await renderBulletinWordHtml(file);
+            if (!mounted) return;
+            _useOfficeEngine = true;
+            break;
           }
           stage = 'attachment.open_office';
           if (!Platform.isAndroid ||
@@ -258,7 +244,6 @@ class _BulletinAttachmentPreviewDialogState
     if (!mounted || _kind == BulletinPreviewKind.unsupported) return;
     final pdf = _pdf;
     _pdf = null;
-    _convertedWord = null;
     _firstPdfPage = null;
     if (pdf != null) unawaited(pdf.close());
     setState(() {
@@ -448,7 +433,7 @@ class _BulletinAttachmentPreviewDialogState
             fit: StackFit.expand,
             children: [
               BulletinOfficeEngineView(
-                file: _file!,
+                file: _engineFile ?? _file!,
                 onReady: (mime) {
                   if (mounted) {
                     setState(() {

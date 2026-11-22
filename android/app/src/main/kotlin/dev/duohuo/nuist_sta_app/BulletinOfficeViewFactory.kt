@@ -19,6 +19,7 @@ import androidx.annotation.Keep
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import io.flutter.plugin.common.BinaryMessenger
+import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
@@ -52,28 +53,37 @@ private class BulletinOfficeWebView(
 
     init {
         channel.setMethodCallHandler { call, result ->
-            if (call.method != "load") {
-                result.notImplemented()
-                return@setMethodCallHandler
-            }
-            try {
-                val file = File(requireNotNull(call.argument<String>("path"))).canonicalFile
-                val root = File(context.cacheDir, "bulletin_attachments").canonicalPath + File.separator
-                require(file.path.startsWith(root) && file.isFile && file.length() in 1L..BulletinOfficeRenderer.MAX_FILE_BYTES)
-                require(webView == null)
-                show(file, call.argument<Boolean>("dark") == true)
-                result.success(null)
-            } catch (_: Exception) {
-                result.error("office_unavailable", "无法加载离线预览", null)
+            when (call.method) {
+                "load" -> load(call, result)
+                else -> result.notImplemented()
             }
         }
     }
 
+
+
+    private fun load(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val file = File(requireNotNull(call.argument<String>("path"))).canonicalFile
+            val roots = listOf("bulletin_attachments", BulletinWordHtml.DIRECTORY).map {
+                File(context.cacheDir, it).canonicalPath + File.separator
+            }
+            require(roots.any(file.path::startsWith) && file.isFile && file.length() in 1L..BulletinOfficeRenderer.MAX_FILE_BYTES)
+            require(webView == null)
+            val convertedWord = file.path.startsWith(roots.last()) && file.extension == "html"
+            require(convertedWord || !file.path.startsWith(roots.last()))
+            show(file, call.argument<Boolean>("dark") == true, convertedWord)
+            result.success(null)
+        } catch (_: Exception) {
+            result.error("office_unavailable", "无法加载离线预览", null)
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
-    private fun show(file: File, dark: Boolean) {
+    private fun show(file: File, dark: Boolean, convertedWord: Boolean) {
         val view = WebView(context)
         webView = view
-        renderer = BulletinOfficeRenderer(file, dark)
+        renderer = BulletinOfficeRenderer(file, dark, convertedWord)
         container.addView(view, FrameLayout.LayoutParams(-1, -1))
         view.settings.apply {
             javaScriptEnabled = true

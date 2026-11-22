@@ -93,7 +93,6 @@ object ReminderScheduler {
     }
 
     fun ensureChannel(ctx: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
         nm.createNotificationChannel(
@@ -114,12 +113,7 @@ object ReminderScheduler {
             ctx, (start / 60000L).toInt(), NotifyStore.launchIntent(ctx),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(ctx, CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(ctx).setPriority(Notification.PRIORITY_HIGH)
-        }
+        val b = Notification.Builder(ctx, CHANNEL_ID)
         val body = intent.getStringExtra("body") ?: ""
         val n = b.setSmallIcon(R.drawable.ic_stat_class)
             .setContentTitle(intent.getStringExtra("title") ?: "即将上课")

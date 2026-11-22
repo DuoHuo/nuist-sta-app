@@ -549,7 +549,7 @@ internal object AppIconStore {
     }
 
     private fun shortcutManager(context: Context): ShortcutManager? =
-        if (Build.VERSION.SDK_INT >= 26) context.getSystemService(ShortcutManager::class.java) else null
+        context.getSystemService(ShortcutManager::class.java)
 
     private fun isPinned(context: Context): Boolean = try {
         shortcutManager(context)?.pinnedShortcuts?.any { isCustomShortcut(it.id) } == true
@@ -564,7 +564,6 @@ internal object AppIconStore {
      */
     @Synchronized
     private fun repairPinnedShortcutActivity(context: Context, builtinId: String, required: Boolean = false) {
-        if (Build.VERSION.SDK_INT < 26) return
         val manager = shortcutManager(context) ?: return
         if (!isAliasEnabled(context, builtinId)) {
             if (required) throw AppIconFailure("shortcut_failed", "新的桌面图标入口尚未启用")

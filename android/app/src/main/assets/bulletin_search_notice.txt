@@ -8,3 +8,10 @@ build may replace that dependency with a modified, compatible JExcelAPI jar.
 PdfBox-Android 2.0.27.0 is distributed under the Apache License 2.0.
 https://github.com/TomRoush/PdfBox-Android
 https://www.apache.org/licenses/LICENSE-2.0
+
+Apache POI 5.5.1 (poi, poi-scratchpad) is distributed under the Apache License 2.0.
+It previews legacy Word (.doc) attachments.
+Copyright The Apache Software Foundation. This product includes software developed
+at The Apache Software Foundation (https://www.apache.org/).
+https://poi.apache.org/
+https://www.apache.org/licenses/LICENSE-2.0

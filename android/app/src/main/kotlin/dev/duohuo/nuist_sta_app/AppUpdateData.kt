@@ -249,10 +249,10 @@ internal object AppUpdateStore {
     fun notificationsAllowed(context: Context): Boolean =
         (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
             (context.getSystemService(NotificationManager::class.java)?.areNotificationsEnabled() == true) &&
-            (Build.VERSION.SDK_INT < 26 || context.getSystemService(NotificationManager::class.java)
+            (context.getSystemService(NotificationManager::class.java)
                 ?.getNotificationChannel(AppUpdateService.CHANNEL_ID)?.importance != NotificationManager.IMPORTANCE_NONE)
 
-    fun installAllowed(context: Context) = Build.VERSION.SDK_INT < 26 || context.packageManager.canRequestPackageInstalls()
+    fun installAllowed(context: Context) = context.packageManager.canRequestPackageInstalls()
 
     /** 下载完成后校验文件大小与 SHA256，安装是否可行由系统安装器判断。 */
     fun verify(item: AppUpdateRelease, file: File, stillActive: () -> Boolean) {

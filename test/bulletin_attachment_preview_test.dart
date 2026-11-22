@@ -200,7 +200,7 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('无后缀的 Word 转换失败仍能预览正文并用识别出的类型外部打开', (tester) async {
+  testWidgets('无后缀的 Word 预览正文并用识别出的类型外部打开', (tester) async {
     const mime =
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
     final api = _FixtureApi(fixture('notice.data', [0x50, 0x4b, 3, 4]));
@@ -210,9 +210,6 @@ void main() {
     ) async {
       calls.add(call);
       if (call.method == 'officeMimeType') return mime;
-      if (call.method == 'convertWord') {
-        throw PlatformException(code: 'word_conversion_failed');
-      }
       return {
         'mimeType': mime,
         'sections': [
@@ -240,56 +237,9 @@ void main() {
     expect(find.byType(Image), findsOneWidget);
     await tester.tap(find.byTooltip(_openLabel));
     await tester.pumpAndSettle();
-    expect(calls.map((call) => call.method), [
-      'officeMimeType',
-      'convertWord',
-      'office',
-    ]);
+    expect(calls.map((call) => call.method), ['officeMimeType', 'office']);
     expect(openCalls.single.arguments['mimeType'], mime);
     expect(api.downloads, 1);
-  });
-
-  testWidgets('DOCX 转成 PDF 后通过附件顶栏查找文字', (tester) async {
-    final source = fixture('notice.docx', [0x50, 0x4b, 3, 4]);
-    final converted = fixture('converted-word.pdf', ascii.encode('%PDF-1.4'));
-    final calls = <MethodCall>[];
-    binding.defaultBinaryMessenger.setMockMethodCallHandler(_pdfChannel, (
-      call,
-    ) async {
-      calls.add(call);
-      return switch (call.method) {
-        'convertWord' => converted.path,
-        'open' => {
-          'id': 41,
-          'pageAspectRatios': [.7],
-        },
-        'render' => _png,
-        'searchPdf' => [
-          {
-            'page': 0,
-            'rects': Float32List.fromList([.1, .1, .3, .2]),
-          },
-        ],
-        _ => null,
-      };
-    });
-    await openDialog(tester, _FixtureApi(source));
-    final search = find.byTooltip('查找文字');
-    await _pumpUntil(tester, search);
-    expect(calls.first.arguments['path'], source.path);
-    await tester.tap(search);
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), '报名');
-    await tester.pump(const Duration(milliseconds: 180));
-    await tester.pumpAndSettle();
-    expect(find.text('1/1'), findsOneWidget);
-    expect(
-      calls.singleWhere((call) => call.method == 'searchPdf').arguments['path'],
-      converted.path,
-    );
-    await tester.tap(find.byTooltip(_openLabel));
-    await tester.pumpAndSettle();
-    expect(openCalls.single.arguments['path'], source.path);
   });
 
   testWidgets('Excel 预览可以切换工作表并保留行列位置', (tester) async {

@@ -24,17 +24,25 @@ class AttachmentPdfPreviewPlugin : FlutterPlugin, MethodChannel.MethodCallHandle
     private lateinit var search: BulletinAttachmentSearch
     private val searchGeneration = AtomicInteger()
     private lateinit var cacheRoot: String
-    private lateinit var wordPdf: BulletinWordPdfClient
+    private lateinit var wordHtml: BulletinWordHtmlClient
     private val main = Handler(Looper.getMainLooper())
     private val documents = mutableMapOf<Int, PdfRenderer>()
     private var nextId = 0
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         cacheRoot = binding.applicationContext.cacheDir.canonicalPath + File.separator
-        wordPdf = BulletinWordPdfClient(binding.applicationContext)
+        wordHtml = BulletinWordHtmlClient(binding.applicationContext)
         worker = Executors.newSingleThreadExecutor()
         searchWorker = Executors.newSingleThreadExecutor()
         search = BulletinAttachmentSearch(binding.applicationContext)
+        val context = binding.applicationContext
+        worker.execute {
+            try {
+                BulletinWordHtml.removeLegacyEngine(context)
+            } catch (_: Exception) {
+                // 清理失败只会留下旧文件，下次启动再试。
+            }
+        }
         channel = MethodChannel(binding.binaryMessenger, "dev.duohuo.nuist_sta_app/attachment_pdf")
         channel.setMethodCallHandler(this)
     }
@@ -57,7 +65,7 @@ class AttachmentPdfPreviewPlugin : FlutterPlugin, MethodChannel.MethodCallHandle
                 result.error("preview_failed", "无法预览此附件", null)
                 return
             }
-            wordPdf.convert(file, result)
+            wordHtml.convert(file, result)
             return
         }
         if (call.method !in setOf("open", "render", "close", "office", "officeMimeType")) {
@@ -163,7 +171,7 @@ class AttachmentPdfPreviewPlugin : FlutterPlugin, MethodChannel.MethodCallHandle
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
-        wordPdf.close()
+        wordHtml.close()
         searchGeneration.incrementAndGet()
         searchWorker.execute { search.close() }
         searchWorker.shutdown()

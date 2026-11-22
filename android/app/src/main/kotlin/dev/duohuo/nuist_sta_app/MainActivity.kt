@@ -190,7 +190,6 @@ class MainActivity : FlutterActivity() {
     /** 清除旧版动态 shortcut，并禁用可能被用户 pinned 的旧 id，避免长按图标出现无效「添加小组件」。
      *  不碰 AppWidgetProvider：系统桌面「小组件」入口是系统行为，应保留。 */
     private fun clearLegacyShortcuts() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1) return
         try {
             val sm = getSystemService(ShortcutManager::class.java) ?: return
             try {

@@ -237,10 +237,8 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
     }
 
     private fun openNotificationSettings(): Boolean {
-        val i = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                .putExtra(Settings.EXTRA_APP_PACKAGE, app.packageName)
-        } else appDetails()
+        val i = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, app.packageName)
         return start(i) || start(appDetails())
     }
 
@@ -301,7 +299,6 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
             "originOs" -> "originOsManual"
             else -> "manual"
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return manual
         if (guide == "originOs") return manual
         if (guide == "miui" && miuiShortcutPermission() == false) {
             return "permissionRequired"

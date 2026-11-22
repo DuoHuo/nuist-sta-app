@@ -15,7 +15,7 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 /** 把转换工作交给独立进程，所有状态在主线程处理。 */
-internal class BulletinWordPdfClient(private val context: Context) : ServiceConnection {
+internal class BulletinWordHtmlClient(private val context: Context) : ServiceConnection {
     private val main = Handler(Looper.getMainLooper())
     private val pending = mutableMapOf<Int, Request>()
     private val idle = Runnable { disconnect() }
@@ -41,7 +41,7 @@ internal class BulletinWordPdfClient(private val context: Context) : ServiceConn
         if (connected != null) {
             send(connected, id, request)
         } else if (!bound) {
-            val intent = Intent(context, BulletinWordPdfService::class.java)
+            val intent = Intent(context, BulletinWordHtmlService::class.java)
             bound = try {
                 context.bindService(intent, this, Context.BIND_AUTO_CREATE)
             } catch (_: RuntimeException) {

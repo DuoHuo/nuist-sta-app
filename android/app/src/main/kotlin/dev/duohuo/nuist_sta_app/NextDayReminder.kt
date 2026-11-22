@@ -96,12 +96,10 @@ object NextDayReminder {
     }
 
     private fun createChannel(context: Context) {
-        if (Build.VERSION.SDK_INT >= 26) {
-            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(NotificationChannel(
-                CHANNEL_ID, "明日课表", NotificationManager.IMPORTANCE_DEFAULT,
-            ).apply { description = "按本机已保存课表推送明日安排" })
-        }
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(NotificationChannel(
+            CHANNEL_ID, "明日课表", NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply { description = "按本机已保存课表推送明日安排" })
     }
 
     private fun notifyToday(context: Context, now: Calendar, diagnostics: MutableList<Map<String, Any?>>) {
@@ -119,10 +117,8 @@ object NextDayReminder {
         if (Build.VERSION.SDK_INT >= 33 &&
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
-        if (Build.VERSION.SDK_INT >= 26) {
-            val system = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (system.getNotificationChannel(CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) return
-        }
+        val system = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (system.getNotificationChannel(CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) return
         val open = Intent(context, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
             data = Uri.parse(OPEN_URI)

@@ -263,7 +263,7 @@ class AppUpdateService : Service() {
         const val EXTRA_OPEN = "nuist_update_open"
 
         fun createChannel(context: Context) {
-            if (Build.VERSION.SDK_INT >= 26) context.getSystemService(NotificationManager::class.java)
+            context.getSystemService(NotificationManager::class.java)
                 ?.createNotificationChannel(NotificationChannel(CHANNEL_ID, "应用更新", NotificationManager.IMPORTANCE_LOW).apply {
                     description = "下载应用更新时显示进度和取消入口"
                 })
@@ -284,9 +284,7 @@ class AppUpdateService : Service() {
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             val view = PendingIntent.getActivity(context, NOTIFICATION_ID, open,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            @Suppress("DEPRECATION")
-            val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(context, CHANNEL_ID)
-                else Notification.Builder(context).setPriority(Notification.PRIORITY_LOW)
+            val builder = Notification.Builder(context, CHANNEL_ID)
             builder.setSmallIcon(android.R.drawable.stat_sys_download)
                 .setContentTitle("NUIST++ 应用更新").setContentText(text).setContentIntent(view)
                 .setOnlyAlertOnce(true).setOngoing(ongoing).setAutoCancel(!ongoing)

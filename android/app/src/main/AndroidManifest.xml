@@ -36,9 +36,9 @@
         </provider>
         <service android:name=".AppUpdateService" android:exported="false" android:foregroundServiceType="dataSync"/>
         <service
-            android:name=".BulletinWordPdfService"
+            android:name=".BulletinWordHtmlService"
             android:exported="false"
-            android:process=":bulletin_word_pdf" />
+            android:process=":bulletin_word" />
         <receiver android:name=".AppUpdateActionReceiver" android:exported="false"/>
         <receiver android:name=".AppUpdateInstallReceiver" android:exported="false"/>
         <receiver android:name=".NextDayReminderReceiver" android:exported="true">
