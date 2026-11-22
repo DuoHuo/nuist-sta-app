@@ -197,9 +197,16 @@ Future<BulletinXlsMatches> findBulletinXlsText(
 
 /// 附件预览顶部的实时搜索框、命中数和匹配选项。
 class BulletinSearchField extends StatelessWidget {
-  const BulletinSearchField({super.key, required this.search});
+  const BulletinSearchField({
+    super.key,
+    required this.search,
+    this.showMatchCase = true,
+  });
 
   final BulletinLiveSearch<dynamic> search;
+
+  /// 查找引擎不支持区分大小写时隐藏该选项。
+  final bool showMatchCase;
 
   Future<void> _promptJump(BuildContext context) async {
     final result = search.result;
@@ -306,15 +313,17 @@ class BulletinSearchField extends StatelessWidget {
                   ),
                 ),
               ),
-              Checkbox(
-                value: search.matchCase,
-                onChanged: (value) => search.updateMatchCase(value ?? false),
-                semanticLabel: '大小写敏感',
-              ),
-              GestureDetector(
-                onTap: () => search.updateMatchCase(!search.matchCase),
-                child: const Text('大小写敏感'),
-              ),
+              if (showMatchCase) ...[
+                Checkbox(
+                  value: search.matchCase,
+                  onChanged: (value) => search.updateMatchCase(value ?? false),
+                  semanticLabel: '大小写敏感',
+                ),
+                GestureDetector(
+                  onTap: () => search.updateMatchCase(!search.matchCase),
+                  child: const Text('大小写敏感'),
+                ),
+              ],
             ],
           ),
         ],

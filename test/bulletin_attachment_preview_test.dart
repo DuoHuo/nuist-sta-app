@@ -242,6 +242,43 @@ void main() {
     expect(api.downloads, 1);
   });
 
+  testWidgets('普通 PDF 附件通过顶栏查找文字', (tester) async {
+    final source = fixture('notice.pdf', ascii.encode('%PDF-1.4'));
+    final calls = <MethodCall>[];
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(_pdfChannel, (
+      call,
+    ) async {
+      calls.add(call);
+      return switch (call.method) {
+        'open' => {
+          'id': 41,
+          'pageAspectRatios': [.7],
+        },
+        'render' => _png,
+        'searchPdf' => [
+          {
+            'page': 0,
+            'rects': Float32List.fromList([.1, .1, .3, .2]),
+          },
+        ],
+        _ => null,
+      };
+    });
+    await openDialog(tester, _FixtureApi(source));
+    final search = find.byTooltip('查找文字');
+    await _pumpUntil(tester, search);
+    await tester.tap(search);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '报名');
+    await tester.pump(const Duration(milliseconds: 180));
+    await tester.pumpAndSettle();
+    expect(find.text('1/1'), findsOneWidget);
+    expect(
+      calls.singleWhere((call) => call.method == 'searchPdf').arguments['path'],
+      source.path,
+    );
+  });
+
   testWidgets('Excel 预览可以切换工作表并保留行列位置', (tester) async {
     final api = _FixtureApi(fixture('notice.xlsx', [0x50, 0x4b, 3, 4]));
     binding.defaultBinaryMessenger.setMockMethodCallHandler(_pdfChannel, (

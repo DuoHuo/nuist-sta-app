@@ -55,6 +55,26 @@ private class BulletinOfficeWebView(
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "load" -> load(call, result)
+                "find" -> {
+                    // WebView 的页内查找会进入正文 iframe，并能匹配跨元素的文字；不区分大小写。
+                    val view = webView
+                    val query = call.argument<String>("query").orEmpty()
+                    if (view == null || query.isBlank()) {
+                        view?.clearMatches()
+                        result.success(null)
+                    } else {
+                        view.findAllAsync(query)
+                        result.success(null)
+                    }
+                }
+                "findNext" -> {
+                    webView?.findNext(call.argument<Boolean>("forward") != false)
+                    result.success(null)
+                }
+                "clearFind" -> {
+                    webView?.clearMatches()
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -84,6 +104,11 @@ private class BulletinOfficeWebView(
         val view = WebView(context)
         webView = view
         renderer = BulletinOfficeRenderer(file, dark, convertedWord)
+        view.setFindListener { active, count, done ->
+            if (done && view === webView) {
+                channel.invokeMethod("found", mapOf("active" to active, "count" to count))
+            }
+        }
         container.addView(view, FrameLayout.LayoutParams(-1, -1))
         view.settings.apply {
             javaScriptEnabled = true

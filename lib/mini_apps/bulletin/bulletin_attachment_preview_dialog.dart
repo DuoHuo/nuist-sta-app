@@ -64,6 +64,7 @@ class _BulletinAttachmentPreviewDialogState
   bool _searchExpanded = false;
 
   File? get _searchFile => switch (_kind) {
+    BulletinPreviewKind.pdf => _file,
     BulletinPreviewKind.office
         when isBulletinSearchableWorkbook(_office?.mimeType) =>
       _file,
@@ -340,7 +341,7 @@ class _BulletinAttachmentPreviewDialogState
             onPressed: () => Navigator.of(context).pop(),
           ),
           actions: [
-            if (canPreview && _searchFile != null)
+            if (canPreview && (_searchFile != null || _useOfficeEngine))
               IconButton(
                 tooltip: _searchExpanded ? '关闭查找' : '查找文字',
                 onPressed: () =>
@@ -443,6 +444,7 @@ class _BulletinAttachmentPreviewDialogState
                   }
                 },
                 onFailure: _officeEngineFailed,
+                searchExpanded: _searchExpanded,
               ),
               if (!_officeEngineReady)
                 ColoredBox(
