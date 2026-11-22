@@ -125,6 +125,29 @@ class WeekGrid extends StatefulWidget {
   /// 局部预览覆盖设置（滑杆拖动过程中避免落盘，只重绘预览）。
   final TimetableSettings? settingsOverride;
 
+  /// 仅测试用：累计触发整周行高重新测量的次数。
+  @visibleForTesting
+  static int get debugPeriodHeightMeasureCount =>
+      _WeekGridState._periodHeightMeasureCount;
+
+  /// 仅测试用：累计命中跨周行高 LRU 缓存的次数。
+  @visibleForTesting
+  static int get debugPeriodHeightCacheHitCount =>
+      _WeekGridState._periodHeightCacheHitCount;
+
+  /// 仅测试用：当前跨周行高 LRU 缓存条目数。
+  @visibleForTesting
+  static int get debugPeriodHeightCacheLength =>
+      _WeekGridState._periodHeightCache.length;
+
+  /// 仅测试用：清空跨周行高 LRU 缓存并重置统计计数。
+  @visibleForTesting
+  static void debugResetPeriodHeightCache() {
+    _WeekGridState._periodHeightCache.clear();
+    _WeekGridState._periodHeightMeasureCount = 0;
+    _WeekGridState._periodHeightCacheHitCount = 0;
+  }
+
   @override
   State<WeekGrid> createState() => _WeekGridState();
 }
@@ -168,9 +191,12 @@ class _WeekGridState extends State<WeekGrid> {
   /// 浮动格阴影（约 Material elevation 6）。
   static final List<BoxShadow> _dragShadow = kElevationToShadow[6]!;
 
-  // 拖起/放下课程只改变浮层；内容、尺寸和字体不变时复用整周的行高测量。
-  Object? _periodHeightInputs;
-  double? _measuredPeriodHeight;
+  // 跨周复用整周行高测量（有界 LRU，字体变化时清空），左右翻周滑回已访问周次免重测。
+  static const int _periodHeightCacheCapacity = 32;
+  static final _periodHeightCache = <Object, double>{};
+  static bool _periodHeightFontListenerStarted = false;
+  static int _periodHeightMeasureCount = 0;
+  static int _periodHeightCacheHitCount = 0;
 
   TimetableController get controller => widget.controller;
   int get week => widget.week;
@@ -201,7 +227,8 @@ class _WeekGridState extends State<WeekGrid> {
   }
 
   void _onFontsChanged() {
-    if (mounted) setState(() => _periodHeightInputs = null);
+    _periodHeightCache.clear();
+    if (mounted) setState(() {});
   }
 
   @override
@@ -298,6 +325,8 @@ class _WeekGridState extends State<WeekGrid> {
         _fontReferenceWidth = dpr.isFinite && dpr > 0
             ? (rawCellWidth * dpr).ceilToDouble() / dpr
             : rawCellWidth;
+        // 单次 build 预先按列分组一次，行高测量与网格绘制共用，避免重复分组。
+        final dayBlocks = [for (final day in days) _blocksForDay(day, nodes)];
         // 用户行高作为下限；整周共用内容所需的行高，保持节次与拖动坐标对齐。
         // 长按开始到调课结束期间冻结，防止组内主课程切换时格子在手指下跳动。
         final periodH = _drag != null && _periodH > 0
@@ -305,6 +334,7 @@ class _WeekGridState extends State<WeekGrid> {
             : _preferredPeriodHeight(
                 context,
                 days: days,
+                dayBlocks: dayBlocks,
                 dayW: dayW,
                 basePeriodH: basePeriodH,
                 radius: radius,
@@ -485,7 +515,7 @@ class _WeekGridState extends State<WeekGrid> {
                                           )
                                             ..._cellsFor(
                                               context,
-                                              day: days[di],
+                                              blocks: dayBlocks[di],
                                               dayIndex: di,
                                               dayW: dayW,
                                               periodH: periodH,
@@ -554,17 +584,38 @@ class _WeekGridState extends State<WeekGrid> {
     ],
   );
 
+  /// 计算单列（一天）的课程与日程块分组，供行高测量与网格绘制复用。
+  List<DayColumnBlock> _blocksForDay(int day, int nodes) {
+    final items = _dayLayoutItems(day, nodes);
+    // 同一列内本周活跃项按节次连通分组，非本周课与非本周幽灵考试让位本周并按最近择一。
+    return planDayColumnBlocks(
+      courses: items.courses,
+      events: items.events,
+      week: week,
+      weekOfDate: controller.weekOfDate,
+    );
+  }
+
   /// 根据可见格内的完整内容增加统一节次行高，不回写用户的高度设置。
   double _preferredPeriodHeight(
     BuildContext context, {
     required List<int> days,
+    required List<List<DayColumnBlock>> dayBlocks,
     required double dayW,
     required double basePeriodH,
     required double radius,
     required int nodes,
     required double dpr,
   }) {
+    if (!_periodHeightFontListenerStarted) {
+      _periodHeightFontListenerStarted = true;
+      PaintingBinding.instance.systemFonts.addListener(
+        _periodHeightCache.clear,
+      );
+    }
+    final settings = widget.settingsOverride ?? controller.settings;
     final inputs = (
+      identityHashCode(controller),
       controller.weekGridContentKey,
       week,
       days.join(','),
@@ -575,27 +626,41 @@ class _WeekGridState extends State<WeekGrid> {
       nodes,
       dpr,
       _focusedEvent,
+      settings.fontScale,
+      settings.showLocation,
+      settings.showTeacher,
       DefaultTextStyle.of(context).style,
       MediaQuery.textScalerOf(context),
       Directionality.of(context),
     );
-    if (_periodHeightInputs == inputs) return _measuredPeriodHeight!;
+    final cached = _periodHeightCache.remove(inputs);
+    if (cached != null) {
+      _periodHeightCache[inputs] = cached;
+      _periodHeightCacheHitCount++;
+      return cached;
+    }
+    _periodHeightMeasureCount++;
     final result = _measurePreferredPeriodHeight(
       context,
       days: days,
+      dayBlocks: dayBlocks,
       dayW: dayW,
       basePeriodH: basePeriodH,
       radius: radius,
       nodes: nodes,
       dpr: dpr,
     );
-    _periodHeightInputs = inputs;
-    return _measuredPeriodHeight = result;
+    if (_periodHeightCache.length >= _periodHeightCacheCapacity) {
+      _periodHeightCache.remove(_periodHeightCache.keys.first);
+    }
+    _periodHeightCache[inputs] = result;
+    return result;
   }
 
   double _measurePreferredPeriodHeight(
     BuildContext context, {
     required List<int> days,
+    required List<List<DayColumnBlock>> dayBlocks,
     required double dayW,
     required double basePeriodH,
     required double radius,
@@ -616,13 +681,7 @@ class _WeekGridState extends State<WeekGrid> {
     for (var di = 0; di < days.length; di++) {
       final width = _fontReferenceWidth;
       if (width <= 0) continue;
-      final items = _dayLayoutItems(days[di], nodes);
-      final blocks = planDayColumnBlocks(
-        courses: items.courses,
-        events: items.events,
-        week: week,
-        weekOfDate: controller.weekOfDate,
-      );
+      final blocks = dayBlocks[di];
       for (final block in blocks) {
         if (block.startNode > nodes) continue;
         final blockSpan =
@@ -660,7 +719,7 @@ class _WeekGridState extends State<WeekGrid> {
 
   List<Widget> _cellsFor(
     BuildContext context, {
-    required int day,
+    required List<DayColumnBlock> blocks,
     required int dayIndex,
     required double dayW,
     required double periodH,
@@ -669,14 +728,6 @@ class _WeekGridState extends State<WeekGrid> {
     required double dpr,
   }) {
     final widgets = <Widget>[];
-    final items = _dayLayoutItems(day, nodes);
-    // 同一列内本周活跃项按节次连通分组，非本周课与非本周幽灵考试让位本周并按最近择一。
-    final blocks = planDayColumnBlocks(
-      courses: items.courses,
-      events: items.events,
-      week: week,
-      weekOfDate: controller.weekOfDate,
-    );
     final focusedId = _focusedEvent?.id;
     for (final block in blocks) {
       if (block.startNode > nodes) continue;
@@ -1586,7 +1637,7 @@ class SlotCellGroup {
   /// 实际绘制的一格。
   ///
   /// 按课名（[normalizeCourseName]）排序的第一门。
-  GridCell get primary {
+  late final GridCell primary = () {
     final base = (List.of(cells)..sort(compareByName)).first;
     // 冲突点/「N 门」由 WeekGrid 按本周叠放数决定，不沿用 controller 的 conflictCount。
     return GridCell(
@@ -1598,7 +1649,7 @@ class SlotCellGroup {
       dateEdit: base.dateEdit,
       swappedFrom: base.swappedFrom,
     );
-  }
+  }();
 
   /// 组的并集节次范围（叠放时一格覆盖全部，避免遮挡）。
   int get startNode =>
@@ -1709,13 +1760,17 @@ bool otherCourseInWeek(Course course, int week) {
   return course.slots.isEmpty;
 }
 
+final _otherWeeksPartPattern = RegExp(
+  r'^第?(\d+)(?:[-–~至](\d+))?周?(?:[(（]?([单双])周?[)）]?)?$',
+);
+final _otherWeeksSeparatorPattern = RegExp(r'[,，、;；\s]+');
+
 /// 「1-16周」「2-17周(双)」「1-8,10-16周」「第3周」→ 周次集合；读不出返回 null。
 Set<int>? parseOtherWeeksLabel(String label) {
   final out = <int>{};
-  final re = RegExp(r'^第?(\d+)(?:[-–~至](\d+))?周?(?:[(（]?([单双])周?[)）]?)?$');
-  for (final part in label.trim().split(RegExp(r'[,，、;；\s]+'))) {
+  for (final part in label.trim().split(_otherWeeksSeparatorPattern)) {
     if (part.isEmpty) continue;
-    final m = re.firstMatch(part);
+    final m = _otherWeeksPartPattern.firstMatch(part);
     if (m == null) return null;
     final a = int.parse(m[1]!);
     final b = m[2] == null ? a : int.parse(m[2]!);
