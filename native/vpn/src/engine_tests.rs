@@ -22,24 +22,36 @@ impl Gateway {
     }
 
     fn without_heartbeat_replies() -> Self {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let stop = Arc::new(AtomicBool::new(false));
-        let stopped = stop.clone();
-        let worker = thread::spawn(move || serve(listener, stopped, None, false));
-        Self {
-            port,
-            stop,
-            worker: Some(worker),
-        }
+        Self::with_options(None, false, true)
     }
 
     fn with_terminal_after(terminal_after: Option<(usize, bool)>) -> Self {
+        Self::with_options(terminal_after, true, true)
+    }
+
+    #[cfg(unix)]
+    fn without_syn_drop() -> Self {
+        Self::with_options(None, true, false)
+    }
+
+    fn with_options(
+        terminal_after: Option<(usize, bool)>,
+        heartbeat_replies: bool,
+        drop_first_syn: bool,
+    ) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
-        let worker = thread::spawn(move || serve(listener, stopped, terminal_after, true));
+        let worker = thread::spawn(move || {
+            serve(
+                listener,
+                stopped,
+                terminal_after,
+                heartbeat_replies,
+                drop_first_syn,
+            )
+        });
         Self {
             port,
             stop,
@@ -67,6 +79,7 @@ fn serve(
     stop: Arc<AtomicBool>,
     terminal_after: Option<(usize, bool)>,
     heartbeat_replies: bool,
+    drop_first_syn: bool,
 ) -> (usize, bool) {
     listener.set_nonblocking(true).unwrap();
     let raw = loop {
@@ -140,7 +153,7 @@ fn serve(
     let dns = sockets.add(dns);
     let started = Instant::now();
     let mut wire = Vec::new();
-    let mut dropped_syn = false;
+    let mut dropped_syn = !drop_first_syn;
     let mut received = 0;
     let mut graceful = false;
     while !stop.load(Ordering::Acquire) && started.elapsed() < Duration::from_secs(70) {
@@ -588,7 +601,7 @@ fn running_flag_does_not_hide_stalled_worker() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (_peer, _) = listener.accept().unwrap();
-    let (commands, receiver) = mpsc::sync_channel(1);
+    let (commands, receiver) = command_channel(1).unwrap();
     let now = Instant::now();
     let handle = Handle {
         opens: Arc::new(Mutex::new(HashMap::new())),
@@ -694,7 +707,7 @@ fn coalesced_tls_burst_keeps_packets_until_ip_queue_has_capacity() {
     tls.write_all(&[1]).unwrap();
     tls.flush().unwrap();
     tls.sock.set_nonblocking(true).unwrap();
-    let (_sender, receiver) = mpsc::sync_channel(MAX_CONNECTIONS);
+    let (_sender, receiver) = command_channel(MAX_CONNECTIONS).unwrap();
     let now = Instant::now();
     let health = Arc::new(Mutex::new(Health {
         progress: now,
@@ -759,4 +772,282 @@ fn coalesced_tls_burst_keeps_packets_until_ip_queue_has_capacity() {
     assert_eq!(failure.kind(), io::ErrorKind::UnexpectedEof);
     let _ = release.send(());
     worker.join().unwrap();
+}
+
+fn decode_bridge_secret(hex: &str) -> Vec<u8> {
+    (0..64)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn default_client_config_reuses_singleton_arc() {
+    let first = default_client_config().unwrap();
+    let second = default_client_config().unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "默认 TLS ClientConfig 必须通过 OnceLock 复用同一 Arc 实例"
+    );
+
+    let threads: Vec<_> = (0..4)
+        .map(|_| thread::spawn(|| default_client_config().unwrap()))
+        .collect();
+    for handle in threads {
+        let shared = handle.join().unwrap();
+        assert!(Arc::ptr_eq(&first, &shared));
+    }
+
+    let mut custom_roots = RootCertStore::empty();
+    custom_roots.add(CertificateDer::from(CERT)).unwrap();
+    let custom = build_client_config(custom_roots).unwrap();
+    assert!(
+        !Arc::ptr_eq(&first, &custom),
+        "自定义 RootCertStore 应构造独立 ClientConfig，不影响测试隔离"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn poll_timeout_rounds_submillisecond_and_caps_overflow() {
+    assert_eq!(sys_poll::duration_to_poll_timeout_ms(Duration::ZERO), 0);
+    assert_eq!(
+        sys_poll::duration_to_poll_timeout_ms(Duration::from_nanos(1)),
+        1
+    );
+    assert_eq!(
+        sys_poll::duration_to_poll_timeout_ms(Duration::from_micros(500)),
+        1
+    );
+    assert_eq!(
+        sys_poll::duration_to_poll_timeout_ms(Duration::from_millis(1)),
+        1
+    );
+    assert_eq!(
+        sys_poll::duration_to_poll_timeout_ms(Duration::from_micros(1_001)),
+        2
+    );
+    assert_eq!(
+        sys_poll::duration_to_poll_timeout_ms(Duration::MAX),
+        std::ffi::c_int::MAX
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn idle_tunnel_blocks_in_poll_with_minimal_loop_iterations() {
+    let gateway = Gateway::new();
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(CERT)).unwrap();
+    let (handle, _) = start_with_roots(
+        &json!({"host":"localhost", "port":gateway.port, "user":"synthetic", "token":"test-token"}),
+        roots,
+    )
+    .unwrap();
+
+    // 等待初始握手后首个心跳及回复完成，进入真正空闲状态。
+    thread::sleep(Duration::from_millis(80));
+    let before_empty = handle.status()["loopIterations"].as_u64().unwrap();
+    thread::sleep(Duration::from_millis(600));
+    let after_empty = handle.status()["loopIterations"].as_u64().unwrap();
+    let empty_delta = after_empty - before_empty;
+    assert!(
+        empty_delta <= 2,
+        "无连接空闲隧道应在 poll(2) 中真实阻塞等待，600ms 内迭代次数过高：{empty_delta}"
+    );
+    assert_eq!(handle.status()["healthy"], true);
+
+    // 建连后仅挂起 listener 等待回环连接，不应导致忙等。
+    let bridge = handle.open("campus.test".into(), 8080).unwrap();
+    thread::sleep(Duration::from_millis(80));
+    let before_listener = handle.status()["loopIterations"].as_u64().unwrap();
+    thread::sleep(Duration::from_millis(600));
+    let after_listener = handle.status()["loopIterations"].as_u64().unwrap();
+    let listener_delta = after_listener - before_listener;
+    assert!(
+        listener_delta <= 2,
+        "等待回环 accept 期间不应忙等，600ms 内迭代次数过高：{listener_delta}"
+    );
+
+    // 建立并鉴权空闲业务流，验证 poll(2) 仍保持低唤醒频次。
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, bridge.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream.write_all(&decode_bridge_secret(&bridge.secret)).unwrap();
+    thread::sleep(Duration::from_millis(80));
+    let before_flow = handle.status()["loopIterations"].as_u64().unwrap();
+    thread::sleep(Duration::from_millis(600));
+    let after_flow = handle.status()["loopIterations"].as_u64().unwrap();
+    let flow_delta = after_flow - before_flow;
+    assert!(
+        flow_delta <= 2,
+        "已鉴权空闲连接应在 poll(2) 中真实阻塞等待，600ms 内迭代次数过高：{flow_delta}"
+    );
+    assert_eq!(handle.status()["healthy"], true);
+
+    drop(stream);
+    handle.stop();
+    gateway.finish();
+}
+
+#[cfg(unix)]
+#[test]
+fn poll_wakes_immediately_on_commands_loopback_io_and_stop() {
+    let gateway = Gateway::without_syn_drop();
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(CERT)).unwrap();
+    let (handle, _) = start_with_roots(
+        &json!({"host":"localhost", "port":gateway.port, "user":"synthetic", "token":"test-token"}),
+        roots,
+    )
+    .unwrap();
+
+    // 1. 隧道完全空闲进入 1000ms poll(2) 阻塞后，Handle::probe 应立即唤醒并返回。
+    thread::sleep(Duration::from_millis(120));
+    let probe_start = Instant::now();
+    handle.probe("campus.test".into()).unwrap();
+    let probe_elapsed = probe_start.elapsed();
+    assert!(
+        probe_elapsed < Duration::from_millis(150),
+        "空闲状态下 probe 未立即唤醒 poll(2)：{probe_elapsed:?}"
+    );
+
+    // 2. 再次进入空闲沉睡，Handle::open 应以低延迟唤醒并完成建连（无需等待 poll 超时或旧 25-50ms 轮询）。
+    thread::sleep(Duration::from_millis(120));
+    let open_start = Instant::now();
+    let bridge = handle.open("campus.test".into(), 8080).unwrap();
+    let open_elapsed = open_start.elapsed();
+    assert!(
+        open_elapsed < Duration::from_millis(150),
+        "空闲状态下 open 未立即唤醒 poll(2)：{open_elapsed:?}"
+    );
+
+    // 3. 回环连接鉴权后进入空闲沉睡，向回环写数据并读取隧道对端回显应立即唤醒完成。
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, bridge.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream.write_all(&decode_bridge_secret(&bridge.secret)).unwrap();
+    thread::sleep(Duration::from_millis(120));
+    let io_start = Instant::now();
+    stream.write_all(b"wake-poll-immediately").unwrap();
+    let mut echo = [0u8; 21];
+    stream.read_exact(&mut echo).unwrap();
+    let io_elapsed = io_start.elapsed();
+    assert_eq!(&echo, b"wake-poll-immediately");
+    assert!(
+        io_elapsed < Duration::from_millis(150),
+        "空闲状态下回环写/隧道回显未立即唤醒 poll(2)：{io_elapsed:?}"
+    );
+
+    // 4. 在途黑洞 DNS 建连处于等待时，cancel_open 应立即唤醒并中止。
+    let open_id = handle.prepare_open().unwrap();
+    let cancel_handle = handle.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = tx.send(cancel_handle.open_reserved("blocked.campus.test".into(), 8080, open_id));
+    });
+    thread::sleep(Duration::from_millis(120));
+    let cancel_start = Instant::now();
+    handle.cancel_open(open_id);
+    let cancel_result = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    let cancel_elapsed = cancel_start.elapsed();
+    assert!(cancel_result.is_err_and(|e| e.kind() == io::ErrorKind::ConnectionAborted));
+    assert!(
+        cancel_elapsed < Duration::from_millis(150),
+        "cancel_open 未立即唤醒 poll(2)：{cancel_elapsed:?}"
+    );
+
+    // 5. 隧道空闲沉睡时，Handle::stop 应立即唤醒事件循环并退出。
+    drop(stream);
+    thread::sleep(Duration::from_millis(120));
+    let stop_start = Instant::now();
+    handle.stop();
+    while handle.alive() && stop_start.elapsed() < Duration::from_secs(1) {
+        thread::sleep(Duration::from_millis(1));
+    }
+    let stop_elapsed = stop_start.elapsed();
+    assert!(!handle.alive());
+    assert!(
+        stop_elapsed < Duration::from_millis(150),
+        "Handle::stop 未立即唤醒 poll(2)：{stop_elapsed:?}"
+    );
+    gateway.finish();
+}
+
+#[cfg(unix)]
+#[test]
+fn poll_wakes_immediately_on_external_tunnel_frame() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (push_tx, push_rx) = mpsc::sync_channel(1);
+    let (done_tx, done_rx) = mpsc::sync_channel(1);
+    let server = thread::spawn(move || {
+        let (raw, _) = listener.accept().unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        raw.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        let config =
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![CertificateDer::from(CERT)],
+                    PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(KEY)),
+                )
+                .unwrap();
+        let mut tls = StreamOwned::new(ServerConnection::new(Arc::new(config)).unwrap(), raw);
+        let mut header = [0; 12];
+        tls.read_exact(&mut header).unwrap();
+        let mut body = vec![0; u16::from_be_bytes([header[2], header[3]]) as usize - 12];
+        tls.read_exact(&mut body).unwrap();
+        let mut response = vec![1, 2, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 11, 0, 4];
+        response.extend_from_slice(&CLIENT.octets());
+        response.extend_from_slice(&[36, 0, 9]);
+        response.extend_from_slice(b"127.0.0.1");
+        response.push(255);
+        let length = response.len() as u16;
+        response[2..4].copy_from_slice(&length.to_be_bytes());
+        tls.write_all(&response).unwrap();
+        tls.flush().unwrap();
+
+        // 等待主线程确认 Runner 已进入空闲 poll(2)，再主动从外部向隧道写入控制帧。
+        push_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        tls.write_all(&[1, 2, 0, 8, 0, 0, 0, 0]).unwrap();
+        tls.flush().unwrap();
+        let _ = done_rx.recv_timeout(Duration::from_secs(5));
+    });
+
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(CERT)).unwrap();
+    let (handle, _) = start_with_roots(
+        &json!({"host":"localhost", "port":port, "user":"synthetic", "token":"test-token"}),
+        roots,
+    )
+    .unwrap();
+
+    // 静置等待，确保 Runner 已进入 1000ms 空闲 poll(2)。
+    thread::sleep(Duration::from_millis(150));
+    let before_bytes = handle.status()["receivedBytes"].as_u64().unwrap();
+    let started = Instant::now();
+    push_tx.send(()).unwrap();
+    while handle.status()["receivedBytes"].as_u64().unwrap() < before_bytes + 8
+        && started.elapsed() < Duration::from_secs(1)
+    {
+        thread::sleep(Duration::from_millis(1));
+    }
+    let elapsed = started.elapsed();
+    assert!(
+        handle.status()["receivedBytes"].as_u64().unwrap() >= before_bytes + 8,
+        "未收到外部主动写入的隧道帧"
+    );
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "外部主动向隧道写入数据时 poll(2) 未立即唤醒：{elapsed:?}"
+    );
+
+    handle.stop();
+    let _ = done_tx.send(());
+    server.join().unwrap();
 }

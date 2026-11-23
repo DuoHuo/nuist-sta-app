@@ -3,21 +3,26 @@
 use crate::{frame, link::IpLink};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde_json::{json, Value};
-use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
+use smoltcp::iface::{Config, Interface, PollResult, SocketHandle, SocketSet};
 use smoltcp::socket::{dns, tcp};
 use smoltcp::time::{Duration as NetDuration, Instant as NetInstant};
 use smoltcp::wire::{DnsQueryType, HardwareAddress, IpAddress, IpCidr};
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
+#[cfg(unix)]
+use std::os::unix::io::{AsRawFd, RawFd};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_CONNECTIONS: usize = 64;
 const BUFFER_SIZE: usize = 64 * 1024;
+const IO_BUFFER_SIZE: usize = 16 * 1024;
 const OPEN_TIMEOUT: Duration = Duration::from_secs(20);
 // 原客户端为 500ms；测试阶段放宽到 10s，网关兼容性仍需实网验证。
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
@@ -26,7 +31,85 @@ const PROGRESS_TIMEOUT: Duration = Duration::from_secs(5);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 const TERMINAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 const START_TIMEOUT: Duration = Duration::from_secs(25);
+const SECRET_AUTH_TIMEOUT: Duration = Duration::from_secs(2);
+const FLOW_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
+#[cfg(unix)]
+const MAX_IDLE_POLL_WAIT: Duration = Duration::from_secs(1);
+#[cfg(unix)]
+const BACKPRESSURE_POLL_CAP: Duration = Duration::from_millis(25);
 static RESOLVERS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(unix)]
+mod sys_poll {
+    use std::ffi::{c_int, c_short};
+    use std::io;
+    use std::os::unix::io::RawFd;
+    use std::time::Duration;
+
+    pub const POLLIN: c_short = 0x0001;
+    pub const POLLOUT: c_short = 0x0004;
+
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    type Nfds = std::ffi::c_uint;
+
+    #[cfg(not(any(
+        target_vendor = "apple",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )))]
+    type Nfds = std::ffi::c_ulong;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct PollFd {
+        pub fd: RawFd,
+        pub events: c_short,
+        pub revents: c_short,
+    }
+
+    extern "C" {
+        fn poll(fds: *mut PollFd, nfds: Nfds, timeout: c_int) -> c_int;
+    }
+
+    pub fn duration_to_poll_timeout_ms(duration: Duration) -> c_int {
+        if duration.is_zero() {
+            return 0;
+        }
+        let millis = duration.as_millis();
+        let rounded = if duration.subsec_nanos() % 1_000_000 != 0 {
+            millis.saturating_add(1)
+        } else {
+            millis
+        };
+        rounded.clamp(1, c_int::MAX as u128) as c_int
+    }
+
+    pub fn wait(fds: &mut [PollFd], timeout: Duration) -> io::Result<usize> {
+        let timeout_ms = duration_to_poll_timeout_ms(timeout);
+        let nfds = Nfds::try_from(fds.len())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "poll fd 数量超限"))?;
+        // SAFETY: `fds` 指向有效且长度与 `nfds` 一致的可写数组；POSIX `poll(2)` 仅在调用期间读写该数组。
+        let ret = unsafe { poll(fds.as_mut_ptr(), nfds, timeout_ms) };
+        if ret < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                return Ok(0);
+            }
+            return Err(err);
+        }
+        Ok(ret as usize)
+    }
+}
 
 /// 启动控制与安全阶段信息；取消时关闭握手 Socket，不等待阻塞的解析器。
 pub struct StartControl {
@@ -237,8 +320,104 @@ struct OpenControl {
 }
 
 #[derive(Clone)]
+struct CommandSender {
+    inner: SyncSender<Command>,
+    #[cfg(unix)]
+    waker: Arc<UnixStream>,
+}
+
+impl CommandSender {
+    fn try_send(&self, command: Command) -> Result<(), mpsc::TrySendError<Command>> {
+        self.inner.try_send(command)?;
+        self.wake();
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn send(&self, command: Command) -> Result<(), mpsc::SendError<Command>> {
+        self.inner.send(command)?;
+        self.wake();
+        Ok(())
+    }
+
+    fn wake(&self) {
+        #[cfg(unix)]
+        {
+            let mut writer = &*self.waker;
+            loop {
+                match writer.write(&[1]) {
+                    Ok(_) => break,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    // WouldBlock 表示唤醒队列已有未读字节；BrokenPipe 表示事件循环已退出。
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+}
+
+struct CommandReceiver {
+    inner: Receiver<Command>,
+    #[cfg(unix)]
+    wakeup: UnixStream,
+}
+
+impl CommandReceiver {
+    fn try_recv(&self) -> Result<Command, mpsc::TryRecvError> {
+        self.inner.try_recv()
+    }
+
+    #[cfg(any(not(unix), test))]
+    fn recv_timeout(&self, timeout: Duration) -> Result<Command, mpsc::RecvTimeoutError> {
+        self.inner.recv_timeout(timeout)
+    }
+
+    #[cfg(unix)]
+    fn raw_fd(&self) -> RawFd {
+        self.wakeup.as_raw_fd()
+    }
+
+    #[cfg(unix)]
+    fn drain_wakeup(&mut self) {
+        let mut bytes = [0u8; 64];
+        loop {
+            match self.wakeup.read(&mut bytes) {
+                Ok(0) => break,
+                Ok(_) => continue,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+    }
+}
+
+fn command_channel(bound: usize) -> io::Result<(CommandSender, CommandReceiver)> {
+    let (inner_tx, inner_rx) = mpsc::sync_channel(bound);
+    #[cfg(unix)]
+    let (wakeup, waker) = {
+        let (reader, writer) = UnixStream::pair()?;
+        reader.set_nonblocking(true)?;
+        writer.set_nonblocking(true)?;
+        (reader, Arc::new(writer))
+    };
+    Ok((
+        CommandSender {
+            inner: inner_tx,
+            #[cfg(unix)]
+            waker,
+        },
+        CommandReceiver {
+            inner: inner_rx,
+            #[cfg(unix)]
+            wakeup,
+        },
+    ))
+}
+
+#[derive(Clone)]
 pub struct Handle {
-    commands: SyncSender<Command>,
+    commands: CommandSender,
     running: Arc<AtomicBool>,
     exit_reason: Arc<Mutex<Option<String>>>,
     health: Arc<Mutex<Health>>,
@@ -262,6 +441,7 @@ impl Handle {
     pub fn stop(&self) {
         self.running.store(false, Ordering::Release);
         let _ = self.socket.shutdown(Shutdown::Both);
+        self.commands.wake();
     }
 
     pub fn status(&self) -> Value {
@@ -289,31 +469,41 @@ impl Handle {
     }
 
     pub fn prepare_open(&self) -> io::Result<u64> {
-        let mut opens = self.opens.lock().unwrap();
-        opens.retain(|_, control| {
-            if control.created.elapsed() < Duration::from_secs(30) {
-                return true;
+        let mut expired = false;
+        let id = {
+            let mut opens = self.opens.lock().unwrap();
+            opens.retain(|_, control| {
+                if control.created.elapsed() < Duration::from_secs(30) {
+                    return true;
+                }
+                control.cancelled.store(true, Ordering::Release);
+                expired = true;
+                false
+            });
+            if opens.len() >= MAX_CONNECTIONS {
+                return Err(error(io::ErrorKind::WouldBlock, "VPN 目标连接登记已达上限"));
             }
-            control.cancelled.store(true, Ordering::Release);
-            false
-        });
-        if opens.len() >= MAX_CONNECTIONS {
-            return Err(error(io::ErrorKind::WouldBlock, "VPN 目标连接登记已达上限"));
+            let id = self.next_open.fetch_add(1, Ordering::Relaxed) as u64;
+            opens.insert(
+                id,
+                Arc::new(OpenControl {
+                    cancelled: AtomicBool::new(false),
+                    created: Instant::now(),
+                }),
+            );
+            id
+        };
+        if expired {
+            self.commands.wake();
         }
-        let id = self.next_open.fetch_add(1, Ordering::Relaxed) as u64;
-        opens.insert(
-            id,
-            Arc::new(OpenControl {
-                cancelled: AtomicBool::new(false),
-                created: Instant::now(),
-            }),
-        );
         Ok(id)
     }
 
     pub fn cancel_open(&self, id: u64) {
-        if let Some(control) = self.opens.lock().unwrap().remove(&id) {
+        let control = self.opens.lock().unwrap().remove(&id);
+        if let Some(control) = control {
             control.cancelled.store(true, Ordering::Release);
+            self.commands.wake();
         }
     }
 
@@ -369,15 +559,31 @@ impl Handle {
     }
 }
 
+fn build_client_config(roots: RootCertStore) -> io::Result<Arc<ClientConfig>> {
+    let config =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .map_err(io::Error::other)?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+    Ok(Arc::new(config))
+}
+
+fn default_client_config() -> io::Result<Arc<ClientConfig>> {
+    static DEFAULT_TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
+    if let Some(config) = DEFAULT_TLS_CONFIG.get() {
+        return Ok(Arc::clone(config));
+    }
+    let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let built = build_client_config(roots)?;
+    Ok(Arc::clone(DEFAULT_TLS_CONFIG.get_or_init(|| built)))
+}
+
 pub fn start_controlled(
     value: &Value,
     control: Arc<StartControl>,
 ) -> io::Result<(Handle, frame::AuthInfo)> {
-    start_with_control(
-        value,
-        RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
-        control,
-    )
+    start_inner(value, None, control, START_TIMEOUT)
 }
 
 #[cfg(test)]
@@ -387,6 +593,7 @@ fn start_with_roots(value: &Value, roots: RootCertStore) -> io::Result<(Handle, 
     start_with_control(value, roots, Arc::new(StartControl::new()))
 }
 
+#[cfg(test)]
 fn start_with_control(
     value: &Value,
     roots: RootCertStore,
@@ -395,9 +602,19 @@ fn start_with_control(
     start_with_deadline(value, roots, control, START_TIMEOUT)
 }
 
+#[cfg(test)]
 fn start_with_deadline(
     value: &Value,
     roots: RootCertStore,
+    control: Arc<StartControl>,
+    timeout: Duration,
+) -> io::Result<(Handle, frame::AuthInfo)> {
+    start_inner(value, Some(roots), control, timeout)
+}
+
+fn start_inner(
+    value: &Value,
+    custom_roots: Option<RootCertStore>,
     control: Arc<StartControl>,
     timeout: Duration,
 ) -> io::Result<(Handle, frame::AuthInfo)> {
@@ -420,12 +637,10 @@ fn start_with_deadline(
         as u16;
     let server_name = rustls::pki_types::ServerName::try_from(host.to_owned())
         .map_err(|_| error(io::ErrorKind::InvalidInput, "VPN 网关主机名不合法"))?;
-    let tls =
-        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-            .with_safe_default_protocol_versions()
-            .map_err(io::Error::other)?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+    let tls = match custom_roots {
+        Some(roots) => build_client_config(roots)?,
+        None => default_client_config()?,
+    };
     control.stage("DNS");
     let addresses = resolve(
         host.to_owned(),
@@ -453,8 +668,7 @@ fn start_with_deadline(
     raw.set_nodelay(true)?;
     *control.socket.lock().unwrap() = Some(raw.try_clone()?);
     control.check(deadline)?;
-    let mut connection =
-        ClientConnection::new(Arc::new(tls), server_name).map_err(io::Error::other)?;
+    let mut connection = ClientConnection::new(tls, server_name).map_err(io::Error::other)?;
     connection.set_buffer_limit(Some(BUFFER_SIZE * 4));
     control.stage("TLS");
     let mut tunnel = StreamOwned::new(
@@ -477,7 +691,7 @@ fn start_with_deadline(
     tunnel.sock.set_write_timeout(None)?;
     tunnel.sock.set_nonblocking(true)?;
 
-    let (sender, receiver) = mpsc::sync_channel(MAX_CONNECTIONS);
+    let (sender, receiver) = command_channel(MAX_CONNECTIONS)?;
     let running = Arc::new(AtomicBool::new(true));
     let exit_reason = Arc::new(Mutex::new(None));
     let now = Instant::now();
@@ -542,13 +756,17 @@ struct Runner {
     interface: Interface,
     sockets: SocketSet<'static>,
     dns: SocketHandle,
-    commands: Receiver<Command>,
+    commands: CommandReceiver,
     running: Arc<AtomicBool>,
     flows: Vec<Flow>,
     local_port: u16,
     decoder: frame::Decoder,
     output: VecDeque<Vec<u8>>,
     output_offset: usize,
+    /// 复用 16 KiB 收发缓冲，避免 `pump_tls()` / `advance()` 每轮在栈上反复零初始化。
+    io_buf: Box<[u8]>,
+    #[cfg(unix)]
+    poll_fds: Vec<sys_poll::PollFd>,
     started: Instant,
     last_received: Instant,
     last_heartbeat: Instant,
@@ -566,7 +784,7 @@ impl Runner {
     fn new(
         tunnel: StreamOwned<ClientConnection, TcpStream>,
         info: &frame::AuthInfo,
-        commands: Receiver<Command>,
+        commands: CommandReceiver,
         running: Arc<AtomicBool>,
         health: Arc<Mutex<Health>>,
     ) -> io::Result<Self> {
@@ -603,6 +821,9 @@ impl Runner {
             decoder: frame::Decoder::default(),
             output: VecDeque::new(),
             output_offset: 0,
+            io_buf: vec![0u8; IO_BUFFER_SIZE].into_boxed_slice(),
+            #[cfg(unix)]
+            poll_fds: Vec::with_capacity(MAX_CONNECTIONS + 2),
             started: now,
             last_received: now,
             // 握手后首轮立即发送，之后按固定周期保活。
@@ -779,7 +1000,11 @@ impl Runner {
                         flow.local = Some(stream);
                         flow.accepted_at = now;
                     }
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) => {}
                     Err(e) => return Err(e),
                 }
             }
@@ -796,7 +1021,11 @@ impl Runner {
                     return Ok(true);
                 }
                 Ok(count) => flow.received_secret.extend_from_slice(&bytes[..count]),
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) => {}
                 Err(_) => {
                     flow.local = None;
                     flow.received_secret.clear();
@@ -819,7 +1048,7 @@ impl Runner {
                 flow.secret.fill(0);
                 flow.received_secret.fill(0);
             } else {
-                if now.duration_since(flow.accepted_at) > Duration::from_secs(2) {
+                if now.duration_since(flow.accepted_at) > SECRET_AUTH_TIMEOUT {
                     flow.local = None;
                     flow.received_secret.clear();
                 }
@@ -827,32 +1056,44 @@ impl Runner {
             }
         }
         if self.terminal.is_none() && !flow.local_eof && socket.can_send() {
-            let mut bytes = [0; 16 * 1024];
-            let capacity = (socket.send_capacity() - socket.send_queue()).min(bytes.len());
-            match local.read(&mut bytes[..capacity]) {
-                Ok(0) => {
-                    flow.local_eof = true;
-                    socket.close();
-                }
-                Ok(count) => {
-                    let sent = socket
-                        .send_slice(&bytes[..count])
-                        .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道写入失败"))?;
-                    if sent != count {
-                        return Err(error(io::ErrorKind::WriteZero, "隧道发送缓冲不足"));
+            let capacity = (socket.send_capacity() - socket.send_queue()).min(self.io_buf.len());
+            if capacity > 0 {
+                match local.read(&mut self.io_buf[..capacity]) {
+                    Ok(0) => {
+                        flow.local_eof = true;
+                        socket.close();
                     }
-                    flow.touched = now;
-                    self.io_progress = self.io_progress.wrapping_add(1);
+                    Ok(count) => {
+                        let sent = socket
+                            .send_slice(&self.io_buf[..count])
+                            .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道写入失败"))?;
+                        if sent != count {
+                            return Err(error(io::ErrorKind::WriteZero, "隧道发送缓冲不足"));
+                        }
+                        flow.touched = now;
+                        self.io_progress = self.io_progress.wrapping_add(1);
+                    }
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(e) => return Err(e),
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                Err(e) => return Err(e),
             }
         }
         if socket.can_recv() {
             let written = socket
                 .recv(|bytes| match local.write(bytes) {
                     Ok(count) => (count, Ok(count)),
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => (0, Ok(0)),
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) =>
+                    {
+                        (0, Ok(0))
+                    }
                     Err(e) => (0, Err(e)),
                 })
                 .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道读取失败"))??;
@@ -871,7 +1112,7 @@ impl Runner {
             return Ok(false);
         }
         // 保留 socket 到 FIN 握手完成；过早 abort/remove 会丢掉尚未发出的 FIN/ACK。
-        Ok(now.duration_since(flow.touched) < Duration::from_secs(180))
+        Ok(now.duration_since(flow.touched) < FLOW_IDLE_TIMEOUT)
     }
 
     fn remove(&mut self, mut flow: Flow, failure: Option<io::Error>) {
@@ -898,7 +1139,6 @@ impl Runner {
         // 每轮设上限，防止一条大下载饿死连接命令和心跳。
         for _ in 0..16 {
             // 先消耗已解密的数据：握手读取可能已把后续报文一并收进 rustls。
-            let mut bytes = [0; 16 * 1024];
             loop {
                 // 最小 IPv4 帧为 8 字节头 + 20 字节包。为 Decoder 中可能
                 // 已有的半帧预留一个槽，不从可靠 TLS 流主动读出随后要丢弃的包。
@@ -906,8 +1146,8 @@ impl Runner {
                 if capacity < 2 {
                     break;
                 }
-                let limit = bytes.len().min((capacity - 1) * 28);
-                match self.tunnel.conn.reader().read(&mut bytes[..limit]) {
+                let limit = self.io_buf.len().min((capacity - 1) * 28);
+                match self.tunnel.conn.reader().read(&mut self.io_buf[..limit]) {
                     // 非空缓冲读到 0 表示已收到 close_notify；即使 TCP 仍保持
                     // 打开，TLS 也不会再有数据，不能继续把它报告为健康隧道。
                     Ok(0) => {
@@ -920,7 +1160,7 @@ impl Runner {
                     Ok(count) => {
                         self.io_progress = self.io_progress.wrapping_add(1);
                         let completed = self.decoder.completed_frames();
-                        for packet in self.decoder.push(&bytes[..count])? {
+                        for packet in self.decoder.push(&self.io_buf[..count])? {
                             self.device.inject(packet);
                         }
                         let mut health = self.health.lock().unwrap();
@@ -955,7 +1195,14 @@ impl Runner {
                         .process_new_packets()
                         .map_err(io::Error::other)?;
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    break
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -973,6 +1220,7 @@ impl Runner {
                 break;
             };
             self.output.push_back(frame::data(&packet)?);
+            self.io_progress = self.io_progress.wrapping_add(1);
         }
         while let Some(bytes) = self.output.front() {
             let count = self
@@ -996,7 +1244,14 @@ impl Runner {
             match self.tunnel.conn.write_tls(&mut self.tunnel.sock) {
                 Ok(0) => return Err(error(io::ErrorKind::WriteZero, "VPN 写入中断")),
                 Ok(_) => self.io_progress = self.io_progress.wrapping_add(1),
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    break
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -1069,12 +1324,135 @@ impl Runner {
         }
     }
 
+    #[cfg(unix)]
+    fn next_poll_timeout(&mut self, idle_rounds: u32) -> Duration {
+        let now = Instant::now();
+        // 始终显著低于 PROGRESS_TIMEOUT (5s)，保证空闲睡眠期间 status().loopIdleMs 与调度停顿检测保持准确。
+        let mut wait = MAX_IDLE_POLL_WAIT;
+        if self.terminal.is_none() && self.output.len() < 256 {
+            let next_heartbeat = self.last_heartbeat + HEARTBEAT_INTERVAL;
+            wait = wait.min(next_heartbeat.saturating_duration_since(now));
+        }
+        if self.terminal.is_some() {
+            if let Some(deadline) = self.drain_deadline {
+                wait = wait.min(deadline.saturating_duration_since(now));
+            }
+        }
+        if let Some((_, deadline, _, _)) = self.probe.as_ref() {
+            wait = wait.min(deadline.saturating_duration_since(now));
+        }
+        for flow in &self.flows {
+            if !flow.authenticated {
+                wait = wait.min(flow.deadline.saturating_duration_since(now));
+                if flow.local.is_some() {
+                    // advance() 使用严格大于 `> SECRET_AUTH_TIMEOUT` 判断超时，+1ms 避免提前唤醒空转。
+                    let secret_deadline =
+                        flow.accepted_at + SECRET_AUTH_TIMEOUT + Duration::from_millis(1);
+                    wait = wait.min(secret_deadline.saturating_duration_since(now));
+                }
+            } else {
+                let idle_deadline = flow.touched + FLOW_IDLE_TIMEOUT;
+                wait = wait.min(idle_deadline.saturating_duration_since(now));
+            }
+        }
+        let net_now = NetInstant::from_millis(self.started.elapsed().as_millis() as i64);
+        if let Some(delay) = self.interface.poll_delay(net_now, &self.sockets) {
+            if delay.total_millis() > 0 {
+                wait = wait.min(Duration::from_millis(delay.total_millis()));
+            } else {
+                // poll_at 为 Now 却无法推进时，链路可能正在背压，保留有界退避兜底避免忙等。
+                let cap = BACKPRESSURE_POLL_CAP.as_millis() as u64;
+                let backoff = Duration::from_millis((1u64 << idle_rounds).min(cap));
+                wait = wait.min(backoff);
+            }
+        }
+        wait
+    }
+
+    #[cfg(unix)]
+    fn wait_unix_events(&mut self, wait: Duration) -> io::Result<()> {
+        self.poll_fds.clear();
+        self.poll_fds.push(sys_poll::PollFd {
+            fd: self.commands.raw_fd(),
+            events: sys_poll::POLLIN,
+            revents: 0,
+        });
+
+        // 仅在未进入终态时监听隧道 socket；终态期间对端可能处于 EOF，登记会导致 POLLIN/POLLHUP 忙等。
+        if self.terminal.is_none() {
+            let mut tunnel_events = 0;
+            if self.device.receive_capacity() >= 2 && self.tunnel.conn.wants_read() {
+                tunnel_events |= sys_poll::POLLIN;
+            }
+            if self.tunnel.conn.wants_write() || !self.output.is_empty() {
+                tunnel_events |= sys_poll::POLLOUT;
+            }
+            if tunnel_events != 0 {
+                self.poll_fds.push(sys_poll::PollFd {
+                    fd: self.tunnel.sock.as_raw_fd(),
+                    events: tunnel_events,
+                    revents: 0,
+                });
+            }
+        }
+
+        for flow in &self.flows {
+            if flow.local.is_none() {
+                if self.terminal.is_none() {
+                    if let Some(listener) = &flow.listener {
+                        self.poll_fds.push(sys_poll::PollFd {
+                            fd: listener.as_raw_fd(),
+                            events: sys_poll::POLLIN,
+                            revents: 0,
+                        });
+                    }
+                }
+                continue;
+            }
+            let Some(local) = &flow.local else {
+                continue;
+            };
+            let mut local_events = 0;
+            if !flow.authenticated {
+                if self.terminal.is_none() {
+                    local_events |= sys_poll::POLLIN;
+                }
+            } else if let Some(tcp_handle) = flow.tcp {
+                let socket = self.sockets.get::<tcp::Socket>(tcp_handle);
+                if self.terminal.is_none() && !flow.local_eof && socket.can_send() {
+                    local_events |= sys_poll::POLLIN;
+                }
+                if socket.can_recv() {
+                    local_events |= sys_poll::POLLOUT;
+                }
+            }
+            // 若不需要任何事件则彻底不登记该 fd，防止已半关/异常 fd 触发 POLLHUP 忙等。
+            if local_events != 0 {
+                self.poll_fds.push(sys_poll::PollFd {
+                    fd: local.as_raw_fd(),
+                    events: local_events,
+                    revents: 0,
+                });
+            }
+        }
+
+        let _ = sys_poll::wait(&mut self.poll_fds, wait)?;
+        Ok(())
+    }
+
     fn run(&mut self) -> io::Result<()> {
         let mut idle_rounds = 0u32;
+        #[cfg(not(unix))]
         let mut pending_command = None;
         while self.running.load(Ordering::Acquire) {
+            #[cfg(unix)]
+            self.commands.drain_wakeup();
+            if !self.running.load(Ordering::Acquire) {
+                break;
+            }
             self.update_progress();
             let progress = self.io_progress;
+            #[cfg(not(unix))]
             if let Some(command) = pending_command.take() {
                 match command {
                     Command::Open(_, _, _, reply) if self.terminal.is_some() => {
@@ -1128,8 +1506,14 @@ impl Runner {
                 }
             }
             self.flows = flows;
-            self.interface
-                .poll(timestamp, &mut self.device, &mut self.sockets);
+            let timestamp = NetInstant::from_millis(self.started.elapsed().as_millis() as i64);
+            if self
+                .interface
+                .poll(timestamp, &mut self.device, &mut self.sockets)
+                == PollResult::SocketStateChanged
+            {
+                self.io_progress = self.io_progress.wrapping_add(1);
+            }
             self.pump_tls()?;
             if self.terminal.is_some()
                 && (self.flows.is_empty()
@@ -1147,21 +1531,29 @@ impl Runner {
                 continue;
             }
             idle_rounds = idle_rounds.saturating_add(1).min(6);
-            let ceiling = if self.flows.is_empty() { 50 } else { 25 };
-            let mut wait = Duration::from_millis((1u64 << idle_rounds).min(ceiling));
-            let now = NetInstant::from_millis(self.started.elapsed().as_millis() as i64);
-            if let Some(delay) = self.interface.poll_delay(now, &self.sockets) {
-                // poll_at 为 Now 却无法推进时，链路可能正在背压，继续退避。
-                // 正数期限仍需准时处理，避免延迟 ACK、重传与 keepalive。
-                if delay.total_millis() > 0 {
-                    wait = wait.min(Duration::from_millis(delay.total_millis()));
-                }
+            #[cfg(unix)]
+            {
+                let wait = self.next_poll_timeout(idle_rounds);
+                self.wait_unix_events(wait)?;
             }
-            // 连接命令直接唤醒等待，无需等下一次轮询。
-            match self.commands.recv_timeout(wait) {
-                Ok(command) => pending_command = Some(command),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            #[cfg(not(unix))]
+            {
+                let ceiling = if self.flows.is_empty() { 50 } else { 25 };
+                let mut wait = Duration::from_millis((1u64 << idle_rounds).min(ceiling));
+                let now = NetInstant::from_millis(self.started.elapsed().as_millis() as i64);
+                if let Some(delay) = self.interface.poll_delay(now, &self.sockets) {
+                    // poll_at 为 Now 却无法推进时，链路可能正在背压，继续退避。
+                    // 正数期限仍需准时处理，避免延迟 ACK、重传与 keepalive。
+                    if delay.total_millis() > 0 {
+                        wait = wait.min(Duration::from_millis(delay.total_millis()));
+                    }
+                }
+                // 连接命令直接唤醒等待，无需等下一次轮询。
+                match self.commands.recv_timeout(wait) {
+                    Ok(command) => pending_command = Some(command),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                }
             }
         }
         Ok(())
@@ -1170,6 +1562,7 @@ impl Runner {
 
 impl Drop for Runner {
     fn drop(&mut self) {
+        self.io_buf.fill(0);
         self.running.store(false, Ordering::Release);
         let _ = self.tunnel.sock.shutdown(Shutdown::Both);
     }
