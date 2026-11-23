@@ -164,7 +164,6 @@ class _CampusMapPageState extends State<CampusMapPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _shuttle = ShuttleController(widget.shuttleSource ?? ShuttleApi())
-      ..addListener(_shuttleChanged)
       ..onFirstFailure = _showShuttleToast;
     _search.addListener(_searchChanged);
     _sheet.addListener(_sheetChanged);
@@ -379,10 +378,6 @@ class _CampusMapPageState extends State<CampusMapPage>
     }
   }
 
-  void _shuttleChanged() {
-    if (mounted) setState(() {});
-  }
-
   void _syncShuttleLifecycle() {
     _shuttle.setActive(_mapActive && _layer == CampusMapLayer.transit);
   }
@@ -410,6 +405,8 @@ class _CampusMapPageState extends State<CampusMapPage>
 
   void _showShuttleToast() {
     if (!mounted) return;
+    _shuttleToastTimer?.cancel();
+    _shuttleToast?.remove();
     _shuttleToast = OverlayEntry(
       builder: (context) {
         final palette = AppPalette.of(context);
@@ -1005,69 +1002,76 @@ class _CampusMapPageState extends State<CampusMapPage>
                                 ))
                         : ValueListenableBuilder<double?>(
                             valueListenable: _userHeading,
-                            builder: (context, heading, _) => CampusMapCanvas(
-                              styleUrl: _style,
-                              useNativeMap: widget.useNativeMap,
-                              places: _campus.places,
-                              shuttleVehicles: _shuttle.vehicles,
-                              shuttleDirections: _shuttle.directions,
-                              selectedPlace: _place,
-                              floor: _floor,
-                              selectedRoom: _room,
-                              rooms: _floorData.rooms,
-                              buildingGeoJson: _campus.buildingGeoJson,
-                              featuresGeoJson: _campus.featuresGeoJson,
-                              floorGeoJson: _floorData.geoJson,
-                              ghostFloorsGeoJson: _ghostFloors,
-                              streetCoverageGeoJson:
-                                  _campus.streetCoverageGeoJson,
-                              routeGeoJson: _route?.geoJson,
-                              streetCoverage:
-                                  _layer == CampusMapLayer.streetView,
-                              mapLayer: _layer,
-                              showRoute: _route != null,
-                              routePassedGeoJson: _isNavigating
-                                  ? _routePassed
-                                  : null,
-                              navigating: _following,
-                              fitRoute: !_isNavigating || _overview,
-                              navPoint: _navPoint,
-                              navBearing: _isNavigating
-                                  ? _navProgress?.bearing
-                                  : null,
-                              category: _category,
-                              resetToken: _resetToken,
-                              zoomDelta: _zoomDelta,
-                              userPoint: _navPoint ?? _userPoint,
-                              userHeading: _userPoint == null ? null : heading,
-                              focusToken: _focusToken,
-                              markerPlaces: _markerPlaces(),
-                              viewportInsets: _isNavigating
-                                  // 导航时把自己放在屏幕偏下处，多看前方的路（同百度）。
-                                  ? EdgeInsets.only(
-                                      top: _topInset + 140,
-                                      bottom: _navInset,
-                                    )
-                                  : wide
-                                  ? EdgeInsets.only(
-                                      left: 352 + 32,
-                                      top: _route == null ? 0 : _topInset,
-                                    )
-                                  : EdgeInsets.only(
-                                      top: _route == null ? 0 : _topInset,
-                                      bottom: _place == null ? 0 : _sheetInset,
-                                    ),
-                              onPlaceSelected: _selectPlace,
-                              onRoomSelected: (room) {
-                                _routeRevision++;
-                                setState(() {
-                                  _room = room;
-                                  _route = null;
-                                  _routing = false;
-                                });
-                                _expandSheet(.43);
-                              },
-                              onStreetEntry: _openStreet,
+                            builder: (context, heading, _) => ListenableBuilder(
+                              listenable: _shuttle,
+                              builder: (context, _) => CampusMapCanvas(
+                                styleUrl: _style,
+                                useNativeMap: widget.useNativeMap,
+                                places: _campus.places,
+                                shuttleVehicles: _shuttle.vehicles,
+                                shuttleDirections: _shuttle.directions,
+                                selectedPlace: _place,
+                                floor: _floor,
+                                selectedRoom: _room,
+                                rooms: _floorData.rooms,
+                                buildingGeoJson: _campus.buildingGeoJson,
+                                featuresGeoJson: _campus.featuresGeoJson,
+                                floorGeoJson: _floorData.geoJson,
+                                ghostFloorsGeoJson: _ghostFloors,
+                                streetCoverageGeoJson:
+                                    _campus.streetCoverageGeoJson,
+                                routeGeoJson: _route?.geoJson,
+                                streetCoverage:
+                                    _layer == CampusMapLayer.streetView,
+                                mapLayer: _layer,
+                                showRoute: _route != null,
+                                routePassedGeoJson: _isNavigating
+                                    ? _routePassed
+                                    : null,
+                                navigating: _following,
+                                fitRoute: !_isNavigating || _overview,
+                                navPoint: _navPoint,
+                                navBearing: _isNavigating
+                                    ? _navProgress?.bearing
+                                    : null,
+                                category: _category,
+                                resetToken: _resetToken,
+                                zoomDelta: _zoomDelta,
+                                userPoint: _navPoint ?? _userPoint,
+                                userHeading: _userPoint == null
+                                    ? null
+                                    : heading,
+                                focusToken: _focusToken,
+                                markerPlaces: _markerPlaces(),
+                                viewportInsets: _isNavigating
+                                    // 导航时把自己放在屏幕偏下处，多看前方的路（同百度）。
+                                    ? EdgeInsets.only(
+                                        top: _topInset + 140,
+                                        bottom: _navInset,
+                                      )
+                                    : wide
+                                    ? EdgeInsets.only(
+                                        left: 352 + 32,
+                                        top: _route == null ? 0 : _topInset,
+                                      )
+                                    : EdgeInsets.only(
+                                        top: _route == null ? 0 : _topInset,
+                                        bottom: _place == null
+                                            ? 0
+                                            : _sheetInset,
+                                      ),
+                                onPlaceSelected: _selectPlace,
+                                onRoomSelected: (room) {
+                                  _routeRevision++;
+                                  setState(() {
+                                    _room = room;
+                                    _route = null;
+                                    _routing = false;
+                                  });
+                                  _expandSheet(.43);
+                                },
+                                onStreetEntry: _openStreet,
+                              ),
                             ),
                           ),
                   ),
@@ -1202,9 +1206,15 @@ class _CampusMapPageState extends State<CampusMapPage>
                       width: 352,
                       child: MapSurface(
                         radius: 26,
-                        child: ListView(
-                          padding: const EdgeInsets.all(20),
-                          children: _panelChildren(),
+                        child: CustomScrollView(
+                          slivers: [
+                            SliverPadding(
+                              padding: const EdgeInsets.all(20),
+                              sliver: SliverMainAxisGroup(
+                                slivers: _panelSlivers(context),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     )
@@ -1232,8 +1242,8 @@ class _CampusMapPageState extends State<CampusMapPage>
                           boxShadow: [
                             BoxShadow(
                               color: colors.shadow,
-                              blurRadius: 32,
-                              offset: const Offset(0, -4),
+                              blurRadius: 14,
+                              offset: const Offset(0, -3),
                             ),
                           ],
                         ),
@@ -1243,63 +1253,75 @@ class _CampusMapPageState extends State<CampusMapPage>
                           ),
                           child: Material(
                             color: colors.surface,
-                            child: ListView(
+                            child: CustomScrollView(
                               controller: controller,
-                              padding: EdgeInsets.fromLTRB(
-                                20,
-                                0,
-                                20,
-                                safe.bottom +
-                                    MediaQuery.viewInsetsOf(context).bottom +
-                                    24,
-                              ),
-                              children: [
-                                Center(
-                                  child: Semantics(
-                                    label: '展开地图面板',
-                                    button: true,
-                                    child: InkWell(
-                                      onTap: () => _expandSheet(
-                                        _sheet.size < .5 ? .88 : .33,
-                                      ),
-                                      child: SizedBox(
-                                        width: 64,
-                                        height: 28,
+                              slivers: [
+                                SliverPadding(
+                                  padding: EdgeInsets.fromLTRB(
+                                    20,
+                                    0,
+                                    20,
+                                    safe.bottom +
+                                        MediaQuery.viewInsetsOf(context)
+                                            .bottom +
+                                        24,
+                                  ),
+                                  sliver: SliverMainAxisGroup(
+                                    slivers: [
+                                      SliverToBoxAdapter(
                                         child: Center(
-                                          child: Container(
-                                            width: 36,
-                                            height: 5,
-                                            decoration: BoxDecoration(
-                                              color: colors.handle,
-                                              borderRadius:
-                                                  BorderRadius.circular(4),
+                                          child: Semantics(
+                                            label: '展开地图面板',
+                                            button: true,
+                                            child: InkWell(
+                                              onTap: () => _expandSheet(
+                                                _sheet.size < .5 ? .88 : .33,
+                                              ),
+                                              child: SizedBox(
+                                                width: 64,
+                                                height: 28,
+                                                child: Center(
+                                                  child: Container(
+                                                    width: 36,
+                                                    height: 5,
+                                                    decoration: BoxDecoration(
+                                                      color: colors.handle,
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            4,
+                                                          ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
                                             ),
                                           ),
                                         ),
                                       ),
-                                    ),
+                                      if (_isHomePanel)
+                                        SliverToBoxAdapter(
+                                          child: _SizeReporter(
+                                            onHeight: (height) {
+                                              if ((height -
+                                                          (_homeContentHeight ??
+                                                              0))
+                                                      .abs() <
+                                                  1) {
+                                                return;
+                                              }
+                                              setState(
+                                                () =>
+                                                    _homeContentHeight = height,
+                                              );
+                                            },
+                                            child: _explorePanel(),
+                                          ),
+                                        )
+                                      else
+                                        ..._panelSlivers(context),
+                                    ],
                                   ),
                                 ),
-                                if (_isHomePanel)
-                                  _SizeReporter(
-                                    onHeight: (height) {
-                                      if ((height - (_homeContentHeight ?? 0))
-                                              .abs() <
-                                          1) {
-                                        return;
-                                      }
-                                      setState(
-                                        () => _homeContentHeight = height,
-                                      );
-                                    },
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: _panelChildren(),
-                                    ),
-                                  )
-                                else
-                                  ..._panelChildren(),
                               ],
                             ),
                           ),
@@ -1686,13 +1708,45 @@ class _CampusMapPageState extends State<CampusMapPage>
     return fraction.clamp(.33, .88);
   }
 
-  /// 面板内容拆成列表项交给 ListView 懒构建：分类列表可能有几百个地点，
-  /// 不能塞进一个 Column 一次性全部布局。
-  List<Widget> _panelChildren() {
-    if (_route == null && _place == null) {
-      return _explorePanel().children(context);
+  /// 面板内容拆成 Sliver 段落交给 CustomScrollView 懒构建：分类列表、房间列表
+  /// 可能有大量条目，只布局并构建可见部分。
+  List<Widget> _panelSlivers(BuildContext context) {
+    final navRoute = _navRoute;
+    if (_route != null && navRoute != null) {
+      return [
+        SliverToBoxAdapter(
+          child: CampusRoutePreview(
+            route: navRoute,
+            originLabel: _routeOriginLabel,
+            destinationLabel: _room?.name ?? _place?.name ?? '目的地',
+            via: _routeVia,
+            onStart: _startNavigation,
+            // 模拟导航只给开发调试用，正式包不显示。
+            onSimulate: kDebugMode ? _startSimulation : null,
+          ),
+        ),
+      ];
     }
-    return [_panel()];
+    if (_place == null) {
+      return _explorePanel().slivers(context);
+    }
+    return [
+      if (_placeLoading)
+        const SliverToBoxAdapter(child: LinearProgressIndicator(minHeight: 2)),
+      if (_placeError != null)
+        SliverToBoxAdapter(
+          child: MapEmptyState(
+            icon: Icons.cloud_off_outlined,
+            title: _placeError!,
+            description: '可重试加载地点详情',
+            action: TextButton(
+              onPressed: () => _selectPlace(_place!),
+              child: const Text('重试'),
+            ),
+          ),
+        ),
+      ..._placePanel().slivers(context),
+    ];
   }
 
   CampusExplorePanel _explorePanel() => CampusExplorePanel(
@@ -1714,102 +1768,66 @@ class _CampusMapPageState extends State<CampusMapPage>
     onSelect: _selectPlace,
   );
 
-  Widget _panel() {
-    final navRoute = _navRoute;
-    if (_route != null && navRoute != null) {
-      return CampusRoutePreview(
-        route: navRoute,
-        originLabel: _routeOriginLabel,
-        destinationLabel: _room?.name ?? _place?.name ?? '目的地',
-        via: _routeVia,
-        onStart: _startNavigation,
-        // 模拟导航只给开发调试用，正式包不显示。
-        onSimulate: kDebugMode ? _startSimulation : null,
-      );
-    }
-    return _place == null
-        ? _explorePanel()
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (_placeLoading) const LinearProgressIndicator(minHeight: 2),
-              if (_placeError != null)
-                MapEmptyState(
-                  icon: Icons.cloud_off_outlined,
-                  title: _placeError!,
-                  description: '可重试加载地点详情',
-                  action: TextButton(
-                    onPressed: () => _selectPlace(_place!),
-                    child: const Text('重试'),
-                  ),
-                ),
-              CampusPlacePanel(
-                place: _place!,
-                onDetail: _place!.hasDetail && _room == null
-                    ? () => _openDetail(_place!)
-                    : null,
-                mediaEntry:
-                    _place!.poiId == null && !_place!.id.startsWith('poi:')
-                    ? CampusBuildingPhotosEntry(
-                        source: widget.source is CampusBuildingPhotosSource
-                            ? widget.source as CampusBuildingPhotosSource
-                            : null,
-                        buildingId: _place!.buildingId ?? _place!.id,
-                        buildingName: _place!.name,
-                      )
-                    : null,
-                floor: _floor,
-                room: _room,
-                floorData: _floorData,
-                floorLoading: _floorLoading,
-                floorError: _floorError,
-                route: _route,
-                routing: _routing,
-                onClose: () {
-                  if (_room != null) {
-                    setState(() => _room = null);
-                  } else {
-                    _clearSelection();
-                  }
-                },
-                onRoute:
-                    widget.source.isConfigured &&
-                        !_placeLoading &&
-                        _placeError == null
-                    ? _showRoutePlanner
-                    : null,
-                onIndoor: _floor != null
-                    ? _leaveIndoor
-                    : _place!.hasIndoor && _place!.floors.isNotEmpty
-                    ? () => _selectFloor(_place!.floors.first)
-                    : null,
-                onStreet: () => _openStreet(_place!),
-                onRetryFloor: () => _selectFloor(_floor!),
-                onFloor: _selectFloor,
-                // 只有楼宇（不是 POI / 通用地物）才和课表联动。
-                weekClasses: _place!.poiId == null && _place!.featureId == null
-                    ? classesInBuilding(_weekClasses, _place!)
-                    : const [],
-                // 本周有课但不在这栋楼：卡片显示一句提示，而不是整块消失。
-                hasWeekClasses:
-                    _place!.poiId == null &&
-                    _place!.featureId == null &&
-                    _weekClasses.isNotEmpty,
-                onClass: _openClass,
-                locatingClass: _locatingClass,
-                onRoom: (room) {
-                  _routeRevision++;
-                  setState(() {
-                    _room = room;
-                    _route = null;
-                    _routing = false;
-                  });
-                },
-                onCloseRoute: () => setState(() => _route = null),
-              ),
-            ],
-          );
-  }
+  CampusPlacePanel _placePanel() => CampusPlacePanel(
+    place: _place!,
+    onDetail: _place!.hasDetail && _room == null
+        ? () => _openDetail(_place!)
+        : null,
+    mediaEntry: _place!.poiId == null && !_place!.id.startsWith('poi:')
+        ? CampusBuildingPhotosEntry(
+            source: widget.source is CampusBuildingPhotosSource
+                ? widget.source as CampusBuildingPhotosSource
+                : null,
+            buildingId: _place!.buildingId ?? _place!.id,
+            buildingName: _place!.name,
+          )
+        : null,
+    floor: _floor,
+    room: _room,
+    floorData: _floorData,
+    floorLoading: _floorLoading,
+    floorError: _floorError,
+    route: _route,
+    routing: _routing,
+    onClose: () {
+      if (_room != null) {
+        setState(() => _room = null);
+      } else {
+        _clearSelection();
+      }
+    },
+    onRoute: widget.source.isConfigured && !_placeLoading && _placeError == null
+        ? _showRoutePlanner
+        : null,
+    onIndoor: _floor != null
+        ? _leaveIndoor
+        : _place!.hasIndoor && _place!.floors.isNotEmpty
+        ? () => _selectFloor(_place!.floors.first)
+        : null,
+    onStreet: () => _openStreet(_place!),
+    onRetryFloor: () => _selectFloor(_floor!),
+    onFloor: _selectFloor,
+    // 只有楼宇（不是 POI / 通用地物）才和课表联动。
+    weekClasses: _place!.poiId == null && _place!.featureId == null
+        ? classesInBuilding(_weekClasses, _place!)
+        : const [],
+    // 本周有课但不在这栋楼：卡片显示一句提示，而不是整块消失。
+    hasWeekClasses:
+        _place!.poiId == null &&
+        _place!.featureId == null &&
+        _weekClasses.isNotEmpty,
+    onClass: _openClass,
+    locatingClass: _locatingClass,
+    onRoom: (room) {
+      _routeRevision++;
+      setState(() {
+        _room = room;
+        _route = null;
+        _routing = false;
+      });
+    },
+    onCloseRoute: () => setState(() => _route = null),
+  );
 
   Widget _tools(bool wide) => Column(
     children: [

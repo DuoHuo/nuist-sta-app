@@ -12,8 +12,9 @@ import 'campus_map_canvas.dart';
 import 'campus_map_data.dart';
 import 'campus_map_heading.dart';
 import 'campus_map_panels.dart';
-import 'shuttle_stations.dart';
 import 'shuttle_map_layer.dart';
+import 'shuttle_models.dart';
+import 'shuttle_stations.dart';
 
 /// 赤道周长（米），Web Mercator 的标准常量。
 const double _equatorCircumferenceM = 40075016.686;
@@ -67,9 +68,247 @@ const double _metersPerDegree = _equatorCircumferenceM / 360.0;
   );
 }
 
+/// Lightweight bridge over [MapLibreMapController] for layer/source mutations.
+///
+/// Production uses [_MapLibreBridge] directly; tests can inspect or override
+/// the bridge via [CampusMapNative.debugBridgeOverride].
+@visibleForTesting
+abstract interface class CampusMapBridge {
+  CameraPosition? get cameraPosition;
+
+  Future<void> addImage(String name, Uint8List bytes);
+
+  Future<void> addGeoJsonSource(String sourceId, Map<String, dynamic> geojson);
+
+  Future<void> setGeoJsonSource(String sourceId, Map<String, dynamic> geojson);
+
+  Future<void> removeSource(String sourceId);
+
+  Future<void> addFillLayer(
+    String sourceId,
+    String layerId,
+    FillLayerProperties properties, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  });
+
+  Future<void> addFillExtrusionLayer(
+    String sourceId,
+    String layerId,
+    FillExtrusionLayerProperties properties, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  });
+
+  Future<void> addLineLayer(
+    String sourceId,
+    String layerId,
+    LineLayerProperties properties, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  });
+
+  Future<void> addCircleLayer(
+    String sourceId,
+    String layerId,
+    CircleLayerProperties properties, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  });
+
+  Future<void> addSymbolLayer(
+    String sourceId,
+    String layerId,
+    SymbolLayerProperties properties, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  });
+
+  Future<void> setLayerProperties(String layerId, LayerProperties properties);
+
+  Future<void> setLayerFilter(String layerId, dynamic filter);
+
+  Future<void> removeLayer(String layerId);
+
+  Future<List<dynamic>> queryRenderedFeaturesInRect(
+    Rect rect,
+    List<String> layerIds,
+    String? filter,
+  );
+
+  Future<List<Point>> toScreenLocationBatch(Iterable<LatLng> latLngs);
+
+  Future<bool?> moveCamera(CameraUpdate update);
+
+  Future<bool?> animateCamera(CameraUpdate update, {Duration? duration});
+}
+
+final class _MapLibreBridge implements CampusMapBridge {
+  _MapLibreBridge(this._controller);
+
+  final MapLibreMapController _controller;
+
+  @override
+  CameraPosition? get cameraPosition => _controller.cameraPosition;
+
+  @override
+  Future<void> addImage(String name, Uint8List bytes) =>
+      _controller.addImage(name, bytes);
+
+  @override
+  Future<void> addGeoJsonSource(
+    String sourceId,
+    Map<String, dynamic> geojson,
+  ) => _controller.addGeoJsonSource(sourceId, geojson);
+
+  @override
+  Future<void> setGeoJsonSource(
+    String sourceId,
+    Map<String, dynamic> geojson,
+  ) => _controller.setGeoJsonSource(sourceId, geojson);
+
+  @override
+  Future<void> removeSource(String sourceId) =>
+      _controller.removeSource(sourceId);
+
+  @override
+  Future<void> addFillLayer(
+    String sourceId,
+    String layerId,
+    FillLayerProperties properties, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  }) => _controller.addFillLayer(
+    sourceId,
+    layerId,
+    properties,
+    belowLayerId: belowLayerId,
+    filter: filter,
+    enableInteraction: enableInteraction,
+  );
+
+  @override
+  Future<void> addFillExtrusionLayer(
+    String sourceId,
+    String layerId,
+    FillExtrusionLayerProperties properties, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  }) => _controller.addFillExtrusionLayer(
+    sourceId,
+    layerId,
+    properties,
+    belowLayerId: belowLayerId,
+    filter: filter,
+    enableInteraction: enableInteraction,
+  );
+
+  @override
+  Future<void> addLineLayer(
+    String sourceId,
+    String layerId,
+    LineLayerProperties properties, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  }) => _controller.addLineLayer(
+    sourceId,
+    layerId,
+    properties,
+    belowLayerId: belowLayerId,
+    filter: filter,
+    enableInteraction: enableInteraction,
+  );
+
+  @override
+  Future<void> addCircleLayer(
+    String sourceId,
+    String layerId,
+    CircleLayerProperties properties, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  }) => _controller.addCircleLayer(
+    sourceId,
+    layerId,
+    properties,
+    belowLayerId: belowLayerId,
+    filter: filter,
+    enableInteraction: enableInteraction,
+  );
+
+  @override
+  Future<void> addSymbolLayer(
+    String sourceId,
+    String layerId,
+    SymbolLayerProperties properties, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  }) => _controller.addSymbolLayer(
+    sourceId,
+    layerId,
+    properties,
+    belowLayerId: belowLayerId,
+    filter: filter,
+    enableInteraction: enableInteraction,
+  );
+
+  @override
+  Future<void> setLayerProperties(String layerId, LayerProperties properties) =>
+      _controller.setLayerProperties(layerId, properties);
+
+  @override
+  Future<void> setLayerFilter(String layerId, dynamic filter) =>
+      _controller.setLayerFilter(layerId, filter);
+
+  @override
+  Future<void> removeLayer(String layerId) => _controller.removeLayer(layerId);
+
+  @override
+  Future<List<dynamic>> queryRenderedFeaturesInRect(
+    Rect rect,
+    List<String> layerIds,
+    String? filter,
+  ) => _controller.queryRenderedFeaturesInRect(rect, layerIds, filter);
+
+  @override
+  Future<List<Point>> toScreenLocationBatch(Iterable<LatLng> latLngs) =>
+      _controller.toScreenLocationBatch(latLngs);
+
+  @override
+  Future<bool?> moveCamera(CameraUpdate update) =>
+      _controller.moveCamera(update);
+
+  @override
+  Future<bool?> animateCamera(CameraUpdate update, {Duration? duration}) =>
+      _controller.animateCamera(update, duration: duration);
+}
+
 class CampusMapNative extends StatefulWidget {
   const CampusMapNative({super.key, required this.configuration});
   final CampusMapCanvas configuration;
+
+  /// Minimum interval between intermediate shuttle GeoJSON pushes.
+  @visibleForTesting
+  static const Duration shuttleThrottleInterval = Duration(milliseconds: 33);
+
+  /// Override clock for deterministic throttle unit/widget tests.
+  @visibleForTesting
+  static DateTime Function() debugClock = DateTime.now;
+
+  /// Optional controller wrapper hook for unit/widget tests.
+  @visibleForTesting
+  static CampusMapBridge Function(MapLibreMapController controller)?
+  debugBridgeOverride;
+
   @override
   State<CampusMapNative> createState() => _CampusMapNativeState();
 }
@@ -81,9 +320,22 @@ class _CampusMapNativeState extends State<CampusMapNative>
   Map<String, GeoPoint> _shuttleOrigins = {};
   bool _shuttleUpdateQueued = false;
   bool _shuttleStationsDirty = true;
+  bool _shuttleForceFlush = false;
   int _shuttleStyleEpoch = 0;
+  int _styleEpoch = 0;
+  Duration? _lastShuttlePushElapsed;
+  DateTime? _lastShuttleWallPushAt;
+  List<ShuttleVehicle>? _lastShuttlePushedVehicles;
+  Map<String, ShuttleDirection>? _lastShuttlePushedDirections;
+  Map<String, GeoPoint>? _lastShuttlePushedOrigins;
+  double? _lastShuttlePushedProgress;
+  int? _lastShuttlePushedEpoch;
+  Uint8List? _shuttleOnlineBytes;
+  Uint8List? _shuttleOfflineBytes;
+  double? _shuttleIconRatio;
+  int? _shuttleImagesEpoch;
   Timer? _shuttleCameraTimer;
-  MapLibreMapController? _controller;
+  CampusMapBridge? _bridge;
   CameraPosition? _overviewCamera;
   bool _ready = false;
   bool _cameraPending = true;
@@ -95,14 +347,51 @@ class _CampusMapNativeState extends State<CampusMapNative>
   int _appliedFocus = 0;
   CampusMapLayer _appliedLayer = CampusMapLayer.standard;
   CameraPosition? _camera;
-  double? _appliedLabelOffsetEm;
   Timer? _loadTimeout;
   Future<void> _queue = Future.value();
-  // 已挂载的数据源与图层（按挂载顺序），group 为所属图层组序号。
+  // 已挂载的数据源与图层（按组序和挂载顺序保存），group 为所属图层组序号。
   final _sources = <({String id, int group})>[];
   final _layers = <({String id, int group})>[];
-  List<List<Object?>> _appliedKeys = const [];
-  int _group = 0;
+
+  // 各图层组已同步到原生端的输入/样式状态，用于原地更新与去重。
+  Map<String, dynamic>? _appliedBuildingGeoJson;
+  Map<String, dynamic>? _appliedFeaturesGeoJson;
+  Map<String, dynamic>? _appliedCity3dBuildingGeoJson;
+  List<CampusPlace>? _appliedCity3dPlaces;
+  String? _appliedCity3dSelectedId;
+  List<CampusPlace>? _appliedTransitPlaces;
+  final Map<
+    String,
+    ({Map<String, dynamic> raw, String buildingId, double base, double opacity})
+  >
+  _appliedStackFloors = {};
+  Map<String, dynamic>? _appliedFloorGeoJson;
+  String? _appliedFloorId;
+  String? _appliedFloorBuildingId;
+  String? _appliedFloorSlabRoomId;
+  double? _appliedFloorSlabBase;
+  double? _appliedFloorWallsBase;
+  double? _appliedLabelOffsetEm;
+  String? _appliedRoomLabelSelectedId;
+  bool _appliedBuildingHighlightVisible = false;
+  String? _appliedBuildingHighlightId;
+  bool _appliedFeatureHighlightVisible = false;
+  int? _appliedFeatureHighlightId;
+  bool _appliedPinVisible = false;
+  double? _appliedPinLat;
+  double? _appliedPinLng;
+  List<Object?>? _appliedRouteKey;
+  Map<String, dynamic>? _appliedRoutePassedGeoJson;
+  Map<String, dynamic>? _appliedStreetGeoJson;
+  List<CampusPlace>? _appliedMarkersPlaces;
+  String? _appliedMarkersSelectedId;
+  bool _appliedMarkersVisible = false;
+  double? _appliedUserLat;
+  double? _appliedUserLng;
+  bool _appliedUserVisible = false;
+  bool _appliedHeadingVisible = false;
+  int? _headingImageEpoch;
+
   CampusMapCanvas get config => widget.configuration;
 
   @override
@@ -114,7 +403,8 @@ class _CampusMapNativeState extends State<CampusMapNative>
             duration: const Duration(milliseconds: 500),
           )
           ..value = 1
-          ..addListener(_scheduleShuttleUpdate);
+          ..addListener(_onShuttleAnimationTick)
+          ..addStatusListener(_onShuttleAnimationStatus);
     _startTimeout();
   }
 
@@ -125,11 +415,68 @@ class _CampusMapNativeState extends State<CampusMapNative>
     });
   }
 
+  void _resetStyleState() {
+    _sources.clear();
+    _layers.clear();
+    _appliedBuildingGeoJson = null;
+    _appliedFeaturesGeoJson = null;
+    _appliedCity3dBuildingGeoJson = null;
+    _appliedCity3dPlaces = null;
+    _appliedCity3dSelectedId = null;
+    _appliedTransitPlaces = null;
+    _appliedStackFloors.clear();
+    _appliedFloorGeoJson = null;
+    _appliedFloorId = null;
+    _appliedFloorBuildingId = null;
+    _appliedFloorSlabRoomId = null;
+    _appliedFloorSlabBase = null;
+    _appliedFloorWallsBase = null;
+    _appliedLabelOffsetEm = null;
+    _appliedRoomLabelSelectedId = null;
+    _appliedBuildingHighlightVisible = false;
+    _appliedBuildingHighlightId = null;
+    _appliedFeatureHighlightVisible = false;
+    _appliedFeatureHighlightId = null;
+    _appliedPinVisible = false;
+    _appliedPinLat = null;
+    _appliedPinLng = null;
+    _appliedRouteKey = null;
+    _appliedRoutePassedGeoJson = null;
+    _appliedStreetGeoJson = null;
+    _appliedMarkersPlaces = null;
+    _appliedMarkersSelectedId = null;
+    _appliedMarkersVisible = false;
+    _appliedUserLat = null;
+    _appliedUserLng = null;
+    _appliedUserVisible = false;
+    _appliedHeading = null;
+    _appliedHeadingVisible = false;
+    _headingSentAt = DateTime.fromMillisecondsSinceEpoch(0);
+    _headingImageEpoch = null;
+    _shuttleImagesEpoch = null;
+    _lastShuttlePushElapsed = null;
+    _lastShuttleWallPushAt = null;
+    _lastShuttlePushedVehicles = null;
+    _lastShuttlePushedDirections = null;
+    _lastShuttlePushedOrigins = null;
+    _lastShuttlePushedProgress = null;
+    _lastShuttlePushedEpoch = null;
+  }
+
   @override
   void didUpdateWidget(covariant CampusMapNative oldWidget) {
     super.didUpdateWidget(oldWidget);
     final old = oldWidget.configuration;
-    if (!identical(old.shuttleVehicles, config.shuttleVehicles)) {
+    final shuttleVehiclesChanged = !identical(
+      old.shuttleVehicles,
+      config.shuttleVehicles,
+    );
+    final shuttleDirectionsChanged = !identical(
+      old.shuttleDirections,
+      config.shuttleDirections,
+    );
+    final mapLayerChanged = old.mapLayer != config.mapLayer;
+    if (shuttleVehiclesChanged) {
       final t = _shuttleAnimation.value;
       _shuttleOrigins = {
         for (final v in old.shuttleVehicles)
@@ -145,13 +492,27 @@ class _CampusMapNativeState extends State<CampusMapNative>
           ),
       };
       if (config.mapLayer == CampusMapLayer.transit) {
+        _shuttleForceFlush = true;
+        _lastShuttlePushElapsed = null;
+        _lastShuttleWallPushAt = null;
         _shuttleAnimation.forward(from: 0);
+        if (_shuttleForceFlush) _scheduleShuttleUpdate(immediate: true);
       }
+    } else if (shuttleDirectionsChanged &&
+        config.mapLayer == CampusMapLayer.transit) {
+      _shuttleForceFlush = true;
     }
-    if (old.mapLayer != config.mapLayer) {
+    if (mapLayerChanged) {
       _shuttleAnimation.stop();
       _shuttleAnimation.value = 1;
       _shuttleStationsDirty = true;
+      _shuttleForceFlush = true;
+      _lastShuttlePushElapsed = null;
+      _lastShuttleWallPushAt = null;
+      if (config.mapLayer != CampusMapLayer.transit) {
+        _shuttleCameraTimer?.cancel();
+        _shuttleCameraTimer = null;
+      }
     }
     _cameraPending =
         _cameraPending ||
@@ -177,16 +538,25 @@ class _CampusMapNativeState extends State<CampusMapNative>
     // 等新样式的 onStyleLoaded 再从头同步（不销毁原生地图视图）。
     if (old.styleUrl != config.styleUrl) {
       _shuttleStyleEpoch++;
+      _styleEpoch++;
       _generation++;
       _ready = false;
+      _shuttleCameraTimer?.cancel();
+      _shuttleCameraTimer = null;
       _startTimeout();
       return;
     }
-    // 图层按组比对签名，只有输入真正变化的组才会重建（见 _sync）。
-    final layersChanged = !_sameKeys(_keysFor(old), _keysFor(config));
+    final layersChanged = _hasLayerInputChanges(old, config);
     if (old.userHeading != config.userHeading) _syncHeading();
-    if (!identical(old.routePassedGeoJson, config.routePassedGeoJson)) {
+    if (!layersChanged &&
+        !identical(old.routePassedGeoJson, config.routePassedGeoJson)) {
       _syncPassedRoute();
+    }
+    if (!layersChanged &&
+        !shuttleVehiclesChanged &&
+        shuttleDirectionsChanged &&
+        config.mapLayer == CampusMapLayer.transit) {
+      _scheduleShuttleUpdate(immediate: true);
     }
     // 面板拖动只调整相机内缩，不必重建图层。
     if (layersChanged) {
@@ -200,16 +570,16 @@ class _CampusMapNativeState extends State<CampusMapNative>
     final generation = ++_generation;
     _queue = _queue.then((_) async {
       if (!mounted || !_ready || generation != _generation) return;
-      final c = _controller;
-      if (c == null) return;
+      final b = _bridge;
+      if (b == null) return;
       try {
         if (sync) {
-          await _sync(c, config);
-          _scheduleShuttleUpdate();
+          await _sync(b, config);
           if (!mounted || generation != _generation) return;
+          _scheduleShuttleUpdate(immediate: _shuttleForceFlush);
         }
         if (_cameraPending) {
-          await _updateCamera(c);
+          await _updateCamera(b);
           if (mounted && generation == _generation) _cameraPending = false;
         }
         if (mounted && _error != null) setState(() => _error = null);
@@ -246,65 +616,137 @@ class _CampusMapNativeState extends State<CampusMapNative>
               .toList(),
         };
 
-  Future<void> _source(
-    MapLibreMapController c,
+  Future<void> _addSource(
+    CampusMapBridge b,
     String id,
-    Map<String, dynamic> data,
-  ) async {
-    await c.addGeoJsonSource(id, data);
-    _sources.add((id: id, group: _group));
+    Map<String, dynamic> data, {
+    required int group,
+  }) async {
+    await b.addGeoJsonSource(id, data);
+    _sources.add((id: id, group: group));
   }
 
-  void _layer(String id) => _layers.add((id: id, group: _group));
+  void _registerLayer(String id, int group) {
+    final idx = _layers.indexWhere((layer) => layer.group > group);
+    final entry = (id: id, group: group);
+    if (idx == -1) {
+      _layers.add(entry);
+    } else {
+      _layers.insert(idx, entry);
+    }
+  }
+
   bool _hasLayer(String id) => _layers.any((layer) => layer.id == id);
+
+  String? _belowAfterGroup(int group) {
+    for (final layer in _layers) {
+      if (layer.group > group) return layer.id;
+    }
+    return null;
+  }
+
+  Future<void> _removeLayerById(CampusMapBridge b, String id) async {
+    if (!_hasLayer(id)) return;
+    await b.removeLayer(id);
+    _layers.removeWhere((layer) => layer.id == id);
+  }
+
+  Future<void> _removeSourceById(CampusMapBridge b, String id) async {
+    if (!_sources.any((source) => source.id == id)) return;
+    await b.removeSource(id);
+    _sources.removeWhere((source) => source.id == id);
+  }
+
+  Future<void> _clearGroup(CampusMapBridge b, int group) async {
+    for (final layer in _layers.reversed.toList()) {
+      if (layer.group != group) continue;
+      await b.removeLayer(layer.id);
+      _layers.remove(layer);
+    }
+    for (final source in _sources.reversed.toList()) {
+      if (source.group != group) continue;
+      await b.removeSource(source.id);
+      _sources.remove(source);
+    }
+  }
 
   String? _selectedBuildingId(CampusMapCanvas value) =>
       value.selectedPlace?.buildingId ?? value.selectedPlace?.id;
 
-  /// 各图层组的输入签名，顺序即叠放顺序（越靠后越在上层）。
-  ///
-  /// 变化频繁的组放在后面：某组变化时从它开始往后全部重建，
-  /// 前面体积大的楼宇/地物数据不必再经平台通道重发。
-  List<List<Object?>> _keysFor(CampusMapCanvas v) {
-    final indoor = v.floor != null;
-    final city3d = v.mapLayer == CampusMapLayer.city3d && !indoor;
-    final user = v.userPoint;
-    final center = v.selectedPlace?.center;
-    return [
-      [v.buildingGeoJson],
-      [v.featuresGeoJson],
-      [city3d, v.buildingGeoJson, v.places, if (city3d) v.selectedPlace?.id],
-      [v.mapLayer == CampusMapLayer.transit, v.places],
-      [
-        _selectedBuildingId(v),
-        v.floor?.id,
-        v.ghostFloorsGeoJson,
-        v.selectedPlace?.floors,
-      ],
-      [
-        v.floorGeoJson,
-        v.floor?.id,
-        _selectedBuildingId(v),
-        v.selectedRoom?.id,
-        v.selectedPlace?.floors,
-      ],
-      [
-        v.selectedPlace?.id,
-        indoor,
-        city3d,
-        center?.latitude,
-        center?.longitude,
-      ],
-      [v.showRoute, v.routeGeoJson, v.floor?.id, _selectedBuildingId(v)],
-      [v.streetCoverage, v.streetCoverageGeoJson],
-      [v.markerPlaces, indoor, v.selectedPlace?.id],
-      // 朝向只看「有没有」：角度变化走 _syncHeading，不重建图层。
-      [user?.latitude, user?.longitude, v.userHeading != null],
-      [v.mapLayer == CampusMapLayer.transit],
-    ];
+  static bool _hasValidUser(GeoPoint? point) => point != null && point.isValid;
+
+  static bool _sameGeoPoint(GeoPoint? a, GeoPoint? b) =>
+      a?.latitude == b?.latitude && a?.longitude == b?.longitude;
+
+  static bool _sameJsonValue(Object? a, Object? b) {
+    if (identical(a, b)) return true;
+    if (a is Map && b is Map) {
+      if (a.length != b.length) return false;
+      for (final entry in a.entries) {
+        if (!b.containsKey(entry.key) ||
+            !_sameJsonValue(entry.value, b[entry.key])) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (a is List && b is List) {
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!_sameJsonValue(a[i], b[i])) return false;
+      }
+      return true;
+    }
+    return a == b;
   }
 
-  /// 签名比对：数据对象按引用比较（不做深比较），标量按值比较。
+  static bool _sameMarkerPlaces(List<CampusPlace>? a, List<CampusPlace> b) {
+    if (a == null) return false;
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      final x = a[i], y = b[i];
+      if (x.id != y.id ||
+          x.name != y.name ||
+          x.category != y.category ||
+          !_sameGeoPoint(x.center, y.center)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool _hasLayerInputChanges(CampusMapCanvas a, CampusMapCanvas b) {
+    final aPin = a.selectedPlace?.center ?? a.selectedPlace?.entrance;
+    final bPin = b.selectedPlace?.center ?? b.selectedPlace?.entrance;
+    final aUserValid = _hasValidUser(a.userPoint);
+    final bUserValid = _hasValidUser(b.userPoint);
+    return !identical(a.buildingGeoJson, b.buildingGeoJson) ||
+        !identical(a.featuresGeoJson, b.featuresGeoJson) ||
+        !identical(a.places, b.places) ||
+        a.mapLayer != b.mapLayer ||
+        a.selectedPlace?.id != b.selectedPlace?.id ||
+        _selectedBuildingId(a) != _selectedBuildingId(b) ||
+        a.selectedPlace?.poiId != b.selectedPlace?.poiId ||
+        a.selectedPlace?.featureId != b.selectedPlace?.featureId ||
+        !_sameGeoPoint(aPin, bPin) ||
+        !identical(a.selectedPlace?.floors, b.selectedPlace?.floors) ||
+        a.floor?.id != b.floor?.id ||
+        a.floor?.number != b.floor?.number ||
+        a.selectedRoom?.id != b.selectedRoom?.id ||
+        !identical(a.floorGeoJson, b.floorGeoJson) ||
+        !identical(a.ghostFloorsGeoJson, b.ghostFloorsGeoJson) ||
+        a.showRoute != b.showRoute ||
+        !identical(a.routeGeoJson, b.routeGeoJson) ||
+        a.streetCoverage != b.streetCoverage ||
+        !identical(a.streetCoverageGeoJson, b.streetCoverageGeoJson) ||
+        !identical(a.markerPlaces, b.markerPlaces) ||
+        aUserValid != bUserValid ||
+        (bUserValid && !_sameGeoPoint(a.userPoint, b.userPoint)) ||
+        (!_hasLayer('campus-user-heading') &&
+            (a.userHeading != null) != (b.userHeading != null));
+  }
+
   static bool _sameKey(List<Object?> a, List<Object?> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
@@ -315,72 +757,42 @@ class _CampusMapNativeState extends State<CampusMapNative>
     return true;
   }
 
-  static bool _sameKeys(List<List<Object?>> a, List<List<Object?>> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (!_sameKey(a[i], b[i])) return false;
-    }
-    return true;
+  /// 按图层组独立增量同步：只更新输入发生变化的组，尽可能原地更新
+  /// 数据源或完整图层属性，不连带拆毁并重建其他无关图层组。
+  Future<void> _sync(CampusMapBridge b, CampusMapCanvas value) async {
+    await _syncBuildingHits(b, value);
+    await _syncFeatureHits(b, value);
+    await _syncCity3d(b, value);
+    await _syncTransit(b, value);
+    await _syncStackedFloors(b, value);
+    await _syncCurrentFloor(b, value);
+    await _syncHighlight(b, value);
+    await _syncRoute(b, value);
+    await _syncStreet(b, value);
+    await _syncMarkers(b, value);
+    await _syncUser(b, value);
+    await _syncShuttle(b, value);
   }
 
-  /// 增量同步：找到第一个签名变化的组，移除它及其后各组的图层与数据源，
-  /// 再按顺序重新挂载。中途失败时只记下已完成的组，下次从失败处续上。
-  Future<void> _sync(MapLibreMapController c, CampusMapCanvas value) async {
-    final keys = _keysFor(value);
-    var from = 0;
-    while (from < keys.length &&
-        from < _appliedKeys.length &&
-        _sameKey(keys[from], _appliedKeys[from])) {
-      from++;
-    }
-    if (from == keys.length) return;
-    for (final layer in _layers.reversed.toList()) {
-      if (layer.group < from) continue;
-      await c.removeLayer(layer.id);
-      _layers.remove(layer);
-    }
-    for (final source in _sources.reversed.toList()) {
-      if (source.group < from) continue;
-      await c.removeSource(source.id);
-      _sources.remove(source);
-    }
-    _appliedKeys = keys.sublist(0, from);
-    for (var i = from; i < keys.length; i++) {
-      _group = i;
-      await _addGroup(i, c, value);
-      _appliedKeys = [..._appliedKeys, keys[i]];
-    }
-  }
-
-  Future<void> _addGroup(
-    int group,
-    MapLibreMapController c,
-    CampusMapCanvas value,
-  ) => switch (group) {
-    0 => _addBuildingHits(c, value),
-    1 => _addFeatureHits(c, value),
-    2 => _addCity3d(c, value),
-    3 => _addTransit(c, value),
-    4 => _syncStackedFloors(c, value),
-    5 => _addCurrentFloor(c, value),
-    6 => _addHighlight(c, value),
-    7 => _addRoute(c, value),
-    8 => _addStreet(c, value),
-    9 => _addMarkers(c, value),
-    10 => _addUser(c, value),
-    _ => _addShuttle(c, value),
-  };
-
-  Future<void> _addBuildingHits(
-    MapLibreMapController c,
+  Future<void> _syncBuildingHits(
+    CampusMapBridge b,
     CampusMapCanvas value,
   ) async {
     // 户外只渲染底图本身：建筑与 POI 由底图样式呈现。楼宇轮廓以全透明图层
     // 挂载，仅作为点击命中区域（碰撞箱），不改变地图外观。
     final buildings = value.buildingGeoJson;
-    if (buildings != null) {
-      await _source(c, 'campus-buildings', buildings);
-      await c.addFillLayer(
+    if (buildings == null) {
+      await _removeLayerById(b, 'campus-selected-line');
+      await _removeLayerById(b, 'campus-selected-fill');
+      _appliedBuildingHighlightVisible = false;
+      _appliedBuildingHighlightId = null;
+      await _clearGroup(b, 0);
+      _appliedBuildingGeoJson = null;
+      return;
+    }
+    if (!_hasLayer('campus-buildings-hit')) {
+      await _addSource(b, 'campus-buildings', buildings, group: 0);
+      await b.addFillLayer(
         'campus-buildings',
         'campus-buildings-hit',
         const FillLayerProperties(
@@ -390,8 +802,13 @@ class _CampusMapNativeState extends State<CampusMapNative>
           fillOpacity: 0.01,
           fillOutlineColor: 'rgba(0,0,0,0)',
         ),
+        belowLayerId: _belowAfterGroup(0),
       );
-      _layer('campus-buildings-hit');
+      _registerLayer('campus-buildings-hit', 0);
+      _appliedBuildingGeoJson = buildings;
+    } else if (!identical(buildings, _appliedBuildingGeoJson)) {
+      await b.setGeoJsonSource('campus-buildings', buildings);
+      _appliedBuildingGeoJson = buildings;
     }
   }
 
@@ -423,133 +840,202 @@ class _CampusMapNativeState extends State<CampusMapNative>
     return _symbolLayerId;
   }
 
-  Future<void> _addCity3d(
-    MapLibreMapController c,
-    CampusMapCanvas value,
-  ) async {
+  FillExtrusionLayerProperties _city3dProps(String selectedBuildingId) =>
+      FillExtrusionLayerProperties(
+        // 选中楼宇的体块染成浅蓝，3D 下不再另画平面高亮（会被体块盖住）。
+        fillExtrusionColor: [
+          'case',
+          [
+            '==',
+            ['get', 'building_id'],
+            selectedBuildingId,
+          ],
+          '#8DB8F5',
+          '#DCE4EE',
+        ],
+        fillExtrusionOpacity: 0.85,
+        fillExtrusionHeight: const ['get', 'height_m'],
+        visibility: 'visible',
+      );
+
+  Map<String, dynamic> _buildCity3dGeoJson(
+    Map<String, dynamic> buildings,
+    List<CampusPlace> places,
+  ) {
+    final heights = <String, double>{
+      for (final place in places)
+        if (place.poiId == null)
+          place.id:
+              (place.floors.isEmpty ? 3 : place.floors.length) *
+              kDisplayFloorHeightM,
+    };
+    return <String, dynamic>{
+      ...buildings,
+      'features': [
+        for (final feature in _features(buildings))
+          {
+            ...feature,
+            'properties': {
+              ..._properties(feature),
+              'height_m':
+                  heights[_properties(feature)['building_id']] ??
+                  3 * kDisplayFloorHeightM,
+            },
+          },
+      ],
+    };
+  }
+
+  Future<void> _syncCity3d(CampusMapBridge b, CampusMapCanvas value) async {
     final buildings = value.buildingGeoJson;
     // 3D 城市：建筑轮廓按楼层数拉伸成体块（无楼层数据时按 3 层估算）；
     // 室内分层模式下不叠加，避免与就地分层模型重合。
-    if (value.mapLayer == CampusMapLayer.city3d &&
+    final active =
+        value.mapLayer == CampusMapLayer.city3d &&
         value.floor == null &&
-        buildings != null) {
-      final heights = <String, double>{
-        for (final place in value.places)
-          if (place.poiId == null)
-            place.id:
-                (place.floors.isEmpty ? 3 : place.floors.length) *
-                kDisplayFloorHeightM,
-      };
-      final extruded = <String, dynamic>{
-        ...buildings,
-        'features': [
-          for (final feature in _features(buildings))
-            {
-              ...feature,
-              'properties': {
-                ..._properties(feature),
-                'height_m':
-                    heights[_properties(feature)['building_id']] ??
-                    3 * kDisplayFloorHeightM,
-              },
-            },
-        ],
-      };
-      await _source(c, 'campus-city3d', extruded);
-      await c.addFillExtrusionLayer(
+        buildings != null;
+    if (!active) {
+      await _clearGroup(b, 2);
+      _appliedCity3dBuildingGeoJson = null;
+      _appliedCity3dPlaces = null;
+      _appliedCity3dSelectedId = null;
+      return;
+    }
+    final selectedId = _selectedBuildingId(value) ?? '';
+    final sourceChanged =
+        !identical(buildings, _appliedCity3dBuildingGeoJson) ||
+        !identical(value.places, _appliedCity3dPlaces);
+    if (!_hasLayer('campus-city3d-volume')) {
+      final extruded = _buildCity3dGeoJson(buildings, value.places);
+      await _addSource(b, 'campus-city3d', extruded, group: 2);
+      await b.addFillExtrusionLayer(
         'campus-city3d',
         'campus-city3d-volume',
-        FillExtrusionLayerProperties(
-          // 选中楼宇的体块染成浅蓝，3D 下不再另画平面高亮（会被体块盖住）。
-          fillExtrusionColor: [
-            'case',
-            [
-              '==',
-              ['get', 'building_id'],
-              _selectedBuildingId(value) ?? '',
-            ],
-            '#8DB8F5',
-            '#DCE4EE',
-          ],
-          fillExtrusionOpacity: 0.85,
-          fillExtrusionHeight: const ['get', 'height_m'],
-        ),
+        _city3dProps(selectedId),
         enableInteraction: false,
         // 插在底图第一个文字图层下面：自绘图层默认叠在整套样式最上层，
         // 体块会把楼名、道路名等底图标注盖住。
-        belowLayerId: _firstSymbolLayerId(value.styleUrl),
+        belowLayerId:
+            _firstSymbolLayerId(value.styleUrl) ?? _belowAfterGroup(2),
       );
-      _layer('campus-city3d-volume');
+      _registerLayer('campus-city3d-volume', 2);
+      _appliedCity3dBuildingGeoJson = buildings;
+      _appliedCity3dPlaces = value.places;
+      _appliedCity3dSelectedId = selectedId;
+      return;
+    }
+    if (sourceChanged) {
+      final extruded = _buildCity3dGeoJson(buildings, value.places);
+      await b.setGeoJsonSource('campus-city3d', extruded);
+      _appliedCity3dBuildingGeoJson = buildings;
+      _appliedCity3dPlaces = value.places;
+    }
+    if (_appliedCity3dSelectedId != selectedId) {
+      await b.setLayerProperties(
+        'campus-city3d-volume',
+        _city3dProps(selectedId),
+      );
+      _appliedCity3dSelectedId = selectedId;
     }
   }
 
-  Future<void> _addTransit(
-    MapLibreMapController c,
-    CampusMapCanvas value,
-  ) async {
+  Future<void> _syncTransit(CampusMapBridge b, CampusMapCanvas value) async {
     // 公交地铁：高亮公交站类地物点位（按 kind 白名单匹配，不按名称猜测）。
-    if (value.mapLayer == CampusMapLayer.transit) {
-      const transitKinds = {'bus_stop', '公交站', '轨道交通'};
-      final stops = [
-        for (final place in value.places)
-          if (transitKinds.contains(place.kind) &&
-              place.center != null &&
-              place.center!.isValid)
-            {
-              'type': 'Feature',
-              'geometry': {
-                'type': 'Point',
-                'coordinates': [
-                  place.center!.longitude,
-                  place.center!.latitude,
-                ],
-              },
-              'properties': {'name': place.name},
-            },
-      ];
-      if (stops.isNotEmpty) {
-        await _source(c, 'campus-transit', {
-          'type': 'FeatureCollection',
-          'features': stops,
-        });
-        await c.addCircleLayer(
-          'campus-transit',
-          'campus-transit-stops',
-          const CircleLayerProperties(
-            circleColor: '#E67E22',
-            circleRadius: 7,
-            circleStrokeColor: '#FFFFFF',
-            circleStrokeWidth: 2.5,
-          ),
-          enableInteraction: false,
-        );
-        _layer('campus-transit-stops');
-      }
+    if (value.mapLayer != CampusMapLayer.transit) {
+      await _clearGroup(b, 3);
+      _appliedTransitPlaces = null;
+      return;
     }
+    if (_hasLayer('campus-transit-stops') &&
+        identical(value.places, _appliedTransitPlaces)) {
+      return;
+    }
+    const transitKinds = {'bus_stop', '公交站', '轨道交通'};
+    final stops = [
+      for (final place in value.places)
+        if (transitKinds.contains(place.kind) &&
+            place.center != null &&
+            place.center!.isValid)
+          {
+            'type': 'Feature',
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [place.center!.longitude, place.center!.latitude],
+            },
+            'properties': {'name': place.name},
+          },
+    ];
+    if (stops.isEmpty) {
+      await _clearGroup(b, 3);
+      _appliedTransitPlaces = value.places;
+      return;
+    }
+    final collection = {'type': 'FeatureCollection', 'features': stops};
+    if (!_hasLayer('campus-transit-stops')) {
+      await _addSource(b, 'campus-transit', collection, group: 3);
+      await b.addCircleLayer(
+        'campus-transit',
+        'campus-transit-stops',
+        const CircleLayerProperties(
+          circleColor: '#E67E22',
+          circleRadius: 7,
+          circleStrokeColor: '#FFFFFF',
+          circleStrokeWidth: 2.5,
+        ),
+        belowLayerId: _belowAfterGroup(3),
+        enableInteraction: false,
+      );
+      _registerLayer('campus-transit-stops', 3);
+    } else {
+      await b.setGeoJsonSource('campus-transit', collection);
+    }
+    _appliedTransitPlaces = value.places;
   }
 
-  Future<void> _addShuttle(
-    MapLibreMapController c,
-    CampusMapCanvas value,
-  ) async {
-    if (value.mapLayer != CampusMapLayer.transit) return;
+  Future<void> _syncShuttle(CampusMapBridge b, CampusMapCanvas value) async {
+    if (value.mapLayer != CampusMapLayer.transit) {
+      await _clearGroup(b, 11);
+      _lastShuttlePushedVehicles = null;
+      _lastShuttlePushedDirections = null;
+      _lastShuttlePushedOrigins = null;
+      _lastShuttlePushedProgress = null;
+      _lastShuttlePushedEpoch = null;
+      return;
+    }
+    if (_hasLayer('shuttle-vehicle-icons')) return;
     final epoch = _shuttleStyleEpoch;
     final ratio = MediaQuery.devicePixelRatioOf(context);
     final iconScale = Theme.of(context).platform == TargetPlatform.android
         ? 1 / ratio
         : 1.0;
     // 图标是地图上的固定设计素材，沿用已审核的天蓝与离线灰。
-    final online = await ShuttleMapLayer.icon(const Color(0xFF409CE8), ratio);
-    final offline = await ShuttleMapLayer.icon(const Color(0xFF929AA3), ratio);
-    if (!mounted || epoch != _shuttleStyleEpoch) return;
-    await c.addImage('shuttle-online', online);
-    await c.addImage('shuttle-offline', offline);
-    await _source(
-      c,
+    var online = _shuttleOnlineBytes;
+    var offline = _shuttleOfflineBytes;
+    if (online == null || offline == null || _shuttleIconRatio != ratio) {
+      online = await ShuttleMapLayer.icon(const Color(0xFF409CE8), ratio);
+      offline = await ShuttleMapLayer.icon(const Color(0xFF929AA3), ratio);
+      _shuttleOnlineBytes = online;
+      _shuttleOfflineBytes = offline;
+      _shuttleIconRatio = ratio;
+    }
+    if (!mounted ||
+        epoch != _shuttleStyleEpoch ||
+        config.mapLayer != CampusMapLayer.transit) {
+      return;
+    }
+    if (_shuttleImagesEpoch != epoch) {
+      await b.addImage('shuttle-online', online);
+      await b.addImage('shuttle-offline', offline);
+      _shuttleImagesEpoch = epoch;
+    }
+    final below = _belowAfterGroup(11);
+    await _addSource(
+      b,
       'shuttle-stations',
       ShuttleMapLayer.stations(List.filled(shuttleStations.length, 0)),
+      group: 11,
     );
-    await c.addCircleLayer(
+    await b.addCircleLayer(
       'shuttle-stations',
       'shuttle-stop-dots',
       const CircleLayerProperties(
@@ -558,10 +1044,11 @@ class _CampusMapNativeState extends State<CampusMapNative>
         circleStrokeColor: '#FFFFFF',
         circleStrokeWidth: 2,
       ),
+      belowLayerId: below,
       enableInteraction: false,
     );
-    _layer('shuttle-stop-dots');
-    await c.addSymbolLayer(
+    _registerLayer('shuttle-stop-dots', 11);
+    await b.addSymbolLayer(
       'shuttle-stations',
       'shuttle-stop-labels',
       const SymbolLayerProperties(
@@ -576,20 +1063,21 @@ class _CampusMapNativeState extends State<CampusMapNative>
         textAllowOverlap: false,
         textIgnorePlacement: false,
       ),
+      belowLayerId: below,
       enableInteraction: false,
     );
-    _layer('shuttle-stop-labels');
-    await _source(
-      c,
+    _registerLayer('shuttle-stop-labels', 11);
+    final vehicles = config.shuttleVehicles;
+    final directions = config.shuttleDirections;
+    final origins = _shuttleOrigins;
+    final progress = _shuttleAnimation.value;
+    await _addSource(
+      b,
       'shuttle-vehicles',
-      ShuttleMapLayer.vehicles(
-        config.shuttleVehicles,
-        config.shuttleDirections,
-        _shuttleOrigins,
-        _shuttleAnimation.value,
-      ),
+      ShuttleMapLayer.vehicles(vehicles, directions, origins, progress),
+      group: 11,
     );
-    await c.addSymbolLayer(
+    await b.addSymbolLayer(
       'shuttle-vehicles',
       'shuttle-vehicle-icons',
       SymbolLayerProperties(
@@ -602,28 +1090,89 @@ class _CampusMapNativeState extends State<CampusMapNative>
         iconIgnorePlacement: true,
         iconSize: iconScale,
       ),
+      belowLayerId: below,
       enableInteraction: false,
     );
-    _layer('shuttle-vehicle-icons');
+    _registerLayer('shuttle-vehicle-icons', 11);
+    _lastShuttlePushedVehicles = vehicles;
+    _lastShuttlePushedDirections = directions;
+    _lastShuttlePushedOrigins = origins;
+    _lastShuttlePushedProgress = progress;
+    _lastShuttlePushedEpoch = epoch;
     _shuttleStationsDirty = true;
   }
 
-  // 与既有图层同步共用串行队列，每帧合并为至多一个待处理的 source 更新。
-  void _scheduleShuttleUpdate() {
-    if (!mounted ||
-        !_ready ||
-        config.mapLayer != CampusMapLayer.transit ||
-        _shuttleUpdateQueued) {
+  void _onShuttleAnimationTick() {
+    final t = _shuttleAnimation.value;
+    final status = _shuttleAnimation.status;
+    final isBoundary =
+        _shuttleForceFlush ||
+        t == 0.0 ||
+        t == 1.0 ||
+        status == AnimationStatus.completed ||
+        status == AnimationStatus.dismissed;
+    _scheduleShuttleUpdate(immediate: isBoundary);
+  }
+
+  void _onShuttleAnimationStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed ||
+        status == AnimationStatus.dismissed) {
+      _scheduleShuttleUpdate(immediate: true);
+    }
+  }
+
+  bool _isSameShuttleSnapshot(int epoch) =>
+      _lastShuttlePushedEpoch == epoch &&
+      identical(_lastShuttlePushedVehicles, config.shuttleVehicles) &&
+      identical(_lastShuttlePushedDirections, config.shuttleDirections) &&
+      identical(_lastShuttlePushedOrigins, _shuttleOrigins) &&
+      _lastShuttlePushedProgress == _shuttleAnimation.value;
+
+  bool _shouldFlushShuttleTick() {
+    final elapsed = _shuttleAnimation.lastElapsedDuration;
+    final lastElapsed = _lastShuttlePushElapsed;
+    if (elapsed != null) {
+      if (lastElapsed == null || elapsed < lastElapsed) return true;
+      return elapsed - lastElapsed >= CampusMapNative.shuttleThrottleInterval;
+    }
+    final lastWall = _lastShuttleWallPushAt;
+    if (lastWall == null) return true;
+    return CampusMapNative.debugClock().difference(lastWall) >=
+        CampusMapNative.shuttleThrottleInterval;
+  }
+
+  void _recordShuttlePushTime() {
+    _lastShuttlePushElapsed =
+        _shuttleAnimation.lastElapsedDuration ??
+        (_shuttleAnimation.value == 0.0 ? Duration.zero : null);
+    _lastShuttleWallPushAt = CampusMapNative.debugClock();
+  }
+
+  // 与既有图层同步共用串行队列；中间动画帧节流至 >=33ms，起止边界与状态变化立即刷新。
+  void _scheduleShuttleUpdate({bool immediate = false}) {
+    if (!mounted || !_ready || config.mapLayer != CampusMapLayer.transit) {
       return;
     }
-    _shuttleUpdateQueued = true;
     final epoch = _shuttleStyleEpoch;
+    final stationsDirty = _shuttleStationsDirty;
+    if (!stationsDirty && _isSameShuttleSnapshot(epoch)) {
+      _shuttleForceFlush = false;
+      return;
+    }
+    final force = immediate || _shuttleForceFlush || stationsDirty;
+    if (!force && !_shouldFlushShuttleTick()) {
+      return;
+    }
+    _shuttleForceFlush = false;
+    _recordShuttlePushTime();
+    if (_shuttleUpdateQueued) return;
+    _shuttleUpdateQueued = true;
     _queue = _queue.then((_) async {
       _shuttleUpdateQueued = false;
-      final c = _controller;
+      final b = _bridge;
       if (!mounted ||
           !_ready ||
-          c == null ||
+          b == null ||
           epoch != _shuttleStyleEpoch ||
           config.mapLayer != CampusMapLayer.transit ||
           !_hasLayer('shuttle-vehicle-icons')) {
@@ -632,32 +1181,48 @@ class _CampusMapNativeState extends State<CampusMapNative>
       try {
         if (_shuttleStationsDirty) {
           _shuttleStationsDirty = false;
-          final pixels = await c.toScreenLocationBatch([
+          final pixels = await b.toScreenLocationBatch([
             for (final station in shuttleStations) ...[
               LatLng(station.first.latitude, station.first.longitude),
               LatLng(station.second.latitude, station.second.longitude),
             ],
           ]);
-          if (!mounted || epoch != _shuttleStyleEpoch || !_ready) return;
+          if (!mounted ||
+              !_ready ||
+              epoch != _shuttleStyleEpoch ||
+              config.mapLayer != CampusMapLayer.transit) {
+            return;
+          }
           // 0.28 起各平台的屏幕坐标都是逻辑像素，不再需要按 Android 的设备像素比换算。
           final distances = [
             for (var i = 0; i < pixels.length; i += 2)
               ShuttleMapLayer.screenDistance(pixels[i], pixels[i + 1], 1),
           ];
-          await c.setGeoJsonSource(
+          await b.setGeoJsonSource(
             'shuttle-stations',
             ShuttleMapLayer.stations(distances),
           );
         }
-        await c.setGeoJsonSource(
+        if (!mounted ||
+            !_ready ||
+            epoch != _shuttleStyleEpoch ||
+            config.mapLayer != CampusMapLayer.transit) {
+          return;
+        }
+        if (_isSameShuttleSnapshot(epoch)) return;
+        final vehicles = config.shuttleVehicles;
+        final directions = config.shuttleDirections;
+        final origins = _shuttleOrigins;
+        final progress = _shuttleAnimation.value;
+        await b.setGeoJsonSource(
           'shuttle-vehicles',
-          ShuttleMapLayer.vehicles(
-            config.shuttleVehicles,
-            config.shuttleDirections,
-            _shuttleOrigins,
-            _shuttleAnimation.value,
-          ),
+          ShuttleMapLayer.vehicles(vehicles, directions, origins, progress),
         );
+        _lastShuttlePushedVehicles = vehicles;
+        _lastShuttlePushedDirections = directions;
+        _lastShuttlePushedOrigins = origins;
+        _lastShuttlePushedProgress = progress;
+        _lastShuttlePushedEpoch = epoch;
       } catch (_) {
         // 样式切换期间原生 source 可能已释放，下一次同步恢复当前状态。
         _shuttleStationsDirty = true;
@@ -665,8 +1230,8 @@ class _CampusMapNativeState extends State<CampusMapNative>
     });
   }
 
-  Future<void> _addFeatureHits(
-    MapLibreMapController c,
+  Future<void> _syncFeatureHits(
+    CampusMapBridge b,
     CampusMapCanvas value,
   ) async {
     // 通用地物：道路、绿地、广场等由管理台提交的地物。视觉由底图瓦片负责，
@@ -677,9 +1242,20 @@ class _CampusMapNativeState extends State<CampusMapNative>
     // 否则圆层会把面/线的每个顶点都画成一个圆点（跑道 118 个顶点那种）。
     final features = value.featuresGeoJson;
     final featureRows = features == null ? null : features['features'];
-    if (features != null && featureRows is List && featureRows.isNotEmpty) {
-      await _source(c, 'campus-features', features);
-      await c.addFillLayer(
+    final hasFeatures =
+        features != null && featureRows is List && featureRows.isNotEmpty;
+    if (!hasFeatures) {
+      await _removeLayerById(b, 'campus-selected-feature');
+      _appliedFeatureHighlightVisible = false;
+      _appliedFeatureHighlightId = null;
+      await _clearGroup(b, 1);
+      _appliedFeaturesGeoJson = null;
+      return;
+    }
+    if (!_hasLayer('campus-features-fill')) {
+      final below = _belowAfterGroup(1);
+      await _addSource(b, 'campus-features', features, group: 1);
+      await b.addFillLayer(
         'campus-features',
         'campus-features-fill',
         const FillLayerProperties(
@@ -687,9 +1263,10 @@ class _CampusMapNativeState extends State<CampusMapNative>
           fillOpacity: 0.01,
           fillOutlineColor: 'rgba(0,0,0,0)',
         ),
+        belowLayerId: below,
       );
-      _layer('campus-features-fill');
-      await c.addLineLayer(
+      _registerLayer('campus-features-fill', 1);
+      await b.addLineLayer(
         'campus-features',
         'campus-features-line',
         const LineLayerProperties(
@@ -697,9 +1274,10 @@ class _CampusMapNativeState extends State<CampusMapNative>
           lineOpacity: 0.01,
           lineWidth: 1.8,
         ),
+        belowLayerId: below,
       );
-      _layer('campus-features-line');
-      await c.addCircleLayer(
+      _registerLayer('campus-features-line', 1);
+      await b.addCircleLayer(
         'campus-features',
         'campus-features-point',
         const CircleLayerProperties(
@@ -712,62 +1290,133 @@ class _CampusMapNativeState extends State<CampusMapNative>
           ['geometry-type'],
           'Point',
         ],
+        belowLayerId: below,
       );
-      _layer('campus-features-point');
+      _registerLayer('campus-features-point', 1);
+      _appliedFeaturesGeoJson = features;
+    } else if (!identical(features, _appliedFeaturesGeoJson)) {
+      await b.setGeoJsonSource('campus-features', features);
+      _appliedFeaturesGeoJson = features;
     }
   }
 
-  Future<void> _addUser(MapLibreMapController c, CampusMapCanvas value) async {
+  static Map<String, dynamic> _pointGeoJson(
+    GeoPoint point, {
+    Map<String, dynamic> properties = const <String, dynamic>{},
+  }) => {
+    'type': 'FeatureCollection',
+    'features': [
+      {
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [point.longitude, point.latitude],
+        },
+        'properties': properties,
+      },
+    ],
+  };
+
+  Future<bool> _ensureHeadingImage(CampusMapBridge b) async {
+    final epoch = _styleEpoch;
+    if (_headingImageEpoch == epoch) return true;
+    final bytes = await _headingBeam();
+    if (!mounted || epoch != _styleEpoch) return false;
+    await b.addImage(_headingImage, bytes);
+    if (!mounted || epoch != _styleEpoch) return false;
+    _headingImageEpoch = epoch;
+    return true;
+  }
+
+  Future<void> _syncUser(CampusMapBridge b, CampusMapCanvas value) async {
     final user = value.userPoint;
-    if (user != null && user.isValid) {
-      await _source(c, 'campus-user', {
-        'type': 'FeatureCollection',
-        'features': [
-          {
-            'type': 'Feature',
-            'geometry': {
-              'type': 'Point',
-              'coordinates': [user.longitude, user.latitude],
-            },
-            'properties': const <String, dynamic>{'kind': 'user'},
-          },
-        ],
-      });
+    final hasUser = _hasValidUser(user);
+    if (!_hasLayer('campus-user-dot')) {
+      final epoch = _styleEpoch;
+      final initialGeoJson = hasUser
+          ? _pointGeoJson(user!, properties: const {'kind': 'user'})
+          : _emptyCollection;
+      final heading = value.userHeading;
+      final showHeading = hasUser && heading != null;
+      final initialAngle = heading ?? _appliedHeading ?? 0.0;
+      await _addSource(b, 'campus-user', initialGeoJson, group: 10);
+      if (!mounted || epoch != _styleEpoch) return;
+      final imageReady = await _ensureHeadingImage(b);
+      if (!imageReady) return;
+      final below = _belowAfterGroup(10);
       // 朝向光束：画在蓝点下面，随手机朝向转动（相对正北，地图旋转时自动跟着转）。
-      if (value.userHeading != null) {
-        await c.addImage(_headingImage, await _headingBeam());
-        await c.addSymbolLayer(
-          'campus-user',
-          'campus-user-heading',
-          _headingProps(value.userHeading!),
-          enableInteraction: false,
-        );
-        _layer('campus-user-heading');
-        _appliedHeading = value.userHeading;
-      }
-      await c.addCircleLayer(
+      await b.addSymbolLayer(
+        'campus-user',
+        'campus-user-heading',
+        _headingProps(initialAngle, visible: showHeading),
+        belowLayerId: below,
+        enableInteraction: false,
+      );
+      _registerLayer('campus-user-heading', 10);
+      await b.addCircleLayer(
         'campus-user',
         'campus-user-halo',
-        const CircleLayerProperties(
-          circleColor: '#1475F5',
-          circleOpacity: 0.18,
-          circleRadius: 16,
-        ),
+        _haloProps(visible: hasUser),
+        belowLayerId: below,
         enableInteraction: false,
       );
-      _layer('campus-user-halo');
-      await c.addCircleLayer(
+      _registerLayer('campus-user-halo', 10);
+      await b.addCircleLayer(
         'campus-user',
         'campus-user-dot',
-        const CircleLayerProperties(
-          circleColor: '#1475F5',
-          circleRadius: 7,
-          circleStrokeColor: '#FFFFFF',
-          circleStrokeWidth: 3,
-        ),
+        _dotProps(visible: hasUser),
+        belowLayerId: below,
         enableInteraction: false,
       );
-      _layer('campus-user-dot');
+      _registerLayer('campus-user-dot', 10);
+      _appliedUserLat = hasUser ? user!.latitude : null;
+      _appliedUserLng = hasUser ? user!.longitude : null;
+      _appliedUserVisible = hasUser;
+      _appliedHeadingVisible = showHeading;
+      if (heading != null) {
+        _appliedHeading = heading;
+        _headingSentAt = CampusMapNative.debugClock();
+      }
+      return;
+    }
+
+    final nextLat = hasUser ? user!.latitude : null;
+    final nextLng = hasUser ? user!.longitude : null;
+    if (_appliedUserVisible != hasUser ||
+        _appliedUserLat != nextLat ||
+        _appliedUserLng != nextLng) {
+      await b.setGeoJsonSource(
+        'campus-user',
+        hasUser
+            ? _pointGeoJson(user!, properties: const {'kind': 'user'})
+            : _emptyCollection,
+      );
+      _appliedUserLat = nextLat;
+      _appliedUserLng = nextLng;
+    }
+    if (_appliedUserVisible != hasUser) {
+      await b.setLayerProperties(
+        'campus-user-halo',
+        _haloProps(visible: hasUser),
+      );
+      await b.setLayerProperties(
+        'campus-user-dot',
+        _dotProps(visible: hasUser),
+      );
+      _appliedUserVisible = hasUser;
+    }
+    final showHeading = hasUser && value.userHeading != null;
+    if (_appliedHeadingVisible != showHeading) {
+      final angle = value.userHeading ?? _appliedHeading ?? 0.0;
+      await b.setLayerProperties(
+        'campus-user-heading',
+        _headingProps(angle, visible: showHeading),
+      );
+      _appliedHeadingVisible = showHeading;
+      if (value.userHeading != null) {
+        _appliedHeading = value.userHeading;
+        _headingSentAt = CampusMapNative.debugClock();
+      }
     }
   }
 
@@ -819,7 +1468,10 @@ class _CampusMapNativeState extends State<CampusMapNative>
     return bytes;
   }
 
-  SymbolLayerProperties _headingProps(double heading) => SymbolLayerProperties(
+  SymbolLayerProperties _headingProps(
+    double heading, {
+    required bool visible,
+  }) => SymbolLayerProperties(
     iconImage: _headingImage,
     iconRotate: heading,
     iconRotationAlignment: 'map',
@@ -827,89 +1479,177 @@ class _CampusMapNativeState extends State<CampusMapNative>
     iconAllowOverlap: true,
     iconIgnorePlacement: true,
     iconAnchor: 'center',
+    visibility: visible ? 'visible' : 'none',
   );
 
-  /// 朝向变化只改图层的旋转角，不重建定位图层；转动不足 3° 或间隔不足 80ms 时跳过。
+  CircleLayerProperties _haloProps({required bool visible}) =>
+      CircleLayerProperties(
+        circleColor: '#1475F5',
+        circleOpacity: 0.18,
+        circleRadius: 16,
+        visibility: visible ? 'visible' : 'none',
+      );
+
+  CircleLayerProperties _dotProps({required bool visible}) =>
+      CircleLayerProperties(
+        circleColor: '#1475F5',
+        circleRadius: 7,
+        circleStrokeColor: '#FFFFFF',
+        circleStrokeWidth: 3,
+        visibility: visible ? 'visible' : 'none',
+      );
+
+  /// 朝向变化只改图层的旋转角与可见性，不重建定位图层；可见状态下转动不足 3° 或间隔不足 80ms 时跳过。
   void _syncHeading() {
-    final c = _controller;
+    final b = _bridge;
+    if (b == null || !_ready || !_hasLayer('campus-user-heading')) return;
+    final hasUser = _hasValidUser(config.userPoint);
     final heading = config.userHeading;
-    if (c == null || heading == null || !_hasLayer('campus-user-heading')) {
+    final showHeading = hasUser && heading != null;
+    if (!showHeading) {
+      if (!_appliedHeadingVisible) return;
+      _appliedHeadingVisible = false;
+      final angle = _appliedHeading ?? 0.0;
+      unawaited(
+        b
+            .setLayerProperties(
+              'campus-user-heading',
+              _headingProps(angle, visible: false),
+            )
+            .catchError((Object _) {}),
+      );
       return;
     }
+    final wasVisible = _appliedHeadingVisible;
     final applied = _appliedHeading;
-    final now = DateTime.now();
-    if (applied != null &&
+    final now = CampusMapNative.debugClock();
+    if (wasVisible &&
+        applied != null &&
         (headingDelta(applied, heading).abs() < 3 ||
             now.difference(_headingSentAt) <
                 const Duration(milliseconds: 80))) {
       return;
     }
     _appliedHeading = heading;
+    _appliedHeadingVisible = true;
     _headingSentAt = now;
     unawaited(
-      c
-          .setLayerProperties('campus-user-heading', _headingProps(heading))
+      b
+          .setLayerProperties(
+            'campus-user-heading',
+            _headingProps(heading, visible: true),
+          )
           .catchError((Object _) {}),
     );
   }
 
-  Future<void> _addCurrentFloor(
-    MapLibreMapController c,
+  FillExtrusionLayerProperties _floorSlabProps(
+    double baseElevation,
+    String? selectedRoomId,
+  ) => FillExtrusionLayerProperties(
+    fillExtrusionColor: [
+      'case',
+      [
+        '==',
+        ['get', 'room_id'],
+        selectedRoomId ?? '',
+      ],
+      '#8FBEFF',
+      [
+        '==',
+        ['get', 'kind'],
+        'corridor',
+      ],
+      '#F7F5EF',
+      [
+        '==',
+        ['get', 'kind'],
+        'facility',
+      ],
+      '#CFE3F7',
+      [
+        '==',
+        ['get', 'kind'],
+        'door',
+      ],
+      '#EFE6DA',
+      '#D6E6FB',
+    ],
+    fillExtrusionOpacity: 1,
+    // MapLibre 的 base/height 是棱柱的两个绝对高度端点（不是厚度），
+    // height < base 时墙面会在两者之间倒挂拉伸，必须把顶面算成绝对值。
+    fillExtrusionHeight: baseElevation + kFloorSlabThicknessM,
+    fillExtrusionBase: baseElevation,
+    visibility: 'visible',
+  );
+
+  FillExtrusionLayerProperties _floorWallsProps(double baseElevation) =>
+      FillExtrusionLayerProperties(
+        fillExtrusionColor: '#B9C4D0',
+        // 顶面 = 楼层底面 + 墙基座 + 墙高（绝对高度，见上楼板注释）。
+        fillExtrusionHeight: [
+          '+',
+          baseElevation,
+          [
+            'coalesce',
+            ['get', 'base_m'],
+            0,
+          ],
+          ['get', 'height_m'],
+        ],
+        fillExtrusionBase: [
+          '+',
+          baseElevation,
+          [
+            'coalesce',
+            ['get', 'base_m'],
+            0,
+          ],
+        ],
+        fillExtrusionOpacity: 1,
+        visibility: 'visible',
+      );
+
+  Future<void> _syncCurrentFloor(
+    CampusMapBridge b,
     CampusMapCanvas value,
   ) async {
-    final floor = value.floor == null
-        ? null
-        : _subset(
-            value.floorGeoJson,
-            (p) =>
-                p['building_id'] ==
-                    (value.selectedPlace?.buildingId ??
-                        value.selectedPlace?.id) &&
-                p['floor_id'] == value.floor?.id,
-          );
-    if (floor != null) {
-      await _source(c, 'campus-floor', floor);
+    final floorId = value.floor?.id;
+    final buildingId = _selectedBuildingId(value);
+    if (value.floor == null || value.floorGeoJson == null) {
+      await _clearGroup(b, 5);
+      _appliedFloorGeoJson = null;
+      _appliedFloorId = null;
+      _appliedFloorBuildingId = null;
+      _appliedFloorSlabRoomId = null;
+      _appliedFloorSlabBase = null;
+      _appliedFloorWallsBase = null;
+      _appliedLabelOffsetEm = null;
+      _appliedRoomLabelSelectedId = null;
+      return;
+    }
+    final sourceChanged =
+        !_hasLayer('campus-floor-slab') ||
+        !identical(value.floorGeoJson, _appliedFloorGeoJson) ||
+        floorId != _appliedFloorId ||
+        buildingId != _appliedFloorBuildingId;
+    final base = _floorBase(value, floorId);
+    final selectedRoomId = value.selectedRoom?.id;
+    final labelOffset = _labelOffsetEm(b);
+    if (!_hasLayer('campus-floor-slab')) {
+      final floor = _subset(
+        value.floorGeoJson,
+        (p) => p['building_id'] == buildingId && p['floor_id'] == floorId,
+      );
+      if (floor == null) return;
+      final below = _belowAfterGroup(5);
+      await _addSource(b, 'campus-floor', floor, group: 5);
       // 当前楼层做成有厚度的楼板并抬到该层高度，房间/走廊按类型着色；
       // 平面填充在这里不再使用，否则俯视时会与楼板重影。
-      await c.addFillExtrusionLayer(
+      await b.addFillExtrusionLayer(
         'campus-floor',
         'campus-floor-slab',
-        FillExtrusionLayerProperties(
-          fillExtrusionColor: [
-            'case',
-            [
-              '==',
-              ['get', 'room_id'],
-              value.selectedRoom?.id ?? '',
-            ],
-            '#8FBEFF',
-            [
-              '==',
-              ['get', 'kind'],
-              'corridor',
-            ],
-            '#F7F5EF',
-            [
-              '==',
-              ['get', 'kind'],
-              'facility',
-            ],
-            '#CFE3F7',
-            [
-              '==',
-              ['get', 'kind'],
-              'door',
-            ],
-            '#EFE6DA',
-            '#D6E6FB',
-          ],
-          fillExtrusionOpacity: 1,
-          // MapLibre 的 base/height 是棱柱的两个绝对高度端点（不是厚度），
-          // height < base 时墙面会在两者之间倒挂拉伸，必须把顶面算成绝对值。
-          fillExtrusionHeight:
-              _floorBase(value, value.floor?.id) + kFloorSlabThicknessM,
-          fillExtrusionBase: _floorBase(value, value.floor?.id),
-        ),
+        _floorSlabProps(base, selectedRoomId),
         filter: [
           'in',
           ['get', 'kind'],
@@ -918,37 +1658,15 @@ class _CampusMapNativeState extends State<CampusMapNative>
             ['room', 'corridor', 'facility', 'door'],
           ],
         ],
+        belowLayerId: below,
         enableInteraction: true,
       );
-      _layer('campus-floor-slab');
+      _registerLayer('campus-floor-slab', 5);
       // Only supplied wall polygons are extruded; room polygons stay roofless.
-      await c.addFillExtrusionLayer(
+      await b.addFillExtrusionLayer(
         'campus-floor',
         'campus-floor-walls',
-        FillExtrusionLayerProperties(
-          fillExtrusionColor: '#B9C4D0',
-          // 顶面 = 楼层底面 + 墙基座 + 墙高（绝对高度，见上楼板注释）。
-          fillExtrusionHeight: [
-            '+',
-            _floorBase(value, value.floor?.id),
-            [
-              'coalesce',
-              ['get', 'base_m'],
-              0,
-            ],
-            ['get', 'height_m'],
-          ],
-          fillExtrusionBase: [
-            '+',
-            _floorBase(value, value.floor?.id),
-            [
-              'coalesce',
-              ['get', 'base_m'],
-              0,
-            ],
-          ],
-          fillExtrusionOpacity: 1,
-        ),
+        _floorWallsProps(base),
         filter: [
           'all',
           [
@@ -958,17 +1676,17 @@ class _CampusMapNativeState extends State<CampusMapNative>
           ],
           ['has', 'height_m'],
         ],
+        belowLayerId: below,
         enableInteraction: false,
       );
-      _layer('campus-floor-walls');
+      _registerLayer('campus-floor-walls', 5);
       // 门牌标注：贴在当前层楼板顶面上。MapLibre Native 尚不支持
       // symbol-z-elevate，用 textOffset 按「楼层高度 × sin(倾角)」手动抬升，
       // 相机变化时动态校正（见 _syncLabelOffset）。
-      final labelOffset = _labelOffsetEm(c);
-      await c.addSymbolLayer(
+      await b.addSymbolLayer(
         'campus-floor',
         'campus-floor-room-labels',
-        _roomLabelProps(labelOffset),
+        _roomLabelProps(labelOffset, selectedRoomId: selectedRoomId),
         filter: [
           'in',
           ['get', 'kind'],
@@ -977,14 +1695,72 @@ class _CampusMapNativeState extends State<CampusMapNative>
             ['room', 'facility'],
           ],
         ],
+        belowLayerId: below,
         enableInteraction: false,
       );
-      _layer('campus-floor-room-labels');
+      _registerLayer('campus-floor-room-labels', 5);
+      _appliedFloorGeoJson = value.floorGeoJson;
+      _appliedFloorId = floorId;
+      _appliedFloorBuildingId = buildingId;
+      _appliedFloorSlabBase = base;
+      _appliedFloorSlabRoomId = selectedRoomId;
+      _appliedFloorWallsBase = base;
       _appliedLabelOffsetEm = labelOffset;
+      _appliedRoomLabelSelectedId = selectedRoomId;
+      return;
+    }
+
+    if (sourceChanged) {
+      final floor = _subset(
+        value.floorGeoJson,
+        (p) => p['building_id'] == buildingId && p['floor_id'] == floorId,
+      );
+      if (floor != null) {
+        await b.setGeoJsonSource('campus-floor', floor);
+        _appliedFloorGeoJson = value.floorGeoJson;
+        _appliedFloorId = floorId;
+        _appliedFloorBuildingId = buildingId;
+      }
+    }
+    if (_appliedFloorSlabBase != base ||
+        _appliedFloorSlabRoomId != selectedRoomId) {
+      await b.setLayerProperties(
+        'campus-floor-slab',
+        _floorSlabProps(base, selectedRoomId),
+      );
+      _appliedFloorSlabBase = base;
+      _appliedFloorSlabRoomId = selectedRoomId;
+    }
+    if (_appliedFloorWallsBase != base) {
+      await b.setLayerProperties('campus-floor-walls', _floorWallsProps(base));
+      _appliedFloorWallsBase = base;
+    }
+    final offsetChanged =
+        _appliedLabelOffsetEm == null ||
+        (labelOffset - _appliedLabelOffsetEm!).abs() >= 0.08;
+    if (_appliedRoomLabelSelectedId != selectedRoomId || offsetChanged) {
+      await b.setLayerProperties(
+        'campus-floor-room-labels',
+        _roomLabelProps(labelOffset, selectedRoomId: selectedRoomId),
+      );
+      _appliedLabelOffsetEm = labelOffset;
+      _appliedRoomLabelSelectedId = selectedRoomId;
     }
   }
 
-  Future<void> _addRoute(MapLibreMapController c, CampusMapCanvas value) async {
+  Future<void> _syncRoute(CampusMapBridge b, CampusMapCanvas value) async {
+    final routeKey = <Object?>[
+      value.showRoute,
+      value.routeGeoJson,
+      value.floor?.id,
+      if (value.floor != null) _selectedBuildingId(value),
+    ];
+    if (_appliedRouteKey != null && _sameKey(_appliedRouteKey!, routeKey)) {
+      await _syncPassedRouteInQueue(b, value);
+      return;
+    }
+    await _clearGroup(b, 7);
+    _appliedRoutePassedGeoJson = null;
     final route = value.showRoute
         ? _subset(
             value.routeGeoJson,
@@ -996,10 +1772,14 @@ class _CampusMapNativeState extends State<CampusMapNative>
                               value.selectedPlace?.id),
           )
         : null;
-    if (route == null) return;
-    await _source(c, 'campus-route', route);
+    if (route == null) {
+      _appliedRouteKey = routeKey;
+      return;
+    }
+    final below = _belowAfterGroup(7);
+    await _addSource(b, 'campus-route', route, group: 7);
     // 仿百度：白色描边 + 粗蓝线，压在底图道路上依然醒目。
-    await c.addLineLayer(
+    await b.addLineLayer(
       'campus-route',
       'campus-route-casing',
       const LineLayerProperties(
@@ -1008,10 +1788,11 @@ class _CampusMapNativeState extends State<CampusMapNative>
         lineCap: 'round',
         lineJoin: 'round',
       ),
+      belowLayerId: below,
       enableInteraction: false,
     );
-    _layer('campus-route-casing');
-    await c.addLineLayer(
+    _registerLayer('campus-route-casing', 7);
+    await b.addLineLayer(
       'campus-route',
       'campus-route-line',
       const LineLayerProperties(
@@ -1020,18 +1801,18 @@ class _CampusMapNativeState extends State<CampusMapNative>
         lineCap: 'round',
         lineJoin: 'round',
       ),
+      belowLayerId: below,
       enableInteraction: false,
     );
-    _layer('campus-route-line');
+    _registerLayer('campus-route-line', 7);
     // 导航中已走过的部分：灰线盖在蓝线上，数据由 _syncPassedRoute 原地更新。
-    await _source(
-      c,
-      'campus-route-passed',
-      value.floor == null && value.routePassedGeoJson != null
-          ? value.routePassedGeoJson!
-          : _emptyCollection,
-    );
-    await c.addLineLayer(
+    final passedInitial =
+        value.floor == null && value.routePassedGeoJson != null
+        ? value.routePassedGeoJson!
+        : _emptyCollection;
+    await _addSource(b, 'campus-route-passed', passedInitial, group: 7);
+    _appliedRoutePassedGeoJson = passedInitial;
+    await b.addLineLayer(
       'campus-route-passed',
       'campus-route-passed-line',
       const LineLayerProperties(
@@ -1040,13 +1821,14 @@ class _CampusMapNativeState extends State<CampusMapNative>
         lineCap: 'round',
         lineJoin: 'round',
       ),
+      belowLayerId: below,
       enableInteraction: false,
     );
-    _layer('campus-route-passed-line');
+    _registerLayer('campus-route-passed-line', 7);
     // 起点绿点、终点红点。
     final ends = _routeEnds(value.routeGeoJson);
     if (ends != null) {
-      await _source(c, 'campus-route-ends', {
+      await _addSource(b, 'campus-route-ends', {
         'type': 'FeatureCollection',
         'features': [
           for (final (kind, point) in [('start', ends.$1), ('end', ends.$2)])
@@ -1056,8 +1838,8 @@ class _CampusMapNativeState extends State<CampusMapNative>
               'properties': {'kind': kind},
             },
         ],
-      });
-      await c.addCircleLayer(
+      }, group: 7);
+      await b.addCircleLayer(
         'campus-route-ends',
         'campus-route-ends-dot',
         const CircleLayerProperties(
@@ -1072,10 +1854,12 @@ class _CampusMapNativeState extends State<CampusMapNative>
           circleStrokeColor: '#FFFFFF',
           circleStrokeWidth: 3,
         ),
+        belowLayerId: below,
         enableInteraction: false,
       );
-      _layer('campus-route-ends-dot');
+      _registerLayer('campus-route-ends-dot', 7);
     }
+    _appliedRouteKey = routeKey;
   }
 
   static const _emptyCollection = <String, dynamic>{
@@ -1112,15 +1896,40 @@ class _CampusMapNativeState extends State<CampusMapNative>
     return (coordinates.first, coordinates.last);
   }
 
-  /// 已走过路线只换数据，不动图层（每次定位都会变）。
+  Future<void> _syncPassedRouteInQueue(
+    CampusMapBridge b,
+    CampusMapCanvas value,
+  ) async {
+    if (!_hasLayer('campus-route-passed-line')) return;
+    final data = value.floor == null && value.routePassedGeoJson != null
+        ? value.routePassedGeoJson!
+        : _emptyCollection;
+    if (_appliedRoutePassedGeoJson != null &&
+        _sameJsonValue(_appliedRoutePassedGeoJson, data)) {
+      return;
+    }
+    await b.setGeoJsonSource('campus-route-passed', data);
+    _appliedRoutePassedGeoJson = data;
+  }
+
+  /// 已走过路线只换数据，不动图层（每次定位都会变），并对等价空/重复载荷去重。
   void _syncPassedRoute() {
-    final c = _controller;
-    if (c == null || !_hasLayer('campus-route-passed-line')) return;
+    final b = _bridge;
+    if (b == null || !_ready || !_hasLayer('campus-route-passed-line')) return;
     final data = config.floor == null && config.routePassedGeoJson != null
         ? config.routePassedGeoJson!
         : _emptyCollection;
+    if (_appliedRoutePassedGeoJson != null &&
+        _sameJsonValue(_appliedRoutePassedGeoJson, data)) {
+      return;
+    }
+    _appliedRoutePassedGeoJson = data;
     unawaited(
-      c.setGeoJsonSource('campus-route-passed', data).catchError((Object _) {}),
+      b.setGeoJsonSource('campus-route-passed', data).catchError((Object _) {
+        if (identical(_appliedRoutePassedGeoJson, data)) {
+          _appliedRoutePassedGeoJson = null;
+        }
+      }),
     );
   }
 
@@ -1139,13 +1948,18 @@ class _CampusMapNativeState extends State<CampusMapNative>
     return x != null && y != null && headingDelta(x, y).abs() >= 3;
   }
 
-  Future<void> _addStreet(
-    MapLibreMapController c,
-    CampusMapCanvas value,
-  ) async {
-    if (value.streetCoverage && value.streetCoverageGeoJson != null) {
-      await _source(c, 'campus-street', value.streetCoverageGeoJson!);
-      await c.addLineLayer(
+  Future<void> _syncStreet(CampusMapBridge b, CampusMapCanvas value) async {
+    final active = value.streetCoverage && value.streetCoverageGeoJson != null;
+    if (!active) {
+      await _clearGroup(b, 8);
+      _appliedStreetGeoJson = null;
+      return;
+    }
+    final data = value.streetCoverageGeoJson!;
+    if (!_hasLayer('campus-street-line')) {
+      final below = _belowAfterGroup(8);
+      await _addSource(b, 'campus-street', data, group: 8);
+      await b.addLineLayer(
         'campus-street',
         'campus-street-line',
         const LineLayerProperties(lineColor: '#109DBE', lineWidth: 4),
@@ -1154,10 +1968,11 @@ class _CampusMapNativeState extends State<CampusMapNative>
           ['geometry-type'],
           'LineString',
         ],
+        belowLayerId: below,
         enableInteraction: false,
       );
-      _layer('campus-street-line');
-      await c.addCircleLayer(
+      _registerLayer('campus-street-line', 8);
+      await b.addCircleLayer(
         'campus-street',
         'campus-street-points',
         const CircleLayerProperties(
@@ -1171,181 +1986,373 @@ class _CampusMapNativeState extends State<CampusMapNative>
           ['geometry-type'],
           'Point',
         ],
+        belowLayerId: below,
         enableInteraction: false,
       );
-      _layer('campus-street-points');
+      _registerLayer('campus-street-points', 8);
+      _appliedStreetGeoJson = data;
+    } else if (!identical(data, _appliedStreetGeoJson)) {
+      await b.setGeoJsonSource('campus-street', data);
+      _appliedStreetGeoJson = data;
     }
   }
 
-  /// 选中高亮（仅户外）：楼宇/地物轮廓描蓝，并在中心点落一枚红色图钉，
-  /// 让点选有明确的地图反馈。复用碰撞箱数据源按编号过滤，不重发几何。
-  Future<void> _addHighlight(
-    MapLibreMapController c,
-    CampusMapCanvas value,
-  ) async {
-    final place = value.selectedPlace;
-    if (place == null || value.floor != null) return;
-    final city3d = value.mapLayer == CampusMapLayer.city3d;
-    final featureId = place.featureId;
-    if (place.poiId == null &&
-        featureId == null &&
-        !city3d &&
-        _hasLayer('campus-buildings-hit')) {
-      final filter = [
-        '==',
-        ['get', 'building_id'],
-        _selectedBuildingId(value) ?? '',
-      ];
-      await c.addFillLayer(
-        'campus-buildings',
-        'campus-selected-fill',
-        const FillLayerProperties(fillColor: '#1475F5', fillOpacity: 0.16),
-        filter: filter,
-        enableInteraction: false,
+  FillLayerProperties _selectedBuildingFillProps({required bool visible}) =>
+      FillLayerProperties(
+        fillColor: '#1475F5',
+        fillOpacity: 0.16,
+        visibility: visible ? 'visible' : 'none',
       );
-      _layer('campus-selected-fill');
-      await c.addLineLayer(
-        'campus-buildings',
-        'campus-selected-line',
-        const LineLayerProperties(
-          lineColor: '#1475F5',
-          lineWidth: 2.5,
-          lineJoin: 'round',
-        ),
-        filter: filter,
-        enableInteraction: false,
+
+  LineLayerProperties _selectedBuildingLineProps({required bool visible}) =>
+      LineLayerProperties(
+        lineColor: '#1475F5',
+        lineWidth: 2.5,
+        lineJoin: 'round',
+        visibility: visible ? 'visible' : 'none',
       );
-      _layer('campus-selected-line');
-    } else if (featureId != null && _hasLayer('campus-features-fill')) {
-      await c.addLineLayer(
-        'campus-features',
-        'campus-selected-feature',
-        const LineLayerProperties(
-          lineColor: '#1475F5',
-          lineOpacity: 0.85,
-          lineWidth: 4,
-          lineCap: 'round',
-          lineJoin: 'round',
-        ),
-        filter: [
-          '==',
-          ['get', 'feature_id'],
-          featureId,
-        ],
-        enableInteraction: false,
+
+  LineLayerProperties _selectedFeatureProps({required bool visible}) =>
+      LineLayerProperties(
+        lineColor: '#1475F5',
+        lineOpacity: 0.85,
+        lineWidth: 4,
+        lineCap: 'round',
+        lineJoin: 'round',
+        visibility: visible ? 'visible' : 'none',
       );
-      _layer('campus-selected-feature');
-    }
-    // 楼宇/地物已有轮廓高亮（3D 下体块染色）时不再落图钉，免得盖住楼名；
-    // 只有 POI 这类没有轮廓的点位才用图钉标出。
-    final outlined =
-        _hasLayer('campus-selected-fill') ||
-        _hasLayer('campus-selected-feature') ||
-        (city3d &&
-            place.poiId == null &&
-            featureId == null &&
-            _hasLayer('campus-city3d-volume'));
-    if (outlined) return;
-    final center = place.center ?? place.entrance;
-    if (center == null || !center.isValid) return;
-    await _source(c, 'campus-selected-pin', {
-      'type': 'FeatureCollection',
-      'features': [
-        {
-          'type': 'Feature',
-          'geometry': {
-            'type': 'Point',
-            'coordinates': [center.longitude, center.latitude],
-          },
-          'properties': const <String, dynamic>{},
-        },
-      ],
-    });
-    await c.addCircleLayer(
-      'campus-selected-pin',
-      'campus-selected-pin-halo',
-      const CircleLayerProperties(
+
+  CircleLayerProperties _selectedPinHaloProps({required bool visible}) =>
+      CircleLayerProperties(
         circleColor: '#E8453C',
         circleOpacity: 0.2,
         circleRadius: 15,
-      ),
-      enableInteraction: false,
-    );
-    _layer('campus-selected-pin-halo');
-    await c.addCircleLayer(
-      'campus-selected-pin',
-      'campus-selected-pin-dot',
-      const CircleLayerProperties(
+        visibility: visible ? 'visible' : 'none',
+      );
+
+  CircleLayerProperties _selectedPinDotProps({required bool visible}) =>
+      CircleLayerProperties(
         circleColor: '#E8453C',
         circleRadius: 7.5,
         circleStrokeColor: '#FFFFFF',
         circleStrokeWidth: 3,
-      ),
-      enableInteraction: false,
-    );
-    _layer('campus-selected-pin-dot');
+        visibility: visible ? 'visible' : 'none',
+      );
+
+  /// 选中高亮（仅户外）：楼宇/地物轮廓描蓝，并在中心点落一枚红色图钉，
+  /// 让点选有明确的地图反馈。复用碰撞箱数据源按编号过滤，切换目标时原地
+  /// 更新过滤条件与完整样式属性，不拆毁重建图层。
+  Future<void> _syncHighlight(CampusMapBridge b, CampusMapCanvas value) async {
+    final place = value.selectedPlace;
+    final outdoor = place != null && value.floor == null;
+    final city3d = value.mapLayer == CampusMapLayer.city3d;
+    final featureId = place?.featureId;
+    final hasBuildings = _hasLayer('campus-buildings-hit');
+    final hasFeatures = _hasLayer('campus-features-fill');
+
+    final showBuilding =
+        outdoor &&
+        place.poiId == null &&
+        featureId == null &&
+        !city3d &&
+        hasBuildings;
+    final showFeature =
+        outdoor && !showBuilding && featureId != null && hasFeatures;
+    final outlinedBy3d =
+        outdoor &&
+        city3d &&
+        place.poiId == null &&
+        featureId == null &&
+        _hasLayer('campus-city3d-volume');
+    final pinCenter = place?.center ?? place?.entrance;
+    final showPin =
+        outdoor &&
+        !showBuilding &&
+        !showFeature &&
+        !outlinedBy3d &&
+        pinCenter != null &&
+        pinCenter.isValid;
+
+    // 1. 2D 楼宇高亮
+    if (!hasBuildings) {
+      await _removeLayerById(b, 'campus-selected-line');
+      await _removeLayerById(b, 'campus-selected-fill');
+      _appliedBuildingHighlightVisible = false;
+      _appliedBuildingHighlightId = null;
+    } else if (!_hasLayer('campus-selected-fill')) {
+      if (showBuilding) {
+        final buildingId = _selectedBuildingId(value) ?? '';
+        final filter = [
+          '==',
+          ['get', 'building_id'],
+          buildingId,
+        ];
+        final below = _belowAfterGroup(6);
+        await b.addFillLayer(
+          'campus-buildings',
+          'campus-selected-fill',
+          _selectedBuildingFillProps(visible: true),
+          filter: filter,
+          belowLayerId: below,
+          enableInteraction: false,
+        );
+        _registerLayer('campus-selected-fill', 6);
+        await b.addLineLayer(
+          'campus-buildings',
+          'campus-selected-line',
+          _selectedBuildingLineProps(visible: true),
+          filter: filter,
+          belowLayerId: below,
+          enableInteraction: false,
+        );
+        _registerLayer('campus-selected-line', 6);
+        _appliedBuildingHighlightVisible = true;
+        _appliedBuildingHighlightId = buildingId;
+      }
+    } else {
+      final buildingId = showBuilding ? (_selectedBuildingId(value) ?? '') : '';
+      if (showBuilding && _appliedBuildingHighlightId != buildingId) {
+        final filter = [
+          '==',
+          ['get', 'building_id'],
+          buildingId,
+        ];
+        await b.setLayerFilter('campus-selected-fill', filter);
+        await b.setLayerFilter('campus-selected-line', filter);
+        _appliedBuildingHighlightId = buildingId;
+      }
+      if (_appliedBuildingHighlightVisible != showBuilding) {
+        await b.setLayerProperties(
+          'campus-selected-fill',
+          _selectedBuildingFillProps(visible: showBuilding),
+        );
+        await b.setLayerProperties(
+          'campus-selected-line',
+          _selectedBuildingLineProps(visible: showBuilding),
+        );
+        _appliedBuildingHighlightVisible = showBuilding;
+      }
+    }
+
+    // 2. 通用地物高亮
+    if (!hasFeatures) {
+      await _removeLayerById(b, 'campus-selected-feature');
+      _appliedFeatureHighlightVisible = false;
+      _appliedFeatureHighlightId = null;
+    } else if (!_hasLayer('campus-selected-feature')) {
+      if (showFeature) {
+        await b.addLineLayer(
+          'campus-features',
+          'campus-selected-feature',
+          _selectedFeatureProps(visible: true),
+          filter: [
+            '==',
+            ['get', 'feature_id'],
+            featureId,
+          ],
+          belowLayerId: _belowAfterGroup(6),
+          enableInteraction: false,
+        );
+        _registerLayer('campus-selected-feature', 6);
+        _appliedFeatureHighlightVisible = true;
+        _appliedFeatureHighlightId = featureId;
+      }
+    } else {
+      if (showFeature && _appliedFeatureHighlightId != featureId) {
+        await b.setLayerFilter('campus-selected-feature', [
+          '==',
+          ['get', 'feature_id'],
+          featureId,
+        ]);
+        _appliedFeatureHighlightId = featureId;
+      }
+      if (_appliedFeatureHighlightVisible != showFeature) {
+        await b.setLayerProperties(
+          'campus-selected-feature',
+          _selectedFeatureProps(visible: showFeature),
+        );
+        _appliedFeatureHighlightVisible = showFeature;
+      }
+    }
+
+    // 3. 点位红色图钉（仅无轮廓高亮的 POI / 入口）
+    if (!_hasLayer('campus-selected-pin-dot')) {
+      if (showPin) {
+        final below = _belowAfterGroup(6);
+        await _addSource(
+          b,
+          'campus-selected-pin',
+          _pointGeoJson(pinCenter),
+          group: 6,
+        );
+        await b.addCircleLayer(
+          'campus-selected-pin',
+          'campus-selected-pin-halo',
+          _selectedPinHaloProps(visible: true),
+          belowLayerId: below,
+          enableInteraction: false,
+        );
+        _registerLayer('campus-selected-pin-halo', 6);
+        await b.addCircleLayer(
+          'campus-selected-pin',
+          'campus-selected-pin-dot',
+          _selectedPinDotProps(visible: true),
+          belowLayerId: below,
+          enableInteraction: false,
+        );
+        _registerLayer('campus-selected-pin-dot', 6);
+        _appliedPinLat = pinCenter.latitude;
+        _appliedPinLng = pinCenter.longitude;
+        _appliedPinVisible = true;
+      }
+    } else {
+      if (showPin &&
+          (_appliedPinLat != pinCenter.latitude ||
+              _appliedPinLng != pinCenter.longitude)) {
+        await b.setGeoJsonSource(
+          'campus-selected-pin',
+          _pointGeoJson(pinCenter),
+        );
+        _appliedPinLat = pinCenter.latitude;
+        _appliedPinLng = pinCenter.longitude;
+      }
+      if (_appliedPinVisible != showPin) {
+        await b.setLayerProperties(
+          'campus-selected-pin-halo',
+          _selectedPinHaloProps(visible: showPin),
+        );
+        await b.setLayerProperties(
+          'campus-selected-pin-dot',
+          _selectedPinDotProps(visible: showPin),
+        );
+        _appliedPinVisible = showPin;
+      }
+    }
   }
 
-  /// 分类/搜索结果标注：按分类着色的圆点 + 名称，点击直接选中该地点。
-  Future<void> _addMarkers(
-    MapLibreMapController c,
-    CampusMapCanvas value,
-  ) async {
-    if (value.floor != null || value.markerPlaces.isEmpty) return;
-    final selectedId = value.selectedPlace?.id;
-    final features = [
-      for (final place in value.markerPlaces)
-        if (place.id != selectedId &&
-            place.center != null &&
-            place.center!.isValid)
-          {
-            'type': 'Feature',
-            'geometry': {
-              'type': 'Point',
-              'coordinates': [place.center!.longitude, place.center!.latitude],
-            },
-            'properties': {
-              'place_id': place.id,
-              'name': place.name,
-              'color': _hex(categoryColor(place.category)),
-            },
-          },
-    ];
-    if (features.isEmpty) return;
-    await _source(c, 'campus-markers', {
-      'type': 'FeatureCollection',
-      'features': features,
-    });
-    await c.addCircleLayer(
-      'campus-markers',
-      'campus-markers-dot',
-      const CircleLayerProperties(
-        circleColor: ['get', 'color'],
+  CircleLayerProperties _markersDotProps({required bool visible}) =>
+      CircleLayerProperties(
+        circleColor: const ['get', 'color'],
         circleRadius: 6.5,
         circleStrokeColor: '#FFFFFF',
         circleStrokeWidth: 2.5,
-      ),
-      enableInteraction: false,
-    );
-    _layer('campus-markers-dot');
-    await c.addSymbolLayer(
-      'campus-markers',
-      'campus-markers-label',
-      const SymbolLayerProperties(
-        textField: ['get', 'name'],
-        textFont: ['Noto Sans Regular'],
+        visibility: visible ? 'visible' : 'none',
+      );
+
+  SymbolLayerProperties _markersLabelProps({required bool visible}) =>
+      SymbolLayerProperties(
+        textField: const ['get', 'name'],
+        textFont: const ['Noto Sans Regular'],
         textSize: 11.5,
         textColor: '#20252D',
         textHaloColor: 'rgba(255,255,255,0.95)',
         textHaloWidth: 1.4,
         textAnchor: 'top',
-        textOffset: [0, 0.9],
+        textOffset: const [0, 0.9],
         textOptional: true,
-      ),
-      enableInteraction: false,
-    );
-    _layer('campus-markers-label');
+        visibility: visible ? 'visible' : 'none',
+      );
+
+  /// 分类/搜索结果标注：按分类着色的圆点 + 名称，点击直接选中该地点。
+  Future<void> _syncMarkers(CampusMapBridge b, CampusMapCanvas value) async {
+    if (value.markerPlaces.isEmpty) {
+      await _clearGroup(b, 9);
+      _appliedMarkersPlaces = null;
+      _appliedMarkersSelectedId = null;
+      _appliedMarkersVisible = false;
+      return;
+    }
+    final visible = value.floor == null;
+    final selectedId = value.selectedPlace?.id;
+    final filter = selectedId == null
+        ? null
+        : [
+            '!=',
+            ['get', 'place_id'],
+            selectedId,
+          ];
+    if (!_hasLayer('campus-markers-dot')) {
+      if (!visible) return;
+      final features = _buildMarkerFeatures(value.markerPlaces);
+      if (features.isEmpty) return;
+      final below = _belowAfterGroup(9);
+      await _addSource(b, 'campus-markers', {
+        'type': 'FeatureCollection',
+        'features': features,
+      }, group: 9);
+      await b.addCircleLayer(
+        'campus-markers',
+        'campus-markers-dot',
+        _markersDotProps(visible: true),
+        filter: filter,
+        belowLayerId: below,
+        enableInteraction: false,
+      );
+      _registerLayer('campus-markers-dot', 9);
+      await b.addSymbolLayer(
+        'campus-markers',
+        'campus-markers-label',
+        _markersLabelProps(visible: true),
+        filter: filter,
+        belowLayerId: below,
+        enableInteraction: false,
+      );
+      _registerLayer('campus-markers-label', 9);
+      _appliedMarkersPlaces = value.markerPlaces;
+      _appliedMarkersSelectedId = selectedId;
+      _appliedMarkersVisible = true;
+      return;
+    }
+
+    if (!_sameMarkerPlaces(_appliedMarkersPlaces, value.markerPlaces)) {
+      final features = _buildMarkerFeatures(value.markerPlaces);
+      if (features.isEmpty) {
+        await _clearGroup(b, 9);
+        _appliedMarkersPlaces = null;
+        _appliedMarkersSelectedId = null;
+        _appliedMarkersVisible = false;
+        return;
+      }
+      await b.setGeoJsonSource('campus-markers', {
+        'type': 'FeatureCollection',
+        'features': features,
+      });
+      _appliedMarkersPlaces = value.markerPlaces;
+    }
+    if (visible && _appliedMarkersSelectedId != selectedId) {
+      await b.setLayerFilter('campus-markers-dot', filter);
+      await b.setLayerFilter('campus-markers-label', filter);
+      _appliedMarkersSelectedId = selectedId;
+    }
+    if (_appliedMarkersVisible != visible) {
+      await b.setLayerProperties(
+        'campus-markers-dot',
+        _markersDotProps(visible: visible),
+      );
+      await b.setLayerProperties(
+        'campus-markers-label',
+        _markersLabelProps(visible: visible),
+      );
+      _appliedMarkersVisible = visible;
+    }
   }
+
+  List<Map<String, dynamic>> _buildMarkerFeatures(List<CampusPlace> places) => [
+    for (final place in places)
+      if (place.center != null && place.center!.isValid)
+        {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [place.center!.longitude, place.center!.latitude],
+          },
+          'properties': {
+            'place_id': place.id,
+            'name': place.name,
+            'color': _hex(categoryColor(place.category)),
+          },
+        },
+  ];
 
   static String _hex(Color color) =>
       '#${(color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
@@ -1354,33 +2361,36 @@ class _CampusMapNativeState extends State<CampusMapNative>
   static const double kFloorSlabThicknessM = 0.8;
 
   /// 门牌标注的完整属性（setLayerProperties 会重置未列字段，必须全量下发）。
-  SymbolLayerProperties _roomLabelProps(double offsetEm) =>
-      SymbolLayerProperties(
-        textField: [
-          'coalesce',
-          ['get', 'room_code'],
-          ['get', 'name'],
-        ],
-        textFont: const ['Noto Sans Regular'],
-        textSize: 11,
-        textColor: [
-          'case',
-          [
-            '==',
-            ['get', 'room_id'],
-            config.selectedRoom?.id ?? '',
-          ],
-          '#1475F5',
-          '#37415C',
-        ],
-        textHaloColor: 'rgba(255,255,255,0.92)',
-        textHaloWidth: 1.2,
-        textOffset: [0, -offsetEm],
-      );
+  SymbolLayerProperties _roomLabelProps(
+    double offsetEm, {
+    String? selectedRoomId,
+  }) => SymbolLayerProperties(
+    textField: [
+      'coalesce',
+      ['get', 'room_code'],
+      ['get', 'name'],
+    ],
+    textFont: const ['Noto Sans Regular'],
+    textSize: 11,
+    textColor: [
+      'case',
+      [
+        '==',
+        ['get', 'room_id'],
+        selectedRoomId ?? '',
+      ],
+      '#1475F5',
+      '#37415C',
+    ],
+    textHaloColor: 'rgba(255,255,255,0.92)',
+    textHaloWidth: 1.2,
+    textOffset: [0, -offsetEm],
+    visibility: 'visible',
+  );
 
   /// 门牌抬升量（em）：楼层顶面相对地面的屏幕上移 = 高度 × sin(倾角) / 地面分辨率。
-  double _labelOffsetEm(MapLibreMapController c) {
-    final cam = _camera ?? c.cameraPosition;
+  double _labelOffsetEm(CampusMapBridge b) {
+    final cam = _camera ?? b.cameraPosition;
     final floorId = config.floor?.id;
     if (cam == null || floorId == null) return 0;
     final elevationM = _floorBase(config, floorId) + kFloorSlabThicknessM;
@@ -1396,16 +2406,26 @@ class _CampusMapNativeState extends State<CampusMapNative>
 
   /// 相机倾角/缩放变化时校正门牌抬升量，变化不足 0.08em（约 1px）不打扰原生端。
   void _syncLabelOffset() {
-    final c = _controller;
-    if (c == null || !_hasLayer('campus-floor-room-labels')) return;
-    final em = _labelOffsetEm(c);
+    final b = _bridge;
+    if (b == null ||
+        !_ready ||
+        config.floor == null ||
+        !_hasLayer('campus-floor-room-labels')) {
+      return;
+    }
+    final em = _labelOffsetEm(b);
     if (_appliedLabelOffsetEm != null &&
         (em - _appliedLabelOffsetEm!).abs() < 0.08) {
       return;
     }
     _appliedLabelOffsetEm = em;
     unawaited(
-      c.setLayerProperties('campus-floor-room-labels', _roomLabelProps(em)),
+      b
+          .setLayerProperties(
+            'campus-floor-room-labels',
+            _roomLabelProps(em, selectedRoomId: config.selectedRoom?.id),
+          )
+          .catchError((Object _) {}),
     );
   }
 
@@ -1417,63 +2437,135 @@ class _CampusMapNativeState extends State<CampusMapNative>
     return 0;
   }
 
+  FillExtrusionLayerProperties _ghostFloorProps(
+    double baseElevation,
+    double opacity,
+  ) => FillExtrusionLayerProperties(
+    fillExtrusionColor: '#E3E9F0',
+    fillExtrusionOpacity: opacity,
+    // 顶面同样要是绝对高度，否则每层楼板会倒挂成通高立柱（重影根因）。
+    fillExtrusionHeight: baseElevation + kFloorSlabThicknessM * 0.4,
+    fillExtrusionBase: baseElevation,
+    visibility: 'visible',
+  );
+
   /// 楼层叠放：每个楼层按自身海拔铺一块楼板，一层层叠起来；
   /// 当前层实色着色，下方楼层按距离递减透明度托底；
   /// 当前层上方的楼层不显示，避免遮挡当前层。
   Future<void> _syncStackedFloors(
-    MapLibreMapController c,
+    CampusMapBridge b,
     CampusMapCanvas value,
   ) async {
     final floors = value.selectedPlace?.floors ?? const <CampusFloor>[];
     final current = value.floor;
-    if (current == null || floors.isEmpty) return;
-    final buildingId =
-        value.selectedPlace?.buildingId ?? value.selectedPlace?.id ?? '';
+    if (current == null || floors.isEmpty) {
+      await _clearGroup(b, 4);
+      _appliedStackFloors.clear();
+      return;
+    }
+    final buildingId = _selectedBuildingId(value) ?? '';
+    final desired =
+        <
+          ({
+            CampusFloor floor,
+            Map<String, dynamic> raw,
+            Map<String, dynamic>? subset,
+            double base,
+            double opacity,
+          })
+        >[];
     for (final floor in floors) {
       if (floor.id == current.id) continue;
       // 高于当前层的幽灵层会压在当前层上面，直接跳过。
       if (floor.number > current.number) continue;
       final raw = value.ghostFloorsGeoJson[floor.id];
       if (raw == null) continue;
-      final subset = _subset(
-        raw,
-        (p) => p['building_id'] == buildingId && p['floor_id'] == floor.id,
-      );
-      if (subset == null || (subset['features'] as List).isEmpty) continue;
+      final existing = _appliedStackFloors[floor.id];
+      Map<String, dynamic>? subset;
+      if (existing == null ||
+          !identical(existing.raw, raw) ||
+          existing.buildingId != buildingId) {
+        subset = _subset(
+          raw,
+          (p) => p['building_id'] == buildingId && p['floor_id'] == floor.id,
+        );
+        if (subset == null || (subset['features'] as List).isEmpty) continue;
+      }
       final distance = (floor.number - current.number).abs();
       final opacity = (0.34 - 0.07 * distance).clamp(0.08, 0.34);
-      final sourceId = 'campus-stack-${floor.id}';
-      await _source(c, sourceId, subset);
-      await c.addFillExtrusionLayer(
-        sourceId,
-        '$sourceId-slab',
-        FillExtrusionLayerProperties(
-          fillExtrusionColor: '#E3E9F0',
-          fillExtrusionOpacity: opacity,
-          // 顶面同样要是绝对高度，否则每层楼板会倒挂成通高立柱（重影根因）。
-          fillExtrusionHeight:
-              floorBaseElevation(floor) + kFloorSlabThicknessM * 0.4,
-          fillExtrusionBase: floorBaseElevation(floor),
-        ),
-        filter: [
-          'in',
-          ['get', 'kind'],
-          [
-            'literal',
-            ['room', 'corridor', 'facility', 'door'],
+      desired.add((
+        floor: floor,
+        raw: raw,
+        subset: subset,
+        base: floorBaseElevation(floor),
+        opacity: opacity,
+      ));
+    }
+    final desiredIds = {for (final item in desired) item.floor.id};
+    for (final mountedId in _appliedStackFloors.keys.toList()) {
+      if (desiredIds.contains(mountedId)) continue;
+      final sourceId = 'campus-stack-$mountedId';
+      await _removeLayerById(b, '$sourceId-slab');
+      await _removeSourceById(b, sourceId);
+      _appliedStackFloors.remove(mountedId);
+    }
+    for (var i = 0; i < desired.length; i++) {
+      final item = desired[i];
+      final sourceId = 'campus-stack-${item.floor.id}';
+      final layerId = '$sourceId-slab';
+      final prev = _appliedStackFloors[item.floor.id];
+      if (prev == null) {
+        String? below;
+        for (var j = i + 1; j < desired.length; j++) {
+          final nextLayerId = 'campus-stack-${desired[j].floor.id}-slab';
+          if (_hasLayer(nextLayerId)) {
+            below = nextLayerId;
+            break;
+          }
+        }
+        below ??= _belowAfterGroup(4);
+        await _addSource(b, sourceId, item.subset!, group: 4);
+        await b.addFillExtrusionLayer(
+          sourceId,
+          layerId,
+          _ghostFloorProps(item.base, item.opacity),
+          filter: [
+            'in',
+            ['get', 'kind'],
+            [
+              'literal',
+              ['room', 'corridor', 'facility', 'door'],
+            ],
           ],
-        ],
-        enableInteraction: false,
+          belowLayerId: below,
+          enableInteraction: false,
+        );
+        _registerLayer(layerId, 4);
+      } else {
+        if (item.subset != null) {
+          await b.setGeoJsonSource(sourceId, item.subset!);
+        }
+        if (prev.base != item.base || prev.opacity != item.opacity) {
+          await b.setLayerProperties(
+            layerId,
+            _ghostFloorProps(item.base, item.opacity),
+          );
+        }
+      }
+      _appliedStackFloors[item.floor.id] = (
+        raw: item.raw,
+        buildingId: buildingId,
+        base: item.base,
+        opacity: item.opacity,
       );
-      _layer('$sourceId-slab');
     }
   }
 
   /// 命中选择：插件返回的 Feature 不带图层信息，因此按图层分别查询，
   /// 顺序为「当前楼层房间 → 建筑碰撞箱 → 街景覆盖」，取最先命中的目标。
   Future<void> _onTap(Point<double> point, LatLng _) async {
-    final c = _controller;
-    if (c == null || !_ready) return;
+    final b = _bridge;
+    if (b == null || !_ready) return;
     // 0.28 起点击位置在各平台都是逻辑像素，查询矩形同为其坐标系。
     final rect = Rect.fromCenter(
       center: Offset(point.x, point.y),
@@ -1481,12 +2573,14 @@ class _CampusMapNativeState extends State<CampusMapNative>
       height: 48,
     );
     Future<List> hitsOn(List<String> layerIds) =>
-        c.queryRenderedFeaturesInRect(rect, layerIds, null);
+        b.queryRenderedFeaturesInRect(rect, layerIds, null);
     Map<String, dynamic> propertiesOf(Object? raw) => raw is Map
         ? Map<String, dynamic>.from(raw['properties'] as Map? ?? const {})
         : const {};
     try {
-      if (_hasLayer('campus-markers-dot')) {
+      if (config.floor == null &&
+          config.markerPlaces.isNotEmpty &&
+          _hasLayer('campus-markers-dot')) {
         for (final raw in await hitsOn(const [
           'campus-markers-dot',
           'campus-markers-label',
@@ -1591,8 +2685,8 @@ class _CampusMapNativeState extends State<CampusMapNative>
     );
   }
 
-  Future<void> _updateCamera(MapLibreMapController c) async {
-    final current = c.cameraPosition;
+  Future<void> _updateCamera(CampusMapBridge b) async {
+    final current = b.cameraPosition;
     _overviewCamera ??= current;
     // 导航与路线预览独占相机：其余取景请求（定位回中、缩放等）视为已处理，
     // 退出后不再补放。
@@ -1603,7 +2697,7 @@ class _CampusMapNativeState extends State<CampusMapNative>
       _appliedLayer = config.mapLayer;
     }
     if (config.navigating) {
-      await _followCamera(c, current);
+      await _followCamera(b, current);
       return;
     }
     final bounds = config.showRoute && config.fitRoute
@@ -1619,9 +2713,9 @@ class _CampusMapNativeState extends State<CampusMapNative>
         bottom: insets.bottom + 48,
       );
       if (MediaQuery.disableAnimationsOf(context)) {
-        await c.moveCamera(update);
+        await b.moveCamera(update);
       } else {
-        await c.animateCamera(
+        await b.animateCamera(
           update,
           duration: const Duration(milliseconds: 500),
         );
@@ -1714,9 +2808,9 @@ class _CampusMapNativeState extends State<CampusMapNative>
     if (camera != null) {
       final update = CameraUpdate.newCameraPosition(camera);
       if (MediaQuery.disableAnimationsOf(context)) {
-        await c.moveCamera(update);
+        await b.moveCamera(update);
       } else {
-        await c.animateCamera(
+        await b.animateCamera(
           update,
           duration: const Duration(milliseconds: 400),
         );
@@ -1725,10 +2819,7 @@ class _CampusMapNativeState extends State<CampusMapNative>
   }
 
   /// 导航跟随：锁定在当前位置，按前进方向旋转、倾斜 50° 看前方（仿百度步行导航）。
-  Future<void> _followCamera(
-    MapLibreMapController c,
-    CameraPosition? current,
-  ) async {
+  Future<void> _followCamera(CampusMapBridge b, CameraPosition? current) async {
     final point = config.navPoint ?? config.userPoint;
     if (point == null || !point.isValid) return;
     final camera = _insetAware(
@@ -1741,9 +2832,9 @@ class _CampusMapNativeState extends State<CampusMapNative>
     );
     final update = CameraUpdate.newCameraPosition(camera);
     if (MediaQuery.disableAnimationsOf(context)) {
-      await c.moveCamera(update);
+      await b.moveCamera(update);
     } else {
-      await c.animateCamera(
+      await b.animateCamera(
         update,
         duration: const Duration(milliseconds: 900),
       );
@@ -1783,14 +2874,16 @@ class _CampusMapNativeState extends State<CampusMapNative>
 
   Future<void> _retry() async {
     _generation++;
+    _shuttleStyleEpoch++;
+    _styleEpoch++;
     _ready = false;
+    _shuttleCameraTimer?.cancel();
+    _shuttleCameraTimer = null;
     final epoch = _mapRevision;
     await _queue;
     if (!mounted || epoch != _mapRevision) return;
-    _controller = null;
-    _sources.clear();
-    _layers.clear();
-    _appliedKeys = const [];
+    _bridge = null;
+    _resetStyleState();
     _queue = Future.value();
     _cameraPending = true;
     setState(() {
@@ -1804,10 +2897,12 @@ class _CampusMapNativeState extends State<CampusMapNative>
   void dispose() {
     _generation++;
     _shuttleStyleEpoch++;
+    _styleEpoch++;
     _shuttleCameraTimer?.cancel();
+    _shuttleCameraTimer = null;
     _shuttleAnimation.dispose();
     _loadTimeout?.cancel();
-    _controller = null;
+    _bridge = null;
     super.dispose();
   }
 
@@ -1825,17 +2920,18 @@ class _CampusMapNativeState extends State<CampusMapNative>
           androidView: const AndroidMapView(
             surface: AndroidMapSurface.textureView,
           ),
-          onMapCreated: (c) => _controller = c,
+          onMapCreated: (c) => _bridge =
+              CampusMapNative.debugBridgeOverride?.call(c) ??
+              _MapLibreBridge(c),
           onStyleLoadedCallback: () {
             _shuttleStyleEpoch++;
+            _styleEpoch++;
             _shuttleStationsDirty = true;
             _loadTimeout?.cancel();
             // 新样式不含任何自绘图层：清空登记，整组重新挂载。排进队列执行，
             // 让旧样式上还没跑完的同步先收尾，避免它在清空后又登记旧图层。
             _queue = _queue.then((_) {
-              _sources.clear();
-              _layers.clear();
-              _appliedKeys = const [];
+              _resetStyleState();
               _ready = true;
             });
             _enqueue();
@@ -1848,14 +2944,16 @@ class _CampusMapNativeState extends State<CampusMapNative>
           onCameraMove: (position) {
             _camera = position;
             _syncLabelOffset();
-            _shuttleStationsDirty = true;
-            _shuttleCameraTimer ??= Timer(
-              const Duration(milliseconds: 100),
-              () {
-                _shuttleCameraTimer = null;
-                _scheduleShuttleUpdate();
-              },
-            );
+            if (config.mapLayer == CampusMapLayer.transit) {
+              _shuttleStationsDirty = true;
+              _shuttleCameraTimer ??= Timer(
+                const Duration(milliseconds: 100),
+                () {
+                  _shuttleCameraTimer = null;
+                  _scheduleShuttleUpdate(immediate: true);
+                },
+              );
+            }
           },
           compassEnabled: false,
           logoEnabled: false,
