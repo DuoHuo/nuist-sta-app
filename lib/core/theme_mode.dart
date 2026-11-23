@@ -1,8 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 
+import 'app_directories.dart';
 import 'logging/app_log.dart';
 
 /// App 的明暗模式：跟随系统 / 浅色 / 深色。
@@ -19,7 +19,7 @@ class AppThemeMode extends ValueNotifier<ThemeMode> {
 
   static Future<File?> _file() async {
     try {
-      final base = await getApplicationSupportDirectory();
+      final base = await AppDirectories.applicationSupport();
       final dir = Directory('${base.path}${Platform.pathSeparator}settings');
       if (!await dir.exists()) await dir.create(recursive: true);
       return File('${dir.path}${Platform.pathSeparator}$_fileName');

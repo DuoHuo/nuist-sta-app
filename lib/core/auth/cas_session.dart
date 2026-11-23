@@ -4,8 +4,8 @@ import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../app_directories.dart';
 import '../network/vpn_log.dart';
 import 'aia_trust.dart';
 import 'nuist_login.dart';
@@ -59,7 +59,7 @@ class CasSession {
     if (createHttp case final factory?) return _client = factory(jar);
     final trust = AiaTrust(
       resolveCacheDir: () async {
-        final base = await getApplicationSupportDirectory();
+        final base = await AppDirectories.applicationSupport();
         return Directory('${base.path}${Platform.pathSeparator}aia_certs');
       },
     );

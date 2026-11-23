@@ -2,8 +2,8 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../../core/app_directories.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/logging/diagnostic_error.dart';
@@ -161,7 +161,7 @@ class BulletinApi {
   Future<File> downloadAttachment(BulletinAttachment attachment) async {
     final paths = Uri.tryParse(attachment.url)?.pathSegments ?? const [];
     final sourceName = paths.isEmpty ? '' : paths.last;
-    final cache = await getTemporaryDirectory();
+    final cache = await AppDirectories.temporary();
     final separator = Platform.pathSeparator;
     final directory = Directory(
       '${cache.path}${separator}bulletin_attachments',

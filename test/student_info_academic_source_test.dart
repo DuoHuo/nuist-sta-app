@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_directories.dart';
 import 'package:nuist_sta_app/core/auth/enrollment_year.dart' as core_year;
 import 'package:nuist_sta_app/core/auth/student_academic_info.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
@@ -55,6 +56,7 @@ void main() {
   Future<String?> Function()? readAccount;
 
   setUp(() async {
+    AppDirectories.resetForTesting();
     await AppLog.resetForTesting();
     cached = _info();
     account = _studentId;
@@ -81,6 +83,7 @@ void main() {
   tearDown(() async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(pathProviderChannel, null);
+    AppDirectories.resetForTesting();
     await AppLog.resetForTesting();
     for (final directory in directories) {
       expect(
@@ -92,6 +95,7 @@ void main() {
   });
 
   Future<Directory> localDirectory() async {
+    AppDirectories.resetForTesting();
     final directory = await Directory.systemTemp.createTemp(
       'student_academic_local_',
     );

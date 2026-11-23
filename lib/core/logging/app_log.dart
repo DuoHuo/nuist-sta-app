@@ -8,9 +8,9 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../app_directories.dart';
 import '../config/campus_config.dart';
 import '../config/api_endpoints.dart';
 import 'diagnostic_error.dart';
@@ -220,7 +220,7 @@ class AppLog {
 
   static Future<void> _initialize(Directory? directory) async {
     try {
-      final base = directory ?? await getTemporaryDirectory();
+      final base = directory ?? await AppDirectories.temporary();
       final store = RotatingLogStore(
         Directory(
           '${base.path}${Platform.pathSeparator}nuist_sta_app'

@@ -4,9 +4,9 @@ import 'dart:io';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show ValueNotifier, visibleForTesting;
-import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../app_directories.dart';
 import '../config/campus_config.dart';
 import '../logging/app_log.dart';
 import '../logging/diagnostic_redactor.dart';
@@ -519,7 +519,7 @@ class PortalSession {
     }
     final trust = AiaTrust(
       resolveCacheDir: () async {
-        final base = await getApplicationSupportDirectory();
+        final base = await AppDirectories.applicationSupport();
         return Directory('${base.path}${Platform.pathSeparator}aia_certs');
       },
     );

@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
+import '../../core/app_directories.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/refresh/silent_refresh.dart';
 import 'labor_score_models.dart';
@@ -17,7 +16,7 @@ class LaborScoreStore {
 
   static Future<File?> _resolve() async {
     try {
-      final base = await getApplicationDocumentsDirectory();
+      final base = await AppDirectories.applicationDocuments();
       final dir = Directory('${base.path}${Platform.pathSeparator}labor_score');
       if (!await dir.exists()) await dir.create(recursive: true);
       return File('${dir.path}${Platform.pathSeparator}$_file');

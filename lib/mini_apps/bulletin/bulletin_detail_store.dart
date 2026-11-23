@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:pointycastle/digests/sha256.dart';
 
+import '../../core/app_directories.dart';
 import '../../core/logging/app_log.dart';
 import 'bulletin_models.dart';
 
@@ -20,7 +20,7 @@ class BulletinDetailStore {
   BulletinDetailStore({
     Future<Directory?> Function()? resolveDirectory,
     DateTime Function()? now,
-  }) : _resolveDirectory = resolveDirectory ?? getTemporaryDirectory,
+  }) : _resolveDirectory = resolveDirectory ?? AppDirectories.temporary,
        _now = now ?? DateTime.now;
 
   static final _log = AppLog.logger('bulletin.detail_store');

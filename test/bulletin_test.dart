@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_directories.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_api.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_controller.dart';
@@ -436,6 +437,7 @@ void main() {
     late Directory directory;
 
     setUp(() async {
+      AppDirectories.resetForTesting();
       directory = await Directory.systemTemp.createTemp('bulletin-test-');
       binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
         call,
@@ -447,6 +449,7 @@ void main() {
 
     tearDown(() async {
       binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+      AppDirectories.resetForTesting();
       await directory.delete(recursive: true);
     });
 

@@ -4,8 +4,8 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show BuildContext;
-import 'package:path_provider/path_provider.dart';
 
+import '../app_directories.dart';
 import '../logging/app_log.dart';
 
 /// 当前隐私政策的版本号。
@@ -53,7 +53,7 @@ class PrivacyConsent extends ValueNotifier<PrivacyDecision> {
 
   static Future<Directory?> _supportDirectory() async {
     try {
-      final base = await getApplicationSupportDirectory();
+      final base = await AppDirectories.applicationSupport();
       final dir = Directory('${base.path}${Platform.pathSeparator}settings');
       if (!await dir.exists()) await dir.create(recursive: true);
       return dir;
