@@ -182,8 +182,6 @@ class _DragState {
 class _WeekGridState extends State<WeekGrid> {
   _DragState? _drag;
   final _dragUpdates = ValueNotifier<int>(0);
-  final _gridScroll = ScrollController();
-  double _viewportHeight = 0;
 
   /// 松手后格子滑进落点 / 滑回原位的时长。
   static const Duration _settleDuration = Duration(milliseconds: 150);
@@ -243,7 +241,6 @@ class _WeekGridState extends State<WeekGrid> {
   void dispose() {
     PaintingBinding.instance.systemFonts.removeListener(_onFontsChanged);
     _dragUpdates.dispose();
-    _gridScroll.dispose();
     super.dispose();
   }
 
@@ -312,10 +309,6 @@ class _WeekGridState extends State<WeekGrid> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        _viewportHeight = math.max(
-          0,
-          constraints.maxHeight - TimetableTheme.weekHeaderHeight,
-        );
         final periodW = TimetableTheme.periodColumnWidth;
         final dayW = (constraints.maxWidth - periodW) / days.length;
         final dpr = MediaQuery.devicePixelRatioOf(context);
@@ -456,7 +449,7 @@ class _WeekGridState extends State<WeekGrid> {
             ),
             Expanded(
               child: SingleChildScrollView(
-                controller: _gridScroll,
+                primary: false,
                 child: Column(
                   children: [
                     SizedBox(
@@ -486,7 +479,7 @@ class _WeekGridState extends State<WeekGrid> {
                               height: gridH,
                               child: Stack(
                                 children: [
-                                  // 网格与浮动格分开记录绘制指令，跟手位移时复用底层课程。
+                                  // 网格与浮动格分开记录绘制指令，垂直滚动与跟手位移时复用底层课程光栅化图层。
                                   Positioned.fill(
                                     child: RepaintBoundary(
                                       key: const Key('week_grid_static_layer'),
@@ -782,22 +775,15 @@ class _WeekGridState extends State<WeekGrid> {
             top: top,
             width: width,
             height: height,
-            child: _ViewportCell(
-              scroll: _gridScroll,
-              top: top,
-              height: height,
-              viewport: _viewportHeight,
-              alwaysVisible: isFocused,
-              child: isFocused
-                  ? _FocusedScheduleTarget(
-                      eventId: primary.id,
-                      reveal: widget.revealFocusedEvent,
-                      onRevealed: widget.onFocusedEventRevealed,
-                      radius: radius,
-                      child: eventCell,
-                    )
-                  : eventCell,
-            ),
+            child: isFocused
+                ? _FocusedScheduleTarget(
+                    eventId: primary.id,
+                    reveal: widget.revealFocusedEvent,
+                    onRevealed: widget.onFocusedEventRevealed,
+                    radius: radius,
+                    child: eventCell,
+                  )
+                : eventCell,
           ),
         );
         continue;
@@ -891,14 +877,7 @@ class _WeekGridState extends State<WeekGrid> {
           top: top,
           width: width,
           height: height,
-          child: _ViewportCell(
-            scroll: _gridScroll,
-            top: top,
-            height: height,
-            viewport: _viewportHeight,
-            alwaysVisible: hasDragged,
-            child: slotChild,
-          ),
+          child: slotChild,
         ),
       );
     }
@@ -1996,70 +1975,6 @@ class _FocusedScheduleTargetState extends State<_FocusedScheduleTarget> {
       ),
     );
   }
-}
-
-/// 网格保持全周几何，仅挂载视口附近文字；滚动中可见性不变不重建课程。
-class _ViewportCell extends StatefulWidget {
-  const _ViewportCell({
-    required this.scroll,
-    required this.top,
-    required this.height,
-    required this.viewport,
-    required this.child,
-    this.alwaysVisible = false,
-  });
-  final ScrollController scroll;
-  final double top;
-  final double height;
-  final double viewport;
-  final bool alwaysVisible;
-  final Widget child;
-  @override
-  State<_ViewportCell> createState() => _ViewportCellState();
-}
-
-class _ViewportCellState extends State<_ViewportCell> {
-  late bool _visible;
-  bool _isVisible() {
-    if (widget.alwaysVisible) return true;
-    final offset = widget.scroll.hasClients ? widget.scroll.offset : 0.0;
-    // 提前半屏准备，正常滑动/甩动进入视口时已有完整内容。
-    final padding = widget.viewport / 2;
-    return widget.top + widget.height >= offset - padding &&
-        widget.top <= offset + widget.viewport + padding;
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _visible = _isVisible();
-    widget.scroll.addListener(_update);
-  }
-
-  void _update() {
-    final visible = _isVisible();
-    if (_visible != visible && mounted) setState(() => _visible = visible);
-  }
-
-  @override
-  void didUpdateWidget(_ViewportCell oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.scroll != widget.scroll) {
-      oldWidget.scroll.removeListener(_update);
-      widget.scroll.addListener(_update);
-    }
-    _visible = _isVisible();
-  }
-
-  @override
-  void dispose() {
-    widget.scroll.removeListener(_update);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) =>
-      _visible ? widget.child : const SizedBox.shrink();
 }
 
 class _DayHeader extends StatelessWidget {
