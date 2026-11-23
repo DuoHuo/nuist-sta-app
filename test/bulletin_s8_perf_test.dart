@@ -353,12 +353,30 @@ void main() {
     // - 第 2 页（index=1 < probedPageCount=2）保持已探测比例 0.8 -> 高度 384 / 0.8 = 480。
     // - 第 3 页（index=2 >= probedPageCount=2）更新为 200x100 比例 2.0 -> 高度 384 / 2.0 = 192。
     // - 第 4 页（index=3）受前页收窄影响，纵向偏移从 1664 上移到 8 + 384 + 8 + 480 + 8 + 192 + 8 = 1088。
-    expect(tester.getSize(find.byKey(const ValueKey(1))).width, closeTo(384.0, 0.01));
-    expect(tester.getSize(find.byKey(const ValueKey(1))).height, closeTo(480.0, 0.01));
-    expect(tester.getSize(find.byKey(const ValueKey(2))).width, closeTo(384.0, 0.01));
-    expect(tester.getSize(find.byKey(const ValueKey(2))).height, closeTo(192.0, 0.01));
-    expect(tester.getTopLeft(find.byKey(const ValueKey(3))).dy, closeTo(1088.0, 0.01));
-    expect(tester.getSize(find.byKey(const ValueKey(3))).height, closeTo(192.0, 0.01));
+    expect(
+      tester.getSize(find.byKey(const ValueKey(1))).width,
+      closeTo(384.0, 0.01),
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey(1))).height,
+      closeTo(480.0, 0.01),
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey(2))).width,
+      closeTo(384.0, 0.01),
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey(2))).height,
+      closeTo(192.0, 0.01),
+    );
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey(3))).dy,
+      closeTo(1088.0, 0.01),
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey(3))).height,
+      closeTo(192.0, 0.01),
+    );
 
     // 无效/占位字节在未探测页渲染时不会抛出异常，且保留初始宽高比。
     binding.defaultBinaryMessenger.setMockMethodCallHandler(_pdfChannel, (
@@ -383,7 +401,10 @@ void main() {
       ),
     );
     await _pumpUntil(tester, find.text('此页无法预览'));
-    expect(tester.getSize(find.byKey(const ValueKey(1))).height, closeTo(768.0, 0.01));
+    expect(
+      tester.getSize(find.byKey(const ValueKey(1))).height,
+      closeTo(768.0, 0.01),
+    );
     expect(tester.takeException(), isNull);
 
     await doc.close();

@@ -150,11 +150,7 @@ Future<String> readBulletinPreviewText(File file) async {
 
 /// Android 自带 PDF 渲染器的文档句柄，支持按页渲染。
 class BulletinPdfDocument {
-  BulletinPdfDocument._(
-    this._id,
-    this.pageAspectRatios,
-    this.probedPageCount,
-  );
+  BulletinPdfDocument._(this._id, this.pageAspectRatios, this.probedPageCount);
 
   final int _id;
   bool _closed = false;
