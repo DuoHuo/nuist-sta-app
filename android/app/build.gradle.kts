@@ -121,8 +121,6 @@ dependencies {
     implementation("androidx.webkit:webkit:1.15.0")
     implementation("androidx.glance:glance-appwidget:1.2.0")
     implementation("androidx.glance:glance-material3:1.2.0")
-    implementation("androidx.glance:glance-appwidget-preview:1.2.0")
-    implementation("androidx.glance:glance-preview:1.2.0")
 }
 
 // 项目按 AGPL-3.0 发布，不能打包闭源的 Google Play 服务。定位走系统 LocationManager

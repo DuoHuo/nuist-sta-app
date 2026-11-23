@@ -51,20 +51,34 @@ class MainActivity : FlutterActivity() {
         // 只接收 Dart 日志层已清洗的摘要，保留 logcat 原生严重程度。
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "nuist/diagnostic_logging")
             .setMethodCallHandler { call, result ->
-                if (call.method in setOf("readNativeDiagnostics", "acknowledgeNativeDiagnostics", "clearNativeDiagnostics")) {
-                    try {
-                        when (call.method) {
-                            "readNativeDiagnostics" -> result.success(NativeBackgroundDiagnostics.read(this))
-                            "acknowledgeNativeDiagnostics" -> {
-                                NativeBackgroundDiagnostics.acknowledge(this, call.argument<List<String>>("ids")?.toSet() ?: emptySet())
-                                result.success(null)
-                            }
-                            "clearNativeDiagnostics" -> { NativeBackgroundDiagnostics.clear(this); result.success(null) }
-                        }
-                    } catch (error: Exception) {
-                        result.error("native_diagnostics_unavailable", "原生诊断队列暂不可用", notifyFailureDetails(error, "diagnostics.${call.method}"))
+                val method = call.method
+                if (method in setOf("readNativeDiagnostics", "acknowledgeNativeDiagnostics", "clearNativeDiagnostics")) {
+                    val appContext = applicationContext
+                    val ids = if (method == "acknowledgeNativeDiagnostics") {
+                        call.argument<List<String>>("ids")?.toSet() ?: emptySet()
+                    } else {
+                        emptySet()
                     }
-                } else if (call.method != "write") {
+                    TimetableNativeWork.reply(
+                        result,
+                        "native_diagnostics_unavailable",
+                        "原生诊断队列暂不可用",
+                        "diagnostics.$method",
+                        action = {
+                            when (method) {
+                                "readNativeDiagnostics" -> NativeBackgroundDiagnostics.read(appContext)
+                                "acknowledgeNativeDiagnostics" -> {
+                                    NativeBackgroundDiagnostics.acknowledge(appContext, ids)
+                                    null
+                                }
+                                else -> {
+                                    NativeBackgroundDiagnostics.clear(appContext)
+                                    null
+                                }
+                            }
+                        },
+                    )
+                } else if (method != "write") {
                     result.notImplemented()
                 } else {
                     val args = call.arguments as? Map<*, *>
@@ -193,24 +207,35 @@ class MainActivity : FlutterActivity() {
     /** 清除旧版动态 shortcut，并禁用可能被用户 pinned 的旧 id，避免长按图标出现无效「添加小组件」。
      *  不碰 AppWidgetProvider：系统桌面「小组件」入口是系统行为，应保留。 */
     private fun clearLegacyShortcuts() {
-        try {
-            val sm = getSystemService(ShortcutManager::class.java) ?: return
+        val context = applicationContext
+        TimetableNativeWork.background(context, "shortcut.clear_legacy", "legacy_shortcut_clear_failed") {
             try {
-                sm.removeDynamicShortcuts(listOf("add_timetable_widget"))
-            } catch (_: IllegalArgumentException) {
-                // 本机没有这个旧动态 shortcut 时继续禁用可能已固定到桌面的旧 id。
-            } catch (_: IllegalStateException) {
-                // 桌面/系统暂时不可用时仍尝试禁用旧 id。
+                val prefs = context.getSharedPreferences("timetable_legacy_cleanup", MODE_PRIVATE)
+                if (prefs.getBoolean("legacy_shortcuts_cleared_v1", false)) return@background
+                val sm = context.getSystemService(ShortcutManager::class.java) ?: return@background
+                var transientFailure = false
+                try {
+                    sm.removeDynamicShortcuts(listOf("add_timetable_widget"))
+                } catch (_: IllegalArgumentException) {
+                    // 本机没有这个旧动态 shortcut 时继续禁用可能已固定到桌面的旧 id。
+                } catch (_: IllegalStateException) {
+                    // 桌面/系统暂时不可用时仍尝试禁用旧 id。
+                    transientFailure = true
+                }
+                try {
+                    sm.disableShortcuts(listOf("add_timetable_widget"))
+                } catch (_: IllegalArgumentException) {
+                    // 本机从未发布过该 id（干净安装）时忽略。
+                } catch (_: IllegalStateException) {
+                    // 桌面/系统暂时不可用时忽略。
+                    transientFailure = true
+                }
+                if (!transientFailure) {
+                    prefs.edit().putBoolean("legacy_shortcuts_cleared_v1", true).apply()
+                }
+            } catch (_: Exception) {
+                // shortcut 清理失败不影响启动。
             }
-            try {
-                sm.disableShortcuts(listOf("add_timetable_widget"))
-            } catch (_: IllegalArgumentException) {
-                // 本机从未发布过该 id（干净安装）时忽略。
-            } catch (_: IllegalStateException) {
-                // 桌面/系统暂时不可用时忽略。
-            }
-        } catch (_: Exception) {
-            // shortcut 清理失败不影响启动。
         }
     }
 
