@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_theme.dart';
 import 'timetable_week_format.dart';
 
@@ -23,25 +24,70 @@ Future<List<int>?> showCourseWeeksSheet(
   builder: (_) => _CourseWeeksSheet(totalWeeks: totalWeeks, initial: initial),
 );
 
-/// 编辑保存前选择生效范围；没有具体日期时只确认全部周次。
+/// 编辑保存前选择生效范围；没有具体日期时直接按全部周次返回。
 Future<CourseFormSaveScope?> showCourseFormSaveScopeSheet(
-  BuildContext context, {
+  BuildContext anchorContext, {
   required int totalWeeks,
   required Set<int> courseWeeks,
   int? currentWeek,
   DateTime? date,
-}) => showModalBottomSheet<CourseFormSaveScope>(
-  context: context,
-  isScrollControlled: true,
-  useSafeArea: true,
-  backgroundColor: TimetableTheme.colorsOf(context).surface,
-  builder: (_) => _CourseScopeSheet(
-    totalWeeks: totalWeeks,
-    courseWeeks: courseWeeks,
-    currentWeek: currentWeek,
-    date: date,
-  ),
-);
+}) async {
+  final canScope = currentWeek != null && courseWeeks.contains(currentWeek);
+  if (!canScope) return CourseFormSaveScope(null);
+  final future = courseWeeks.where((week) => week >= currentWeek).toList()
+    ..sort();
+  final choice = await showMiuixOptionDialog<_Scope>(
+    anchorContext,
+    title: '将修改应用到',
+    contentKey: const Key('course_form_scope_sheet'),
+    cancelKey: const Key('course_form_scope_cancel'),
+    items: [
+      MiuixOptionItem(
+        key: const Key('course_form_scope_once'),
+        value: _Scope.once,
+        label: '仅这次课',
+        description:
+            '第 $currentWeek 周'
+            '${date == null ? '' : ' · ${date.month}月${date.day}日'}',
+      ),
+      MiuixOptionItem(
+        key: const Key('course_form_scope_future'),
+        value: _Scope.future,
+        label: '本周及以后',
+        description: formatWeeks(future.toSet(), maxSegments: null),
+      ),
+      MiuixOptionItem(
+        key: const Key('course_form_scope_all'),
+        value: _Scope.all,
+        label: '这一上课安排的所有周',
+        description: formatWeeks(courseWeeks, maxSegments: null),
+      ),
+      const MiuixOptionItem(
+        key: Key('course_form_scope_custom'),
+        value: _Scope.custom,
+        label: '自定义周次',
+      ),
+    ],
+  );
+  switch (choice) {
+    case null:
+      return null;
+    case _Scope.once:
+      return CourseFormSaveScope([currentWeek]);
+    case _Scope.future:
+      return CourseFormSaveScope(future);
+    case _Scope.all:
+      return CourseFormSaveScope(null);
+    case _Scope.custom:
+      if (!anchorContext.mounted) return null;
+      final weeks = await showCourseWeeksSheet(
+        anchorContext,
+        totalWeeks: totalWeeks,
+        initial: courseWeeks,
+      );
+      return weeks == null ? null : CourseFormSaveScope(weeks);
+  }
+}
 
 /// 更改课程重复周次时明确确认新旧安排，不再提供单次修改选项。
 Future<bool> confirmCourseWeekChange(
@@ -127,163 +173,22 @@ class _CourseWeeksSheetState extends State<_CourseWeeksSheet> {
 
 enum _Scope { once, future, all, custom }
 
-class _CourseScopeSheet extends StatefulWidget {
-  const _CourseScopeSheet({
-    required this.totalWeeks,
-    required this.courseWeeks,
-    required this.currentWeek,
-    required this.date,
-  });
-
-  final int totalWeeks;
-  final Set<int> courseWeeks;
-  final int? currentWeek;
-  final DateTime? date;
-
-  @override
-  State<_CourseScopeSheet> createState() => _CourseScopeSheetState();
-}
-
-class _CourseScopeSheetState extends State<_CourseScopeSheet> {
-  late _Scope _scope;
-  late Set<int> _weeks;
-  bool _showError = false;
-
-  bool get _canScope =>
-      widget.currentWeek != null &&
-      widget.courseWeeks.contains(widget.currentWeek);
-
-  @override
-  void initState() {
-    super.initState();
-    _scope = _canScope ? _Scope.once : _Scope.all;
-    _weeks = {if (_canScope) widget.currentWeek!};
-  }
-
-  void _confirm() {
-    final List<int>? weeks;
-    switch (_scope) {
-      case _Scope.once:
-        weeks = [widget.currentWeek!];
-      case _Scope.future:
-        weeks =
-            widget.courseWeeks
-                .where((week) => week >= widget.currentWeek!)
-                .toList()
-              ..sort();
-      case _Scope.all:
-        weeks = null;
-      case _Scope.custom:
-        if (_weeks.isEmpty) {
-          setState(() => _showError = true);
-          return;
-        }
-        weeks = _weeks.toList()..sort();
-    }
-    Navigator.pop(context, CourseFormSaveScope(weeks));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final date = widget.date;
-    final future = widget.courseWeeks.where(
-      (week) => week >= (widget.currentWeek ?? 1),
-    );
-    return _SheetFrame(
-      sheetKey: const Key('course_form_scope_sheet'),
-      title: '将修改应用到',
-      content: !_canScope
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text('应用到这一上课安排的所有周', key: Key('course_form_scope_all')),
-                const SizedBox(height: 8),
-                Text(formatWeeks(widget.courseWeeks, maxSegments: null)),
-              ],
-            )
-          : RadioGroup<_Scope>(
-              groupValue: _scope,
-              onChanged: (value) => setState(() {
-                _scope = value!;
-                _showError = false;
-              }),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  RadioListTile<_Scope>(
-                    key: const Key('course_form_scope_once'),
-                    value: _Scope.once,
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('仅这次课'),
-                    subtitle: Text(
-                      '第 ${widget.currentWeek} 周'
-                      '${date == null ? '' : ' · ${date.month}月${date.day}日'}',
-                    ),
-                  ),
-                  RadioListTile<_Scope>(
-                    key: const Key('course_form_scope_future'),
-                    value: _Scope.future,
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('本周及以后'),
-                    subtitle: Text(formatWeeks(future, maxSegments: null)),
-                  ),
-                  RadioListTile<_Scope>(
-                    key: const Key('course_form_scope_all'),
-                    value: _Scope.all,
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('这一上课安排的所有周'),
-                    subtitle: Text(
-                      formatWeeks(widget.courseWeeks, maxSegments: null),
-                    ),
-                  ),
-                  const RadioListTile<_Scope>(
-                    key: Key('course_form_scope_custom'),
-                    value: _Scope.custom,
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('自选周次'),
-                  ),
-                  if (_scope == _Scope.custom)
-                    _WeeksGrid(
-                      totalWeeks: widget.totalWeeks,
-                      available: widget.courseWeeks,
-                      selected: _weeks,
-                      showError: _showError,
-                      onChanged: (weeks) => setState(() {
-                        _weeks = weeks;
-                        _showError = false;
-                      }),
-                    ),
-                ],
-              ),
-            ),
-      cancelKey: const Key('course_form_scope_cancel'),
-      confirmKey: const Key('course_form_scope_confirm'),
-      confirmLabel: '确认保存',
-      onConfirm: _confirm,
-    );
-  }
-}
-
 class _WeeksGrid extends StatelessWidget {
   const _WeeksGrid({
     required this.totalWeeks,
     required this.selected,
     required this.onChanged,
-    this.available,
     this.showError = false,
   });
 
   final int totalWeeks;
   final Set<int> selected;
-  final Set<int>? available;
   final ValueChanged<Set<int>> onChanged;
   final bool showError;
 
   Set<int> _preset(int parity) => {
     for (var week = 1; week <= totalWeeks; week++)
-      if ((available?.contains(week) ?? true) &&
-          (parity == 0 || (parity == 1 ? week.isOdd : week.isEven)))
-        week,
+      if (parity == 0 || (parity == 1 ? week.isOdd : week.isEven)) week,
   };
 
   @override
@@ -330,13 +235,11 @@ class _WeeksGrid extends StatelessWidget {
                   selected: selected.contains(week),
                   showCheckmark: true,
                   materialTapTargetSize: MaterialTapTargetSize.padded,
-                  onSelected: available?.contains(week) == false
-                      ? null
-                      : (value) {
-                          final next = {...selected};
-                          value ? next.add(week) : next.remove(week);
-                          onChanged(next);
-                        },
+                  onSelected: (value) {
+                    final next = {...selected};
+                    value ? next.add(week) : next.remove(week);
+                    onChanged(next);
+                  },
                 ),
               ),
           ],

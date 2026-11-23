@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/core/theme.dart';
@@ -18,7 +19,6 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart'
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_detail_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
 
 final _c = TimetableController.instance;
@@ -539,16 +539,18 @@ void main() {
       await tester.tap(find.byKey(const Key('course_detail_jwxt_delete')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('delete_scope_sheet')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('delete_scope_whole_course')));
+      await tester.tap(find.text('这门课程的全部时间段'));
       await tester.pumpAndSettle();
       expect(find.text('删除这门课？同步后也不会恢复，可在设置里一键恢复。'), findsOneWidget);
-      final del = tester.widget<TextButton>(
+      final del = tester.widget<MiuixButton>(
+        find.byKey(const Key('jwxt_delete_confirm')),
+      );
+      final confirmContext = tester.element(
         find.byKey(const Key('jwxt_delete_confirm')),
       );
       expect(
-        del.style?.foregroundColor?.resolve(const {}),
-        // item 12：Colors.red.shade600 → danger token（浅色 #F53F3F）。
-        TimetableColors.light.danger,
+        del.colors?.contentColor,
+        MiuixTheme.of(confirmContext).colors.error,
       );
       await tester.tap(find.byKey(const Key('jwxt_delete_cancel')));
       await tester.pumpAndSettle();
@@ -556,7 +558,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('course_detail_jwxt_delete')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('delete_scope_whole_course')));
+      await tester.tap(find.text('这门课程的全部时间段'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('jwxt_delete_confirm')));
       await _settleIo(tester);
@@ -608,7 +610,6 @@ void main() {
       await tester.tap(find.byKey(const Key('jwxt_edit_save')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('course_form_scope_once')));
-      await tester.tap(find.byKey(const Key('course_form_scope_confirm')));
       await _settleIo(tester);
       final edited = _c.cellsForDay(_week, 1).single;
       expect(edited.course.name, '测试课乙');

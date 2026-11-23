@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/auth/passkey_transfer.dart';
 import '../../../core/colors.dart';
+import '../../../core/ui/miuix_dialog.dart';
 
 /// 「我的」页那套圆角卡片，统一门户相关的几个页面共用；底色随主题明暗切换。
 class PortalCard extends StatelessWidget {
@@ -116,30 +117,31 @@ Future<String?> showPinDialog(
   bool confirm = false,
   String confirmText = '确定',
 }) {
-  return showDialog<String>(
-    context: context,
-    useRootNavigator: false,
-    builder: (_) => _PinDialog(
-      title: title,
+  return showMiuixDialog<String>(
+    context,
+    title: title,
+    centered: true,
+    builder: (dialogContext, dialog) => _PinDialog(
       message: message,
       confirm: confirm,
       confirmText: confirmText,
+      onClose: dialog.close,
     ),
   );
 }
 
 class _PinDialog extends StatefulWidget {
   const _PinDialog({
-    required this.title,
     required this.message,
     required this.confirm,
     required this.confirmText,
+    required this.onClose,
   });
 
-  final String title;
   final String message;
   final bool confirm;
   final String confirmText;
+  final ValueChanged<String?> onClose;
 
   @override
   State<_PinDialog> createState() => _PinDialogState();
@@ -156,8 +158,10 @@ class _PinDialogState extends State<_PinDialog> {
     super.dispose();
   }
 
+  static bool _isPin(String text) => RegExp(r'^\d{6}$').hasMatch(text);
+
   bool get _valid {
-    if (_first.text.length != 6) return false;
+    if (!_isPin(_first.text)) return false;
     return !widget.confirm || _second.text == _first.text;
   }
 
@@ -168,93 +172,71 @@ class _PinDialogState extends State<_PinDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.title),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            widget.message,
-            style: const TextStyle(fontSize: 14, height: 1.5),
+    final theme = MiuixTheme.of(context);
+    final primary = MiuixButtonDefaults.buttonColorsPrimary(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          widget.message,
+          style: theme.textStyles.body1.copyWith(
+            color: theme.colors.onSurfaceSecondary,
+            height: 1.5,
           ),
-          const SizedBox(height: 16),
-          PinField(
-            controller: _first,
-            autofocus: true,
-            hintText: widget.confirm ? '设置六位数字 PIN' : '六位数字 PIN',
+        ),
+        const SizedBox(height: 16),
+        MiuixTextField(
+          controller: _first,
+          autofocus: true,
+          singleLine: true,
+          obscureText: true,
+          keyboardType: TextInputType.number,
+          label: widget.confirm ? '设置六位数字 PIN' : '六位数字 PIN',
+          onChanged: (_) => setState(() {}),
+        ),
+        if (widget.confirm) ...[
+          const SizedBox(height: 10),
+          MiuixTextField(
+            controller: _second,
+            singleLine: true,
+            obscureText: true,
+            keyboardType: TextInputType.number,
+            label: '再输入一遍',
             onChanged: (_) => setState(() {}),
           ),
-          if (widget.confirm) ...[
-            const SizedBox(height: 10),
-            PinField(
-              controller: _second,
-              hintText: '再输入一遍',
-              errorText: _mismatchHint,
-              onChanged: (_) => setState(() {}),
+          if (_mismatchHint case final hint?)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                hint,
+                style: theme.textStyles.body2.copyWith(
+                  color: theme.colors.error,
+                ),
+              ),
+            ),
+        ],
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: MiuixButton(
+                colors: primary,
+                onPressed: () => widget.onClose(null),
+                child: const Text('取消'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: MiuixButton(
+                enabled: _valid,
+                onPressed: _valid ? () => widget.onClose(_first.text) : null,
+                child: Text(widget.confirmText),
+              ),
             ),
           ],
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        TextButton(
-          onPressed: _valid
-              ? () => Navigator.of(context).pop(_first.text)
-              : null,
-          child: Text(widget.confirmText),
         ),
       ],
-    );
-  }
-}
-
-/// 只收六位数字的密码框。
-class PinField extends StatelessWidget {
-  const PinField({
-    super.key,
-    required this.controller,
-    required this.hintText,
-    this.autofocus = false,
-    this.errorText,
-    this.onChanged,
-  });
-
-  final TextEditingController controller;
-  final String hintText;
-  final bool autofocus;
-  final String? errorText;
-  final ValueChanged<String>? onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = AppPalette.of(context);
-    return TextField(
-      controller: controller,
-      autofocus: autofocus,
-      obscureText: true,
-      keyboardType: TextInputType.number,
-      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-      maxLength: 6,
-      onChanged: onChanged,
-      style: const TextStyle(fontSize: 18, letterSpacing: 6),
-      decoration: InputDecoration(
-        hintText: hintText,
-        hintStyle: const TextStyle(fontSize: 14, letterSpacing: 0),
-        errorText: errorText,
-        counterText: '',
-        isDense: true,
-        filled: true,
-        // 输入框压在对话框的 surface 面上，用页面底色做凹陷感，深浅色都成立。
-        fillColor: palette.pageBg,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide.none,
-        ),
-      ),
     );
   }
 }

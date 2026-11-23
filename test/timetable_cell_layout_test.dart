@@ -846,7 +846,7 @@ void main() {
       await tester.tap(find.byKey(const Key('course_detail_delete')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('delete_scope_sheet')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('delete_scope_whole_course')));
+      await tester.tap(find.text('这门课程的全部时间段'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('course_delete_confirm')));
       await settleIo(tester);

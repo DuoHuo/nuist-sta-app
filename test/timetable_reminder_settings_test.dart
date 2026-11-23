@@ -5,7 +5,9 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/ui/miuix_dialog.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -116,7 +118,9 @@ void main() {
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
       MaterialApp(
-        home: TimetableSettingsPage(controller: _c, reminderActions: a),
+        home: MiuixPopupHostScope(
+          child: TimetableSettingsPage(controller: _c, reminderActions: a),
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -173,8 +177,8 @@ void main() {
       await tester.tap(lead);
       await tester.pumpAndSettle();
       Finder seg(int m) => find.descendant(
-        of: find.byType(BottomSheet),
-        matching: find.widgetWithText(TextButton, '$m 分钟'),
+        of: find.byType(MiuixPopupHost),
+        matching: find.text('$m 分钟'),
       );
       for (final m in kReminderLeadChoices) {
         expect(seg(m), findsOneWidget);
@@ -322,10 +326,12 @@ void main() {
       );
       await tester.tap(row);
       await tester.pumpAndSettle();
-      Finder seg(int n) => find.descendant(
-        of: find.byType(BottomSheet),
-        matching: find.widgetWithText(TextButton, '$n'),
-      );
+      Finder seg(int n) => find
+          .descendant(
+            of: find.byType(MiuixPopupHost),
+            matching: find.text(TtSettingsText.courses(n)),
+          )
+          .hitTestable();
       for (final n in kWidgetCourseCountOptions) {
         expect(seg(n), findsOneWidget);
       }

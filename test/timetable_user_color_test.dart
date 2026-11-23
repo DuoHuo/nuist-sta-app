@@ -123,7 +123,7 @@ Future<void> _chooseColor(WidgetTester tester, Color color) async {
 }
 
 Future<void> _globalScope(WidgetTester tester) async {
-  await tester.tap(find.byKey(const Key('course_color_scope_all')));
+  await tester.tap(find.text('应用到全局'));
   await _settleIo(tester);
 }
 
@@ -314,7 +314,7 @@ void main() {
           0xFF000000;
       await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
       await _settleIo(tester);
-      await tester.tap(find.byKey(const Key('course_color_scope_this')));
+      await tester.tap(find.text('仅本周这节课'));
       await _settleIo(tester);
       expect(_c.userColorOf(_a), isNull);
       final current = _c.cellsForDay(7, 1).single;
@@ -395,7 +395,7 @@ void main() {
         expect(tester.takeException(), isNull);
         await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
         await _settleIo(tester);
-        await tester.tap(find.byKey(const Key('course_color_scope_this')));
+        await tester.tap(find.text('仅本周这节课'));
         await _settleIo(tester);
         Navigator.of(tester.element(find.byType(WeekGrid))).pop();
         await _settleIo(tester);
@@ -541,10 +541,7 @@ void main() {
         expect(tester.takeException(), isNull, reason: '键盘升降与滚动不能产生布局溢出');
         await tester.tap(save);
         await _settleIo(tester);
-        expect(
-          find.byKey(const Key('course_color_scope_this')),
-          findsOneWidget,
-        );
+        expect(find.text('仅本周这节课'), findsOneWidget);
         expect(tester.takeException(), isNull);
       });
     }
@@ -616,7 +613,7 @@ void main() {
         expect((preview.decoration! as BoxDecoration).color, expected);
         await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
         await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const Key('course_color_scope_this')));
+        await tester.tap(find.text('仅本周这节课'));
         await _settleIo(tester);
         final saved = _c.cellsForDay(7, 1).single;
         expect(coursePairFor(_c, saved.course).bg, expected);
@@ -712,7 +709,6 @@ void main() {
       await tester.tap(find.byKey(const Key('manual_course_save')));
       await _settleIo(tester);
       await tester.tap(find.byKey(const Key('course_form_scope_once')));
-      await tester.tap(find.byKey(const Key('course_form_scope_confirm')));
       await _settleIo(tester);
       expect(_c.userColorOf(_c.manualCourses.single), isNull);
       expect(_c.manualCourses.single.slots.single.note, isEmpty);

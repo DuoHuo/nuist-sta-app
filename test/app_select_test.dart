@@ -85,9 +85,10 @@ Future<void> _open(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-Finder _searchField() => find.descendant(
-  of: find.byType(BottomSheet),
-  matching: find.byType(TextField),
+Finder _searchField() => find.byWidgetPredicate(
+  (widget) =>
+      widget is TextField &&
+      (widget.decoration?.hintText?.startsWith('搜索') ?? false),
 );
 
 void main() {
@@ -100,7 +101,7 @@ void main() {
     );
 
     await _open(tester);
-    expect(find.byType(BottomSheet), findsNothing);
+    expect(_searchField(), findsNothing);
     expect(find.text('第二学期'), findsOneWidget);
     await tester.tap(find.text('第二学期'));
     await tester.pumpAndSettle();
@@ -192,7 +193,7 @@ void main() {
       _host(_controlled(selected, _buildings(), label: '楼栋', changes: changes)),
     );
     await _open(tester);
-    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(_searchField(), findsOneWidget);
 
     await tester.enterText(_searchField(), '不存在的楼栋');
     await tester.pumpAndSettle();
@@ -208,7 +209,7 @@ void main() {
     await tester.tap(find.text('楼栋 4').last);
     await tester.pumpAndSettle();
     expect(changes, isEmpty);
-    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(_searchField(), findsOneWidget);
 
     await tester.enterText(_searchField(), '  楼栋 8  ');
     await tester.pumpAndSettle();
@@ -216,7 +217,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(selected.value, 8);
     expect(changes, [8]);
-    expect(find.byType(BottomSheet), findsNothing);
+    expect(_searchField(), findsNothing);
   });
 
   testWidgets('空值选项与取消保持区分，菜单和底部面板行为一致', (tester) async {
@@ -396,7 +397,7 @@ void main() {
     await tester.tap(find.text('选项 119'));
     await tester.pumpAndSettle();
     expect(selected.value, 119);
-    expect(find.byType(BottomSheet), findsNothing);
+    expect(_searchField(), findsNothing);
   });
 
   testWidgets('长短标签混排时首次展开能定位到已选末项', (tester) async {
@@ -419,7 +420,7 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.tap(find.text(options.last.label).hitTestable());
     await tester.pumpAndSettle();
-    expect(find.byType(BottomSheet), findsNothing);
+    expect(_searchField(), findsNothing);
     expect(selected.value, 119);
   });
 
@@ -465,7 +466,7 @@ void main() {
     expect(find.text('加载中…'), findsOneWidget);
     expect(find.text('暂无数据'), findsOneWidget);
     expect(find.text('第一学期'), findsNothing);
-    expect(find.byType(BottomSheet), findsNothing);
+    expect(_searchField(), findsNothing);
     expect(changes, isEmpty);
   });
 
@@ -581,7 +582,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(changes, isEmpty);
     expect(find.text('楼栋 1'), findsOneWidget);
-    expect(find.byType(BottomSheet), findsNothing);
+    expect(_searchField(), findsNothing);
   });
 
   testWidgets('窄屏大字与横屏键盘下可滚动搜索并选择长标签', (tester) async {
@@ -647,14 +648,12 @@ void main() {
       await tester.scrollUntilVisible(
         find.text('$label 9'),
         64,
-        scrollable: find.descendant(
-          of: find.byType(BottomSheet),
-          matching: find.byWidgetPredicate(
-            (widget) =>
-                widget is Scrollable &&
-                widget.axisDirection == AxisDirection.down,
-          ),
-        ),
+        scrollable: find
+            .descendant(
+              of: find.byType(CustomScrollView),
+              matching: find.byType(Scrollable),
+            )
+            .first,
       );
       await tester.pumpAndSettle();
       expect(find.text('$label 9'), findsOneWidget);
@@ -666,7 +665,7 @@ void main() {
       await tester.tap(find.text('$label 9'));
       await tester.pumpAndSettle();
       expect(selected.value, 9);
-      expect(find.byType(BottomSheet), findsNothing);
+      expect(_searchField(), findsNothing);
       expect(tester.takeException(), isNull);
     }
   });

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'timetable_theme.dart';
+import '../../core/ui/miuix_dialog.dart';
 
 /// 删除范围（详情「删除」三档）。
 enum DeleteScope {
@@ -30,71 +30,39 @@ String deleteScopeWeekdayMatchLabel(int weekday, {required bool relaxed}) {
 }
 
 /// WakeUp 风格三档删除菜单；取消独立、danger 色。返回 null = 取消。
+///
+/// [anchorContext] 用来定位原地弹出的菜单，传触发删除的按钮上下文。
 Future<DeleteScope?> showDeleteScopeSheet(
-  BuildContext context, {
+  BuildContext anchorContext, {
   required int week,
   required int weekday,
   required bool teacherOrLocationEmpty,
 }) {
-  return showModalBottomSheet<DeleteScope>(
-    context: context,
-    backgroundColor: TimetableTheme.colorsOf(context).surface,
-    builder: (sheetContext) {
-      final colors = TimetableTheme.colorsOf(sheetContext);
-      return SafeArea(
-        child: Padding(
-          key: const Key('delete_scope_sheet'),
-          padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              ListTile(
-                key: const Key('delete_scope_one_day'),
-                title: Text(
-                  deleteScopeOneDayLabel(week, weekday),
-                  style: TextStyle(color: colors.titleText),
-                ),
-                onTap: () => Navigator.pop(sheetContext, DeleteScope.oneDay),
-              ),
-              ListTile(
-                key: const Key('delete_scope_weekday_match'),
-                title: Text(
-                  deleteScopeWeekdayMatchLabel(
-                    weekday,
-                    relaxed: teacherOrLocationEmpty,
-                  ),
-                  style: TextStyle(color: colors.titleText),
-                ),
-                onTap: () =>
-                    Navigator.pop(sheetContext, DeleteScope.weekdayMatch),
-              ),
-              ListTile(
-                key: const Key('delete_scope_whole_course'),
-                title: Text(
-                  '这门课程的全部时间段',
-                  style: TextStyle(color: colors.titleText),
-                ),
-                onTap: () =>
-                    Navigator.pop(sheetContext, DeleteScope.wholeCourse),
-              ),
-              const Divider(height: 8),
-              ListTile(
-                key: const Key('delete_scope_cancel'),
-                title: Text(
-                  '取消',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: colors.danger,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                onTap: () => Navigator.pop(sheetContext),
-              ),
-            ],
-          ),
+  return showMiuixOptionMenu<DeleteScope>(
+    anchorContext,
+    anchorBounds: miuixAnchorRect(anchorContext),
+    menuKey: const Key('delete_scope_sheet'),
+    cancelLabel: '取消',
+    cancelKey: const Key('delete_scope_cancel'),
+    items: [
+      MiuixOptionItem(
+        key: const Key('delete_scope_one_day'),
+        value: DeleteScope.oneDay,
+        label: deleteScopeOneDayLabel(week, weekday),
+      ),
+      MiuixOptionItem(
+        key: const Key('delete_scope_weekday_match'),
+        value: DeleteScope.weekdayMatch,
+        label: deleteScopeWeekdayMatchLabel(
+          weekday,
+          relaxed: teacherOrLocationEmpty,
         ),
-      );
-    },
+      ),
+      MiuixOptionItem(
+        key: const Key('delete_scope_whole_course'),
+        value: DeleteScope.wholeCourse,
+        label: '这门课程的全部时间段',
+      ),
+    ],
   );
 }

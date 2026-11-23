@@ -505,7 +505,7 @@ void main() {
     Future<void> jump(String counter, String index) async {
       await tester.tap(find.text(counter));
       await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextFormField), index);
+      await tester.enterText(find.byType(EditableText).last, index);
       await tester.tap(find.text('跳转'));
       await tester.pumpAndSettle();
     }
@@ -634,7 +634,7 @@ void main() {
 
     await tester.tap(find.text('2/3'));
     await tester.pumpAndSettle();
-    final ordinal = find.byType(TextFormField);
+    final ordinal = find.byType(EditableText).last;
     await tester.enterText(ordinal, '4');
     await tester.tap(find.text('跳转'));
     await tester.pumpAndSettle();

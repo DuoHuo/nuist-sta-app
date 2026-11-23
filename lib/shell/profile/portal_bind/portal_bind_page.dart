@@ -14,6 +14,7 @@ import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
 import '../../../core/logging/diagnostic_error.dart';
 import '../../../core/network/web_diagnostics.dart';
+import '../../../core/ui/miuix_dialog.dart';
 import 'portal_binding_actions.dart';
 
 /// 「绑定统一门户」页：内嵌门户登录，登录后自动跳到「账户安全-通行密钥」，
@@ -320,20 +321,12 @@ class _PortalBindPageState extends State<PortalBindPage> {
       return;
     }
     if (!mounted) return;
-    await showDialog<void>(
-      context: context,
-      useRootNavigator: false,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('绑定成功'),
-        content: Text('已注册通行密钥「${bundle.deviceName}」并保存到本机安全存储。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('完成'),
-          ),
-        ],
-      ),
+    await showMiuixInfoDialog(
+      context,
+      title: '绑定成功',
+      message: '已注册通行密钥「${bundle.deviceName}」并保存到本机安全存储。',
+      confirmLabel: '完成',
+      dismissible: false,
     );
     if (mounted) AppNavigation.pop(context, true);
   }

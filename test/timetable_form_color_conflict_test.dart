@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/core/theme.dart';
@@ -55,6 +56,30 @@ Future<void> _settle(WidgetTester tester) async {
     );
     await tester.pump(const Duration(milliseconds: 100));
   }
+  await tester.pumpAndSettle();
+}
+
+/// 打开结束节次选择框，搜索并选中「第 [node] 节」。
+Future<void> pickEnd(WidgetTester tester, int node) async {
+  await tester.tap(find.byKey(const ValueKey('manual_course_end_1')));
+  await tester.pumpAndSettle();
+  await tester.enterText(
+    find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          (widget.decoration?.hintText?.startsWith('搜索') ?? false),
+    ),
+    '第 $node 节',
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(
+    find
+        .descendant(
+          of: find.byType(MiuixPopupHost),
+          matching: find.text('第 $node 节'),
+        )
+        .last,
+  );
   await tester.pumpAndSettle();
 }
 
@@ -297,10 +322,7 @@ void main() {
       ]);
       await _openForm(tester);
       // 默认两节连堂；先改为第1节，验证单门冲突。
-      await tester.tap(find.byKey(const ValueKey('manual_course_end_1')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('第 1 节').last);
-      await tester.pumpAndSettle();
+      await pickEnd(tester, 1);
       expect(find.textContaining('与「数据结构」第 1–16 周冲突'), findsOneWidget);
       final defaultSlot = CourseSlot(
         day: 1,
@@ -320,10 +342,7 @@ void main() {
       expect(hint.data, contains('仍可保存'));
 
       // 改结束节为第 2 节 → 两门。
-      await tester.tap(find.byKey(const ValueKey('manual_course_end_1')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('第 2 节').last);
-      await tester.pumpAndSettle();
+      await pickEnd(tester, 2);
       expect(find.textContaining('与 2 门课冲突'), findsOneWidget);
       final twoNodes = CourseSlot(
         day: 1,

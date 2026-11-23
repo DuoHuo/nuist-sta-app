@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../../core/app_select.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_theme.dart';
 
 /// 课表设置与外观页共用的分组，标题和行文字使用同一条左边线。
@@ -410,20 +410,23 @@ class TimetableSettingsChoiceRow<T> extends StatelessWidget {
   /// 为 false 时始终显示当前值，点击打开选择弹层。
   final bool showInlineOptions;
 
+  String _labelOf(String value) => '$value${unit == null ? '' : ' $unit'}';
+
   Future<void> _pick(BuildContext context) async {
-    final picked = await showAppSelectSheet<T>(
+    final entries = options.entries.toList();
+    final picked = await showMiuixOptionMenu<T>(
       context,
-      title: title,
-      selected: selected,
-      options: [
-        for (final option in options.entries)
-          AppSelectOption(
-            value: option.key,
-            label: '${option.value}${unit == null ? '' : ' $unit'}',
+      anchorBounds: miuixAnchorRect(context),
+      items: [
+        for (final entry in entries)
+          MiuixOptionItem(
+            value: entry.key,
+            label: _labelOf(entry.value),
+            selected: entry.key == selected,
           ),
       ],
     );
-    if (context.mounted && picked != null) onSelected(picked.value);
+    if (context.mounted && picked != null) onSelected(picked);
   }
 
   @override
@@ -446,7 +449,7 @@ class TimetableSettingsChoiceRow<T> extends StatelessWidget {
         return TimetableSettingsRow(
           title: title,
           enabled: enabled,
-          value: '${options[selected]}${unit == null ? '' : ' $unit'}',
+          value: _labelOf(options[selected] ?? ''),
           showChevron: true,
           onTap: () => _pick(context),
         );

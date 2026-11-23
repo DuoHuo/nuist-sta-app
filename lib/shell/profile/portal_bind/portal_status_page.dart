@@ -9,6 +9,7 @@ import '../../../core/auth/portal_exceptions.dart';
 import '../../../core/auth/portal_session.dart';
 import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
+import '../../../core/ui/miuix_dialog.dart';
 import '../../../mini_apps/student_info/student_info_models.dart';
 import '../../../mini_apps/student_info/student_info_store.dart';
 import 'portal_bind_widgets.dart';
@@ -146,35 +147,14 @@ class _PortalStatusPageState extends State<PortalStatusPage> {
     required String message,
     required String confirmText,
     bool destructive = false,
-  }) async {
-    final result = await showDialog<bool>(
-      context: context,
-      useRootNavigator: false,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(title),
-        content: Text(
-          message,
-          style: const TextStyle(fontSize: 14, height: 1.5),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            style: destructive
-                ? TextButton.styleFrom(
-                    foregroundColor: Theme.of(context).colorScheme.error,
-                  )
-                : null,
-            child: Text(confirmText),
-          ),
-        ],
-      ),
-    );
-    return result ?? false;
-  }
+  }) => showMiuixConfirmDialog(
+    context,
+    title: title,
+    message: message,
+    confirmLabel: confirmText,
+    cancelLabel: '取消',
+    destructive: destructive,
+  );
 
   /// 跑一次真实登录。走 verifyCredential 而不是普通登录，否则 CAS 票根还在时
   /// 会直接走 SSO 快路径，根本验不到 Passkey 本身。

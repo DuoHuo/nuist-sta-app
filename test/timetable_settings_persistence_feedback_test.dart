@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/ui/miuix_dialog.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_color_picker.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -75,7 +77,9 @@ void main() {
     tester.view.physicalSize = size == null ? const Size(1080, 7000) : size * 3;
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(MaterialApp(home: page));
+    await tester.pumpWidget(
+      MaterialApp(home: MiuixPopupHostScope(child: page)),
+    );
     await tester.pumpAndSettle();
   }
 
@@ -225,7 +229,7 @@ void main() {
     expect(_controller.settings.examColor, 0xFF386F95);
   });
 
-  testWidgets('一周起始保存失败在对话框内提示，重试成功才关闭', (tester) async {
+  testWidgets('一周起始保存失败提示并保持原值，恢复存储后可重试', (tester) async {
     await pumpPage(
       tester,
       TimetableAppearancePage(controller: _controller),
@@ -234,19 +238,20 @@ void main() {
     await tapKey(tester, 'tt_settings_week_start');
     await tester.pumpAndSettle();
     final sunday = find.descendant(
-      of: find.byType(SimpleDialog),
+      of: find.byType(MiuixPopupHost),
       matching: find.text('周日'),
     );
     await tester.tap(sunday);
     await settleIo(tester);
 
-    expectVisibleModalError(tester, find.byType(SimpleDialog));
+    expect(find.text(_saveError), findsOneWidget);
     expect(_controller.settings.weekStartsOnMonday, isTrue);
 
     TimetableStore.debugDirectory = tmp;
+    await tapKey(tester, 'tt_settings_week_start');
+    await tester.pumpAndSettle();
     await tester.tap(sunday);
     await settleIo(tester);
-    expect(find.byType(SimpleDialog), findsNothing);
     expect(_controller.settings.weekStartsOnMonday, isFalse);
   });
 
@@ -276,13 +281,16 @@ void main() {
     await tester.tap(find.byKey(const Key('tt_restore_jwxt_confirm')));
     await settleIo(tester);
 
-    expectVisibleModalError(tester, find.byType(AlertDialog));
+    expectVisibleModalError(
+      tester,
+      find.byKey(const Key('tt_restore_jwxt_dialog')),
+    );
     expect(_controller.isJwxtOverridden(courseId: 'test-course'), isTrue);
 
     TimetableStore.debugDirectory = tmp;
     await tester.tap(find.byKey(const Key('tt_restore_jwxt_confirm')));
     await settleIo(tester);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byKey(const Key('tt_restore_jwxt_dialog')), findsNothing);
     expect(_controller.isJwxtOverridden(courseId: 'test-course'), isFalse);
     expect(find.text('已恢复教务课程'), findsOneWidget);
   });

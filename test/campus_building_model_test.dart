@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_building_model.dart';
@@ -187,16 +188,27 @@ void main() {
     await tester.tap(find.byType(AppSelectField<int>));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.descendant(
-        of: find.byType(BottomSheet),
-        matching: find.byType(TextField),
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is TextField &&
+            (widget.decoration?.hintText?.startsWith('搜索') ?? false),
       ),
       label,
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text(label).last);
+    await tester.tap(
+      find
+          .descendant(
+            of: find.byType(MiuixPopupHost),
+            matching: find.text(label),
+          )
+          .last,
+    );
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    // 对话框关闭动画较长；WebView 加载动画不会静止，不能用 pumpAndSettle。
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
   }
 
   modelTestWidgets(

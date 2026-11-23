@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/colors.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'library_api.dart';
 import 'library_controller.dart';
 import 'library_detail_page.dart';
@@ -102,15 +103,40 @@ class _LibraryPageState extends State<LibraryPage>
         padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
         child: Row(
           children: [
-            DropdownButton<LibrarySearchField>(
-              value: _field,
-              onChanged: (field) {
-                if (field != null) setState(() => _field = field);
-              },
-              items: [
-                for (final field in LibrarySearchField.values)
-                  DropdownMenuItem(value: field, child: Text(field.label)),
-              ],
+            Builder(
+              builder: (buttonContext) => InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () async {
+                  final field = await showMiuixOptionMenu<LibrarySearchField>(
+                    buttonContext,
+                    anchorBounds: miuixAnchorRect(buttonContext),
+                    items: [
+                      for (final field in LibrarySearchField.values)
+                        MiuixOptionItem(
+                          value: field,
+                          label: field.label,
+                          selected: field == _field,
+                        ),
+                    ],
+                  );
+                  if (field != null && mounted) {
+                    setState(() => _field = field);
+                  }
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(_field.label),
+                      const Icon(Icons.arrow_drop_down),
+                    ],
+                  ),
+                ),
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(

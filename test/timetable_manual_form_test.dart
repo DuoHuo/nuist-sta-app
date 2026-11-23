@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/core/theme.dart';
@@ -51,7 +52,7 @@ Future<void> _openAddForm(WidgetTester tester) async {
   }
   await tester.tap(find.byTooltip('添加'));
   await tester.pumpAndSettle();
-  await tester.tap(find.byKey(const Key('add_entry_course')));
+  await tester.tap(find.text('课程'));
   await tester.pumpAndSettle();
 }
 
@@ -205,7 +206,7 @@ void main() {
     await tester.tap(find.byTooltip('添加'));
     await tester.pumpAndSettle();
     // EV01：「+」先弹三选一，「课程」进入原手动课表单。
-    await tester.tap(find.byKey(const Key('add_entry_course')));
+    await tester.tap(find.text('课程'));
     await tester.pumpAndSettle();
     expect(find.text('添加课程'), findsWidgets);
     tester
@@ -307,7 +308,6 @@ void main() {
     await tester.enterText(find.byKey(const Key('manual_course_name')), '新名');
     await tester.tap(find.byKey(const Key('manual_course_save')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('course_form_scope_confirm')));
     await _settle(tester);
     expect(_c.manualCourses.single.id, course.id);
     expect(_c.cellsForDay(1, 2).single.course.name, '新名');
@@ -417,9 +417,10 @@ void main() {
       await tester.tap(field('start'));
       await tester.pumpAndSettle();
       await tester.enterText(
-        find.descendant(
-          of: find.byType(BottomSheet),
-          matching: find.byType(TextField),
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is TextField &&
+              (widget.decoration?.hintText?.startsWith('搜索') ?? false),
         ),
         '第 $start 节',
       );
@@ -427,7 +428,7 @@ void main() {
       await tester.tap(
         find
             .descendant(
-              of: find.byType(BottomSheet),
+              of: find.byType(MiuixPopupHost),
               matching: find.text('第 $start 节'),
             )
             .last,

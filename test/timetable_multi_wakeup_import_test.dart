@@ -1353,7 +1353,13 @@ void main() {
       }
 
       expect(find.byType(TimetableExportPage), findsOneWidget);
-      expect(find.text('室友导出的课表'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(TimetableExportPage),
+          matching: find.text('室友导出的课表'),
+        ),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const Key('timetable_export_generate')),
         findsOneWidget,

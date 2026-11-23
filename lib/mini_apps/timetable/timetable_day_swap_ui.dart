@@ -2,8 +2,10 @@ import '../../core/navigation/app_page.dart';
 import 'timetable_persistence_feedback.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/app_snack_bar.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_controller.dart';
 import 'timetable_date_edits.dart';
 import 'timetable_theme.dart';
@@ -35,30 +37,6 @@ String daySwapDescription(DaySwap s) {
 }
 
 /// 选日期；测试可替换。返回 null 表示取消。
-typedef DaySwapDatePicker = Future<DateTime?> Function(
-  BuildContext context, {
-  required DateTime initial,
-  required DateTime first,
-  required DateTime last,
-});
-
-Future<DateTime?> _defaultPicker(
-  BuildContext context, {
-  required DateTime initial,
-  required DateTime first,
-  required DateTime last,
-}) => showDatePicker(
-  context: context,
-  initialDate: initial,
-  firstDate: first,
-  lastDate: last,
-  helpText: '选择日期',
-);
-
-/// 仅测试用：替换日期选择器。
-@visibleForTesting
-DaySwapDatePicker? debugDaySwapDatePicker;
-
 /// 调课失败原因；null 表示可以调。
 String? daySwapErrorFor(TimetableController c, DateTime a, DateTime b) {
   if (isSameDate(a, b)) return '不能和同一天互换';
@@ -113,6 +91,7 @@ class TimetableDaySwapsPage extends StatefulWidget {
 class _TimetableDaySwapsPageState extends State<TimetableDaySwapsPage> {
   DateTime? _from;
   DateTime? _to;
+  bool _editingFrom = true;
 
   TimetableController get _c =>
       widget.controller ?? TimetableController.instance;
@@ -128,37 +107,34 @@ class _TimetableDaySwapsPageState extends State<TimetableDaySwapsPage> {
       return x;
     }
 
-    if (widget.initialFrom != null) {
-      _from = clamp(widget.initialFrom!);
-    }
+    // 进入调课页默认选中当天；长按表头进入时用带入的日期。
+    _from = clamp(widget.initialFrom ?? DateTime.now());
   }
 
   Future<void> _pick({required bool from}) async {
-    final r = semesterRangeOf(_c);
-    final current = from ? _from : _to;
-    final now = DateTime.now();
-    final initial =
-        current ??
-        (from ? widget.initialFrom : null) ??
-        DateTime(now.year, now.month, now.day);
-    final clamped = initial.isBefore(r.first)
-        ? r.first
-        : (initial.isAfter(r.last) ? r.last : initial);
-    final picker = debugDaySwapDatePicker ?? _defaultPicker;
-    final picked = await picker(
-      context,
-      initial: clamped,
-      first: r.first,
-      last: r.last,
-    );
-    if (picked == null || !mounted) return;
+    if (_editingFrom != from) setState(() => _editingFrom = from);
+  }
+
+  /// 内嵌日历选中某一天后填入当前编辑的日期块。
+  void _setDate(DateTime picked) {
     setState(() {
-      if (from) {
-        _from = DateTime(picked.year, picked.month, picked.day);
+      final date = DateTime(picked.year, picked.month, picked.day);
+      if (_editingFrom) {
+        _from = date;
       } else {
-        _to = DateTime(picked.year, picked.month, picked.day);
+        _to = date;
       }
     });
+  }
+
+  /// 内嵌日历当前应显示的日期：优先当前编辑的日期块，其次原日期或学期首日。
+  DateTime _calendarSeed() {
+    final range = semesterRangeOf(_c);
+    final seed = (_editingFrom ? _from : _to) ?? _from ?? DateTime.now();
+    final date = DateTime(seed.year, seed.month, seed.day);
+    if (date.isBefore(range.first)) return range.first;
+    if (date.isAfter(range.last)) return range.last;
+    return date;
   }
 
   Future<void> _submit() async {
@@ -178,31 +154,19 @@ class _TimetableDaySwapsPageState extends State<TimetableDaySwapsPage> {
       _snack(messenger, err);
       return;
     }
-    final ok = await showDialog<bool>(
-      context: context,
-      useRootNavigator: false,
-      builder: (ctx) => AlertDialog(
-        key: const Key('day_swap_confirm_dialog'),
-        title: const Text('整天调课'),
-        content: Text(
+    final ok = await showMiuixConfirmDialog(
+      context,
+      title: '整天调课',
+      message:
           '${daySwapDateLabel(a)}和${daySwapDateLabel(b)}的课程将整天互换，'
           '可随时在下方「调课记录」里恢复。',
-        ),
-        actions: [
-          TextButton(
-            key: const Key('day_swap_cancel'),
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            key: const Key('day_swap_confirm'),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text('与${daySwapDateLabel(b)}互换'),
-          ),
-        ],
-      ),
+      contentKey: const Key('day_swap_confirm_dialog'),
+      confirmLabel: '与${daySwapDateLabel(b)}互换',
+      cancelLabel: '取消',
+      cancelKey: const Key('day_swap_cancel'),
+      confirmKey: const Key('day_swap_confirm'),
     );
-    if (ok != true) return;
+    if (!ok) return;
     final swap = await _c.addDaySwap(a, b);
     if (!mounted) return;
     _snack(messenger, swap == null ? '调课失败' : '已与${daySwapDateLabel(b)}互换');
@@ -242,6 +206,7 @@ class _TimetableDaySwapsPageState extends State<TimetableDaySwapsPage> {
                         value: _from == null
                             ? '选择日期'
                             : daySwapDateLabel(_from!),
+                        selected: _editingFrom,
                         onTap: () => _pick(from: true),
                       ),
                       const SizedBox(height: 8),
@@ -249,7 +214,16 @@ class _TimetableDaySwapsPageState extends State<TimetableDaySwapsPage> {
                         key: const Key('day_swap_to'),
                         label: '目标日期',
                         value: _to == null ? '选择日期' : daySwapDateLabel(_to!),
+                        selected: !_editingFrom,
                         onTap: () => _pick(from: false),
+                      ),
+                      const SizedBox(height: 12),
+                      _DaySwapCalendar(
+                        key: ValueKey('day_swap_calendar_$_editingFrom'),
+                        initial: _calendarSeed(),
+                        first: semesterRangeOf(_c).first,
+                        last: semesterRangeOf(_c).last,
+                        onChanged: _setDate,
                       ),
                       const SizedBox(height: 16),
                       SizedBox(
@@ -326,11 +300,13 @@ class _DateBlock extends StatelessWidget {
     super.key,
     required this.label,
     required this.value,
+    required this.selected,
     required this.onTap,
   });
 
   final String label;
   final String value;
+  final bool selected;
   final VoidCallback onTap;
 
   @override
@@ -342,7 +318,10 @@ class _DateBlock extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
         decoration: BoxDecoration(
-          border: Border.all(color: colors.divider),
+          border: Border.all(
+            color: selected ? colors.accent : colors.divider,
+            width: selected ? 1.5 : 1,
+          ),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
@@ -351,11 +330,47 @@ class _DateBlock extends StatelessWidget {
             const Spacer(),
             Text(
               value,
-              style: TimetableTheme.bodyStyle(color: colors.titleText),
+              style: TimetableTheme.bodyStyle(
+                color: selected ? colors.accent : colors.titleText,
+              ),
             ),
-            Icon(Icons.chevron_right, color: colors.hint),
+            Icon(
+              selected ? Icons.edit_calendar_outlined : Icons.chevron_right,
+              size: 18,
+              color: selected ? colors.accent : colors.hint,
+            ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 调课页内嵌日历；跟随明暗主题，不再弹出系统日期选择器。
+class _DaySwapCalendar extends StatelessWidget {
+  const _DaySwapCalendar({
+    super.key,
+    required this.initial,
+    required this.first,
+    required this.last,
+    required this.onChanged,
+  });
+
+  final DateTime initial;
+  final DateTime first;
+  final DateTime last;
+  final ValueChanged<DateTime> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return MiuixTheme(
+      data: MiuixThemeData.of(Theme.of(context).brightness),
+      child: MiuixDatePicker(
+        initialDate: initial,
+        firstDate: first,
+        lastDate: last,
+        weekStart: MiuixWeekStart.sunday,
+        onDateChanged: onChanged,
       ),
     );
   }

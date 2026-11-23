@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_snack_bar.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_controller.dart';
 import 'timetable_course_color.dart';
 import 'timetable_date_edits.dart';
@@ -568,63 +569,34 @@ Color? _parseHex(String raw) {
   return Color(int.parse(value, radix: 16) | 0xFF000000);
 }
 
-/// 选色保存后的范围选择；关闭面板即取消保存。
+/// 选色保存后的范围选择；关闭菜单即取消保存。
 Future<EditScope?> showCourseColorScopeSheet(
-  BuildContext context, {
+  BuildContext anchorContext, {
   required GridCell cell,
-}) => showModalBottomSheet<EditScope>(
-  context: context,
-  isScrollControlled: true,
-  useSafeArea: true,
-  backgroundColor: TimetableTheme.colorsOf(context).surface,
-  builder: (context) {
-    final colors = TimetableTheme.colorsOf(context);
-    final date = cell.date!;
-    return SafeArea(
-      child: SingleChildScrollView(
-        key: const Key('course_color_scope_sheet'),
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              '颜色应用到哪里？',
-              style: TimetableTheme.titleStyle(color: colors.titleText),
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              key: const Key('course_color_scope_this'),
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.event_outlined, color: colors.accent),
-              title: const Text('仅本周这节课'),
-              subtitle: Text(
-                '${date.month}月${date.day}日 · 第 ${cell.slot.startNode}–${cell.slot.endNode} 节',
-              ),
-              trailing: Icon(Icons.chevron_right, color: colors.chevron),
-              onTap: () => Navigator.pop(context, EditScope.thisDay),
-            ),
-            Divider(color: colors.divider),
-            ListTile(
-              key: const Key('course_color_scope_all'),
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.date_range_outlined, color: colors.hint),
-              title: const Text('应用到全局'),
-              subtitle: const Text('这门课的所有周次和时段'),
-              trailing: Icon(Icons.chevron_right, color: colors.chevron),
-              onTap: () => Navigator.pop(context, EditScope.allWeeks),
-            ),
-            const SizedBox(height: 8),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text('取消', style: TextStyle(color: colors.labelText)),
-            ),
-          ],
-        ),
+}) {
+  final date = cell.date!;
+  return showMiuixOptionMenu<EditScope>(
+    anchorContext,
+    anchorBounds: miuixAnchorRect(anchorContext),
+    menuKey: const Key('course_color_scope_sheet'),
+    cancelLabel: '取消',
+    items: [
+      MiuixOptionItem(
+        key: const Key('course_color_scope_this'),
+        value: EditScope.thisDay,
+        label: '仅本周这节课',
+        description:
+            '${date.month}月${date.day}日 · 第 ${cell.slot.startNode}–${cell.slot.endNode} 节',
       ),
-    );
-  },
-);
+      const MiuixOptionItem(
+        key: Key('course_color_scope_all'),
+        value: EditScope.allWeeks,
+        label: '应用到全局',
+        description: '这门课的所有周次和时段',
+      ),
+    ],
+  );
+}
 
 /// 课程详情的颜色按钮：预览当前颜色，有具体日期时保存前选择范围。
 class CourseColorRow extends StatelessWidget {

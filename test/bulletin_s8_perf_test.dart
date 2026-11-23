@@ -217,7 +217,7 @@ void main() {
       required int sizeBytes,
       required DateTime modified,
     }) async {
-      final dir = Directory('${tempDir.path}/$name');
+      final dir = Directory('${tempDir.path}${Platform.pathSeparator}$name');
       await dir.create(recursive: true);
       final file = File('${dir.path}/payload.bin');
       await file.writeAsBytes(List<int>.filled(sizeBytes, 1));

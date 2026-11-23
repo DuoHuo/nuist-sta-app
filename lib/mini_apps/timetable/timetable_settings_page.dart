@@ -1,9 +1,11 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/navigation/app_page.dart';
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_appearance_page.dart';
 import 'timetable_change_log_page.dart';
 import 'timetable_copy.dart';
@@ -312,57 +314,13 @@ Future<void> _confirmRestoreAll(
   BuildContext context,
   TimetableController c,
 ) async {
-  var saving = false;
-  String? saveError;
-  final changed = await showDialog<bool>(
-    context: context,
-    useRootNavigator: false,
-    builder: (_) => StatefulBuilder(
-      builder: (dialogContext, setDialogState) => AlertDialog(
-        key: const Key('tt_restore_jwxt_dialog'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(TimetableSettingsPage.restoreConfirmText),
-            if (saveError case final message?) ...[
-              const SizedBox(height: 12),
-              TimetablePersistenceErrorText(message),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            key: const Key('tt_restore_jwxt_cancel'),
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            key: const Key('tt_restore_jwxt_confirm'),
-            style: TextButton.styleFrom(
-              foregroundColor: TimetableTheme.colorsOf(context).danger,
-            ),
-            onPressed: saving
-                ? null
-                : () async {
-                    setDialogState(() {
-                      saving = true;
-                      saveError = null;
-                    });
-                    final changed = await withTimetablePersistenceFeedback(
-                      dialogContext,
-                      c.restoreAllJwxt,
-                      onError: (message) =>
-                          setDialogState(() => saveError = message),
-                    );
-                    if (!dialogContext.mounted) return;
-                    setDialogState(() => saving = false);
-                    if (changed != null) Navigator.pop(dialogContext, changed);
-                  },
-            child: const Text('恢复'),
-          ),
-        ],
-      ),
+  final changed = await showMiuixDialog<bool>(
+    context,
+    title: '恢复教务课程',
+    builder: (dialogContext, dialog) => _RestoreJwxtContent(
+      text: TimetableSettingsPage.restoreConfirmText,
+      controller: c,
+      onClose: dialog.close,
     ),
   );
   if (changed == null || !context.mounted) return;
@@ -374,6 +332,91 @@ Future<void> _confirmRestoreAll(
       content: Text(changed ? '已恢复教务课程' : '没有需要恢复的修改'),
     ),
   );
+}
+
+/// 恢复教务课程的确认内容；保存失败时留在弹窗里显示原因。
+class _RestoreJwxtContent extends StatefulWidget {
+  const _RestoreJwxtContent({
+    required this.text,
+    required this.controller,
+    required this.onClose,
+  });
+
+  final String text;
+  final TimetableController controller;
+  final ValueChanged<bool?> onClose;
+
+  @override
+  State<_RestoreJwxtContent> createState() => _RestoreJwxtContentState();
+}
+
+class _RestoreJwxtContentState extends State<_RestoreJwxtContent> {
+  bool _saving = false;
+  String? _error;
+
+  Future<void> _restore() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final changed = await withTimetablePersistenceFeedback(
+      context,
+      widget.controller.restoreAllJwxt,
+      onError: (message) {
+        if (mounted) setState(() => _error = message);
+      },
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (changed != null) widget.onClose(changed);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    final primary = MiuixButtonDefaults.buttonColorsPrimary(context);
+    return Column(
+      key: const Key('tt_restore_jwxt_dialog'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          widget.text,
+          style: theme.textStyles.body1.copyWith(
+            color: theme.colors.onSurfaceSecondary,
+            height: 1.5,
+          ),
+        ),
+        if (_error case final message?) ...[
+          const SizedBox(height: 12),
+          TimetablePersistenceErrorText(message),
+        ],
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: MiuixButton(
+                key: const Key('tt_restore_jwxt_cancel'),
+                colors: primary,
+                onPressed: _saving ? null : () => widget.onClose(null),
+                child: const Text('取消'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: MiuixButton(
+                key: const Key('tt_restore_jwxt_confirm'),
+                enabled: !_saving,
+                colors: miuixDestructiveButtonColors(context),
+                onPressed: _saving ? null : _restore,
+                child: const Text('恢复'),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }
 
 /// 桌面小组件设置：预览显示内容，所有选项沿用原有设置与原生刷新入口。

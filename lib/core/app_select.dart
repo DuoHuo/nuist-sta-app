@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'colors.dart';
+import 'ui/miuix_dialog.dart';
 
 // 绘制与行高测量共用紧凑尺寸，长文字仍可按内容增高。
 const _selectMinHeight = 40.0;
@@ -457,35 +458,45 @@ Future<AppSelectOption<T>?> showAppSelectSheet<T>(
   T? selected,
   bool searchable = true,
 }) {
-  final palette = AppPalette.of(context);
   final snapshot = List<AppSelectOption<T>>.unmodifiable(options);
-  final sheet = _AppSelectSheet<T>(
-    title: title,
-    options: snapshot,
-    selected: selected,
-    searchable: searchable && snapshot.length > 6,
-  );
-  return showModalBottomSheet<AppSelectOption<T>>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    showDragHandle: true,
-    backgroundColor: palette.surface,
-    barrierColor: (palette.isDark ? palette.pageBg : palette.titleText)
-        .withValues(alpha: palette.isDark ? .6 : .24),
-    constraints: const BoxConstraints(maxWidth: 560),
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+  return showMiuixDialog<AppSelectOption<T>>(
+    context,
+    // 多选项弹窗收紧默认内边距，避免左右空白过大。
+    insideMargin: const Size(12, 16),
+    builder: (dialogContext, dialog) => _AdaptiveDialogBody(
+      child: _AppSelectSheet<T>(
+        title: title,
+        options: snapshot,
+        selected: selected,
+        searchable: searchable && snapshot.length > 6,
+        onSelected: dialog.close,
+      ),
     ),
-    clipBehavior: Clip.antiAlias,
-    sheetAnimationStyle: MediaQuery.disableAnimationsOf(context)
-        ? AnimationStyle.noAnimation
-        : const AnimationStyle(
-            duration: Duration(milliseconds: 220),
-            reverseDuration: Duration(milliseconds: 140),
-          ),
-    builder: (context) => sheet,
   );
+}
+
+/// 按对话框可用高度调整面板高度；键盘弹起时自动收缩，内容 widget 不重建。
+class _AdaptiveDialogBody extends StatelessWidget {
+  const _AdaptiveDialogBody({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    // 对话框在内容外有上下内边距（共 32），面板自身底部还有 12 的内边距；
+    // 这里没有标题。保底值必须小于真实剩余空间，否则横屏键盘下会比对话框
+    // 还高而溢出，空间不足时由面板自己进入整体滚动（compact）。
+    final available = math.max(
+      48.0,
+      media.size.height - media.viewInsets.bottom - media.padding.vertical - 44,
+    );
+    // 不强制固定高度：短列表贴合内容，长列表在 maxHeight 内滚动。
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: math.min(available, 480)),
+      child: child,
+    );
+  }
 }
 
 class _AppSelectSheet<T> extends StatefulWidget {
@@ -494,12 +505,16 @@ class _AppSelectSheet<T> extends StatefulWidget {
     required this.options,
     required this.selected,
     required this.searchable,
+    this.onSelected,
   });
 
   final String title;
   final List<AppSelectOption<T>> options;
   final T? selected;
   final bool searchable;
+
+  /// 点选/关闭时的回调；为空时退回直接 `Navigator.pop`。
+  final ValueChanged<AppSelectOption<T>?>? onSelected;
 
   @override
   State<_AppSelectSheet<T>> createState() => _AppSelectSheetState<T>();
@@ -623,7 +638,14 @@ class _AppSelectSheetState<T> extends State<_AppSelectSheet<T>> {
                   height: _selectMinHeight,
                 ),
                 padding: EdgeInsets.zero,
-                onPressed: () => Navigator.pop(context),
+                onPressed: () {
+                  final onSelected = widget.onSelected;
+                  if (onSelected != null) {
+                    onSelected(null);
+                  } else {
+                    Navigator.pop(context);
+                  }
+                },
                 icon: Icon(Icons.close, color: palette.labelText),
               ),
             ],
@@ -810,7 +832,14 @@ class _AppSelectSheetState<T> extends State<_AppSelectSheet<T>> {
                               selected: option.value == widget.selected,
                               child: TextButton(
                                 onPressed: option.enabled
-                                    ? () => Navigator.pop(context, option)
+                                    ? () {
+                                        final onSelected = widget.onSelected;
+                                        if (onSelected != null) {
+                                          onSelected(option);
+                                        } else {
+                                          Navigator.pop(context, option);
+                                        }
+                                      }
                                     : null,
                                 style: _optionStyle(
                                   palette,
@@ -857,21 +886,10 @@ class _SelectSheetKeyboardArea extends StatelessWidget {
 
   final Widget child;
 
+  // 对话框外壳和 _AdaptiveDialogBody 已经按键盘收缩可用高度，
+  // 这里不再叠加底部内边距与限高，否则列表区会被重复压缩。
   @override
-  Widget build(BuildContext context) {
-    final media = MediaQuery.of(context);
-    final maxHeight = math.max(
-      0.0,
-      (media.size.height - media.viewInsets.bottom - media.padding.top) * .65,
-    );
-    return Padding(
-      padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxHeight),
-        child: child,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => child;
 }
 
 ButtonStyle _optionStyle(AppPalette palette, {required bool selected}) =>

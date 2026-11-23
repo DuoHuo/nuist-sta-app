@@ -3,6 +3,7 @@ import 'timetable_persistence_feedback.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/app_snack_bar.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_change_format.dart';
 import 'timetable_color_picker.dart';
 import 'timetable_course_color.dart';
@@ -175,26 +176,30 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                             color: colors.labelText,
                           ),
                         ),
-                        IconButton(
-                          key: Key(
-                            course.isManual
-                                ? 'course_detail_delete'
-                                : 'course_detail_jwxt_delete',
-                          ),
-                          tooltip: '删除课程',
-                          padding: const EdgeInsets.all(6),
-                          onPressed: _restoring ? null : () => _delete(course),
-                          constraints: const BoxConstraints.tightFor(
-                            width: 48,
-                            height: 32,
-                          ),
-                          style: IconButton.styleFrom(
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          icon: Icon(
-                            Icons.delete_outline,
-                            size: 20,
-                            color: colors.danger,
+                        Builder(
+                          builder: (buttonContext) => IconButton(
+                            key: Key(
+                              course.isManual
+                                  ? 'course_detail_delete'
+                                  : 'course_detail_jwxt_delete',
+                            ),
+                            tooltip: '删除课程',
+                            padding: const EdgeInsets.all(6),
+                            onPressed: _restoring
+                                ? null
+                                : () => _delete(buttonContext, course),
+                            constraints: const BoxConstraints.tightFor(
+                              width: 48,
+                              height: 32,
+                            ),
+                            style: IconButton.styleFrom(
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            icon: Icon(
+                              Icons.delete_outline,
+                              size: 20,
+                              color: colors.danger,
+                            ),
                           ),
                         ),
                       ],
@@ -523,14 +528,17 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     );
   }
 
-  Future<void> _delete(Course course) async {
+  Future<void> _delete(BuildContext anchorContext, Course course) async {
     await withTimetablePersistenceFeedback(
       context,
-      () => _deleteUnchecked(course),
+      () => _deleteUnchecked(anchorContext, course),
     );
   }
 
-  Future<void> _deleteUnchecked(Course course) async {
+  Future<void> _deleteUnchecked(
+    BuildContext anchorContext,
+    Course course,
+  ) async {
     final cell = _cell;
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.maybeOf(context);
@@ -538,7 +546,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     if (date != null && cell.activeThisWeek) {
       final week = widget.controller.weekOfDate(date);
       final scope = await showDeleteScopeSheet(
-        context,
+        anchorContext,
         week: week,
         weekday: date.weekday,
         teacherOrLocationEmpty:
@@ -579,36 +587,19 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
       }
     }
     final readOnly = course.source == CourseSource.jwxt;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      useRootNavigator: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('删除课程'),
-        content: readOnly
-            ? const Text(
-                kJwxtCourseDeleteMessage,
-                key: Key('jwxt_delete_message'),
-              )
-            : Text(
-                '确定删除「${courseDisplayName(course: course, slot: cell.slot)}」吗？此操作不可撤销。',
-              ),
-        actions: [
-          TextButton(
-            key: readOnly ? const Key('jwxt_delete_cancel') : null,
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            key: Key(
-              readOnly ? 'jwxt_delete_confirm' : 'course_delete_confirm',
-            ),
-            onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(
-              foregroundColor: TimetableTheme.colorsOf(context).danger,
-            ),
-            child: Text(readOnly ? '删除' : '确认删除'),
-          ),
-        ],
+    final confirmed = await showMiuixConfirmDialog(
+      context,
+      title: '删除课程',
+      message: readOnly
+          ? kJwxtCourseDeleteMessage
+          : '确定删除「${courseDisplayName(course: course, slot: cell.slot)}」吗？此操作不可撤销。',
+      messageKey: readOnly ? const Key('jwxt_delete_message') : null,
+      confirmLabel: readOnly ? '删除' : '确认删除',
+      cancelLabel: '取消',
+      destructive: true,
+      cancelKey: readOnly ? const Key('jwxt_delete_cancel') : null,
+      confirmKey: Key(
+        readOnly ? 'jwxt_delete_confirm' : 'course_delete_confirm',
       ),
     );
     if (confirmed != true || !mounted) return;

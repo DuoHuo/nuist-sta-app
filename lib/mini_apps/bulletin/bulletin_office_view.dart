@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import '../../core/colors.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'bulletin_attachment_preview.dart';
 import 'bulletin_attachment_search.dart';
 
@@ -134,36 +135,58 @@ class _BulletinOfficeViewState extends State<BulletinOfficeView> {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: DropdownButton<int>(
-            isExpanded: true,
-            value: selected,
-            items: [
-              for (final (index, sheet) in sheets.indexed)
-                DropdownMenuItem(
-                  value: index,
-                  child: Text(
-                    sheet.title?.trim().isNotEmpty == true
-                        ? sheet.title!
-                        : '工作表 ${index + 1}',
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
-            onChanged: sheets.length == 1
-                ? null
-                : (index) {
-                    if (index == null) return;
-                    if (match == null) {
-                      setState(() => _sheet = index);
-                    } else {
-                      final search = _search!;
-                      search.jumpTo(
-                        search.result!.matches.indexWhere(
-                          (hit) => hit.sheet == index,
-                        ),
+          child: Builder(
+            builder: (buttonContext) => InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: sheets.length == 1
+                  ? null
+                  : () async {
+                      final index = await showMiuixOptionMenu<int>(
+                        buttonContext,
+                        anchorBounds: miuixAnchorRect(buttonContext),
+                        items: [
+                          for (final (index, sheet) in sheets.indexed)
+                            MiuixOptionItem(
+                              value: index,
+                              label: sheet.title?.trim().isNotEmpty == true
+                                  ? sheet.title!
+                                  : '工作表 ${index + 1}',
+                              selected: index == selected,
+                            ),
+                        ],
                       );
-                    }
-                  },
+                      if (index == null || !mounted) return;
+                      if (match == null) {
+                        setState(() => _sheet = index);
+                      } else {
+                        final search = _search!;
+                        search.jumpTo(
+                          search.result!.matches.indexWhere(
+                            (hit) => hit.sheet == index,
+                          ),
+                        );
+                      }
+                    },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 4,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        sheets[selected].title?.trim().isNotEmpty == true
+                            ? sheets[selected].title!
+                            : '工作表 ${selected + 1}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const Icon(Icons.arrow_drop_down),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
         Expanded(

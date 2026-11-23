@@ -3,8 +3,9 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import '../../core/app_snack_bar.dart';
 import '../../core/app_select.dart';
+import '../../core/app_snack_bar.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_api.dart';
 import 'timetable_color_picker.dart';
 import 'timetable_colors.dart';
@@ -288,28 +289,15 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
       return;
     }
     _confirmingExit = true;
-    final discard = await showDialog<bool>(
-      context: context,
-      useRootNavigator: false,
-      builder: (context) => AlertDialog(
-        title: const Text('放弃未保存的修改？'),
-        content: const Text('离开后，这次填写的内容不会保存。'),
-        actions: [
-          TextButton(
-            key: const Key('course_form_discard_cancel'),
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('继续编辑'),
-          ),
-          TextButton(
-            key: const Key('course_form_discard_confirm'),
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(
-              foregroundColor: TimetableTheme.colorsOf(context).danger,
-            ),
-            child: const Text('放弃修改'),
-          ),
-        ],
-      ),
+    final discard = await showMiuixConfirmDialog(
+      context,
+      title: '放弃未保存的修改？',
+      message: '离开后，这次填写的内容不会保存。',
+      confirmLabel: '放弃修改',
+      cancelLabel: '继续编辑',
+      destructive: true,
+      cancelKey: const Key('course_form_discard_cancel'),
+      confirmKey: const Key('course_form_discard_confirm'),
     );
     _confirmingExit = false;
     if (mounted && discard == true) _leave();
@@ -485,33 +473,14 @@ class _TimetableCourseFormState extends State<TimetableCourseForm> {
     }
     FocusScope.of(context).unfocus();
     setState(() => _choosingScope = true);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      useRootNavigator: false,
-      builder: (context) => AlertDialog(
-        title: const Text('改为考试'),
-        content: const Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('仅修改本周这节课'),
-            SizedBox(height: 12),
-            Text('其他周次和时段保持不变。'),
-          ],
-        ),
-        actions: [
-          TextButton(
-            key: const Key('course_form_exam_cancel'),
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            key: const Key('course_form_exam_confirm'),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('确认保存'),
-          ),
-        ],
-      ),
+    final confirmed = await showMiuixConfirmDialog(
+      context,
+      title: '改为考试',
+      paragraphs: const ['仅修改本周这节课', '其他周次和时段保持不变。'],
+      confirmLabel: '确认保存',
+      cancelLabel: '取消',
+      cancelKey: const Key('course_form_exam_cancel'),
+      confirmKey: const Key('course_form_exam_confirm'),
     );
     if (!mounted) return;
     setState(() => _choosingScope = false);

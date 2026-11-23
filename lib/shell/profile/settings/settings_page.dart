@@ -14,6 +14,7 @@ import '../../../core/app_select.dart';
 import '../../../core/colors.dart';
 import '../../../core/logging/app_log.dart';
 import '../../../core/logging/log_export_service.dart';
+import '../../../core/ui/miuix_dialog.dart';
 import '../../../core/logging/log_store.dart';
 import '../../../core/privacy/privacy_consent.dart';
 import '../../../core/privacy/privacy_consent_dialog.dart';
@@ -359,29 +360,17 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
     if (_working) return;
     setState(() => _working = true);
     try {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        useRootNavigator: false,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('导出诊断日志'),
-          content: const Text(
+      final confirmed = await showMiuixConfirmDialog(
+        context,
+        title: '导出诊断日志',
+        message:
             '诊断文件包含完整请求与响应内容、错误原因和调用堆栈。文本会遮蔽可识别的凭据和个人信息；'
             '二进制附件保留原文件，无法自动检查其中的所有内容。'
             '分享前请检查内容，并确认接收方可信。',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('继续'),
-            ),
-          ],
-        ),
+        confirmLabel: '继续',
+        cancelLabel: '取消',
       );
-      if (confirmed != true || !mounted) return;
+      if (!confirmed || !mounted) return;
       await _log.operation(
         'export.share',
         () async {
@@ -421,25 +410,15 @@ class _DiagnosticLogSectionState extends State<_DiagnosticLogSection> {
     if (_working) return;
     setState(() => _working = true);
     try {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        useRootNavigator: false,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('清除诊断日志'),
-          content: const Text('将清除本机运行日志和应用生成的导出副本。清除后无法恢复，当前日志模式不变。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('清除'),
-            ),
-          ],
-        ),
+      final confirmed = await showMiuixConfirmDialog(
+        context,
+        title: '清除诊断日志',
+        message: '将清除本机运行日志和应用生成的导出副本。清除后无法恢复，当前日志模式不变。',
+        confirmLabel: '清除',
+        cancelLabel: '取消',
+        destructive: true,
       );
-      if (confirmed != true || !mounted) return;
+      if (!confirmed || !mounted) return;
       setState(() => _progress = '正在清除日志…');
       await AppLog.clear();
       await _loadStats();

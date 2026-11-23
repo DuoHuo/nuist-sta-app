@@ -278,7 +278,10 @@ void main() {
       expect(find.byKey(const Key('day_swap_from')), findsOneWidget);
       expect(find.byKey(const Key('day_swap_to')), findsOneWidget);
       expect(find.byKey(const Key('day_swap_submit')), findsOneWidget);
-      expect(find.byKey(const Key('day_swaps_empty')), findsOneWidget);
+      expect(
+        find.byKey(const Key('day_swaps_empty'), skipOffstage: false),
+        findsOneWidget,
+      );
       expect(find.text('9月7日'), findsOneWidget); // prefilled 原日期
     });
   });

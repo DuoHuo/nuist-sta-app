@@ -151,7 +151,7 @@ void main() {
       hold: const Duration(milliseconds: 500),
     );
     expect(taps, ['甲课程']);
-    expect(find.text('此更改应用范围？'), findsNothing);
+    expect(find.byKey(const Key('drag_scope_sheet')), findsNothing);
   });
 
   testWidgets('DR02 按住 0.8 秒不移动：无任何反馈；松手不弹面板、不点开', (tester) async {
@@ -163,7 +163,7 @@ void main() {
     expect(find.byType(CourseCell), findsOneWidget);
     await g.up();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.text('此更改应用范围？'), findsNothing);
+    expect(find.byKey(const Key('drag_scope_sheet')), findsNothing);
     expect(taps, isEmpty);
   });
 
@@ -261,12 +261,12 @@ void main() {
     await tester.pump();
     // 先约 150ms 滑进落点，再弹面板。中心在第 2 列（1.9 列）→ 周二；
     // 上沿 1.6 节 → 最近的节次线 → 第 3 节。
-    expect(find.text('此更改应用范围？'), findsNothing);
+    expect(find.byKey(const Key('drag_scope_sheet')), findsNothing);
     await tester.pumpAndSettle();
     at = tester.getTopLeft(dragging);
     expect(at.dx - origin.dx, closeTo(step.width, 0.5));
     expect(at.dy - origin.dy, closeTo(step.height * 2, 0.5));
-    expect(find.text('此更改应用范围？'), findsOneWidget);
+    expect(find.byKey(const Key('drag_scope_sheet')), findsOneWidget);
     // 第 1 条：「只改这一天（M月D日）」（默认，第一项）/「所有周」。
     expect(find.textContaining('只改这一天（'), findsOneWidget);
     expect(find.text('所有周'), findsOneWidget);
@@ -301,7 +301,7 @@ void main() {
     await tester.pump();
     await g.up();
     await tester.pumpAndSettle();
-    expect(find.text('此更改应用范围？'), findsOneWidget);
+    expect(find.byKey(const Key('drag_scope_sheet')), findsOneWidget);
   });
 
   testWidgets('DR13 选「取消」：格子回原位，数据不变', (tester) async {
@@ -310,7 +310,7 @@ void main() {
     final step = cellStep(tester);
     await longDrag(tester, cellOf('甲课程'), moves: [Offset(step.width, 0)]);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('drag_scope_cancel')));
+    await tester.tap(find.text('取消'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300)); // 面板收起
     // 约 150ms 滑回原位后才消失。
@@ -320,25 +320,17 @@ void main() {
     expect(c.slotOverrides, isEmpty);
   });
 
-  testWidgets('DR14 点遮罩 / 下拉关闭面板：都等同取消', (tester) async {
+  testWidgets('DR14 点菜单外区域关闭菜单：等同取消', (tester) async {
     load(jwxt: [_jwxt('K1|01', '乙课程')]);
     await pumpGrid(tester);
     final step = cellStep(tester);
     // 点遮罩。
     await longDrag(tester, cellOf('乙课程'), moves: [Offset(step.width, 0)]);
     await tester.pumpAndSettle();
-    expect(find.text('此更改应用范围？'), findsOneWidget);
+    expect(find.byKey(const Key('drag_scope_sheet')), findsOneWidget);
     await tester.tapAt(const Offset(20, 20));
     await tester.pumpAndSettle();
-    expect(find.text('此更改应用范围？'), findsNothing);
-    expect(find.byKey(const Key('week_grid_dragging_cell')), findsNothing);
-    expect(c.slotOverrides, isEmpty);
-    // 下拉关闭。
-    await longDrag(tester, cellOf('乙课程'), moves: [Offset(step.width, 0)]);
-    await tester.pumpAndSettle();
-    await tester.fling(find.text('此更改应用范围？'), const Offset(0, 600), 2000);
-    await tester.pumpAndSettle();
-    expect(find.text('此更改应用范围？'), findsNothing);
+    expect(find.byKey(const Key('drag_scope_sheet')), findsNothing);
     expect(find.byKey(const Key('week_grid_dragging_cell')), findsNothing);
     expect(c.slotOverrides, isEmpty);
     expect(c.courses.single.slots.single.day, 1);
@@ -357,7 +349,7 @@ void main() {
       ],
     );
     await tester.pumpAndSettle();
-    expect(find.text('此更改应用范围？'), findsNothing);
+    expect(find.byKey(const Key('drag_scope_sheet')), findsNothing);
     expect(find.byKey(const Key('week_grid_dragging_cell')), findsNothing);
     expect(c.slotOverrides, isEmpty);
   });
@@ -372,7 +364,7 @@ void main() {
       moves: [Offset(step.width * 2, step.height * 2)],
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('drag_scope_this_week')));
+    await tester.tap(find.textContaining('只改'));
     await tester.pump();
     await settleIo(tester);
     final slots = c.manualCourses.single.slots;
@@ -390,7 +382,7 @@ void main() {
     final step = cellStep(tester);
     await longDrag(tester, cellOf('甲课程'), moves: [Offset(step.width, 0)]);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('drag_scope_all_weeks')));
+    await tester.tap(find.text('所有周'));
     await tester.pump();
     await settleIo(tester);
     expect(find.text('与丙课程时间冲突'), findsOneWidget);
@@ -425,7 +417,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(dragging, findsNothing);
-    expect(find.text('此更改应用范围？'), findsNothing);
+    expect(find.byKey(const Key('drag_scope_sheet')), findsNothing);
     expect(c.slotOverrides, isEmpty);
   });
 
@@ -443,57 +435,12 @@ void main() {
     expect(c.visibleDays(_week), [1, 2, 3, 4, 5]);
     await longDrag(tester, cellOf('甲课程'), moves: [const Offset(3000, 0)]);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('drag_scope_all_weeks')));
+    await tester.tap(find.text('所有周'));
     await tester.pump();
     await settleIo(tester);
     final slots = c.manualCourses.single.slots;
     expect(slots.any((s) => s.day == 5 && s.startNode == 1), isTrue);
     expect(slots.any((s) => s.day > 5), isFalse);
-  });
-
-  testWidgets('范围面板：标题全角问号、纯白底无 surface tint、拖动条同课程详情', (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: ThemeData(colorSchemeSeed: Colors.pink),
-        home: Scaffold(
-          body: Builder(
-            builder: (context) => TextButton(
-              onPressed: () => showDragScopeSheet(context, week: _week),
-              child: const Text('open'),
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.tap(find.text('open'));
-    await tester.pumpAndSettle();
-    expect(find.text('此更改应用范围？'), findsOneWidget);
-    expect('此更改应用范围？'.codeUnits.last, 0xFF1F);
-    final sheet = tester.widget<Material>(
-      find.byKey(const Key('drag_scope_sheet')),
-    );
-    expect(sheet.color, const Color(0xFFFFFFFF));
-    expect(sheet.surfaceTintColor, Colors.transparent);
-    expect(sheet.elevation, 0);
-    // 外层 BottomSheet 透明，不再叠 M3 的底色/tint。
-    final bs = tester.widget<BottomSheet>(find.byType(BottomSheet));
-    expect(bs.backgroundColor, Colors.transparent);
-    // 拖动条：与课程详情同一个 widget。
-    final handle = find.byKey(const Key('sheet_drag_handle'));
-    expect(handle, findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('drag_scope_sheet')),
-        matching: find.byType(SheetDragHandle),
-      ),
-      findsOneWidget,
-    );
-    expect(tester.getSize(handle), const Size(36, 4));
-    expect(
-      tester.getTopLeft(handle).dy <
-          tester.getTopLeft(find.text('此更改应用范围？')).dy,
-      isTrue,
-    );
   });
 
   testWidgets('A11Y 只改本周后：拆出的单周次课朗读/胶囊不含「单周」「双周」；'
@@ -726,7 +673,7 @@ void main() {
     await g.up();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.text('此更改应用范围？'), findsNothing);
+    expect(find.byKey(const Key('drag_scope_sheet')), findsNothing);
     expect(taps, isEmpty);
     expect(c.slotOverrides, isEmpty);
     final after = c.manualCourseById('m1')!.slots;
@@ -761,7 +708,7 @@ void main() {
     await tester.fling(cellOf('甲课程'), const Offset(-300, 0), 1500);
     await tester.pumpAndSettle();
     expect(pc.page, _week.toDouble());
-    expect(find.text('此更改应用范围？'), findsNothing);
+    expect(find.byKey(const Key('drag_scope_sheet')), findsNothing);
   });
 
   group('详情页恢复原位置', () {

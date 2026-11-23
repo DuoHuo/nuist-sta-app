@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 
 import '../app_info.dart';
-import '../ui/miuix_bottom_dialog.dart';
+import '../ui/miuix_dialog.dart';
 import 'privacy_consent.dart';
 
 /// 首次启动（或隐私政策版本更新后）的同意弹窗，从下半屏弹出。

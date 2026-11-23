@@ -45,24 +45,14 @@ void main() {
     );
   }
 
-  DateTime? picked;
-
   setUp(() {
     tmp = Directory.systemTemp.createTempSync('tt_swap_ui');
     TimetableStore.debugDirectory = tmp;
     TimetableController.clock = () => DateTime(2026, 10, 12);
     c.debugReset();
-    picked = null;
-    debugDaySwapDatePicker = (
-      context, {
-      required initial,
-      required first,
-      required last,
-    }) async => picked;
   });
 
   tearDown(() {
-    debugDaySwapDatePicker = null;
     TimetableStore.debugDirectory = null;
     TimetableController.clock = origClock;
     c.debugReset();
@@ -132,8 +122,9 @@ void main() {
     await longPressHeader(tester, 1);
     expect(find.byKey(const Key('day_swaps_page')), findsOneWidget);
     expect(find.text('10月12日'), findsOneWidget); // 原日期预填
-    picked = _wed;
     await tester.tap(find.byKey(const Key('day_swap_to')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('14'));
     await tester.pumpAndSettle();
     expect(find.text('10月14日'), findsOneWidget);
     await tester.tap(find.byKey(const Key('day_swap_submit')));
@@ -156,12 +147,10 @@ void main() {
     load();
     await pumpGrid(tester);
     await longPressHeader(tester, 1);
-    picked = null;
     await tester.tap(find.byKey(const Key('day_swap_to')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('day_swap_confirm_dialog')), findsNothing);
-    picked = _wed;
-    await tester.tap(find.byKey(const Key('day_swap_to')));
+    await tester.tap(find.text('14'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('day_swap_submit')));
     await tester.pumpAndSettle();
@@ -193,9 +182,10 @@ void main() {
       TimetableDaySwapsPage(controller: c, initialFrom: _mon),
     );
 
-    Future<void> attempt(DateTime d, String msg) async {
-      picked = d;
+    Future<void> attempt(int day, String msg) async {
       await tester.tap(find.byKey(const Key('day_swap_to')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('$day'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('day_swap_submit')));
       await tester.pumpAndSettle();
@@ -206,9 +196,8 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    await attempt(_mon, '不能和同一天互换');
-    await attempt(DateTime(2027, 6, 1), '日期不在本学期内');
-    await attempt(_wed, '10月14日已调过课，请先撤销');
+    await attempt(12, '不能和同一天互换');
+    await attempt(14, '10月14日已调过课，请先撤销');
     expect(c.daySwaps, hasLength(1));
   });
 
@@ -289,7 +278,7 @@ void main() {
     await tester.tap(find.byKey(const Key('course_detail_delete')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('delete_scope_sheet')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('delete_scope_one_day')));
+    await tester.tap(find.textContaining('仅第'));
     await settleIo(tester);
     expect(
       c

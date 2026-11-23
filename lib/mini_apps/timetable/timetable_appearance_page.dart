@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_color_picker.dart';
 import 'timetable_colors.dart';
 import 'timetable_controller.dart';
@@ -115,53 +116,23 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
     );
   }
 
-  Future<void> _pickWeekStart() async {
-    var saving = false;
-    String? saveError;
-    await showDialog<void>(
-      context: context,
-      useRootNavigator: false,
-      builder: (_) => StatefulBuilder(
-        builder: (dialogContext, setDialogState) => SimpleDialog(
-          title: const Text('一周起始'),
-          children: [
-            if (saveError case final message?)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
-                child: TimetablePersistenceErrorText(message),
-              ),
-            for (final option in const {true: '周一', false: '周日'}.entries)
-              SimpleDialogOption(
-                onPressed: saving
-                    ? null
-                    : () async {
-                        setDialogState(() {
-                          saving = true;
-                          saveError = null;
-                        });
-                        final saved = await withTimetablePersistenceFeedback(
-                          dialogContext,
-                          () async {
-                            await _c.updateSettings(
-                              _c.settingsForEditing.copyWith(
-                                weekStartsOnMonday: option.key,
-                              ),
-                            );
-                            return true;
-                          },
-                          onError: (message) =>
-                              setDialogState(() => saveError = message),
-                        );
-                        if (!dialogContext.mounted) return;
-                        setDialogState(() => saving = false);
-                        if (saved == true) Navigator.pop(dialogContext);
-                      },
-                child: Text(option.value),
-              ),
-          ],
-        ),
-      ),
+  Future<void> _pickWeekStart(BuildContext anchorContext) async {
+    final current = _c.settingsForEditing.weekStartsOnMonday;
+    final choice = await showMiuixOptionMenu<bool>(
+      anchorContext,
+      anchorBounds: miuixAnchorRect(anchorContext),
+      items: [
+        MiuixOptionItem(value: true, label: '周一', selected: current),
+        MiuixOptionItem(value: false, label: '周日', selected: !current),
+      ],
     );
+    if (choice == null || choice == current || !mounted) return;
+    await withTimetablePersistenceFeedback(context, () async {
+      await _c.updateSettings(
+        _c.settingsForEditing.copyWith(weekStartsOnMonday: choice),
+      );
+      return true;
+    });
   }
 
   @override
@@ -499,12 +470,14 @@ class _TimetableAppearancePageState extends State<TimetableAppearancePage> {
                               key: const Key('tt_appearance_group_week'),
                               title: '周视图',
                               children: [
-                                TimetableSettingsRow(
-                                  key: const Key('tt_settings_week_start'),
-                                  title: '一周起始',
-                                  value: s.weekStartsOnMonday ? '周一' : '周日',
-                                  showChevron: true,
-                                  onTap: _pickWeekStart,
+                                Builder(
+                                  builder: (rowContext) => TimetableSettingsRow(
+                                    key: const Key('tt_settings_week_start'),
+                                    title: '一周起始',
+                                    value: s.weekStartsOnMonday ? '周一' : '周日',
+                                    showChevron: true,
+                                    onTap: () => _pickWeekStart(rowContext),
+                                  ),
                                 ),
                                 TimetableSettingsSwitchRow(
                                   key: const Key('tt_settings_saturday'),

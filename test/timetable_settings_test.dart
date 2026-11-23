@@ -4,7 +4,9 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/ui/miuix_dialog.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_colors.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -110,7 +112,9 @@ void main() {
     tester.view.physicalSize = const Size(1080, 6000);
     tester.view.devicePixelRatio = 2.625;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(MaterialApp(home: body));
+    await tester.pumpWidget(
+      MaterialApp(home: MiuixPopupHostScope(child: body)),
+    );
     await tester.pump();
   }
 
@@ -128,7 +132,11 @@ void main() {
     tester.view.devicePixelRatio = 2.625;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
-      MaterialApp(home: TimetableAppearancePage(controller: _c)),
+      MaterialApp(
+        home: MiuixPopupHostScope(
+          child: TimetableAppearancePage(controller: _c),
+        ),
+      ),
     );
     await tester.pump();
   }
@@ -462,9 +470,7 @@ void main() {
       await tester.tap(find.byKey(const Key('tt_settings_show_tomorrow')));
       await tester.tap(find.byKey(const Key('tt_settings_home_max_exams')));
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.descendant(of: find.byType(BottomSheet), matching: find.text('4')),
-      );
+      await tester.tap(find.text('4'));
       await settleIo(tester);
       final s = _c.settings;
       expect(s.showLocation, isFalse);
@@ -569,7 +575,7 @@ void main() {
       await tester.tap(find.byKey(const Key('tt_settings_reminder_lead')));
       await tester.pumpAndSettle();
       Finder leadChoice(int minutes) => find.descendant(
-        of: find.byType(BottomSheet),
+        of: find.byType(MiuixPopupHost),
         matching: find.text('$minutes 分钟'),
       );
       for (final m in kReminderLeadChoices) {

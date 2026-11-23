@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/app_snack_bar.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_day_swap_ui.dart';
 import 'timetable_edit_scope_sheet.dart';
 import 'timetable_schedule_event.dart';
@@ -15,7 +16,6 @@ import 'timetable_models.dart';
 import 'timetable_overrides.dart';
 import 'timetable_theme.dart';
 import 'timetable_course_cell.dart';
-import 'timetable_course_detail_sheet.dart' show SheetDragHandle;
 import 'timetable_schedule_event_cell.dart';
 
 const _weekdayLabels = ['一', '二', '三', '四', '五', '六', '日'];
@@ -968,6 +968,14 @@ class _WeekGridState extends State<WeekGrid> {
     (start - 1) * _periodH + TimetableTheme.cellMargin,
   );
 
+  /// 拖动落点对应的全局矩形，作为原地弹层的锚点。
+  Rect? _dropAnchor(int column, int start) {
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    final origin = box.localToGlobal(_slotTopLeft(column, start));
+    return Rect.fromLTWH(origin.dx, origin.dy, _dayW, _periodH);
+  }
+
   /// 跟手位置：原位置 + 手指位移，夹紧在网格内（不出网格，不取消）。
   Offset _followTopLeft(_DragState d) {
     const m = TimetableTheme.cellMargin;
@@ -1082,6 +1090,7 @@ class _WeekGridState extends State<WeekGrid> {
     if (!mounted) return;
     final choice = await showDragScopeSheet(
       context,
+      anchorBounds: _dropAnchor(drop.column, toStart),
       week: week,
       date: d.cell.date,
     );
@@ -1314,67 +1323,33 @@ const Color kDragScopeSheetColor = Color(0xFFFFFFFF);
 /// 第 1 条：「只改这一天（M月D日）」（默认，第一项）/「所有周」/「取消」。
 /// [date] 为空（旧调用方）时第一项显示「只改本周（第 N 周）」。
 Future<DragScopeChoice?> showDragScopeSheet(
-  BuildContext context, {
+  BuildContext anchorContext, {
   required int week,
   DateTime? date,
+  Rect? anchorBounds,
 }) {
-  return showModalBottomSheet<DragScopeChoice>(
-    context: context,
-    isDismissible: true,
-    enableDrag: true,
-    // 弹层本身透明，内容用纯白 Material（elevation 0、surfaceTintColor 透明，
-    // 没有 M3 surface tint）；顶部拖动条复用课程详情的 [SheetDragHandle]。
-    backgroundColor: Colors.transparent,
-    elevation: 0,
-    builder: (sheetContext) => Material(
-      key: const Key('drag_scope_sheet'),
-      color: TimetableTheme.colorsOf(sheetContext).surface,
-      surfaceTintColor: Colors.transparent,
-      elevation: 0,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(TimetableTheme.sheetTopRadius),
-        ),
+  return showMiuixOptionMenu<DragScopeChoice>(
+    anchorContext,
+    anchorBounds: anchorBounds ?? miuixAnchorRect(anchorContext),
+    menuKey: const Key('drag_scope_sheet'),
+    items: [
+      MiuixOptionItem(
+        key: const Key('drag_scope_this_week'),
+        value: DragScopeChoice.thisWeek,
+        label: date == null ? '只改本周（第 $week 周）' : editScopeThisDayLabel(date),
       ),
-      child: SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: 8),
-            const Center(child: SheetDragHandle()),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text(
-                '此更改应用范围？',
-                style: TimetableTheme.titleStyle(
-                  color: TimetableTheme.colorsOf(context).titleText,
-                ),
-              ),
-            ),
-            ListTile(
-              key: const Key('drag_scope_this_week'),
-              title: Text(
-                date == null ? '只改本周（第 $week 周）' : editScopeThisDayLabel(date),
-              ),
-              onTap: () =>
-                  Navigator.pop(sheetContext, DragScopeChoice.thisWeek),
-            ),
-            ListTile(
-              key: const Key('drag_scope_all_weeks'),
-              title: const Text('所有周'),
-              onTap: () =>
-                  Navigator.pop(sheetContext, DragScopeChoice.allWeeks),
-            ),
-            ListTile(
-              key: const Key('drag_scope_cancel'),
-              title: const Text('取消'),
-              onTap: () => Navigator.pop(sheetContext, DragScopeChoice.cancel),
-            ),
-          ],
-        ),
+      const MiuixOptionItem(
+        key: Key('drag_scope_all_weeks'),
+        value: DragScopeChoice.allWeeks,
+        label: '所有周',
       ),
-    ),
+      const MiuixOptionItem(
+        key: Key('drag_scope_cancel'),
+        value: DragScopeChoice.cancel,
+        label: '取消',
+        destructive: true,
+      ),
+    ],
   );
 }
 

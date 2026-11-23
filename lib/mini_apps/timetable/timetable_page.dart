@@ -599,8 +599,10 @@ class _TimetablePageState extends State<TimetablePage> {
                         onSwitchSchedule: _openWeekAndSchedulePopup,
                         weekSelectorOpen: _weekStripOpen,
                         // §14.1：「+」三选一（课程 / 考试 / 其他）；「课程」仍是原手动课表单。
-                        onAdd: () =>
-                            showAddEntrySheet(context, controller: active),
+                        onAdd: (buttonContext) => showAddEntrySheet(
+                          buttonContext,
+                          controller: active,
+                        ),
                         onSync: _manualSync,
                         syncing:
                             active.syncStatus == TimetableSyncStatus.syncing ||
@@ -796,7 +798,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onWeekTap;
   final VoidCallback onSwitchSchedule;
   final bool weekSelectorOpen;
-  final VoidCallback onAdd;
+  final void Function(BuildContext anchorContext) onAdd;
   final VoidCallback onSync;
   final VoidCallback onSettings;
   final VoidCallback onExport;
@@ -943,7 +945,13 @@ class _TopBar extends StatelessWidget {
                 ],
               ),
             ),
-            _IconBtn(icon: Icons.add, onTap: onAdd, tooltip: '添加'),
+            Builder(
+              builder: (buttonContext) => _IconBtn(
+                icon: Icons.add,
+                onTap: () => onAdd(buttonContext),
+                tooltip: '添加',
+              ),
+            ),
             _IconBtn(
               key: const Key('timetable_export_button'),
               icon: Icons.ios_share,

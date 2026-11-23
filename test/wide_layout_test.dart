@@ -1094,8 +1094,7 @@ void main() {
       expect(router.state.uri.path, '/home/apps/timetable');
       await tester.tap(find.byTooltip('添加'));
       await tester.pumpAndSettle();
-      expect(tester.getSize(find.byType(ModalBarrier).last).width, 320);
-      await tester.tap(find.byKey(const Key('add_entry_course')));
+      await tester.tap(find.text('课程'));
       await tester.pumpAndSettle();
       final field = find.byKey(const Key('manual_course_name'));
       final route = ModalRoute.of(tester.element(field))! as PageRoute;

@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_controller.dart';
 import 'timetable_export_page.dart';
 import 'timetable_import_page.dart';
@@ -44,9 +46,15 @@ Future<void> showRenameScheduleDialog(
   required TimetableController controller,
   required ScheduleMetadata meta,
 }) async {
-  final saved = await showDialog<bool>(
-    context: context,
-    builder: (_) => _RenameScheduleDialog(controller: controller, meta: meta),
+  final saved = await showMiuixDialog<bool>(
+    context,
+    title: '重命名课表',
+    centered: true,
+    builder: (dialogContext, dialog) => _RenameScheduleDialog(
+      controller: controller,
+      meta: meta,
+      onClose: dialog.close,
+    ),
   );
   if (saved == true && context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -59,10 +67,15 @@ Future<void> showRenameScheduleDialog(
 }
 
 class _RenameScheduleDialog extends StatefulWidget {
-  const _RenameScheduleDialog({required this.controller, required this.meta});
+  const _RenameScheduleDialog({
+    required this.controller,
+    required this.meta,
+    required this.onClose,
+  });
 
   final TimetableController controller;
   final ScheduleMetadata meta;
+  final ValueChanged<bool?> onClose;
 
   @override
   State<_RenameScheduleDialog> createState() => _RenameScheduleDialogState();
@@ -78,60 +91,68 @@ class _RenameScheduleDialogState extends State<_RenameScheduleDialog> {
     super.dispose();
   }
 
+  Future<void> _save() async {
+    final nextName = _textCtrl.text.trim();
+    if (nextName.isEmpty) {
+      setState(() => _error = '名称不能为空');
+      return;
+    }
+    if (nextName.length > 24) {
+      setState(() => _error = '名称不能超过 24 个字符');
+      return;
+    }
+    final ok = await withTimetablePersistenceFeedback<bool>(
+      context,
+      () async {
+        await widget.controller.renameSchedule(widget.meta.id, nextName);
+        return true;
+      },
+      onError: (msg) {
+        if (mounted) setState(() => _error = msg);
+      },
+    );
+    if (ok == true && mounted) widget.onClose(true);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    final primary = MiuixButtonDefaults.buttonColorsPrimary(context);
+    return Column(
       key: const Key('tt_rename_schedule_dialog'),
-      title: const Text('重命名课表'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            key: const Key('tt_rename_schedule_input'),
-            controller: _textCtrl,
-            autofocus: true,
-            maxLength: 24,
-            decoration: const InputDecoration(
-              labelText: '课表名称',
-              border: OutlineInputBorder(),
-              counterText: '',
-            ),
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 8),
-            TimetablePersistenceErrorText(_error!),
-          ],
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('取消'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        MiuixTextField(
+          key: const Key('tt_rename_schedule_input'),
+          controller: _textCtrl,
+          autofocus: true,
+          singleLine: true,
+          label: '课表名称',
+          onChanged: (_) => setState(() {}),
         ),
-        TextButton(
-          key: const Key('tt_rename_schedule_confirm'),
-          onPressed: () async {
-            final nextName = _textCtrl.text.trim();
-            if (nextName.isEmpty) {
-              setState(() => _error = '名称不能为空');
-              return;
-            }
-            final navigator = Navigator.of(context);
-            final ok = await withTimetablePersistenceFeedback<bool>(
-              context,
-              () async {
-                await widget.controller.renameSchedule(
-                  widget.meta.id,
-                  nextName,
-                );
-                return true;
-              },
-              onError: (msg) => setState(() => _error = msg),
-            );
-            if (ok == true && mounted) navigator.pop(true);
-          },
-          child: const Text('保存'),
+        if (_error != null) ...[
+          const SizedBox(height: 8),
+          TimetablePersistenceErrorText(_error!),
+        ],
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: MiuixButton(
+                colors: primary,
+                onPressed: () => widget.onClose(false),
+                child: const Text('取消'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: MiuixButton(
+                key: const Key('tt_rename_schedule_confirm'),
+                onPressed: _save,
+                child: const Text('保存'),
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -756,76 +777,80 @@ class _ScheduleItemTile extends StatelessWidget {
               subtitleParts.join(' · '),
               style: TextStyle(fontSize: 12, color: palette.hint),
             ),
-      trailing: PopupMenuButton<String>(
-        key: Key('tt_schedule_menu_${meta.id}'),
-        tooltip: '课表操作',
-        onSelected: (action) async {
-          switch (action) {
-            case 'primary':
-              await withTimetablePersistenceFeedback(
-                context,
-                () => controller.setPrimarySchedule(meta.id),
-              );
-            case 'resync':
-              await _resyncOne(context);
-            case 'export':
-              await _exportWakeup(context);
-            case 'rename':
-              await showRenameScheduleDialog(
-                context,
-                controller: controller,
-                meta: meta,
-              );
-            case 'delete':
-              final confirmed = await showDialog<bool>(
-                context: context,
-                builder: (dialogContext) => AlertDialog(
-                  key: const Key('tt_delete_schedule_dialog'),
-                  title: const Text('删除课表'),
-                  content: Text('确定删除「${meta.name}」？本地数据将一并清除。'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(dialogContext, false),
-                      child: const Text('取消'),
-                    ),
-                    TextButton(
-                      key: const Key('tt_delete_schedule_confirm'),
-                      onPressed: () => Navigator.pop(dialogContext, true),
-                      child: Text(
-                        '删除',
-                        style: TextStyle(color: palette.danger),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-              if (confirmed != true || !context.mounted) return;
-              final ok = await withTimetablePersistenceFeedback(
-                context,
-                () => controller.deleteSchedule(meta.id),
-              );
-              if (ok == true && context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  AppSnackBar(
-                    tone: AppSnackBarTone.info,
-                    content: Text('已删除「${meta.name}」'),
-                  ),
-                );
-              }
-          }
-        },
-        itemBuilder: (_) => [
-          if (!isPrimary)
-            const PopupMenuItem(value: 'primary', child: Text('设为主课表')),
-          if (meta.isOwnSchedule)
-            const PopupMenuItem(value: 'resync', child: Text('重新拉取')),
-          const PopupMenuItem(value: 'export', child: Text('导出到 WakeUp')),
-          const PopupMenuItem(value: 'rename', child: Text('重命名')),
-          if (meta.isImportedSchedule)
-            const PopupMenuItem(value: 'delete', child: Text('删除')),
-        ],
+      trailing: Builder(
+        builder: (buttonContext) => IconButton(
+          key: Key('tt_schedule_menu_${meta.id}'),
+          tooltip: '课表操作',
+          onPressed: () => _openActions(buttonContext),
+          icon: Icon(Icons.more_vert, size: 20, color: palette.hint),
+        ),
       ),
       onTap: onSelect,
     );
+  }
+
+  /// 课表卡片的操作菜单：原地弹出，选择后执行。
+  Future<void> _openActions(BuildContext anchorContext) async {
+    final action = await showMiuixOptionMenu<String>(
+      anchorContext,
+      anchorBounds: miuixAnchorRect(anchorContext),
+      cancelLabel: '取消',
+      items: [
+        if (controller.primaryScheduleId != meta.id)
+          const MiuixOptionItem(value: 'primary', label: '设为主课表'),
+        if (meta.isOwnSchedule)
+          const MiuixOptionItem(value: 'resync', label: '重新拉取'),
+        const MiuixOptionItem(value: 'export', label: '导出到 WakeUp'),
+        const MiuixOptionItem(value: 'rename', label: '重命名'),
+        if (meta.isImportedSchedule)
+          const MiuixOptionItem(
+            value: 'delete',
+            label: '删除',
+            destructive: true,
+          ),
+      ],
+    );
+    if (action == null || !anchorContext.mounted) return;
+    switch (action) {
+      case 'primary':
+        await withTimetablePersistenceFeedback(
+          anchorContext,
+          () => controller.setPrimarySchedule(meta.id),
+        );
+      case 'resync':
+        await _resyncOne(anchorContext);
+      case 'export':
+        await _exportWakeup(anchorContext);
+      case 'rename':
+        await showRenameScheduleDialog(
+          anchorContext,
+          controller: controller,
+          meta: meta,
+        );
+      case 'delete':
+        final confirmed = await showMiuixConfirmDialog(
+          anchorContext,
+          title: '删除课表',
+          message: '确定删除「${meta.name}」？本地数据将一并清除。',
+          contentKey: const Key('tt_delete_schedule_dialog'),
+          confirmLabel: '删除',
+          cancelLabel: '取消',
+          destructive: true,
+          confirmKey: const Key('tt_delete_schedule_confirm'),
+        );
+        if (!confirmed || !anchorContext.mounted) return;
+        final ok = await withTimetablePersistenceFeedback(
+          anchorContext,
+          () => controller.deleteSchedule(meta.id),
+        );
+        if (ok == true && anchorContext.mounted) {
+          ScaffoldMessenger.of(anchorContext).showSnackBar(
+            AppSnackBar(
+              tone: AppSnackBarTone.info,
+              content: Text('已删除「${meta.name}」'),
+            ),
+          );
+        }
+    }
   }
 }

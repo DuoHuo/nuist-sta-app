@@ -3,6 +3,7 @@ import 'timetable_persistence_feedback.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/app_snack_bar.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_edit_page.dart';
 import 'timetable_schedule_event_layout.dart';
@@ -11,60 +12,29 @@ import 'timetable_controller.dart';
 import 'timetable_theme.dart';
 import 'timetable_manual_course_form.dart';
 
-/// 「+」底部面板三选一（spec §14.1）：课程（现有每周重复的手动课）/ 考试 / 其他。
+/// 「+」原地弹出三选一（spec §14.1）：课程（现有每周重复的手动课）/ 考试 / 其他。
 Future<void> showAddEntrySheet(
-  BuildContext context, {
+  BuildContext anchorContext, {
   required TimetableController controller,
 }) async {
-  final choice = await showModalBottomSheet<String>(
-    context: context,
-    backgroundColor: TimetableTheme.colorsOf(context).surface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(
-        top: Radius.circular(TimetableTheme.sheetTopRadius),
+  final choice = await showMiuixOptionMenu<String>(
+    anchorContext,
+    anchorBounds: miuixAnchorRect(anchorContext),
+    menuKey: const Key('add_entry_sheet'),
+    items: const [
+      MiuixOptionItem(
+        key: Key('add_entry_course'),
+        value: 'course',
+        label: '课程',
+        description: '每周重复',
       ),
-    ),
-    builder: (ctx) => SafeArea(
-      child: Column(
-        key: const Key('add_entry_sheet'),
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 8),
-          Container(
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: TimetableTheme.colorsOf(context).divider,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 8),
-          ListTile(
-            key: const Key('add_entry_course'),
-            leading: const Icon(Icons.repeat),
-            title: const Text('课程'),
-            subtitle: const Text('每周重复'),
-            onTap: () => Navigator.pop(ctx, 'course'),
-          ),
-          ListTile(
-            key: const Key('add_entry_exam'),
-            leading: const Icon(Icons.edit_note),
-            title: const Text('考试'),
-            onTap: () => Navigator.pop(ctx, 'exam'),
-          ),
-          ListTile(
-            key: const Key('add_entry_other'),
-            leading: const Icon(Icons.event_outlined),
-            title: const Text('其他'),
-            onTap: () => Navigator.pop(ctx, 'other'),
-          ),
-        ],
-      ),
-    ),
+      MiuixOptionItem(key: Key('add_entry_exam'), value: 'exam', label: '考试'),
+      MiuixOptionItem(key: Key('add_entry_other'), value: 'other', label: '其他'),
+    ],
   );
-  if (choice == null || !context.mounted) return;
+  if (choice == null || !anchorContext.mounted) return;
   if (choice == 'course') {
-    await showManualCourseForm(context, controller: controller);
+    await showManualCourseForm(anchorContext, controller: controller);
     return;
   }
   // 默认日期：看本周时为今天；看别的周时为该周第一天。
@@ -75,7 +45,7 @@ Future<void> showAddEntrySheet(
           controller.visibleDays(controller.viewingWeek).first,
         );
   await showScheduleEventEditPage(
-    context,
+    anchorContext,
     controller: controller,
     kind: choice == 'exam' ? ScheduleKind.exam : ScheduleKind.other,
     initialDate: date,

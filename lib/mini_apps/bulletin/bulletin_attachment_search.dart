@@ -3,8 +3,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/colors.dart';
+import '../../core/ui/miuix_dialog.dart';
 import 'bulletin_attachment_preview.dart';
 
 const _channel = MethodChannel('dev.duohuo.nuist_sta_app/attachment_pdf');
@@ -195,6 +197,84 @@ Future<BulletinXlsMatches> findBulletinXlsText(
   return (matches: matches, sheets: sections);
 }
 
+/// 输入结果序号并跳转的弹窗内容。
+class _JumpToResultContent extends StatefulWidget {
+  const _JumpToResultContent({required this.count, required this.onClose});
+
+  final int count;
+  final ValueChanged<int?> onClose;
+
+  @override
+  State<_JumpToResultContent> createState() => _JumpToResultContentState();
+}
+
+class _JumpToResultContentState extends State<_JumpToResultContent> {
+  final _controller = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final number = int.tryParse(_controller.text.trim());
+    if (number == null || number < 1 || number > widget.count) {
+      setState(() => _error = '请输入 1 到 ${widget.count} 之间的序号');
+      return;
+    }
+    widget.onClose(number - 1);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MiuixTheme.of(context);
+    final primary = MiuixButtonDefaults.buttonColorsPrimary(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        MiuixTextField(
+          controller: _controller,
+          autofocus: true,
+          singleLine: true,
+          keyboardType: TextInputType.number,
+          label: '结果序号',
+          onChanged: (_) {
+            if (_error != null) setState(() => _error = null);
+          },
+          onSubmitted: (_) => _submit(),
+        ),
+        if (_error case final message?)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              message,
+              style: theme.textStyles.body2.copyWith(color: theme.colors.error),
+            ),
+          ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: MiuixButton(
+                colors: primary,
+                onPressed: () => widget.onClose(null),
+                child: const Text('取消'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: MiuixButton(onPressed: _submit, child: const Text('跳转')),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
 /// 附件预览顶部的实时搜索框、命中数和匹配选项。
 class BulletinSearchField extends StatelessWidget {
   const BulletinSearchField({
@@ -211,45 +291,12 @@ class BulletinSearchField extends StatelessWidget {
   Future<void> _promptJump(BuildContext context) async {
     final result = search.result;
     final count = search.count;
-    final form = GlobalKey<FormState>();
-    int? number;
-    final index = await showDialog<int>(
-      context: context,
-      builder: (context) {
-        void submit() {
-          if (form.currentState!.validate()) {
-            Navigator.of(context).pop(number! - 1);
-          }
-        }
-
-        return AlertDialog(
-          title: const Text('跳转到搜索结果'),
-          content: Form(
-            key: form,
-            child: TextFormField(
-              autofocus: true,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: InputDecoration(
-                labelText: '结果序号',
-                hintText: '1–$count',
-              ),
-              onChanged: (value) => number = int.tryParse(value),
-              onFieldSubmitted: (_) => submit(),
-              validator: (_) => number == null || number! < 1 || number! > count
-                  ? '请输入 1 到 $count 之间的序号'
-                  : null,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('取消'),
-            ),
-            TextButton(onPressed: submit, child: const Text('跳转')),
-          ],
-        );
-      },
+    final index = await showMiuixDialog<int>(
+      context,
+      title: '跳转到搜索结果',
+      centered: true,
+      builder: (dialogContext, dialog) =>
+          _JumpToResultContent(count: count, onClose: dialog.close),
     );
     if (context.mounted && index != null && identical(search.result, result)) {
       search.jumpTo(index);

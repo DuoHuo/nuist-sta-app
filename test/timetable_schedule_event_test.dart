@@ -233,11 +233,6 @@ void main() {
       await tester.tap(find.byTooltip('添加'));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('add_entry_sheet')), findsOneWidget);
-      final tiles = find.descendant(
-        of: find.byKey(const Key('add_entry_sheet')),
-        matching: find.byType(ListTile),
-      );
-      expect(tiles, findsNWidgets(3));
       for (final k in [
         'add_entry_course',
         'add_entry_exam',
@@ -249,7 +244,7 @@ void main() {
       expect(find.text('考试'), findsOneWidget);
       expect(find.text('其他'), findsOneWidget);
 
-      await tester.tap(find.byKey(const Key('add_entry_exam')));
+      await tester.tap(find.text('考试'));
       await tester.pumpAndSettle();
       expect(find.byType(ScheduleEventEditPage), findsOneWidget);
       expect(find.text('添加考试'), findsOneWidget);
@@ -264,7 +259,7 @@ void main() {
       }
       await tester.tap(find.byTooltip('添加'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('add_entry_other')));
+      await tester.tap(find.text('其他'));
       await tester.pumpAndSettle();
       expect(find.text('添加日程'), findsOneWidget);
       expect(find.byKey(const Key('schedule_form_course_code')), findsNothing);

@@ -2,7 +2,9 @@ import '../../core/navigation/app_page.dart';
 import 'timetable_persistence_feedback.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
+import '../../core/ui/miuix_dialog.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_layout.dart';
 import 'timetable_api.dart';
@@ -46,29 +48,16 @@ Future<bool> confirmDeleteScheduleEvent(
   } else {
     text = '删除这个日程？';
   }
-  final ok = await showDialog<bool>(
-    context: context,
-    useRootNavigator: false,
-    builder: (ctx) => AlertDialog(
-      content: Text(text, key: const Key('schedule_delete_message')),
-      actions: [
-        TextButton(
-          key: const Key('schedule_delete_cancel'),
-          onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('取消'),
-        ),
-        TextButton(
-          key: const Key('schedule_delete_confirm'),
-          onPressed: () => Navigator.pop(ctx, true),
-          style: TextButton.styleFrom(
-            foregroundColor: TimetableTheme.colorsOf(context).danger,
-          ),
-          child: const Text('删除'),
-        ),
-      ],
-    ),
+  return showMiuixConfirmDialog(
+    context,
+    message: text,
+    messageKey: const Key('schedule_delete_message'),
+    confirmLabel: '删除',
+    cancelLabel: '取消',
+    destructive: true,
+    cancelKey: const Key('schedule_delete_cancel'),
+    confirmKey: const Key('schedule_delete_confirm'),
   );
-  return ok == true;
 }
 
 class ScheduleEventEditPage extends StatefulWidget {
@@ -159,40 +148,17 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
     return _isEdit ? '编辑$noun' : '添加$noun';
   }
 
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _date,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100, 12, 31),
-      helpText: '选择日期',
-      cancelText: '取消',
-      confirmText: '确定',
-    );
-    if (picked == null || !mounted) return;
+  void _setDate(DateTime picked) {
     setState(() => _date = DateTime(picked.year, picked.month, picked.day));
   }
 
-  Future<void> _pickTime({required bool start}) async {
-    final cur = start ? _start : _end;
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay(hour: cur.hour, minute: cur.minute),
-      helpText: start ? '开始时间' : '结束时间',
-      cancelText: '取消',
-      confirmText: '确定',
-      builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
-        child: child!,
-      ),
-    );
-    if (picked == null || !mounted) return;
+  void _setTime({required bool start, required int hour, required int minute}) {
     setState(() {
-      final v = TimeOfDayMinutes(picked.hour, picked.minute);
+      final value = TimeOfDayMinutes(hour, minute);
       if (start) {
-        _start = v;
+        _start = value;
       } else {
-        _end = v;
+        _end = value;
       }
     });
   }
@@ -273,179 +239,245 @@ class _ScheduleEventEditPageState extends State<ScheduleEventEditPage> {
       ),
       body: Form(
         key: _formKey,
-        child: ListView(
+        // 表单内嵌日历与数字选择器后整体变高；一次性构建所有字段，
+        // 避免离屏字段在未滚动时不进入组件树。
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(TimetableTheme.pagePaddingH),
-          children: [
-            if (!_isJwxt) ...[
-              SegmentedButton<ScheduleKind>(
-                key: const Key('schedule_form_kind'),
-                segments: const [
-                  ButtonSegment(
-                    value: ScheduleKind.exam,
-                    label: Text('考试', key: Key('schedule_form_kind_exam')),
-                  ),
-                  ButtonSegment(
-                    value: ScheduleKind.other,
-                    label: Text('其他', key: Key('schedule_form_kind_other')),
-                  ),
-                ],
-                selected: {_kind},
-                showSelectedIcon: false,
-                onSelectionChanged: (s) => setState(() => _kind = s.first),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (!_isJwxt) ...[
+                SegmentedButton<ScheduleKind>(
+                  key: const Key('schedule_form_kind'),
+                  segments: const [
+                    ButtonSegment(
+                      value: ScheduleKind.exam,
+                      label: Text('考试', key: Key('schedule_form_kind_exam')),
+                    ),
+                    ButtonSegment(
+                      value: ScheduleKind.other,
+                      label: Text('其他', key: Key('schedule_form_kind_other')),
+                    ),
+                  ],
+                  selected: {_kind},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (s) => setState(() => _kind = s.first),
+                ),
+                const SizedBox(height: 12),
+              ],
+              TextFormField(
+                key: const Key('schedule_form_title'),
+                controller: _title,
+                decoration: InputDecoration(
+                  labelText: _kind == ScheduleKind.exam ? '考试名称' : '名称',
+                  hintText: '必填',
+                ),
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? '请填写名称' : null,
               ),
-              const SizedBox(height: 12),
-            ],
-            TextFormField(
-              key: const Key('schedule_form_title'),
-              controller: _title,
-              decoration: InputDecoration(
-                labelText: _kind == ScheduleKind.exam ? '考试名称' : '名称',
-                hintText: '必填',
+              const SizedBox(height: 8),
+              _FieldLabel(
+                key: const Key('schedule_form_date'),
+                icon: Icons.calendar_today_outlined,
+                label: '日期',
+                value: scheduleDateText(_date),
               ),
-              autovalidateMode: AutovalidateMode.onUserInteraction,
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? '请填写名称' : null,
-            ),
-            const SizedBox(height: 8),
-            _PickerRow(
-              key: const Key('schedule_form_date'),
-              icon: Icons.calendar_today_outlined,
-              label: '日期',
-              value: scheduleDateText(_date),
-              onTap: _pickDate,
-            ),
-            // EV-1：日期不在本学期周次内 → 灰色提示，仍可保存（首页照常显示）。
-            if (isOutsideTermWeeks(widget.controller, _date))
-              Padding(
-                padding: const EdgeInsets.fromLTRB(40, 0, 0, 8),
-                child: Text(
-                  kOutsideTermHint,
-                  key: const Key('schedule_form_outside_term_hint'),
-                  style: TimetableTheme.captionStyle(
-                    color: TimetableTheme.colorsOf(context).hint,
-                  ),
+              const SizedBox(height: 4),
+              MiuixTheme(
+                data: MiuixThemeData.of(Theme.of(context).brightness),
+                child: MiuixDatePicker(
+                  initialDate: _date,
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2100, 12, 31),
+                  weekStart: MiuixWeekStart.sunday,
+                  onDateChanged: _setDate,
                 ),
               ),
-            _PickerRow(
-              key: const Key('schedule_form_start'),
-              icon: Icons.access_time,
-              label: '开始时间',
-              value: _start.format(),
-              onTap: () => _pickTime(start: true),
-            ),
-            _PickerRow(
-              key: const Key('schedule_form_end'),
-              icon: Icons.access_time_filled_outlined,
-              label: '结束时间',
-              value: _end.format(),
-              onTap: () => _pickTime(start: false),
-            ),
-            if (!_timeValid)
-              Padding(
-                padding: const EdgeInsets.only(left: 16, top: 4),
-                child: Text(
-                  '结束时间需晚于开始时间',
-                  key: const Key('schedule_form_time_error'),
-                  style: TimetableTheme.captionStyle(
-                    color: _triedSave
-                        ? TimetableTheme.colorsOf(context).danger
-                        : TimetableTheme.colorsOf(context).warning,
+              // EV-1：日期不在本学期周次内 → 灰色提示，仍可保存（首页照常显示）。
+              if (isOutsideTermWeeks(widget.controller, _date))
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(40, 0, 0, 8),
+                  child: Text(
+                    kOutsideTermHint,
+                    key: const Key('schedule_form_outside_term_hint'),
+                    style: TimetableTheme.captionStyle(
+                      color: TimetableTheme.colorsOf(context).hint,
+                    ),
                   ),
                 ),
+              _FieldLabel(
+                key: const Key('schedule_form_start'),
+                icon: Icons.access_time,
+                label: '开始时间',
+                value: _start.format(),
               ),
-            const SizedBox(height: 8),
-            TextFormField(
-              key: const Key('schedule_form_location'),
-              controller: _location,
-              decoration: const InputDecoration(
-                labelText: '地点',
-                hintText: '选填',
+              _TimeNumberPickers(
+                hour: _start.hour,
+                minute: _start.minute,
+                onChanged: (hour, minute) =>
+                    _setTime(start: true, hour: hour, minute: minute),
               ),
-            ),
-            const SizedBox(height: 8),
-            TextFormField(
-              key: const Key('schedule_form_note'),
-              controller: _note,
-              maxLines: 3,
-              minLines: 1,
-              decoration: const InputDecoration(
-                labelText: '备注',
-                hintText: '选填',
+              _FieldLabel(
+                key: const Key('schedule_form_end'),
+                icon: Icons.access_time_filled_outlined,
+                label: '结束时间',
+                value: _end.format(),
               ),
-            ),
-            if (_kind == ScheduleKind.exam || _isJwxt) ...[
+              _TimeNumberPickers(
+                hour: _end.hour,
+                minute: _end.minute,
+                onChanged: (hour, minute) =>
+                    _setTime(start: false, hour: hour, minute: minute),
+              ),
+              if (!_timeValid)
+                Padding(
+                  padding: const EdgeInsets.only(left: 16, top: 4),
+                  child: Text(
+                    '结束时间需晚于开始时间',
+                    key: const Key('schedule_form_time_error'),
+                    style: TimetableTheme.captionStyle(
+                      color: _triedSave
+                          ? TimetableTheme.colorsOf(context).danger
+                          : TimetableTheme.colorsOf(context).warning,
+                    ),
+                  ),
+                ),
               const SizedBox(height: 8),
               TextFormField(
-                key: const Key('schedule_form_course_code'),
-                controller: _courseCode,
-                readOnly: _isJwxt,
-                enabled: !_isJwxt,
-                decoration: InputDecoration(
-                  labelText: '课程号',
-                  hintText: _isJwxt ? null : '选填',
-                  helperText: _isJwxt ? '来自教务，不可修改' : null,
+                key: const Key('schedule_form_location'),
+                controller: _location,
+                decoration: const InputDecoration(
+                  labelText: '地点',
+                  hintText: '选填',
                 ),
               ),
-            ],
-            if (_isEdit) ...[
-              const SizedBox(height: 24),
-              SizedBox(
-                height: 44,
-                child: OutlinedButton.icon(
-                  key: const Key('schedule_form_delete'),
-                  onPressed: _saving ? null : _delete,
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  label: const Text('删除'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: TimetableTheme.colorsOf(context).danger,
-                    shape: const StadiumBorder(),
+              const SizedBox(height: 8),
+              TextFormField(
+                key: const Key('schedule_form_note'),
+                controller: _note,
+                maxLines: 3,
+                minLines: 1,
+                decoration: const InputDecoration(
+                  labelText: '备注',
+                  hintText: '选填',
+                ),
+              ),
+              if (_kind == ScheduleKind.exam || _isJwxt) ...[
+                const SizedBox(height: 8),
+                TextFormField(
+                  key: const Key('schedule_form_course_code'),
+                  controller: _courseCode,
+                  readOnly: _isJwxt,
+                  enabled: !_isJwxt,
+                  decoration: InputDecoration(
+                    labelText: '课程号',
+                    hintText: _isJwxt ? null : '选填',
+                    helperText: _isJwxt ? '来自教务，不可修改' : null,
                   ),
                 ),
-              ),
+              ],
+              if (_isEdit) ...[
+                const SizedBox(height: 24),
+                SizedBox(
+                  height: 44,
+                  child: OutlinedButton.icon(
+                    key: const Key('schedule_form_delete'),
+                    onPressed: _saving ? null : _delete,
+                    icon: const Icon(Icons.delete_outline, size: 20),
+                    label: const Text('删除'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: TimetableTheme.colorsOf(context).danger,
+                      shape: const StadiumBorder(),
+                    ),
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _PickerRow extends StatelessWidget {
-  const _PickerRow({
+/// 字段标题行：图标 + 名称 + 当前值；具体编辑控件放在下方内嵌展示。
+class _FieldLabel extends StatelessWidget {
+  const _FieldLabel({
     super.key,
     required this.icon,
     required this.label,
     required this.value,
-    required this.onTap,
   });
 
   final IconData icon;
   final String label;
   final String value;
-  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-      leading: Icon(
-        icon,
-        size: 20,
-        color: TimetableTheme.colorsOf(context).hint,
+    final colors = TimetableTheme.colorsOf(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: colors.hint),
+          const SizedBox(width: 8),
+          Text(label, style: TimetableTheme.bodyStyle(color: colors.labelText)),
+          const Spacer(),
+          Text(value, style: TimetableTheme.bodyStyle(color: colors.titleText)),
+        ],
       ),
-      title: Text(
-        label,
-        style: TimetableTheme.bodyStyle(
-          color: TimetableTheme.colorsOf(context).labelText,
+    );
+  }
+}
+
+/// 内嵌的时、分两列数字选择器。
+class _TimeNumberPickers extends StatelessWidget {
+  const _TimeNumberPickers({
+    required this.hour,
+    required this.minute,
+    required this.onChanged,
+  });
+
+  final int hour;
+  final int minute;
+  final void Function(int hour, int minute) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return MiuixTheme(
+      data: MiuixThemeData.of(Theme.of(context).brightness),
+      child: SizedBox(
+        height: 135,
+        child: Row(
+          children: [
+            Expanded(
+              child: MiuixNumberPicker(
+                value: hour,
+                min: 0,
+                max: 23,
+                wrapAround: true,
+                visibleItemCount: 3,
+                label: (value) => '$value 时',
+                onValueChanged: (value) => onChanged(value, minute),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: MiuixNumberPicker(
+                value: minute,
+                min: 0,
+                max: 59,
+                wrapAround: true,
+                visibleItemCount: 3,
+                label: (value) => '$value 分',
+                onValueChanged: (value) => onChanged(hour, value),
+              ),
+            ),
+          ],
         ),
       ),
-      trailing: Text(
-        value,
-        style: TimetableTheme.bodyStyle(
-          color: TimetableTheme.colorsOf(context).titleText,
-        ),
-      ),
-      onTap: onTap,
     );
   }
 }

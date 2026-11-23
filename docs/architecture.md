@@ -25,7 +25,7 @@ lib/
 │   ├── navigation/     # 固定分支导航器、所属栏跳转与预测性返回协调
 │   ├── network/        # 自有服务客户端与元数据；校园 VPN 与 Rust 原生库的 FFI 封装
 │   ├── privacy/        # 隐私政策同意状态、匿名标识与同意/撤回弹窗 —— 见下文「隐私同意」
-│   ├── ui/             # miuix_bottom_dialog.dart：Miuix 风格的下半屏对话框
+│   ├── ui/             # miuix_dialog.dart：Miuix 对话框（确认、选项、输入）与页面内弹层宿主
 │   ├── schedule/       # WeeklyClasses：「本周课程」跨小程序接口（课表提供，地图读取）
 │   ├── app_manifest.dart   # AppManifest：小程序描述
 │   ├── app_registry.dart   # AppRegistry：注册校验与宫格、学习卡片、入口索引
@@ -365,7 +365,7 @@ ANCO 环境优先于普通 ROM 判断，类别为 `HarmonyOSNEXT`；从宿主软
 课表分享要和社团服务器交换数据（生成口令上传课表快照，导入口令上传口令），必须先同意：
 `ensurePrivacyConsent` 在生成口令和导入真实口令前弹窗询问，内置演示口令只在本地解析，不拦截。
 首次启动的同意弹窗由 `app.dart` 在首帧后弹出，设置页的入口提供撤回（弹窗内 10 秒倒计时）和重新同意。
-这些弹窗用 `core/ui/miuix_bottom_dialog.dart`（`flutter_miuix`），手机上从下半屏弹出。
+这些弹窗用 `core/ui/miuix_dialog.dart`（`flutter_miuix`），手机上从下半屏弹出。
 `core` 不能依赖 `shell`，所以隐私政策页入口通过 `PrivacyConsent.openPolicy` 由壳在启动时登记。
 服务端把 `random_uuid_v1` 的请求单独统计，不与现有设备和请求数混合，见 nuist-sta-server 的 README。
 

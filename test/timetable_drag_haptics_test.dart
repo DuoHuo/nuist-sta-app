@@ -155,8 +155,8 @@ void main() {
       ]);
       await tester.pump(const Duration(milliseconds: 400));
       await tester.pumpAndSettle();
-      expect(find.text('此更改应用范围？'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('drag_scope_cancel')));
+      expect(find.byKey(const Key('drag_scope_sheet')), findsOneWidget);
+      await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       expect(haptics, [
         'HapticFeedbackType.mediumImpact',
@@ -176,7 +176,7 @@ void main() {
       await tester.pump();
       await g.up();
       await tester.pumpAndSettle();
-      expect(find.text('此更改应用范围？'), findsNothing);
+      expect(find.byKey(const Key('drag_scope_sheet')), findsNothing);
       expect(haptics, ['HapticFeedbackType.mediumImpact']);
     });
 

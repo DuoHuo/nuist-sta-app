@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
@@ -262,13 +263,12 @@ void main() {
       await tester.pumpAndSettle();
       final sheet = find.byKey(const Key('add_entry_sheet'));
       expect(sheet, findsOneWidget);
-      expect(
-        find.descendant(of: sheet, matching: find.byType(ListTile)),
-        findsNWidgets(3),
-      );
       for (final t in ['课程', '考试', '其他']) {
         expect(
-          find.descendant(of: sheet, matching: find.text(t)),
+          find.descendant(
+            of: find.byType(MiuixPopupHost),
+            matching: find.text(t),
+          ),
           findsOneWidget,
           reason: t,
         );
