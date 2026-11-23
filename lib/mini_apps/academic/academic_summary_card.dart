@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/navigation/app_navigation.dart';
@@ -11,19 +13,32 @@ import 'academic_models.dart';
 ///
 /// 未绑定门户 / 从未拉到数据时只显示一行提示，不撑出空表格。
 class AcademicSummaryCard extends StatefulWidget {
-  const AcademicSummaryCard({super.key});
+  const AcademicSummaryCard({super.key, this.controller});
+
+  /// 宿主可注入独立状态，默认使用学习页共享实例。
+  final AcademicController? controller;
 
   @override
   State<AcademicSummaryCard> createState() => _AcademicSummaryCardState();
 }
 
 class _AcademicSummaryCardState extends State<AcademicSummaryCard> {
-  final _controller = AcademicController.instance;
+  late final _controller = widget.controller ?? AcademicController.instance;
+  bool _cacheLoadRequested = false;
+  bool _startRequested = false;
 
   @override
-  void initState() {
-    super.initState();
-    _controller.ensureStarted();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_startRequested) return;
+    if (AppNavigation.isVisibleOf(context)) {
+      _startRequested = true;
+      _cacheLoadRequested = true;
+      unawaited(_controller.ensureStarted());
+    } else if (!_cacheLoadRequested) {
+      _cacheLoadRequested = true;
+      unawaited(_controller.ensureCacheLoaded());
+    }
   }
 
   @override

@@ -29,9 +29,11 @@ void main() {
       );
       return _Controller(
         notifier: controller,
+        ensureCacheLoaded: controller.ensureCacheLoaded,
         ensureStarted: controller.ensureStarted,
         refresh: controller.refresh,
         bindingChanged: controller.onPortalBindingChanged,
+        debugReset: controller.debugReset,
         data: () => controller.summary,
         bound: () => controller.portalBound,
         loading: () => controller.loading,
@@ -51,9 +53,11 @@ void main() {
       );
       return _Controller(
         notifier: controller,
+        ensureCacheLoaded: controller.ensureCacheLoaded,
         ensureStarted: controller.ensureStarted,
         refresh: controller.refresh,
         bindingChanged: controller.onPortalBindingChanged,
+        debugReset: controller.debugReset,
         data: () => controller.info,
         bound: () => controller.portalBound,
         loading: () => controller.loading,
@@ -73,9 +77,11 @@ void main() {
       );
       return _Controller(
         notifier: controller,
+        ensureCacheLoaded: controller.ensureCacheLoaded,
         ensureStarted: controller.ensureStarted,
         refresh: controller.refresh,
         bindingChanged: controller.onPortalBindingChanged,
+        debugReset: controller.debugReset,
         data: () => controller.report,
         bound: () => controller.portalBound,
         loading: () => controller.loading,
@@ -96,9 +102,11 @@ void main() {
       );
       return _Controller(
         notifier: controller,
+        ensureCacheLoaded: controller.ensureCacheLoaded,
         ensureStarted: controller.ensureStarted,
         refresh: controller.refresh,
         bindingChanged: controller.onPortalBindingChanged,
+        debugReset: controller.debugReset,
         data: () => controller.credit,
         bound: () => controller.portalBound,
         loading: () => controller.loading,
@@ -124,14 +132,46 @@ void main() {
       );
       return _Controller(
         notifier: controller,
+        ensureCacheLoaded: controller.ensureCacheLoaded,
         ensureStarted: controller.ensureStarted,
         refresh: controller.refresh,
         bindingChanged: controller.onPortalBindingChanged,
+        debugReset: controller.debugReset,
         data: () => controller.score,
         bound: () => controller.portalBound,
         loading: () => controller.loading,
         error: () => controller.error,
       );
+    },
+  );
+
+  test(
+    'student_info ensureCacheLoaded 标记 infoFromCache，远端刷新与 debugReset 后复位',
+    () async {
+      final stale = StudentInfo.fromJson(
+        const {},
+        fetchedAt: DateTime.now().subtract(const Duration(days: 1)),
+      );
+      final fresh = StudentInfo.fromJson(const {}, fetchedAt: DateTime.now());
+      final controller = StudentInfoController.forTesting(
+        readCache: () async => stale,
+        saveCache: (_) async {},
+        fetch: () async => fresh,
+        bindingCheck: () async => true,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.ensureCacheLoaded();
+      expect(controller.info, same(stale));
+      expect(controller.infoFromCache, isTrue);
+
+      await controller.ensureStarted();
+      expect(controller.info, same(fresh));
+      expect(controller.infoFromCache, isFalse);
+
+      controller.debugReset();
+      expect(controller.info, isNull);
+      expect(controller.infoFromCache, isFalse);
     },
   );
 }
@@ -336,6 +376,169 @@ void _registerCases<T>(
       expect(dependencies.requests, 1);
       expect(dependencies.saved, [fresh]);
     });
+
+    test(
+      'ensureCacheLoaded 仅读本地过期缓存不发请求，后续 ensureStarted 触发拉取且不重复读盘',
+      () async {
+        final stale = makeData(
+          DateTime.now().subtract(const Duration(days: 1)),
+        );
+        dependencies.cached = stale;
+        var notifications = 0;
+        controller.notifier.addListener(() => notifications++);
+
+        await controller.ensureCacheLoaded();
+        expect(dependencies.reads, 1);
+        expect(dependencies.bindingChecks, 1);
+        expect(dependencies.requests, 0);
+        expect(controller.data(), same(stale));
+        expect(controller.bound(), isTrue);
+        expect(controller.loading(), isFalse);
+        expect(notifications, greaterThan(0));
+
+        // 重复调用 ensureCacheLoaded 幂等，不重复读盘或检查绑定。
+        await controller.ensureCacheLoaded();
+        expect(dependencies.reads, 1);
+        expect(dependencies.bindingChecks, 1);
+        expect(dependencies.requests, 0);
+
+        // 后续进入可见态调用 ensureStarted：复用缓存加载，按过期策略触发一次远端拉取。
+        await controller.ensureStarted();
+        expect(dependencies.reads, 1);
+        expect(dependencies.requests, 1);
+        expect(controller.data(), same(fresh));
+        expect(dependencies.saved, [fresh]);
+
+        // 再次调用 ensureStarted 不重复拉取。
+        await controller.ensureStarted();
+        expect(dependencies.reads, 1);
+        expect(dependencies.requests, 1);
+      },
+    );
+
+    test('ensureCacheLoaded 命中当天缓存后，后续 ensureStarted 不重复读盘且不发远端请求', () async {
+      await controller.ensureCacheLoaded();
+      expect(dependencies.reads, 1);
+      expect(dependencies.requests, 0);
+      expect(controller.data(), same(cached));
+
+      await controller.ensureStarted();
+      expect(dependencies.reads, 1);
+      expect(dependencies.requests, 0);
+      expect(controller.data(), same(cached));
+    });
+
+    test('ensureCacheLoaded 遇到空缓存或未绑定均不发请求，后续 ensureStarted 按绑定状态决定', () async {
+      dependencies.cached = null;
+      await controller.ensureCacheLoaded();
+      expect(dependencies.reads, 1);
+      expect(dependencies.requests, 0);
+      expect(controller.data(), isNull);
+      expect(controller.bound(), isTrue);
+
+      await controller.ensureStarted();
+      expect(dependencies.reads, 1);
+      expect(dependencies.requests, 1);
+      expect(controller.data(), same(fresh));
+
+      // 重置为未绑定状态后再测一次。
+      controller.debugReset();
+      dependencies.bindingOverride = () async => false;
+      dependencies.cached = makeData(
+        DateTime.now().subtract(const Duration(days: 1)),
+      );
+      await controller.ensureCacheLoaded();
+      expect(dependencies.reads, 2);
+      expect(dependencies.requests, 1);
+      expect(controller.bound(), isFalse);
+      expect(controller.data(), same(dependencies.cached));
+
+      await controller.ensureStarted();
+      expect(dependencies.reads, 2);
+      expect(dependencies.requests, 1);
+      expect(controller.bound(), isFalse);
+    });
+
+    test('并发调用 ensureCacheLoaded 与 ensureStarted 共用同一次读盘过程', () async {
+      final stale = makeData(DateTime.now().subtract(const Duration(days: 1)));
+      final cacheRead = Completer<T?>();
+      dependencies.readOverride = () => cacheRead.future;
+
+      final firstCache = controller.ensureCacheLoaded();
+      final secondCache = controller.ensureCacheLoaded();
+      expect(firstCache, same(secondCache));
+      final starting = controller.ensureStarted();
+      expect(dependencies.reads, 1);
+      expect(dependencies.requests, 0);
+
+      cacheRead.complete(stale);
+      await Future.wait([firstCache, secondCache, starting]);
+      expect(dependencies.reads, 1);
+      expect(dependencies.requests, 1);
+      expect(controller.data(), same(fresh));
+    });
+
+    test('ensureCacheLoaded 在途发生重绑时旧缓存不覆盖新数据，后续 ensureStarted 不重复拉取', () async {
+      final cacheRead = Completer<T?>();
+      dependencies.readOverride = () => cacheRead.future;
+      final seen = <T?>[];
+      controller.notifier.addListener(() => seen.add(controller.data()));
+
+      final loading = controller.ensureCacheLoaded();
+      final binding = controller.bindingChanged(true);
+      cacheRead.complete(cached);
+      await Future.wait([loading, binding]);
+
+      expect(dependencies.reads, 1);
+      expect(dependencies.requests, 1);
+      expect(controller.data(), same(fresh));
+      expect(seen, isNot(contains(same(cached))));
+
+      await controller.ensureStarted();
+      expect(dependencies.reads, 1);
+      expect(dependencies.requests, 1);
+    });
+
+    test('ensureCacheLoaded 后解绑再调用 ensureStarted 不发请求且保留缓存', () async {
+      final stale = makeData(DateTime.now().subtract(const Duration(days: 1)));
+      dependencies.cached = stale;
+      await controller.ensureCacheLoaded();
+      await controller.bindingChanged(false);
+      await controller.ensureStarted();
+
+      expect(dependencies.reads, 1);
+      expect(dependencies.requests, 0);
+      expect(controller.bound(), isFalse);
+      expect(controller.data(), same(stale));
+    });
+
+    test('debugReset 清空所有状态并使在途读盘失效，重置后可重新加载缓存与启动', () async {
+      final pendingRead = Completer<T?>();
+      dependencies.readOverride = () => pendingRead.future;
+      final stale = makeData(DateTime.now().subtract(const Duration(days: 1)));
+      final inFlight = controller.ensureCacheLoaded();
+      expect(dependencies.reads, 1);
+
+      controller.debugReset();
+      pendingRead.complete(stale);
+      await inFlight;
+      expect(controller.data(), isNull);
+      expect(controller.bound(), isTrue);
+      expect(controller.loading(), isFalse);
+      expect(controller.error(), isNull);
+
+      dependencies.readOverride = null;
+      dependencies.cached = stale;
+      await controller.ensureCacheLoaded();
+      expect(dependencies.reads, 2);
+      expect(dependencies.requests, 0);
+      expect(controller.data(), same(stale));
+
+      await controller.ensureStarted();
+      expect(dependencies.reads, 2);
+      expect(dependencies.requests, 1);
+      expect(controller.data(), same(fresh));
+    });
   });
 }
 
@@ -346,6 +549,7 @@ class _Dependencies<T> {
   T next;
   int reads = 0;
   int requests = 0;
+  int bindingChecks = 0;
   final List<T> saved = [];
   Future<T?> Function()? readOverride;
   Future<T> Function()? fetchOverride;
@@ -367,16 +571,20 @@ class _Dependencies<T> {
     saved.add(value);
   }
 
-  Future<bool> bindingCheck() async =>
-      bindingOverride == null ? true : await bindingOverride!();
+  Future<bool> bindingCheck() async {
+    bindingChecks++;
+    return bindingOverride == null ? true : await bindingOverride!();
+  }
 }
 
 class _Controller<T> {
   _Controller({
     required this.notifier,
+    required this.ensureCacheLoaded,
     required this.ensureStarted,
     required this.refresh,
     required this.bindingChanged,
+    required this.debugReset,
     required this.data,
     required this.bound,
     required this.loading,
@@ -384,9 +592,11 @@ class _Controller<T> {
   });
 
   final ChangeNotifier notifier;
+  final Future<void> Function() ensureCacheLoaded;
   final Future<void> Function() ensureStarted;
   final Future<void> Function() refresh;
   final Future<void> Function(bool) bindingChanged;
+  final void Function() debugReset;
   final T? Function() data;
   final bool Function() bound;
   final bool Function() loading;

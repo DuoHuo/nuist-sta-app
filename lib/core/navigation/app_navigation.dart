@@ -346,6 +346,17 @@ class AppNavigationScope extends InheritedWidget {
 
 /// 保留查询参数、extra 和泛型返回结果的面板导航入口。
 abstract final class AppNavigation {
+  /// 当前上下文所在面板与路由是否对用户可见，并订阅可见性变化。
+  ///
+  /// 结合 [AppNavigationScope.visible] 与 [TickerMode]：在后台预加载的页签或被
+  /// 上层路由遮挡时返回 `false`，独立宿主（无 [AppNavigationScope]）则仅看
+  /// [TickerMode]。适合在 `didChangeDependencies` 中决定是否触发远端刷新。
+  static bool isVisibleOf(BuildContext context) {
+    final scope = AppNavigationScope.maybeOf(context);
+    final tickerEnabled = TickerMode.valuesOf(context).enabled;
+    return (scope?.visible ?? true) && tickerEnabled;
+  }
+
   /// 将公开详情路径放入所属分支，独立小程序宿主继续使用原有路径。
   static Future<T?> push<T extends Object?>(
     BuildContext context,
