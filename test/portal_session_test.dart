@@ -177,12 +177,12 @@ class _Campus {
   int rulesRequests = 0;
   Future<void> Function()? callbackGate;
 
-  Future<void> saveVpnSession() async {
+  Future<void> saveVpnSession({String sessionId = 'valid'}) async {
     final info = base64Encode(
       utf8.encode(jsonEncode({'userId': 'a' * 32, 'username': '202512340001'})),
     );
     await cookies.openJar().saveFromResponse(Uri.parse(VpnAuth.controller), [
-      Cookie('ENSSESSIONID', 'valid')
+      Cookie('ENSSESSIONID', sessionId)
         ..path = '/'
         ..secure = true,
       Cookie('clientInfo', info)
@@ -793,6 +793,328 @@ void main() {
     );
     expect((await vpn.obtain()).token, 'synthetic-token');
     expect(requests, 2);
+    expect(campus.assertions, 1);
+  });
+
+  test('VPN 控制器返回 1001 被踢下线时清理旧 Cookie 并经 CAS 重登恢复', () async {
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
+    final storage = _MemoryStorage();
+    final campus = _Campus(PortalCookieStore(storage: storage));
+    await campus.saveVpnSession(sessionId: 'kicked');
+    var rulesRequests = 0;
+    var callbacks = 0;
+    String? callbackCookieHeader;
+    final vpn = VpnAuth(
+      cas: campus.cas,
+      readCredential: () async => _bundle(),
+      createHttp: (jar) => _http(jar, (options) {
+        if (options.uri.path.contains('/callback/cas')) {
+          callbacks++;
+          callbackCookieHeader = options.headers[HttpHeaders.cookieHeader]
+              ?.toString();
+        }
+        if (options.uri.path.contains('/terminal/rules/')) {
+          rulesRequests++;
+          final cookie = '${options.headers[HttpHeaders.cookieHeader]}';
+          if (cookie.contains('ENSSESSIONID=kicked')) {
+            return _json({
+              'code': '1001',
+              'messages': 'Account was kicked offline by the administrator, please log in again!',
+              'data': null,
+            });
+          }
+        }
+        return campus.controller(options);
+      }),
+    );
+
+    final credentials = await vpn.obtain();
+    expect(credentials.token, 'synthetic-token');
+    expect(rulesRequests, 2);
+    expect(callbacks, 1);
+    expect(campus.assertions, 1);
+    expect(
+      callbackCookieHeader ?? '',
+      isNot(contains('ENSSESSIONID')),
+      reason: 'CAS 回调前必须已清理失效的控制器会话 Cookie',
+    );
+    expect(callbackCookieHeader ?? '', isNot(contains('clientInfo')));
+
+    final rejected = records
+        .where((record) => record['event'] == 'authentication.session_rejected')
+        .toList();
+    expect(rejected, hasLength(1));
+    final attrs = (rejected.single['attrs'] as Map).cast<String, Object?>();
+    expect(attrs['reason_code'], 'controller_session_expired');
+    expect(attrs['response_code'], 1001);
+    expect(attrs['attempt'], 1);
+    expect(attrs.containsKey('field_validation'), isFalse);
+    expect(
+      jsonEncode(rejected.single),
+      isNot(contains('Account was kicked offline')),
+      reason: '结构化会话失效事件不应把原始服务端文案直接写入摘要字段',
+    );
+
+    // 验证重启后磁盘已保存新会话，不再卡在被踢的旧 Cookie 上。
+    final restarted = _Campus(PortalCookieStore(storage: storage))
+      ..vpnValid = true;
+    expect((await restarted.vpn().obtain()).token, 'synthetic-token');
+    expect(restarted.authRequests, 0);
+    expect(restarted.assertions, 0);
+    expect(restarted.rulesRequests, 1);
+  });
+
+  test('VPN 控制器返回 1001 且 CASTGC 仍有效时清理控制器 Cookie 并仅走 SSO', () async {
+    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+    await campus.saveVpnSession(sessionId: 'kicked');
+    await campus.cookies.openJar().saveFromResponse(
+      Uri.parse('${NuistLogin.authserverNormal}/authserver/login'),
+      [
+        Cookie('CASTGC', 'valid')
+          ..path = '/authserver'
+          ..secure = true,
+      ],
+    );
+    var rulesRequests = 0;
+    final vpn = VpnAuth(
+      cas: campus.cas,
+      readCredential: () async => _bundle(),
+      createHttp: (jar) => _http(jar, (options) {
+        if (options.uri.path.contains('/terminal/rules/')) {
+          rulesRequests++;
+          final cookie = '${options.headers[HttpHeaders.cookieHeader]}';
+          if (cookie.contains('ENSSESSIONID=kicked')) {
+            return _json({
+              'code': '1001',
+              'messages': 'Account was kicked offline by the administrator, please log in again!',
+              'data': null,
+            });
+          }
+        }
+        return campus.controller(options);
+      }),
+    );
+
+    expect((await vpn.obtain()).token, 'synthetic-token');
+    expect(rulesRequests, 2);
+    expect(campus.assertions, 0);
+    expect(campus.authRequests, 1);
+  });
+
+  test('VPN HTTP 200 业务码 401、1001 整型及 1000 英文失效提示均可恢复会话', () async {
+    final cases = <({Map<String, Object?> payload, int expectedCode})>[
+      (
+        payload: {'code': '401', 'messages': 'Unauthorized', 'data': null},
+        expectedCode: 401,
+      ),
+      (
+        payload: {
+          'code': '1000',
+          'messages': 'Session expired, Please Log In Again!',
+          'data': null,
+        },
+        expectedCode: 1000,
+      ),
+      (
+        payload: {
+          'code': '1000',
+          'messages': 'Account was Kicked Offline',
+          'data': null,
+        },
+        expectedCode: 1000,
+      ),
+      (
+        payload: {'code': 1001, 'messages': null, 'data': null},
+        expectedCode: 1001,
+      ),
+    ];
+    for (final testCase in cases) {
+      final records = <Map<String, Object?>>[];
+      AppLog.recordListenerForTesting = records.add;
+      try {
+        final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+        await campus.saveVpnSession(sessionId: 'stale');
+        var rulesRequests = 0;
+        final vpn = VpnAuth(
+          cas: campus.cas,
+          readCredential: () async => _bundle(),
+          createHttp: (jar) => _http(jar, (options) {
+            if (options.uri.path.contains('/terminal/rules/')) {
+              rulesRequests++;
+              if (!campus.vpnValid) return _json(testCase.payload);
+            }
+            return campus.controller(options);
+          }),
+        );
+        expect((await vpn.obtain()).token, 'synthetic-token');
+        expect(rulesRequests, 2);
+        expect(campus.assertions, 1);
+        final rejected = records.singleWhere(
+          (record) => record['event'] == 'authentication.session_rejected',
+        );
+        final attrs = (rejected['attrs'] as Map).cast<String, Object?>();
+        expect(attrs['reason_code'], 'controller_session_expired');
+        expect(attrs['response_code'], testCase.expectedCode);
+        expect(attrs.containsKey('field_validation'), isFalse);
+      } finally {
+        AppLog.recordListenerForTesting = null;
+      }
+    }
+  });
+
+  test('VPN 刚 CAS 重登后仍持续返回 1001 时抛 PortalLoginError 且不死循环', () async {
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
+    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+    await campus.saveVpnSession(sessionId: 'kicked');
+    var rulesRequests = 0;
+    var callbacks = 0;
+    final vpn = VpnAuth(
+      cas: campus.cas,
+      readCredential: () async => _bundle(),
+      createHttp: (jar) => _http(jar, (options) {
+        if (options.uri.path.contains('/callback/cas')) callbacks++;
+        if (options.uri.path.contains('/terminal/rules/')) {
+          rulesRequests++;
+          return _json({
+            'code': '1001',
+            'messages': 'Account was kicked offline by the administrator, please log in again!',
+            'data': null,
+          });
+        }
+        return campus.controller(options);
+      }),
+    );
+
+    await expectLater(
+      vpn.obtain(),
+      throwsA(
+        isA<PortalLoginError>()
+            .having((e) => e.code, 'code', 'vpn_controller_rules_rejected')
+            .having((e) => e.stage, 'stage', 'vpn.rules.validate')
+            .having((e) => e.context['response_code'], 'response_code', '1001')
+            .having((e) => e.context['attempt'], 'attempt', 1)
+            .having(
+              (e) => (e.context['details'] as Map)['after_cas_relogin'],
+              'after_cas_relogin',
+              isTrue,
+            )
+            .having(
+              (e) => (e.context['details'] as Map)['session_expired'],
+              'session_expired',
+              isTrue,
+            ),
+      ),
+    );
+    expect(rulesRequests, 2);
+    expect(callbacks, 1);
+    expect(campus.assertions, 1);
+    final rejected = records
+        .where((record) => record['event'] == 'authentication.session_rejected')
+        .toList();
+    expect(rejected, hasLength(2));
+    for (final record in rejected) {
+      final attrs = (record['attrs'] as Map).cast<String, Object?>();
+      expect(attrs['reason_code'], 'controller_session_expired');
+      expect(attrs['response_code'], 1001);
+      expect(attrs.containsKey('field_validation'), isFalse);
+    }
+  });
+
+  test('VPN 控制器返回未知错误码 500 或非重登 1000 错误时直接抛 PortalLoginError', () async {
+    // 场景 1：复用旧会话遇到未知错误码 500 或非重登 1000 错误，不清 Cookie 也不触发 CAS。
+    for (final failure in [
+      {'code': '500', 'messages': 'Internal server error', 'data': null},
+      {'code': '1000', 'messages': '系统繁忙，请稍后再试', 'data': null},
+    ]) {
+      final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+      await campus.saveVpnSession(sessionId: 'valid');
+      var rulesRequests = 0;
+      final vpn = VpnAuth(
+        cas: campus.cas,
+        readCredential: () async => _bundle(),
+        createHttp: (jar) => _http(jar, (options) {
+          if (options.uri.path.contains('/terminal/rules/')) {
+            rulesRequests++;
+            return _json(failure);
+          }
+          return campus.controller(options);
+        }),
+      );
+      await expectLater(
+        vpn.obtain(),
+        throwsA(
+          isA<PortalLoginError>()
+              .having((e) => e.code, 'code', 'vpn_controller_rules_rejected')
+              .having((e) => e.stage, 'stage', 'vpn.rules.validate')
+              .having(
+                (e) => e.context['response_code'],
+                'response_code',
+                failure['code'],
+              )
+              .having((e) => e.context['attempt'], 'attempt', 1),
+        ),
+      );
+      expect(rulesRequests, 1);
+      expect(campus.authRequests, 0);
+      expect(
+        (await campus.cookies.openJar().loadForRequest(
+          Uri.parse(VpnAuth.controller),
+        )).map((cookie) => cookie.name),
+        containsAll(['ENSSESSIONID', 'clientInfo']),
+      );
+    }
+
+    // 场景 2：旧会话 1001 触发 CAS 重登后，新会话遇到未知错误码 500 时抛异常且不重试。
+    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+    await campus.saveVpnSession(sessionId: 'kicked');
+    var rulesRequests = 0;
+    final vpn = VpnAuth(
+      cas: campus.cas,
+      readCredential: () async => _bundle(),
+      createHttp: (jar) => _http(jar, (options) {
+        if (options.uri.path.contains('/terminal/rules/')) {
+          rulesRequests++;
+          if (!campus.vpnValid) {
+            return _json({
+              'code': '1001',
+              'messages': 'Account was kicked offline by the administrator, please log in again!',
+              'data': null,
+            });
+          }
+          return _json({
+            'code': '500',
+            'messages': 'Internal server error',
+            'data': null,
+          });
+        }
+        return campus.controller(options);
+      }),
+    );
+    await expectLater(
+      vpn.obtain(),
+      throwsA(
+        isA<PortalLoginError>()
+            .having((e) => e.code, 'code', 'vpn_controller_rules_rejected')
+            .having((e) => e.stage, 'stage', 'vpn.rules.validate')
+            .having((e) => e.context['response_code'], 'response_code', '500')
+            .having((e) => e.context['attempt'], 'attempt', 1)
+            .having(
+              (e) => (e.context['details'] as Map)['after_cas_relogin'],
+              'after_cas_relogin',
+              isTrue,
+            )
+            .having(
+              (e) => (e.context['details'] as Map)['session_expired'],
+              'session_expired',
+              isFalse,
+            ),
+      ),
+    );
+    expect(rulesRequests, 2);
     expect(campus.assertions, 1);
   });
 

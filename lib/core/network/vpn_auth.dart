@@ -106,7 +106,13 @@ class VpnAuth {
     }
     final http = _http;
     final jar = _jar;
-    final reused = await _obtainWithSession(bundle, http, jar, check);
+    final reused = await _obtainWithSession(
+      bundle,
+      http,
+      jar,
+      check,
+      reusingSession: true,
+    );
     check();
     if (reused != null) {
       vpnLog('authentication.session_reused');
@@ -141,7 +147,13 @@ class VpnAuth {
       );
     }
     vpnLog('authentication.cas_completed');
-    final fresh = await _obtainWithSession(bundle, http, jar, check);
+    final fresh = await _obtainWithSession(
+      bundle,
+      http,
+      jar,
+      check,
+      reusingSession: false,
+    );
     check();
     if (fresh == null) {
       throw const PortalLoginError(
@@ -157,8 +169,9 @@ class VpnAuth {
     PasskeyBundle bundle,
     PortalHttp http,
     CookieJar jar,
-    void Function() check,
-  ) async {
+    void Function() check, {
+    required bool reusingSession,
+  }) async {
     check();
     final cookies = await vpnStage(
       'vpn.read_controller',
@@ -242,21 +255,37 @@ class VpnAuth {
         );
       }
       final data = body['data'];
-      final code = '${body['code']}';
-      if (code == '401' ||
-          (code == '1000' && '${body['messages']}'.contains('请重新登录'))) {
-        return null;
+      final code = '${body['code']}'.trim();
+      final messages = '${body['messages'] ?? body['message'] ?? ''}';
+      final sessionExpired = _isSessionExpiredResponse(code, messages);
+      if (sessionExpired) {
+        vpnLog(
+          'authentication.session_rejected',
+          fields: {
+            'reason_code': 'controller_session_expired',
+            'response_code': ?int.tryParse(code),
+            'attempt': attempt + 1,
+          },
+        );
+        if (reusingSession) return null;
       }
-      if ('${body['code']}' != '200') {
+      if (code != '200') {
         throw PortalLoginError(
           'VPN 控制器未正常返回隧道凭据，请稍后再试',
           code: 'vpn_controller_rules_rejected',
           stage: 'vpn.rules.validate',
-          context: {'response_code': code, 'attempt': attempt + 1},
+          context: {
+            'response_code': code,
+            'attempt': attempt + 1,
+            if (!reusingSession)
+              'details': {
+                'after_cas_relogin': true,
+                'session_expired': sessionExpired,
+              },
+          },
         );
       }
-      if ('${body['code']}' == '200' &&
-          data is Map &&
+      if (data is Map &&
           data['token'] is String &&
           (data['token'] as String).isNotEmpty) {
         final endpoints = _endpoints(data['server']);
@@ -305,6 +334,19 @@ class VpnAuth {
       stage: 'vpn.rules',
       context: {'attempt': 6},
     );
+  }
+
+  /// 判断控制器 rules 响应是否明确表示旧会话已失效或被踢下线，需要清理 Cookie 并重登。
+  static bool _isSessionExpiredResponse(String code, String messages) {
+    if (code == '200') return false;
+    if (code == '401' || code == '1001') return true;
+    final normalized = messages.toLowerCase();
+    return normalized.contains('重新登录') ||
+        normalized.contains('重新登陆') ||
+        normalized.contains('log in again') ||
+        normalized.contains('login again') ||
+        normalized.contains('kicked offline') ||
+        normalized.contains('踢下线');
   }
 
   Future<void> _clearController() => _cas.cookies.clearHost(
