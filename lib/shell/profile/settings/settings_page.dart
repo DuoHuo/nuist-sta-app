@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -191,6 +192,10 @@ class _AppIconEntryState extends State<_AppIconEntry>
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
+    final iconCacheSize = math.max(
+      1,
+      (44 * MediaQuery.devicePixelRatioOf(context)).round(),
+    );
     return Material(
       color: palette.surface,
       borderRadius: BorderRadius.circular(12),
@@ -212,6 +217,8 @@ class _AppIconEntryState extends State<_AppIconEntry>
                       choice.assetPath,
                       width: 44,
                       height: 44,
+                      cacheWidth: iconCacheSize,
+                      cacheHeight: iconCacheSize,
                       fit: BoxFit.cover,
                       errorBuilder: (_, _, _) => Container(
                         width: 44,
