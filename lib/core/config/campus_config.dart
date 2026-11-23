@@ -60,7 +60,7 @@ abstract final class CampusHosts {
   static final iportal = 'i.$kCampusRootDomain';
   static final library = 'elib.$kCampusRootDomain';
   static final bulletin = 'bulletin.$kCampusRootDomain';
-  static final labor = 'labor.$kCampusRootDomain';
+  static final labor = 'Labor.$kCampusRootDomain'; //统一认证主机名改为严格匹配，需要大写
   static final cxcyjy = 'cxcyjy.$kCampusRootDomain';
   static final cxxf = 'cxxf.$kCampusRootDomain';
   static final vpnController = 'client.vpn.$kCampusRootDomain';
