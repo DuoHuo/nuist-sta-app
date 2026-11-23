@@ -35,6 +35,11 @@ class AcademicApi {
           ),
           idempotent: true,
         );
+    requireServiceSuccess(
+      response,
+      endpoint: 'academic.summary',
+      service: 'portal',
+    );
     return AcademicSummary.fromJson(
       _decode(response.data),
       fetchedAt: DateTime.now(),

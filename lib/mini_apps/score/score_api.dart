@@ -79,6 +79,7 @@ class ScoreApi {
           ),
           idempotent: true,
         );
+    requireServiceSuccess(response, endpoint: 'score.query', service: 'jwxt');
     final raw = response.data;
 
     try {

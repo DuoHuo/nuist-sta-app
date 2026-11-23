@@ -146,6 +146,7 @@ class AiaTrustInterceptor extends Interceptor {
   void onError(DioException err, ErrorInterceptorHandler handler) async {
     if (err.requestOptions.extra['_aiaRepaired'] == true ||
         !AiaTrust.isHandshakeFailure(err.error) ||
+        err.requestOptions.data is Stream ||
         err.requestOptions.cancelToken?.isCancelled == true) {
       handler.next(err);
       return;
@@ -166,6 +167,9 @@ class AiaTrustInterceptor extends Interceptor {
       }
       _reset();
       err.requestOptions.extra['_aiaRepaired'] = true;
+      if (err.requestOptions.data is FormData) {
+        err.requestOptions.data = (err.requestOptions.data as FormData).clone();
+      }
       handler.resolve(await dio.fetch<dynamic>(err.requestOptions));
     } catch (failure, stack) {
       handler.next(
@@ -529,7 +533,25 @@ class CampusTransport {
           context: {'status_code': current.statusCode},
         );
       }
-      final target = current.realUri.resolve(location);
+      final Uri target;
+      try {
+        target = current.realUri.resolve(location);
+      } on FormatException catch (error, stack) {
+        Error.throwWithStackTrace(
+          PortalLoginError(
+            '重定向 Location 格式无效',
+            code: 'redirect_location_invalid',
+            stage: 'http.redirect',
+            cause: error,
+            causeStackTrace: stack,
+            context: {
+              'status_code': current.statusCode,
+              'details': {'hop': hop},
+            },
+          ),
+          stack,
+        );
+      }
       if (sameHost &&
           (target.scheme != origin.scheme ||
               target.host != origin.host ||
@@ -542,7 +564,10 @@ class CampusTransport {
         );
       }
       final old = current.requestOptions;
-      final toGet = const {301, 302, 303}.contains(current.statusCode);
+      final method = old.method.toUpperCase();
+      final toGet = current.statusCode == 303
+          ? method != 'HEAD'
+          : const {301, 302}.contains(current.statusCode) && method == 'POST';
       redirects.add(RedirectRecord(current.statusCode!, old.method, target));
       final headers = Map<String, dynamic>.from(
         old.headers,
@@ -570,6 +595,12 @@ class CampusTransport {
           }.contains(key.toLowerCase()),
         );
       }
+      final nextExtra = Map<String, dynamic>.from(old.extra)
+        ..remove('_vpnReplayed')
+        ..remove('_aiaRepaired')
+        ..remove('_redirectValidateStatus')
+        ..remove('vpnDio.engineId');
+      nextExtra['followRedirects'] = false;
       final next = old.copyWith(
         path: target.toString(),
         baseUrl: '',
@@ -578,7 +609,7 @@ class CampusTransport {
         data: toGet ? null : old.data,
         headers: headers,
         cancelToken: cancelToken ?? old.cancelToken,
-        extra: {...old.extra, 'followRedirects': false},
+        extra: nextExtra,
       );
       if (toGet) {
         next.data = null;

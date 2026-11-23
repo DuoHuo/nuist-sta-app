@@ -51,6 +51,13 @@ class InnovationCreditApi {
           ),
           idempotent: true,
         );
+    requireServiceSuccess(
+      response,
+      endpoint: identical(page, _summaryPage)
+          ? 'innovation_credit.summary'
+          : 'innovation_credit.detail',
+      service: 'innovation',
+    );
     final rows = parseHtmlTable('${response.data ?? ''}', tableId);
     if (rows != null) return rows;
     throw DiagnosticException(

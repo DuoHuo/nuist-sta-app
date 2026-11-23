@@ -110,9 +110,11 @@ class AiaTrust {
     client.badCertificateCallback = onBadCertificate;
     client.connectionTimeout = _fetchTimeout;
     var repaired = false;
+    var verified = false;
     try {
       // getUrl 只建立连接；不 close/send，不发业务 HTTP 或认证信息。
       final request = await client.getUrl(uri).timeout(_fetchTimeout);
+      verified = true;
       request.abort();
     } catch (_) {
       if (_badLeaf.containsKey(uri.host)) {
@@ -124,8 +126,10 @@ class AiaTrust {
     } finally {
       client.close(force: true);
     }
-    _preparedHosts['${uri.host}:${uri.port}'] =
-        _cacheValidUntil ?? _now().add(const Duration(minutes: 5));
+    if (verified) {
+      _preparedHosts['${uri.host}:${uri.port}'] =
+          _cacheValidUntil ?? _now().add(const Duration(minutes: 5));
+    }
     return repaired;
   }
 

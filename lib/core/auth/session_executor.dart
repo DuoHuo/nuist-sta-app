@@ -90,6 +90,17 @@ class SessionExecutor {
     return work;
   }
 
+  Future<T> _coordinateHosts<T>(
+    Iterable<String> hosts,
+    Future<T> Function() action,
+  ) {
+    final sorted = hosts.toSet().toList()..sort();
+    Future<T> acquire(int index) => index == sorted.length
+        ? cookieStore.runRefreshing(sorted, action)
+        : _coordinateHost(sorted[index], () => acquire(index + 1));
+    return acquire(0);
+  }
+
   /// 兼容 H5 门面恢复已验证的落地标记，子系统非 Cookie 凭据仍由 Spec 建立。
   void restoreSession<S>(ServiceAuthSpec<S> spec, S session) {
     if (_inflightRefresh.containsKey(spec.id)) return;
@@ -126,15 +137,24 @@ class SessionExecutor {
     if (pending != null) {
       final requiresFresh =
           forceFreshWebAuthn && _inflightFreshWebAuthn[spec.id] != true;
+      if (requiresFresh) {
+        final generation = cookieStore.generation;
+        try {
+          await pending;
+        } catch (_) {
+          // 旧普通登录的失败不能取消用户明确发起的完整 WebAuthn。
+        }
+        cookieStore.checkGeneration(generation);
+        return ensureSession(
+          spec,
+          force: true,
+          forceFreshWebAuthn: true,
+          onStage: onStage,
+        );
+      }
       final entry = (await pending) as SessionEntry<S>;
       cookieStore.checkGeneration(entry.cookieGeneration);
-      if (!requiresFresh) return entry;
-      return ensureSession(
-        spec,
-        force: true,
-        forceFreshWebAuthn: true,
-        onStage: onStage,
-      );
+      return entry;
     }
     final current = _entries[spec.id];
     if (!force && !forceFreshWebAuthn && current != null && _valid(current)) {
@@ -193,7 +213,7 @@ class SessionExecutor {
     work = _log
         .operation(
           'service.refresh',
-          () => _coordinateHost(spec.cookieHosts.first, () async {
+          () => _coordinateHosts(spec.cookieHosts, () async {
             check();
             final previous = _entries[spec.id];
             final hostChanged =
@@ -211,9 +231,27 @@ class SessionExecutor {
               onStage: onStage,
             );
             check();
+            late Map<String, int> establishedRevisions;
+            Future<S> establish(CasAuthenticationResult authentication) async {
+              check();
+              final revisions = <String, int>{
+                for (final host in spec.cookieHosts)
+                  host: cookieStore.hostRevision(host),
+              };
+              cookieStore.checkHostRevisions(revisions);
+              final session = await spec.establish(
+                transport,
+                authentication.landingUri,
+              );
+              check();
+              cookieStore.checkHostRevisions(revisions);
+              establishedRevisions = Map.unmodifiable(revisions);
+              return session;
+            }
+
             late S session;
             try {
-              session = await spec.establish(transport, result.landingUri);
+              session = await establish(result);
             } on PortalLoginError catch (error) {
               final status = error.context['status_code'];
               final missingIcardToken = error.code == 'icard_token_missing';
@@ -242,7 +280,7 @@ class SessionExecutor {
                 onStage: onStage,
               );
               check();
-              session = await spec.establish(transport, result.landingUri);
+              session = await establish(result);
             }
             check();
             final revision = (_revisions[spec.id] ?? 0) + 1;
@@ -252,10 +290,7 @@ class SessionExecutor {
               revision: revision,
               cookieGeneration: generation,
               establishedAt: DateTime.now(),
-              hostRevisions: {
-                for (final host in spec.cookieHosts)
-                  host: cookieStore.hostRevision(host),
-              },
+              hostRevisions: establishedRevisions,
             );
             _entries[spec.id] = entry;
             return entry;
@@ -281,6 +316,10 @@ class SessionExecutor {
     bool idempotent = true,
   }) => _execute(spec, (entry) async {
     final options = buildRequest();
+    options.extra[PortalCookieStore.hostRevisionsKey] =
+        Map<String, int>.unmodifiable(entry.hostRevisions);
+    options.extra[PortalCookieStore.accountGenerationKey] =
+        entry.cookieGeneration;
     options.extra['idempotent'] = idempotent;
     options.validateStatus = (status) =>
         status != null && status >= 100 && status < 600;
@@ -290,7 +329,11 @@ class SessionExecutor {
     try {
       await spec.applyAuth(options, entry.session);
       cookieStore.checkGeneration(entry.cookieGeneration);
-      return await transport.send(options);
+      return await cookieStore.runWithSession(
+        entry.hostRevisions,
+        entry.cookieGeneration,
+        () => transport.send(options),
+      );
     } finally {
       _requests.remove(cancel);
     }
@@ -300,7 +343,15 @@ class SessionExecutor {
   Future<Response<dynamic>> executeCallback<S>(
     ServiceAuthSpec<S> spec,
     Future<Response<dynamic>> Function() request,
-  ) => _execute(spec, (_) => request(), idempotent: true);
+  ) => _execute(
+    spec,
+    (entry) => cookieStore.runWithSession(
+      entry.hostRevisions,
+      entry.cookieGeneration,
+      request,
+    ),
+    idempotent: true,
+  );
 
   Future<Response<dynamic>> _execute<S>(
     ServiceAuthSpec<S> spec,
@@ -318,14 +369,51 @@ class SessionExecutor {
           stage: 'service.request',
         );
       }
-      final response = await request(entry);
+      late final Response<dynamic> response;
+      try {
+        cookieStore.checkHostRevisions(entry.hostRevisions);
+        response = await request(entry);
+      } on PortalLoginError catch (error, stackTrace) {
+        if (error.code != 'service_cookie_revision_changed') rethrow;
+        if (!idempotent) {
+          if (_entries[spec.id]?.revision == entry.revision) {
+            _entries.remove(spec.id);
+          }
+          throw PortalLoginError(
+            '会话已更新，写入请求未重放，请重新确认后提交',
+            code: 'session_expired_non_idempotent',
+            stage: 'service.request',
+            cause: error,
+            causeStackTrace: stackTrace,
+            context: {'service': spec.id},
+          );
+        }
+        if (attempt == 1) rethrow;
+        entry = await refreshIfNeeded(spec, failedRevision: entry.revision);
+        continue;
+      }
       cookieStore.checkGeneration(entry.cookieGeneration);
       final expired =
           (response.statusCode ?? 0) < 500 &&
           (isGlobalAuthExpired(response, treat403: spec.treat403AsExpired) ||
               spec.isSubsystemExpired(response));
       if (!expired) return response;
-      if (attempt == 1 || !idempotent) {
+      if (!idempotent) {
+        if (_entries[spec.id]?.revision == entry.revision) {
+          _entries.remove(spec.id);
+        }
+        throw PortalLoginError(
+          '会话已失效，写入请求未重放，请重新确认后提交',
+          code: 'session_expired_non_idempotent',
+          stage: 'service.request',
+          context: {
+            'service': spec.id,
+            'status_code': response.statusCode,
+            'attempt': 1,
+          },
+        );
+      }
+      if (attempt == 1) {
         throw PortalLoginError(
           '重新登录后服务仍拒绝访问，请稍后再试',
           code: 'reauthentication_exhausted',

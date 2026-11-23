@@ -33,8 +33,8 @@ abstract interface class VpnSessionConnector implements VpnConnector {
 
 /// 在取用已缓存的 HTTP 连接前确认隧道，包含合流等待原生恢复探测。
 abstract interface class VpnPreparedConnector implements VpnSessionConnector {
-  /// 等待共享启动或恢复，成功后 [sessionId] 指向可用的隧道。
-  Future<void> prepare();
+  /// 原子返回本次请求锁定的会话，调用方不得再读取变化中的全局状态。
+  Future<VpnSession> prepare();
 }
 
 /// 可按失败引擎精确作废并单飞恢复的共享连接器。
@@ -119,7 +119,21 @@ Future<ConnectionTask<Socket>> connectVpnProxy(
       },
     );
     try {
-      await ready.future.timeout(const Duration(seconds: 10));
+      try {
+        await ready.future.timeout(const Duration(seconds: 10));
+      } on TimeoutException catch (error, stack) {
+        Error.throwWithStackTrace(
+          PortalNetworkError(
+            '校园 VPN CONNECT 建连超时',
+            code: 'vpn_proxy_connect_timeout',
+            stage: 'vpn.connect',
+            cause: error,
+            causeStackTrace: stack,
+            context: {'vpn_session_id': session.engineId, 'timeout_ms': 10000},
+          ),
+          stack,
+        );
+      }
       if (cancelled) throw const SocketException('VPN 连接已取消');
       if (uri.scheme == 'https') return socket;
       return _ConnectedProxySocket(socket, subscription, remainder);
@@ -224,10 +238,16 @@ class VpnIdempotentRetryInterceptor extends Interceptor {
       options.extra['idempotent'] == true;
   static bool retryable(DioException error) =>
       error.type != DioExceptionType.cancel &&
+      error.error is! HandshakeException &&
+      (error.error is! VpnProxyException ||
+          (error.error as VpnProxyException).statusCode == 503) &&
       (error.error is SocketException ||
-          error.error is HandshakeException ||
           error.error is HttpException ||
-          error.type == DioExceptionType.connectionError);
+          error.type == DioExceptionType.connectionError ||
+          error.type == DioExceptionType.connectionTimeout ||
+          (error.error is PortalNetworkError &&
+              (error.error as PortalNetworkError).code ==
+                  'vpn_proxy_connect_timeout'));
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) async {
     final options = err.requestOptions;
@@ -247,7 +267,16 @@ class VpnIdempotentRetryInterceptor extends Interceptor {
           if (options.cancelToken?.isCancelled == true) {
             throw options.cancelToken!.cancelError!;
           }
-          await connector.prepare();
+          final preparing = connector.prepare();
+          final cancelled = options.cancelToken?.whenCancel.then<VpnSession>(
+            (error) => throw error,
+          );
+          await (cancelled == null
+              ? preparing
+              : Future.any([preparing, cancelled]));
+          if (options.cancelToken?.isCancelled == true) {
+            throw options.cancelToken!.cancelError!;
+          }
           if (options.data is FormData) {
             options.data = (options.data as FormData).clone();
           }
@@ -314,7 +343,7 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
 
   /// 仅关闭仍引用失败引擎的连接池，迟到请求不得关闭新池。
   void discardVpnPool(int? engineId) {
-    if (engineId != null && _vpnSessionId != engineId) return;
+    if (engineId == null || _vpnSessionId != engineId) return;
     _vpn?.close(force: true);
     _vpn = null;
   }
@@ -343,24 +372,29 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
   Future<HttpClient> createPreparationClient() async =>
       createRoutedClient(useVpn: forceVpn || await _selectRoute());
 
-  IOHttpClientAdapter _adapter(bool vpn) {
+  IOHttpClientAdapter _adapter(bool vpn, {VpnSession? session}) {
     if (!vpn) {
       return _direct ??= IOHttpClientAdapter(
         createHttpClient: _createHttpClient,
       );
     }
-    if (connector case final VpnSessionConnector session) {
-      if (_sessionKnown && _vpnSessionId != session.sessionId) {
+    final engineId =
+        session?.engineId ??
+        (connector is VpnPreparedConnector
+            ? null
+            : connector is VpnSessionConnector
+            ? (connector as VpnSessionConnector).sessionId
+            : null);
+    if (engineId != null) {
+      if (_sessionKnown && _vpnSessionId != engineId) {
         vpnLog('clients.session_changed');
         _vpn?.close();
         _vpn = null;
       }
       _sessionKnown = true;
-      _vpnSessionId = session.sessionId;
+      _vpnSessionId = engineId;
     }
-    final boundSession = connector is VpnGateway
-        ? (connector as VpnGateway).readySession
-        : null;
+    final boundSession = connector is VpnGateway ? session : null;
     return _vpn ??= IOHttpClientAdapter(
       createHttpClient: () =>
           createRoutedClient(useVpn: true, session: boundSession),
@@ -433,7 +467,10 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
   ) async {
     var useVpn = false;
     var cancelled = false;
+    VpnSession? session;
     try {
+      options.extra.remove('vpnDio.engineId');
+      options.extra.remove('vpnDio.usedVpn');
       log?.route = '选路中';
       if (_closed) throw StateError('VPN 客户端已关闭');
       if (!['http', 'https'].contains(options.uri.scheme)) {
@@ -473,16 +510,22 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
       log?.route = useVpn ? (mustUseVpn ? 'VPN（强制）' : 'VPN') : '直连';
       if (useVpn && connector is VpnPreparedConnector) {
         final prepared = connector as VpnPreparedConnector;
-        await Future.any([
-          prepared.prepare(),
-          aborted.future.then<void>((_) {}),
-        ]).timeout(
-          options.connectTimeout ?? const Duration(seconds: 70),
-          onTimeout: () => throw DioException.connectionTimeout(
-            requestOptions: options,
-            timeout: options.connectTimeout ?? const Duration(seconds: 70),
-          ),
-        );
+        session =
+            await Future.any<VpnSession>([
+              prepared.prepare(),
+              aborted.future.then<VpnSession>(
+                (_) => throw DioException.requestCancelled(
+                  requestOptions: options,
+                  reason: '请求已取消',
+                ),
+              ),
+            ]).timeout(
+              options.connectTimeout ?? const Duration(seconds: 70),
+              onTimeout: () => throw DioException.connectionTimeout(
+                requestOptions: options,
+                timeout: options.connectTimeout ?? const Duration(seconds: 70),
+              ),
+            );
         if (cancelled) {
           throw DioException.requestCancelled(
             requestOptions: options,
@@ -491,12 +534,20 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
         }
         if (_closed) throw StateError('VPN 客户端已关闭');
       }
-      if (useVpn && connector is VpnSessionConnector) {
+      if (useVpn && session != null) {
+        options.extra['vpnDio.engineId'] = session.engineId;
+      } else if (useVpn &&
+          connector is VpnSessionConnector &&
+          connector is! VpnPreparedConnector) {
         options.extra['vpnDio.engineId'] =
             (connector as VpnSessionConnector).sessionId;
+      } else {
+        options.extra.remove('vpnDio.engineId');
       }
-      final response = await _adapter(useVpn)
-          .fetch(options, requestStream, cancelFuture);
+      final response = await _adapter(
+        useVpn,
+        session: session,
+      ).fetch(options, requestStream, cancelFuture);
       if (log?.managedByInterceptor == false) {
         log?.complete(
           response.statusCode,
@@ -512,9 +563,12 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
           status: error is DioException ? error.response?.statusCode : null,
         );
       }
+      final failure = error is DioException
+          ? error
+          : DioException(requestOptions: options, error: error);
       if (useVpn &&
           !cancelled &&
-          !(error is DioException && error.type == DioExceptionType.cancel)) {
+          VpnIdempotentRetryInterceptor.retryable(failure)) {
         final id = options.extra['vpnDio.engineId'];
         discardVpnPool(id is int ? id : null);
       }

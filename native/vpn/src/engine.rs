@@ -14,6 +14,7 @@ use std::io::{self, Read, Write};
 #[cfg(test)]
 use std::net::TcpListener;
 use std::net::{Ipv4Addr, Shutdown, TcpStream, ToSocketAddrs};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -22,7 +23,12 @@ use std::time::{Duration, Instant};
 
 const MAX_CONNECTIONS: usize = 64;
 const BUFFER_SIZE: usize = 64 * 1024;
-const OPEN_TIMEOUT: Duration = Duration::from_secs(8);
+const TCP_OPEN_TIMEOUT: Duration = Duration::from_secs(8);
+const DNS_OPEN_TIMEOUT: Duration = Duration::from_secs(3);
+const BLACKHOLE_IDLE: Duration = Duration::from_secs(3);
+const BLACKHOLE_PROBE_TIMEOUT: Duration = Duration::from_millis(2500);
+const IO_BUDGET: usize = 16;
+const OUTPUT_CAPACITY: usize = 256;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const TUNNEL: Token = Token(0);
 const LISTENER: Token = Token(1);
@@ -223,6 +229,36 @@ fn random<const N: usize>() -> io::Result<[u8; N]> {
     Ok(bytes)
 }
 
+#[derive(Clone)]
+struct ExitEvent {
+    reason: String,
+    diagnostic: Option<Value>,
+}
+
+fn publish_exit(id: &AtomicU64, emitted: &AtomicBool, event: &Mutex<Option<ExitEvent>>) {
+    let id = id.load(Ordering::Acquire);
+    if id == 0 {
+        return;
+    }
+    let event = event.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(event) = event {
+        if !emitted.swap(true, Ordering::AcqRel) {
+            crate::emit_event_with_diagnostic(id, "exited", &event.reason, event.diagnostic);
+        }
+    }
+}
+
+/// 老旧内核不支持完整 keepalive 参数时，只退回 idle 时间；所有降级都不阻断握手。
+fn configure_keepalive(mut apply: impl FnMut(&TcpKeepalive) -> io::Result<()>) {
+    let complete = TcpKeepalive::new()
+        .with_time(Duration::from_secs(15))
+        .with_interval(Duration::from_secs(5))
+        .with_retries(3);
+    if apply(&complete).is_err() {
+        let _ = apply(&TcpKeepalive::new().with_time(Duration::from_secs(15)));
+    }
+}
+
 enum Command {
     Probe(String, Duration, SyncSender<io::Result<()>>),
     #[cfg(test)]
@@ -238,6 +274,8 @@ pub struct Handle {
     socket: Arc<TcpStream>,
     waker: Arc<Waker>,
     engine_id: Arc<AtomicU64>,
+    exited_emitted: Arc<AtomicBool>,
+    exit_event: Arc<Mutex<Option<ExitEvent>>>,
     pub proxy_port: u16,
     pub proxy_token: String,
 }
@@ -254,13 +292,7 @@ impl Handle {
     }
     pub fn set_id(&self, id: u64) {
         self.engine_id.store(id, Ordering::Release);
-        if !self.alive() {
-            crate::emit_event(
-                id,
-                "exited",
-                self.exit_reason().as_deref().unwrap_or("stopped"),
-            );
-        }
+        publish_exit(&self.engine_id, &self.exited_emitted, &self.exit_event);
     }
     pub fn stop(&self) {
         self.running.store(false, Ordering::Release);
@@ -344,6 +376,7 @@ fn start_with_deadline(
             .ok_or_else(|| error(io::ErrorKind::InvalidInput, "VPN 配置缺少必要字段"))
     };
     let host = field("host")?;
+    let probe_host = field("probeHost")?;
     let user = field("user")?;
     let token = field("token")?;
     let port = value["port"]
@@ -384,12 +417,7 @@ fn start_with_deadline(
     }
     let raw = raw.ok_or_else(|| error(io::ErrorKind::NotConnected, "无法连接 VPN 网关"))?;
     raw.set_nodelay(true)?;
-    SockRef::from(&raw).set_tcp_keepalive(
-        &TcpKeepalive::new()
-            .with_time(Duration::from_secs(15))
-            .with_interval(Duration::from_secs(5))
-            .with_retries(3),
-    )?;
+    configure_keepalive(|options| SockRef::from(&raw).set_tcp_keepalive(options));
     *control.socket.lock().unwrap_or_else(|e| e.into_inner()) = Some(raw.try_clone()?);
     control.check(deadline)?;
     let mut connection =
@@ -437,7 +465,16 @@ fn start_with_deadline(
     }));
     let control_socket = Arc::new(tunnel.sock.try_clone()?);
     let tunnel = StreamOwned::new(tunnel.conn, mio::net::TcpStream::from_std(tunnel.sock));
-    let mut runner = Runner::new(tunnel, &info, receiver, running.clone(), health.clone())?;
+    let mut runner = Runner::new(
+        tunnel,
+        &info,
+        receiver,
+        running.clone(),
+        health.clone(),
+        probe_host.to_owned(),
+    )?;
+    let exited_emitted = Arc::new(AtomicBool::new(false));
+    let exit_event = Arc::new(Mutex::new(None));
     let engine_id = runner.engine_id.clone();
     let handle = Handle {
         commands: sender,
@@ -447,25 +484,36 @@ fn start_with_deadline(
         socket: control_socket,
         waker: runner.waker.clone(),
         engine_id: engine_id.clone(),
-        proxy_port: runner.listener.local_addr()?.port(),
+        exited_emitted: exited_emitted.clone(),
+        exit_event: exit_event.clone(),
+        proxy_port: runner
+            .listener
+            .as_ref()
+            .expect("启动时代理监听存在")
+            .local_addr()?
+            .port(),
         proxy_token: runner.proxy_token.clone(),
     };
     thread::Builder::new()
         .name("nuist-vpn".into())
         .spawn(move || {
-            let outcome = runner.run();
+            let outcome = catch_unwind(AssertUnwindSafe(|| runner.run())).unwrap_or_else(|_| {
+                runner.exit_code = Some("native_engine_panic".into());
+                Err(io::Error::other("VPN 引擎线程发生 panic"))
+            });
             let reason = runner.exit_code.take().unwrap_or_else(|| match &outcome {
                 Ok(()) => "stopped".to_owned(),
-                Err(ref error) => format!("{:?}", error.kind()),
+                Err(error) => format!("{:?}", error.kind()),
             });
             *exit_reason.lock().unwrap_or_else(|e| e.into_inner()) = Some(reason.clone());
+            let diagnostic = outcome
+                .as_ref()
+                .err()
+                .map(|error| crate::NativeFailure::io_details(error, &reason, "native.engine"));
+            *exit_event.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(ExitEvent { reason, diagnostic });
             running.store(false, Ordering::Release);
-            crate::emit_diagnostic_event(
-                engine_id.load(Ordering::Acquire),
-                "exited",
-                &reason,
-                outcome.as_ref().err(),
-            );
+            publish_exit(&engine_id, &exited_emitted, &exit_event);
         })?;
     control.stage("完成");
     Ok((handle, info))
@@ -476,6 +524,7 @@ struct Flow {
     tcp: Option<SocketHandle>,
     port: u16,
     deadline: Instant,
+    connect_started: Option<Instant>,
     local: mio::net::TcpStream,
     token: Token,
     interest: Interest,
@@ -496,6 +545,8 @@ struct Probe {
     deadline: Instant,
     reply: Option<SyncSender<io::Result<()>>>,
     blackhole: bool,
+    recovery: bool,
+    observed_frames: u64,
 }
 
 struct Runner {
@@ -504,7 +555,8 @@ struct Runner {
     poll: Poll,
     events: Events,
     waker: Arc<Waker>,
-    listener: mio::net::TcpListener,
+    listener: Option<mio::net::TcpListener>,
+    probe_host: String,
     proxy_token: String,
     proxy_authorization: String,
     next_token: usize,
@@ -533,6 +585,12 @@ struct Runner {
     probe: Option<Probe>,
     consecutive_timeouts: u32,
     exit_code: Option<String>,
+    budget_exhausted: bool,
+    tls_write_blocked: bool,
+    #[cfg(test)]
+    io_budget: usize,
+    #[cfg(test)]
+    io_chunk_limit: usize,
 }
 
 /// CONNECT 凭据固定为 VPN 会话的随机口令，比较时不提前返回。
@@ -618,6 +676,7 @@ impl Runner {
         commands: Receiver<Command>,
         running: Arc<AtomicBool>,
         health: Arc<Mutex<Health>>,
+        probe_host: String,
     ) -> io::Result<Self> {
         let mut device = IpLink::default();
         let mut config = Config::new(HardwareAddress::Ip);
@@ -651,7 +710,8 @@ impl Runner {
             poll,
             events: Events::with_capacity(128),
             waker,
-            listener,
+            listener: Some(listener),
+            probe_host,
             proxy_token,
             proxy_authorization,
             next_token: 3,
@@ -680,7 +740,35 @@ impl Runner {
             probe: None,
             consecutive_timeouts: 0,
             exit_code: None,
+            budget_exhausted: false,
+            tls_write_blocked: false,
+            #[cfg(test)]
+            io_budget: IO_BUDGET,
+            #[cfg(test)]
+            io_chunk_limit: usize::MAX,
         })
+    }
+
+    fn io_budget(&self) -> usize {
+        #[cfg(test)]
+        {
+            self.io_budget
+        }
+        #[cfg(not(test))]
+        {
+            IO_BUDGET
+        }
+    }
+
+    fn io_chunk_limit(&self) -> usize {
+        #[cfg(test)]
+        {
+            self.io_chunk_limit
+        }
+        #[cfg(not(test))]
+        {
+            usize::MAX
+        }
     }
 
     fn connect_tcp(&mut self, ip: IpAddress, port: u16) -> io::Result<SocketHandle> {
@@ -713,7 +801,10 @@ impl Runner {
             return Ok(());
         }
         loop {
-            match self.listener.accept() {
+            let Some(listener) = self.listener.as_mut() else {
+                return Ok(());
+            };
+            match listener.accept() {
                 Ok((mut local, _)) => {
                     if self.flows.len() >= MAX_CONNECTIONS {
                         let _ = local.write_all(
@@ -731,7 +822,8 @@ impl Runner {
                         query: None,
                         tcp: None,
                         port: 0,
-                        deadline: Instant::now() + OPEN_TIMEOUT,
+                        deadline: Instant::now() + TCP_OPEN_TIMEOUT,
+                        connect_started: None,
                         local,
                         token,
                         interest: Interest::READABLE,
@@ -779,15 +871,22 @@ impl Runner {
         timeout: Duration,
         reply: Option<SyncSender<io::Result<()>>>,
         blackhole: bool,
+        recovery: bool,
     ) -> io::Result<()> {
-        if self.terminal.is_some() || self.probe.is_some() {
+        if self.terminal.is_some() {
             if let Some(reply) = reply {
-                let _ = reply.send(Err(error(io::ErrorKind::WouldBlock, "VPN 探测不可用")));
+                let _ = reply.send(Err(error(
+                    io::ErrorKind::ConnectionAborted,
+                    "VPN 已进入排空",
+                )));
             }
-            if blackhole {
-                if let Some(probe) = self.probe.as_mut() {
-                    probe.blackhole = true;
-                }
+            return Ok(());
+        }
+        if let Some(probe) = self.probe.as_mut() {
+            probe.blackhole |= blackhole;
+            probe.recovery |= recovery;
+            if let Some(reply) = reply {
+                let _ = reply.send(Err(error(io::ErrorKind::WouldBlock, "VPN 探活已在进行")));
             }
             return Ok(());
         }
@@ -802,26 +901,63 @@ impl Runner {
                     deadline: Instant::now() + timeout,
                     reply,
                     blackhole,
+                    recovery,
+                    observed_frames: self.decoder.completed_frames(),
                 })
             }
             Err(_) => {
                 if let Some(reply) = reply {
                     let _ = reply.send(Err(error(
                         io::ErrorKind::InvalidInput,
-                        "VPN 探测主机不合法",
+                        "VPN 探活主机或查询槽不可用",
                     )));
                 }
-                if blackhole {
-                    self.exit_code = Some("blackhole_detected".into());
-                    return Err(error(io::ErrorKind::TimedOut, "VPN 黑洞探测无法启动"));
+                if blackhole || recovery {
+                    self.exit_code = Some(
+                        if blackhole {
+                            "blackhole_detected"
+                        } else {
+                            "recovery_timeout"
+                        }
+                        .into(),
+                    );
+                    return Err(error(io::ErrorKind::TimedOut, "VPN 内置 DNS 探活无法启动"));
                 }
             }
         }
         Ok(())
     }
 
+    /// 黑洞判定属于引擎主循环，不能被单条目标连接的错误处理吞掉。
+    fn check_blackhole(&mut self) -> io::Result<()> {
+        let now = Instant::now();
+        let stalled_connection = self.flows.iter().any(|flow| {
+            flow.authorized
+                && !flow.established
+                && !flow.reject
+                && flow
+                    .connect_started
+                    .is_some_and(|started| now.duration_since(started) >= BLACKHOLE_IDLE)
+        });
+        if self.probe.is_none()
+            && self.last_received.elapsed() >= BLACKHOLE_IDLE
+            && (stalled_connection || self.consecutive_timeouts >= 2)
+        {
+            self.start_probe(
+                &self.probe_host.clone(),
+                BLACKHOLE_PROBE_TIMEOUT,
+                None,
+                true,
+                false,
+            )?;
+        }
+        Ok(())
+    }
+
     fn advance(&mut self, flow: &mut Flow) -> io::Result<bool> {
         let now = Instant::now();
+        let budget = self.io_budget();
+        let chunk_limit = self.io_chunk_limit();
         if !flow.established && !flow.reject && now >= flow.deadline {
             if flow.authorized {
                 let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
@@ -832,9 +968,6 @@ impl Runner {
                 }
                 drop(health);
                 self.consecutive_timeouts += 1;
-                if self.consecutive_timeouts >= 2 {
-                    self.start_probe("vpn-probe.invalid", PROBE_TIMEOUT, None, true)?;
-                }
             }
             Self::respond(flow, 504);
         }
@@ -860,15 +993,18 @@ impl Runner {
                         Ok((host, port)) => {
                             flow.port = port;
                             flow.authorized = true;
+                            flow.connect_started = Some(now);
                             flow.ingress = flow.headers.split_off(end);
                             flow.headers.fill(0);
                             flow.headers.clear();
                             if let Ok(ip) = host.parse::<Ipv4Addr>() {
+                                flow.deadline = now + TCP_OPEN_TIMEOUT;
                                 match self.connect_tcp(ip.into(), port) {
                                     Ok(tcp) => flow.tcp = Some(tcp),
                                     Err(_) => Self::respond(flow, 502),
                                 }
                             } else {
+                                flow.deadline = now + DNS_OPEN_TIMEOUT;
                                 match self.sockets.get_mut::<dns::Socket>(self.dns).start_query(
                                     self.interface.context(),
                                     &host,
@@ -910,6 +1046,7 @@ impl Runner {
                     Ok(addresses) => {
                         flow.query = None;
                         if let Some(ip) = addresses.first() {
+                            flow.deadline = now + TCP_OPEN_TIMEOUT;
                             match self.connect_tcp(*ip, flow.port) {
                                 Ok(tcp) => flow.tcp = Some(tcp),
                                 Err(_) => Self::respond(flow, 502),
@@ -969,12 +1106,15 @@ impl Runner {
                         .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道发送失败"))?;
                     flow.ingress.drain(..sent);
                 }
-                for _ in 0..16 {
+                let mut read_rounds = 0;
+                for _ in 0..budget {
                     if !flow.ingress.is_empty() || !socket.can_send() {
                         break;
                     }
                     let mut bytes = [0u8; 16384];
-                    let capacity = (socket.send_capacity() - socket.send_queue()).min(bytes.len());
+                    let capacity = (socket.send_capacity() - socket.send_queue())
+                        .min(bytes.len())
+                        .min(chunk_limit);
                     if capacity == 0 {
                         break;
                     }
@@ -985,6 +1125,7 @@ impl Runner {
                             break;
                         }
                         Ok(count) => {
+                            read_rounds += 1;
                             socket
                                 .send_slice(&bytes[..count])
                                 .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道发送失败"))?;
@@ -995,31 +1136,44 @@ impl Runner {
                         Err(e) => return Err(e),
                     }
                 }
+                if read_rounds == budget {
+                    self.budget_exhausted = true;
+                }
             }
-            for _ in 0..16 {
+            let mut write_rounds = 0;
+            for _ in 0..budget {
                 if !socket.can_recv() {
                     break;
                 }
                 let written = socket
-                    .recv(|bytes| match flow.local.write(bytes) {
-                        Ok(count) => (count, Ok(count)),
-                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => (0, Ok(0)),
-                        Err(e) => (0, Err(e)),
-                    })
+                    .recv(
+                        |bytes| match flow.local.write(&bytes[..bytes.len().min(chunk_limit)]) {
+                            Ok(count) => (count, Ok(count)),
+                            Err(e) if e.kind() == io::ErrorKind::WouldBlock => (0, Ok(0)),
+                            Err(e) => (0, Err(e)),
+                        },
+                    )
                     .map_err(|_| error(io::ErrorKind::BrokenPipe, "隧道接收失败"))??;
                 if written == 0 {
                     break;
                 }
+                write_rounds += 1;
                 flow.touched = now;
                 self.io_progress = self.io_progress.wrapping_add(1);
             }
-            if !socket.may_recv() && !flow.remote_eof {
+            if write_rounds == budget {
+                self.budget_exhausted = true;
+            }
+            if !socket.may_recv() && !socket.can_recv() && !flow.remote_eof {
                 let _ = flow.local.shutdown(Shutdown::Write);
                 flow.remote_eof = true;
             }
             if self.terminal.is_some() && !socket.can_recv() {
                 let _ = flow.local.shutdown(Shutdown::Write);
-                return Ok(false);
+                if Self::drain_local(flow) {
+                    return Ok(false);
+                }
+                self.budget_exhausted = true;
             }
             if socket.state() == tcp::State::Closed {
                 return Ok(false);
@@ -1043,7 +1197,25 @@ impl Runner {
         Ok(now.duration_since(flow.touched) < Duration::from_secs(180))
     }
 
+    /// 关闭前抽干已经到达本地 Socket 的数据，减少有未读请求时内核 RST 冲掉响应尾部。
+    fn drain_local(flow: &mut Flow) -> bool {
+        let mut bytes = [0u8; 16 * 1024];
+        for _ in 0..IO_BUDGET {
+            match flow.local.read(&mut bytes) {
+                Ok(0) => return true,
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return true,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => return true,
+            }
+        }
+        false
+    }
+
     fn remove(&mut self, mut flow: Flow) {
+        if self.terminal.is_some() {
+            let _ = Self::drain_local(&mut flow);
+        }
         let _ = self.poll.registry().deregister(&mut flow.local);
         if let Some(query) = flow.query.take() {
             self.sockets
@@ -1061,7 +1233,9 @@ impl Runner {
             return Ok(());
         }
         // 每轮设上限，防止一条大下载饿死连接命令和心跳。
-        for _ in 0..16 {
+        let budget = self.io_budget();
+        let mut read_rounds = 0;
+        for _ in 0..budget {
             // 先消耗已解密的数据：握手读取可能已把后续报文一并收进 rustls。
             let mut bytes = [0; 16 * 1024];
             loop {
@@ -1123,6 +1297,7 @@ impl Runner {
                     return Ok(());
                 }
                 Ok(_) => {
+                    read_rounds += 1;
                     self.io_progress = self.io_progress.wrapping_add(1);
                     self.tunnel
                         .conn
@@ -1133,19 +1308,25 @@ impl Runner {
                 Err(e) => return Err(e),
             }
         }
+        if read_rounds == budget {
+            self.budget_exhausted = true;
+        }
         // 部分合法网关不回复保活帧；空闲无数据不等于关闭，留待请求/前台
         // 发起一次有界 DNS 探测。真正 TLS/TCP EOF 仍走终态清理。
-        if self.last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL && self.output.len() < 256 {
-            self.heartbeat = self.heartbeat.wrapping_add(1);
-            self.health
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .heartbeats = self.heartbeat;
-            self.output
-                .push_back(frame::heartbeat(self.heartbeat).to_vec());
+        if self.last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
+            if self.output.len() < OUTPUT_CAPACITY {
+                self.heartbeat = self.heartbeat.wrapping_add(1);
+                self.health
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .heartbeats = self.heartbeat;
+                self.output
+                    .push_back(frame::heartbeat(self.heartbeat).to_vec());
+            }
+            // 背压跳过保活时也推迟下次检查，不能让已经过去的心跳截止时间造成 poll(0)。
             self.last_heartbeat = Instant::now();
         }
-        while self.output.len() < 256 {
+        while self.output.len() < OUTPUT_CAPACITY {
             let Some(packet) = self.device.outgoing.pop_front() else {
                 break;
             };
@@ -1166,16 +1347,30 @@ impl Runner {
                 self.output_offset = 0;
             }
         }
-        for _ in 0..32 {
+        self.tls_write_blocked = false;
+        let mut write_rounds = 0;
+        for _ in 0..budget * 2 {
             if !self.tunnel.conn.wants_write() {
                 break;
             }
             match self.tunnel.conn.write_tls(&mut self.tunnel.sock) {
                 Ok(0) => return Err(error(io::ErrorKind::WriteZero, "VPN 写入中断")),
-                Ok(_) => self.io_progress = self.io_progress.wrapping_add(1),
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Ok(_) => {
+                    write_rounds += 1;
+                    self.io_progress = self.io_progress.wrapping_add(1);
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    self.tls_write_blocked = true;
+                    break;
+                }
                 Err(e) => return Err(e),
             }
+        }
+        if write_rounds == budget * 2
+            || (!self.tls_write_blocked
+                && (!self.output.is_empty() || self.tunnel.conn.wants_write()))
+        {
+            self.budget_exhausted = true;
         }
         Ok(())
     }
@@ -1185,6 +1380,15 @@ impl Runner {
             return;
         }
         self.terminal = Some(failure);
+        self.output.clear();
+        self.output_offset = 0;
+        self.device.enter_draining();
+        // 进入终态前耗尽的TLS预算已无意义，不能用它继续零期限轮询。
+        self.budget_exhausted = false;
+        let _ = self.poll.registry().deregister(&mut self.tunnel.sock);
+        if let Some(mut listener) = self.listener.take() {
+            let _ = self.poll.registry().deregister(&mut listener);
+        }
         self.drain_deadline = Some(Instant::now() + TERMINAL_DRAIN_TIMEOUT);
         let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
         health.draining = true;
@@ -1199,7 +1403,7 @@ impl Runner {
         );
     }
 
-    fn update_progress(&mut self) {
+    fn update_progress(&mut self) -> io::Result<()> {
         let now = Instant::now();
         if self.terminal.is_none()
             && now.duration_since(self.last_progress) > PROGRESS_TIMEOUT
@@ -1211,6 +1415,8 @@ impl Runner {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .recovering = true;
+            // 合法网关可以不回心跳；恢复必须发起实际 DNS 探活，不能仅等待心跳回复。
+            self.start_probe(&self.probe_host.clone(), PROBE_TIMEOUT, None, false, true)?;
             crate::emit_event(
                 self.engine_id.load(Ordering::Acquire),
                 "unhealthy",
@@ -1221,12 +1427,19 @@ impl Runner {
         let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
         health.progress = now;
         health.loop_iterations = health.loop_iterations.saturating_add(1);
+        Ok(())
+    }
+
+    fn poll_finished(&mut self, expected: Instant, interrupted: bool) {
+        if interrupted || Instant::now() <= expected + PROGRESS_TIMEOUT {
+            self.last_progress = Instant::now();
+        }
     }
 
     fn command(&mut self, command: Command) -> io::Result<()> {
         match command {
             Command::Probe(host, timeout, reply) => {
-                self.start_probe(&host, timeout, Some(reply), false)
+                self.start_probe(&host, timeout, Some(reply), false, false)
             }
             #[cfg(test)]
             Command::SimulateSuspend(reply) => {
@@ -1236,7 +1449,7 @@ impl Runner {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .received = self.last_received;
-                self.update_progress();
+                self.update_progress()?;
                 let _ = reply.send(());
                 Ok(())
             }
@@ -1244,15 +1457,31 @@ impl Runner {
     }
 
     fn advance_probe(&mut self) -> io::Result<()> {
+        if self.terminal.is_some() {
+            if let Some(probe) = self.probe.take() {
+                self.sockets
+                    .get_mut::<dns::Socket>(self.dns)
+                    .cancel_query(probe.query);
+                if let Some(reply) = probe.reply {
+                    let _ = reply.send(Err(error(
+                        io::ErrorKind::ConnectionAborted,
+                        "VPN 已进入排空",
+                    )));
+                }
+            }
+            return Ok(());
+        }
         if let Some(probe) = self.probe.as_ref() {
             let result = self
                 .sockets
                 .get_mut::<dns::Socket>(self.dns)
                 .get_query_result(probe.query);
-            let answered = !matches!(result, Err(dns::GetQueryResultError::Pending));
-            if answered || Instant::now() >= probe.deadline || self.terminal.is_some() {
+            let pending = matches!(result, Err(dns::GetQueryResultError::Pending));
+            // 完整的隧道数据或有效 DNS 拒绝响应都能证明链路活着，避免只因某个目标 DNS 失败误杀。
+            let answered = !pending || self.decoder.completed_frames() > probe.observed_frames;
+            if answered || Instant::now() >= probe.deadline {
                 let probe = self.probe.take().expect("探活存在");
-                if !answered {
+                if pending {
                     self.sockets
                         .get_mut::<dns::Socket>(self.dns)
                         .cancel_query(probe.query);
@@ -1261,12 +1490,19 @@ impl Runner {
                     let _ = reply.send(if answered {
                         Ok(())
                     } else {
-                        Err(error(io::ErrorKind::TimedOut, "VPN DNS 探测超时"))
+                        Err(error(io::ErrorKind::TimedOut, "VPN DNS 探活超时"))
                     });
                 }
-                if probe.blackhole && !answered {
-                    self.exit_code = Some("blackhole_detected".into());
-                    return Err(error(io::ErrorKind::TimedOut, "VPN 静默黑洞探测失败"));
+                if !answered && (probe.blackhole || probe.recovery) {
+                    self.exit_code = Some(
+                        if probe.blackhole {
+                            "blackhole_detected"
+                        } else {
+                            "recovery_timeout"
+                        }
+                        .into(),
+                    );
+                    return Err(error(io::ErrorKind::TimedOut, "VPN 内置 DNS 探活失败"));
                 }
                 if answered {
                     self.consecutive_timeouts = 0;
@@ -1277,13 +1513,17 @@ impl Runner {
     }
 
     fn poll_timeout(&mut self, timestamp: NetInstant) -> Duration {
+        if self.budget_exhausted {
+            return Duration::ZERO;
+        }
         let now = Instant::now();
-        let mut deadline = self.last_heartbeat + HEARTBEAT_INTERVAL;
+        let mut deadline = if self.terminal.is_some() {
+            self.drain_deadline.expect("终态排空期限存在")
+        } else {
+            self.last_heartbeat + HEARTBEAT_INTERVAL
+        };
         if let Some(recovery) = self.recovery_deadline {
             deadline = deadline.min(recovery);
-        }
-        if let Some(drain) = self.drain_deadline {
-            deadline = deadline.min(drain);
         }
         if let Some(probe) = self.probe.as_ref() {
             deadline = deadline.min(probe.deadline);
@@ -1294,22 +1534,33 @@ impl Runner {
             } else {
                 flow.deadline
             });
+            if self.terminal.is_none()
+                && self.probe.is_none()
+                && flow.authorized
+                && !flow.established
+                && !flow.reject
+            {
+                if let Some(started) = flow.connect_started {
+                    deadline = deadline
+                        .min((started + BLACKHOLE_IDLE).max(self.last_received + BLACKHOLE_IDLE));
+                }
+            }
         }
         let timer = deadline.saturating_duration_since(now);
-        // 终态不再发送协议栈报文；排空只等待本地写就绪及一秒期限，避免未发 ACK 忙等。
-        if self.terminal.is_some() {
+        // 终态无心跳、无发送；写背压时协议栈立即重发也只能等 OS 写就绪，不能 poll(0) 空转。
+        if self.terminal.is_some() || !self.device.can_transmit() {
             return timer;
         }
         self.interface
             .poll_delay(timestamp, &self.sockets)
-            .map(|delay| Duration::from_millis(delay.total_millis()))
-            .map(|delay| delay.min(timer))
+            .map(|delay| Duration::from_millis(delay.total_millis()).min(timer))
             .unwrap_or(timer)
     }
 
     fn run(&mut self) -> io::Result<()> {
         while self.running.load(Ordering::Acquire) {
-            self.update_progress();
+            self.budget_exhausted = false;
+            self.update_progress()?;
             if self
                 .recovery_deadline
                 .is_some_and(|deadline| Instant::now() >= deadline)
@@ -1325,12 +1576,12 @@ impl Runner {
                 }
             }
             self.accept_clients()?;
-            let progress = self.io_progress;
             self.pump_tls()?;
             let timestamp = NetInstant::from_millis(self.started.elapsed().as_millis() as i64);
             self.interface
                 .poll(timestamp, &mut self.device, &mut self.sockets);
             self.advance_probe()?;
+            self.check_blackhole()?;
             let mut flows = std::mem::take(&mut self.flows);
             for index in (0..flows.len()).rev() {
                 match self.advance(&mut flows[index]) {
@@ -1355,29 +1606,28 @@ impl Runner {
             } else {
                 Interest::READABLE
             };
-            if interest != self.tunnel_interest {
+            if self.terminal.is_none() && interest != self.tunnel_interest {
                 self.poll
                     .registry()
                     .reregister(&mut self.tunnel.sock, TUNNEL, interest)?;
                 self.tunnel_interest = interest;
             }
-            // 仅当本轮搬运了缓冲数据时继续处理，空闲及背压等待 OS 事件或协议期限。
-            if self.io_progress != progress
-                && (!self.device.incoming.is_empty() || !self.device.outgoing.is_empty())
-            {
-                continue;
+            // 接收队列还可被协议栈消费时继续驱动，不能把已解密的尾包留到下一次OS边沿。
+            if !self.device.incoming.is_empty() && self.device.can_transmit() {
+                self.budget_exhausted = true;
             }
             let timeout = self.poll_timeout(timestamp);
             let expected = Instant::now() + timeout;
             match self.poll.poll(&mut self.events, Some(timeout)) {
                 Ok(()) => {}
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {
+                    self.poll_finished(expected, true);
+                    continue;
+                }
                 Err(e) => return Err(e),
             }
-            // 正常 Poll 等待可超过五秒；仅比预期醒来时间迟五秒以上才保留陈旧进度。
-            if Instant::now() <= expected + PROGRESS_TIMEOUT {
-                self.last_progress = Instant::now();
-            }
+            // 正常 Poll 和 EINTR 均补偿等待时间，真正超出预计期限才触发调度恢复。
+            self.poll_finished(expected, false);
         }
         Ok(())
     }
@@ -1386,6 +1636,9 @@ impl Runner {
 impl Drop for Runner {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Release);
+        for flow in &mut self.flows {
+            let _ = Self::drain_local(flow);
+        }
         let _ = self.tunnel.sock.shutdown(Shutdown::Both);
     }
 }

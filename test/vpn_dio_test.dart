@@ -35,6 +35,20 @@ class LocalConnector implements VpnConnector {
   }
 }
 
+class _ScriptedAdapter implements HttpClientAdapter {
+  _ScriptedAdapter(this.respond);
+  final Future<ResponseBody> Function(RequestOptions, Stream<Uint8List>?)
+  respond;
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? stream,
+    Future<void>? cancelled,
+  ) => respond(options, stream);
+  @override
+  void close({bool force = false}) {}
+}
+
 class _SyntheticAiaCertificate implements X509Certificate {
   _SyntheticAiaCertificate(this.der);
   @override
@@ -113,13 +127,53 @@ class LocalSessionConnector extends LocalConnector
   int? sessionId = 1;
 }
 
+VpnSession _testSession(int id) => VpnSession(
+  engineId: id,
+  proxyPort: 0,
+  proxyToken: 'synthetic',
+  establishedAt: DateTime(2026),
+  generation: id,
+);
+
+class ChangingPreparedConnector extends LocalSessionConnector
+    implements VpnPreparedConnector {
+  @override
+  Future<VpnSession> prepare() async {
+    final locked = _testSession(sessionId!);
+    scheduleMicrotask(() => sessionId = locked.engineId + 1);
+    return locked;
+  }
+}
+
+class DrainingDuringPreparationGateway extends VpnGateway {
+  DrainingDuringPreparationGateway({
+    required super.native,
+    required super.auth,
+  });
+  bool first = true;
+  @override
+  Future<VpnSession> prepare() async {
+    final locked = await super.prepare();
+    if (first) {
+      first = false;
+      await onNativeEvent({
+        'engineId': locked.engineId,
+        'event': 'draining',
+        'reason': 'receive_terminal',
+      });
+    }
+    return locked;
+  }
+}
+
 class PreparedLocalConnector extends LocalSessionConnector
     implements VpnPreparedConnector {
   int preparations = 0;
   @override
-  Future<void> prepare() async {
+  Future<VpnSession> prepare() async {
     preparations++;
     if (preparations == 2) sessionId = 2;
+    return _testSession(sessionId!);
   }
 }
 
@@ -128,9 +182,9 @@ class WaitingLocalConnector extends LocalSessionConnector
   final entered = Completer<void>();
   final ready = Completer<void>();
   @override
-  Future<void> prepare() {
+  Future<VpnSession> prepare() {
     if (!entered.isCompleted) entered.complete();
-    return ready.future;
+    return ready.future.then((_) => _testSession(sessionId!));
   }
 }
 
@@ -203,6 +257,8 @@ class ConnectProxy {
   final sockets = <Socket>[];
   late HttpServer server;
   int connects = 0;
+  int proxyRequests = 0;
+  int? rejectOnceStatus;
   Future<void> start() async {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
@@ -211,6 +267,21 @@ class ConnectProxy {
               'Basic ${base64Encode(utf8.encode('vpn:${'00' * 32}'))}') {
         request.response.statusCode = 407;
         await request.response.close();
+        return;
+      }
+      proxyRequests++;
+      final rejection = rejectOnceStatus;
+      rejectOnceStatus = null;
+      if (rejection != null) {
+        final rejected = await request.response.detachSocket(
+          writeHeaders: false,
+        );
+        sockets.add(rejected);
+        rejected.write(
+          'HTTP/1.1 $rejection Proxy Failure\r\nContent-Length: 0\r\n\r\n',
+        );
+        await rejected.flush();
+        rejected.destroy();
         return;
       }
       connects++;
@@ -244,9 +315,16 @@ class ConnectProxy {
 class RecoverableLocalConnector extends LocalSessionConnector
     implements VpnRecoverableConnector {
   final invalidated = <int>[];
+  Completer<void>? replayGate;
+  Completer<void>? replayEntered;
   @override
-  Future<void> prepare() async {
+  Future<VpnSession> prepare() async {
     sessionId ??= invalidated.length + 1;
+    if (invalidated.isNotEmpty && replayGate != null) {
+      if (replayEntered?.isCompleted == false) replayEntered!.complete();
+      await replayGate!.future;
+    }
+    return _testSession(sessionId!);
   }
 
   @override
@@ -883,6 +961,9 @@ void main() {
             .get(Uri.parse('https://wrong.test:${https.port}/')),
         throwsA(isA<PortalNetworkError>()),
       );
+      expect(gateway.sessionId, 1);
+      expect(native.stopped, isEmpty);
+      expect(native.starts, 1);
     } finally {
       secureClient.close(force: true);
       await gateway.dispose();
@@ -1008,6 +1089,393 @@ void main() {
     await native.controller.close();
   });
 
+  test('P1-9 AIA补链重试克隆已finalize的FormData，Stream请求不重放', () async {
+    final bodies = <String>[];
+    final trust = _RepairCounterTrust();
+    final mock = Dio()
+      ..httpClientAdapter = _ScriptedAdapter((options, stream) async {
+        bodies.add(
+          utf8.decode(
+            await stream!.fold<List<int>>([], (all, part) => all..addAll(part)),
+          ),
+        );
+        if (bodies.length == 1) throw const HandshakeException('合成缺链');
+        return ResponseBody.fromString('ok', 200);
+      });
+    final http = PortalHttp(mock, trust: trust);
+    try {
+      expect(
+        (await http.post(
+          Uri.parse('https://synthetic.test/query'),
+          data: FormData.fromMap({'query': 'read-only-value'}),
+        )).data,
+        'ok',
+      );
+      expect(bodies, hasLength(2));
+      expect(bodies[1], bodies[0]);
+      expect(RegExp('name="query"').allMatches(bodies[1]), hasLength(1));
+      expect(bodies[1], contains('read-only-value'));
+      expect(trust.repairs, 1);
+    } finally {
+      mock.close(force: true);
+    }
+    var streamCalls = 0;
+    final noReplayTrust = _RepairCounterTrust();
+    final streamDio = Dio()
+      ..httpClientAdapter = _ScriptedAdapter((options, stream) async {
+        streamCalls++;
+        await stream!.drain<void>();
+        throw const HandshakeException('合成Stream缺链');
+      });
+    try {
+      await expectLater(
+        PortalHttp(streamDio, trust: noReplayTrust).post(
+          Uri.parse('https://synthetic.test/query'),
+          data: Stream<Uint8List>.value(Uint8List.fromList([1, 2, 3])),
+        ),
+        throwsA(isA<PortalNetworkError>()),
+      );
+      expect(streamCalls, 1);
+      expect(noReplayTrust.repairs, 0);
+    } finally {
+      streamDio.close(force: true);
+    }
+  });
+
+  test('P1-13 AIA预探测失败不能缓存，成功后才复用标记', () async {
+    final trust = AiaTrust();
+    var probes = 0;
+    HttpClient failed() {
+      probes++;
+      return HttpClient()
+        ..connectionFactory = (uri, host, port) =>
+            throw const SocketException('合成探测失败');
+    }
+
+    expect(await trust.prepareHost(url, createProbeClient: failed), isFalse);
+    expect(await trust.prepareHost(url, createProbeClient: failed), isFalse);
+    expect(probes, 2);
+    await trust.prepareHost(
+      url,
+      createProbeClient: () {
+        probes++;
+        return HttpClient();
+      },
+    );
+    await trust.prepareHost(url, createProbeClient: failed);
+    expect(probes, 3);
+    expect(requests, 0);
+  });
+
+  for (final code in [301, 302, 303]) {
+    for (final method in ['HEAD', 'PUT', 'POST']) {
+      test('P1-9 redirect$code保持$method的RFC方法语义并清理跨跳重放状态', () async {
+        final seen = <RequestOptions>[];
+        bool guard(int? status) => status == 200;
+        final dio = Dio()
+          ..httpClientAdapter = _ScriptedAdapter((options, stream) async {
+            await stream?.drain<void>();
+            seen.add(options);
+            return options.uri.path == '/start'
+                ? ResponseBody.fromString(
+                    '',
+                    code,
+                    headers: {
+                      'location': ['/next'],
+                    },
+                  )
+                : ResponseBody.fromString('', 200);
+          });
+        final transport = CampusTransport.stateless(dio: dio);
+        try {
+          final result = await transport.dio.request(
+            'http://synthetic.test/start',
+            data: 'body=kept',
+            options: Options(
+              method: method,
+              extra: {
+                '_vpnReplayed': true,
+                '_aiaRepaired': true,
+                '_redirectValidateStatus': guard,
+                'vpnDio.engineId': 77,
+              },
+            ),
+          );
+          expect(result.statusCode, 200);
+          expect(seen, hasLength(2));
+          final expectedGet = code == 303 ? method != 'HEAD' : method == 'POST';
+          expect(seen[1].method, expectedGet ? 'GET' : method);
+          expect(seen[1].data, expectedGet ? null : 'body=kept');
+          for (final key in [
+            '_vpnReplayed',
+            '_aiaRepaired',
+            'vpnDio.engineId',
+          ]) {
+            expect(seen[1].extra.containsKey(key), isFalse);
+          }
+          expect(seen[1].extra['_redirectValidateStatus'], isNot(same(guard)));
+          expect(result.redirects, hasLength(1));
+        } finally {
+          transport.close(force: true);
+        }
+      });
+    }
+  }
+
+  test('P1-9 非法Location保留原因，PortalHttp重定向503不泄露裸DioException', () async {
+    final invalidDio = Dio()
+      ..httpClientAdapter = _ScriptedAdapter(
+        (options, stream) async => ResponseBody.fromString(
+          '',
+          302,
+          headers: {
+            'location': ['http://bad.test:invalid/'],
+          },
+        ),
+      );
+    final invalid = CampusTransport.stateless(dio: invalidDio);
+    try {
+      await expectLater(
+        invalid.get(Uri.parse('http://synthetic.test/start')),
+        throwsA(
+          isA<PortalLoginError>()
+              .having((e) => e.code, 'code', 'redirect_location_invalid')
+              .having((e) => e.cause, 'cause', isA<FormatException>()),
+        ),
+      );
+    } finally {
+      invalid.close(force: true);
+    }
+    var calls = 0;
+    final rejectingDio = Dio()
+      ..httpClientAdapter = _ScriptedAdapter((options, stream) async {
+        calls++;
+        return calls == 1
+            ? ResponseBody.fromString(
+                '',
+                302,
+                headers: {
+                  'location': ['/failed'],
+                },
+              )
+            : ResponseBody.fromString('temporarily unavailable', 503);
+      });
+    final http = PortalHttp(rejectingDio);
+    try {
+      final landed = await http.get(Uri.parse('http://synthetic.test/start'));
+      await expectLater(
+        http.followRedirects(landed),
+        throwsA(
+          isA<DiagnosticException>()
+              .having((e) => e.diagnosticContext['status_code'], 'status', 503)
+              .having((e) => e.cause, 'cause', isA<DioException>()),
+        ),
+      );
+      expect(calls, 2);
+    } finally {
+      rejectingDio.close(force: true);
+    }
+  });
+
+  test('P0-3 prepare返回后全局代次变化仍使用锁定会话，未知失败ID不关闭活跃池', () async {
+    final changing = ChangingPreparedConnector();
+    final atomicClient = vpnDio(connector: changing, forceVpn: true);
+    try {
+      final first = await atomicClient.getUri(url);
+      expect(first.requestOptions.extra['vpnDio.engineId'], 1);
+      expect(changing.sessionId, 2);
+      final second = await atomicClient.getUri(url);
+      expect(second.requestOptions.extra['vpnDio.engineId'], 2);
+      expect(changing.connections, 2);
+    } finally {
+      atomicClient.close(force: true);
+    }
+    final stable = PreparedLocalConnector();
+    final pooled = vpnDio(connector: stable);
+    try {
+      await pooled.getUri(url);
+      final adapter = unwrapHttpDiagnostics(
+        pooled.httpClientAdapter,
+      ) as VpnHttpClientAdapter;
+      adapter.discardVpnPool(null);
+      stable.preparations = 2;
+      await pooled.getUri(url);
+      expect(stable.connections, 1);
+    } finally {
+      pooled.close(force: true);
+    }
+  });
+
+  test('P0-3 prepare之后Draining不能把请求归属转交给新引擎', () async {
+    final proxy = ConnectProxy();
+    await proxy.start();
+    final native = FakeNative(proxy.server.port);
+    final gateway = DrainingDuringPreparationGateway(
+      native: native,
+      auth: FakeAuth(),
+    );
+    final lockedClient = vpnDio(connector: gateway);
+    try {
+      final result = await lockedClient.getUri(
+        url.replace(host: 'campus.test'),
+      );
+      expect(result.requestOptions.extra['vpnDio.engineId'], 1);
+      expect(native.starts, 1);
+      expect(gateway.state, isA<VpnDraining>());
+    } finally {
+      lockedClient.close(force: true);
+      await gateway.dispose();
+      await native.controller.close();
+      await proxy.close();
+    }
+  });
+
+  for (final status in [502, 504, 503]) {
+    test('P1-7 CONNECT$status区分目标失败与本地隧道不可用', () async {
+      final proxy = ConnectProxy()..rejectOnceStatus = status;
+      await proxy.start();
+      final native = FakeNative(proxy.server.port);
+      final gateway = VpnGateway(native: native, auth: FakeAuth());
+      final query = vpnDio(connector: gateway);
+      try {
+        final result = query.getUri(url.replace(host: 'campus.test'));
+        if (status == 503) {
+          expect((await result).statusCode, 200);
+          expect(proxy.proxyRequests, 2);
+          expect(native.stopped, [1]);
+          expect(native.starts, 2);
+        } else {
+          await expectLater(
+            result,
+            throwsA(
+              isA<DioException>().having(
+                (e) => (e.error as VpnProxyException).statusCode,
+                'proxy_status',
+                status,
+              ),
+            ),
+          );
+          expect(proxy.proxyRequests, 1);
+          expect(gateway.sessionId, 1);
+          expect(native.stopped, isEmpty);
+          expect(native.starts, 1);
+        }
+      } finally {
+        query.close(force: true);
+        await gateway.dispose();
+        await native.controller.close();
+        await proxy.close();
+      }
+    });
+  }
+
+  test('P1-7 connectionTimeout也触发唯一一次恢复', () async {
+    final proxy = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final sockets = <Socket>[];
+    proxy.listen((socket) {
+      sockets.add(socket);
+      socket.listen((_) {});
+    });
+    final native = FakeNative(proxy.port);
+    final gateway = VpnGateway(native: native, auth: FakeAuth());
+    final timed = vpnDio(
+      connector: gateway,
+      options: BaseOptions(connectTimeout: const Duration(milliseconds: 60)),
+    );
+    try {
+      await expectLater(
+        timed.get('http://campus.test/'),
+        throwsA(isA<DioException>()),
+      );
+      expect(native.starts, 2);
+      expect(native.stopped, [1, 2]);
+    } finally {
+      timed.close(force: true);
+      await gateway.dispose();
+      await native.controller.close();
+      for (final socket in sockets) {
+        socket.destroy();
+      }
+      await proxy.close();
+    }
+  });
+
+  test('P1-7 重放准备中取消一个请求不取消共享准备或其他请求', () async {
+    final failing = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    var attempts = 0;
+    failing.listen((request) async {
+      attempts++;
+      if (attempts == 1) {
+        (await request.response.detachSocket(writeHeaders: false)).destroy();
+      } else {
+        request.response.write('retained');
+        await request.response.close();
+      }
+    });
+    final shared = RecoverableLocalConnector()
+      ..replayGate = Completer<void>()
+      ..replayEntered = Completer<void>();
+    final replay = vpnDio(connector: shared);
+    final token = CancelToken();
+    try {
+      final cancelled = replay.get<String>(
+        'http://127.0.0.1:${failing.port}/',
+        cancelToken: token,
+      );
+      final rejected = expectLater(
+        cancelled,
+        throwsA(
+          isA<DioException>().having(
+            (e) => e.type,
+            'type',
+            DioExceptionType.cancel,
+          ),
+        ),
+      );
+      await shared.replayEntered!.future;
+      final retained = replay.get<String>('http://127.0.0.1:${failing.port}/');
+      token.cancel();
+      await rejected.timeout(const Duration(seconds: 1));
+      expect(shared.replayGate!.isCompleted, isFalse);
+      shared.replayGate!.complete();
+      expect((await retained).data, 'retained');
+      expect(attempts, 2);
+      expect(shared.invalidated, [1]);
+    } finally {
+      replay.close(force: true);
+      await failing.close(force: true);
+    }
+  });
+
+  test('P1-4 scheduler_stall保留原生DNS探活机会而不是立即停止引擎', () async {
+    final native = FakeNative(0);
+    final gateway = VpnGateway(native: native, auth: FakeAuth());
+    await gateway.setForeground(false);
+    await gateway.prepare();
+    await gateway.onNativeEvent({
+      'engineId': 1,
+      'event': 'unhealthy',
+      'reason': 'scheduler_stall',
+    });
+    expect(gateway.sessionId, 1);
+    expect(native.stopped, isEmpty);
+    await gateway.onNativeEvent({
+      'engineId': 1,
+      'event': 'healthy',
+      'reason': 'probe_completed',
+    });
+    expect(gateway.sessionId, 1);
+    await gateway.onNativeEvent({
+      'engineId': 1,
+      'event': 'exited',
+      'reason': 'recovery_timeout',
+    });
+    expect(gateway.state, isA<VpnDisconnected>());
+    expect(native.stopped, [1]);
+    await gateway.dispose();
+    await native.controller.close();
+  });
+
   test('五个并发请求共享启动，网络变化不取消正在建立的隧道', () async {
     final native = FakeNative(0)..startGate = Completer<void>();
     final auth = FakeAuth();
@@ -1016,8 +1484,10 @@ void main() {
     while (native.starts == 0) {
       await Future<void>.delayed(Duration.zero);
     }
-    await gateway.networkChanged();
+    final networkChange = gateway.networkChanged();
     native.startGate!.complete();
+    await networkChange;
+    expect(native.probes, 1);
     final sessions = await Future.wait(waiting);
     expect(auth.logins, 1);
     expect(native.starts, 1);

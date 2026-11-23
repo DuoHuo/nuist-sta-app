@@ -82,9 +82,6 @@ class VpnGateway implements VpnRecoverableConnector {
   /// 当前状态只读，调用方可据此决定是否需要前台探活。
   VpnState get state => _state;
 
-  /// 创建连接池时固定其所属会话，异步建连不能改记为后来的引擎。
-  VpnSession? get readySession =>
-      _state is VpnReady ? (_state as VpnReady).session : null;
   @override
   int? get sessionId => switch (_state) {
     VpnReady(:final session) || VpnDraining(:final session) => session.engineId,
@@ -113,9 +110,7 @@ class VpnGateway implements VpnRecoverableConnector {
   }
 
   @override
-  Future<void> prepare() async {
-    await ensureReady();
-  }
+  Future<VpnSession> prepare() => ensureReady();
 
   /// 同一启动共享结果，后台退避不会阻挡用户或业务主动请求。
   Future<VpnSession> ensureReady({bool userInitiated = true}) async {
@@ -187,6 +182,7 @@ class VpnGateway implements VpnRecoverableConnector {
         'port': credentials.port,
         'user': credentials.user,
         'token': credentials.token,
+        'probeHost': Uri.parse(VpnAuth.controller).host,
       });
       engineId = result['engineId'] as int;
       final session = VpnSession(
@@ -304,7 +300,10 @@ class VpnGateway implements VpnRecoverableConnector {
   Future<void> onNativeEvent(Map<String, dynamic> event) => _enqueue(() async {
     final id = event['engineId'];
     if (id is! int) return;
+    final probingAfterStall =
+        event['event'] == 'unhealthy' && event['reason'] == 'scheduler_stall';
     if (_state is VpnConnecting &&
+        !probingAfterStall &&
         const {'exited', 'unhealthy', 'draining'}.contains(event['event'])) {
       _earlyTerminalEvents[id] = event;
       return;
@@ -327,6 +326,11 @@ class VpnGateway implements VpnRecoverableConnector {
         _failures = 0;
         _backgroundAfter = null;
       case 'unhealthy':
+        // 原生已启动受控 DNS 探活，由 healthy/exited 决定恢复或退出。
+        if (probingAfterStall) return;
+        _state = const VpnDisconnected();
+        await _stop(id);
+        _scheduleBackground();
       case 'exited':
         _state = const VpnDisconnected();
         await _stop(id);
@@ -364,7 +368,19 @@ class VpnGateway implements VpnRecoverableConnector {
       _backgroundAfter = null;
       return _state;
     });
-    if (selected is VpnReady) await checkHealth();
+    if (selected is VpnReady) {
+      await checkHealth();
+    } else if (selected is VpnConnecting) {
+      try {
+        final connected = await selected.pending;
+        if (_state case VpnReady(:final session)
+            when session.engineId == connected.engineId) {
+          await checkHealth();
+        }
+      } catch (error, stack) {
+        vpnLog('network.prepare_failed', error: error, stackTrace: stack);
+      }
+    }
   }
 
   /// 回前台仅探活已有隧道；inactive 不应调用本方法暂停后台行为。

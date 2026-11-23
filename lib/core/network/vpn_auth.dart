@@ -273,21 +273,61 @@ class VpnAuth {
       }
       lastStatus = response.statusCode;
       lastCode = body?['code']?.toString();
-      final accepted = response.statusCode == 200 && lastCode == '200';
-      if (!accepted && reusingSession) {
+      final code = (lastCode ?? '').trim();
+      final messages = '${body?['messages'] ?? body?['message'] ?? ''}';
+      final sessionExpired = _isSessionExpiredResponse(code, messages);
+      final loginResponse = PortalHttp.isLoginResponse(response);
+      if (sessionExpired) {
         vpnLog(
           'authentication.session_rejected',
           fields: {
-            'reason_code': 'controller_rules_rejected',
-            'status_code': lastStatus,
-            'response_code': lastCode,
+            'reason_code': 'controller_session_expired',
+            'response_code': ?int.tryParse(code),
+            'attempt': attempt + 1,
           },
         );
+      }
+      if (reusingSession &&
+          (response.statusCode == 401 ||
+              response.statusCode == 403 ||
+              loginResponse ||
+              body == null ||
+              sessionExpired)) {
+        if (!sessionExpired) {
+          vpnLog(
+            'authentication.session_rejected',
+            fields: {
+              'reason_code': loginResponse
+                  ? 'controller_login_response'
+                  : 'controller_response_unusable',
+              'status_code': lastStatus,
+              'attempt': attempt + 1,
+            },
+          );
+        }
         return null;
       }
-      final data = body?['data'];
-      if (accepted &&
-          data is Map &&
+      if (response.statusCode != 200 || code != '200' || body == null) {
+        throw PortalLoginError(
+          'VPN 控制器未正常返回隧道凭据，请稍后再试',
+          code: 'vpn_controller_rules_rejected',
+          stage: 'vpn.rules.validate',
+          cause: lastCause,
+          causeStackTrace: lastStack,
+          context: {
+            'response_code': code,
+            'status_code': lastStatus,
+            'attempt': attempt + 1,
+            if (!reusingSession)
+              'details': {
+                'after_cas_relogin': true,
+                'session_expired': sessionExpired,
+              },
+          },
+        );
+      }
+      final data = body['data'];
+      if (data is Map &&
           data['token'] is String &&
           (data['token'] as String).isNotEmpty) {
         final endpoints = _endpoints(data['server']);
@@ -347,6 +387,22 @@ class VpnAuth {
         'response_code': lastCode,
       },
     );
+  }
+
+  /// 判断控制器 rules 响应是否明确表示旧会话已失效或被踢下线，需要清理 Cookie 并重登。
+  static bool _isSessionExpiredResponse(String code, String messages) {
+    if (code == '200') return false;
+    if (code == '401' || code == '1001') return true;
+    final normalized = messages.toLowerCase();
+    return normalized.contains('重新登录') ||
+        normalized.contains('重新登陆') ||
+        normalized.contains('re-login') ||
+        normalized.contains('relogin') ||
+        normalized.contains('log in again') ||
+        normalized.contains('login again') ||
+        normalized.contains('logged out') ||
+        normalized.contains('kicked offline') ||
+        normalized.contains('踢下线');
   }
 
   Future<void> _clearController() => _cas.cookies.clearHost(

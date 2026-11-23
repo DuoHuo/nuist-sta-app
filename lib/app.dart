@@ -30,7 +30,14 @@ import 'shell/update/update_controller.dart';
 import 'shell/update/update_dialog.dart';
 
 class NuistApp extends StatefulWidget {
-  const NuistApp({super.key, this.updates, this.updateBridge, this.consent});
+  const NuistApp({
+    super.key,
+    this.updates,
+    this.updateBridge,
+    this.consent,
+    this.networkChanges,
+    this.vpnGateway,
+  });
 
   /// 宿主与测试可注入更新状态及通知通道。
   final UpdateController? updates;
@@ -38,6 +45,12 @@ class NuistApp extends StatefulWidget {
 
   /// 隐私政策同意状态。传入时一定会在未选择时弹出同意框；默认只在真机上弹出。
   final PrivacyConsent? consent;
+
+  /// 网络监听回归可注入事件源与网关，真机默认沿用插件和共享实例。
+  @visibleForTesting
+  final Stream<List<ConnectivityResult>>? networkChanges;
+  @visibleForTesting
+  final VpnGateway? vpnGateway;
 
   @override
   State<NuistApp> createState() => _NuistAppState();
@@ -55,6 +68,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     ignorePlatformInitialRoute: _systemTimetableRoute != null,
   );
   late final _consent = widget.consent ?? PrivacyConsent.instance;
+  late final _vpnGateway = widget.vpnGateway ?? VpnGateway.instance;
   bool _openingUpdate = false;
   bool get _askConsent =>
       widget.consent != null ||
@@ -133,42 +147,51 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     }
     WidgetsBinding.instance.addObserver(this);
     SilentRefresh.updated.addListener(_onRefreshUpdated);
-    if (!kIsWeb && !Platform.environment.containsKey('FLUTTER_TEST')) {
+    if (widget.networkChanges != null ||
+        (!kIsWeb && !Platform.environment.containsKey('FLUTTER_TEST'))) {
       try {
-        _networkSubscription = Connectivity().onConnectivityChanged.listen(
-          (results) {
-            final names = results.map((result) => result.name).toList()..sort();
-            final current = names.join(',');
-            final previous = _network;
-            _network = current;
-            if (previous != current) {
-              _networkDebounce?.cancel();
-              final gateway = VpnGateway.instance;
-              if (results.every(
-                (result) => result == ConnectivityResult.none,
-              )) {
-                unawaited(gateway.disconnected());
-                return;
-              }
-              // 在事件发生时记录会话，迟到的防抖不能掐断后来启动的新会话。
-              final observed = gateway.state;
-              if (observed is! VpnReady && observed is! VpnConnecting) return;
-              _log.info('network.changed', fields: {'connection_types': names});
-              _networkDebounce = Timer(const Duration(milliseconds: 400), () {
-                if (identical(gateway.state, observed)) {
-                  unawaited(gateway.networkChanged());
-                }
-              });
-            }
-          },
-          onError: (Object error, StackTrace stackTrace) {
-            _log.warning(
-              'network.listener_failed',
-              error: error,
-              stackTrace: stackTrace,
-            );
-          },
-        );
+        _networkSubscription =
+            (widget.networkChanges ?? Connectivity().onConnectivityChanged)
+                .listen(
+                  (results) {
+                    final names = results.map((result) => result.name).toList()
+                      ..sort();
+                    final current = names.join(',');
+                    final previous = _network;
+                    _network = current;
+                    // 插件首次黏性事件只初始化网络快照，不代表一次出口变化。
+                    if (previous == null) return;
+                    if (previous != current) {
+                      _networkDebounce?.cancel();
+                      final gateway = _vpnGateway;
+                      if (results.isNotEmpty &&
+                          results.every(
+                            (result) => result == ConnectivityResult.none,
+                          )) {
+                        unawaited(gateway.disconnected());
+                        return;
+                      }
+                      _log.info(
+                        'network.changed',
+                        fields: {'connection_types': names},
+                      );
+                      _networkDebounce = Timer(
+                        const Duration(milliseconds: 400),
+                        () {
+                          // 断开态也解除后台退避；Connecting 变 Ready 后仍需完成探活。
+                          unawaited(gateway.networkChanged());
+                        },
+                      );
+                    }
+                  },
+                  onError: (Object error, StackTrace stackTrace) {
+                    _log.warning(
+                      'network.listener_failed',
+                      error: error,
+                      stackTrace: stackTrace,
+                    );
+                  },
+                );
       } catch (error, stackTrace) {
         _log.warning(
           'network.listener_unavailable',
@@ -310,9 +333,9 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     _log.debug('state.changed', fields: {'state': state.name});
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
-      unawaited(VpnGateway.instance.setForeground(false));
+      unawaited(_vpnGateway.setForeground(false));
     } else if (state == AppLifecycleState.resumed) {
-      unawaited(VpnGateway.instance.setForeground(true));
+      unawaited(_vpnGateway.setForeground(true));
     }
     if (state == AppLifecycleState.resumed) {
       unawaited(AppLog.collectNativeDiagnostics());

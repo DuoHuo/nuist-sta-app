@@ -190,6 +190,7 @@ class ElectricityApi {
               ),
               idempotent: true,
             );
+    requireServiceSuccess(response, endpoint: endpoint, service: 'icard');
     final raw = response.data;
     try {
       final decoded = raw is String ? jsonDecode(raw) : raw;

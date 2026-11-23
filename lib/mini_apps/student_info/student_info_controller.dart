@@ -10,8 +10,9 @@ import 'student_info_store.dart';
 
 /// 学生卡（身份 + 学期）的全局状态：学习页头部卡片订阅它。
 ///
-/// 生命周期与 AcademicController 一致：卡片首次挂载时 [ensureStarted]
-/// （读缓存 → 缓存不是今天拉的才自动拉一次），之后在手动刷新或门户绑定变化时请求。
+/// 生命周期与 AcademicController 一致：后台预加载时可先 [ensureCacheLoaded]
+/// 仅读本地缓存，进入可见态时再 [ensureStarted]（缓存不是今天拉的才自动拉
+/// 一次），之后在手动刷新或门户绑定变化时请求。
 class StudentInfoController extends ChangeNotifier {
   StudentInfoController._()
     : _readCache = StudentInfoStore.read,
@@ -43,6 +44,8 @@ class StudentInfoController extends ChangeNotifier {
   bool _loading = false;
   String? _error;
   bool _portalBound = true;
+  bool _cacheLoaded = false;
+  Future<void>? _loadingCache;
   bool _started = false;
   Future<void>? _starting;
   Future<void>? _refreshing;
@@ -60,11 +63,34 @@ class StudentInfoController extends ChangeNotifier {
   /// 门户未绑定时拉不到数据，卡片改成引导去绑定。
   bool get portalBound => _portalBound;
 
+  /// 仅读取本地缓存并检查门户绑定状态，不发起远端网络请求；重复调用只会执行一次。
+  Future<void> ensureCacheLoaded() {
+    if (_cacheLoaded) return _loadingCache ?? Future.value();
+    _cacheLoaded = true;
+    return _loadingCache = _loadCacheAndBinding();
+  }
+
   /// 读本地缓存，缓存过了自然天才自动刷新一次；重复调用只会执行一次。
   Future<void> ensureStarted() {
     if (_started) return _starting ?? Future.value();
     _started = true;
     return _starting = _start();
+  }
+
+  /// 测试用：重置控制器状态并使在途异步操作失效，避免测试间状态泄漏。
+  @visibleForTesting
+  void debugReset() {
+    _bindingGeneration++;
+    _info = null;
+    _infoFromCache = false;
+    _loading = false;
+    _error = null;
+    _portalBound = true;
+    _cacheLoaded = false;
+    _loadingCache = null;
+    _started = false;
+    _starting = null;
+    _refreshing = null;
   }
 
   Future<void> _readInitialCache(int generation) async {
@@ -75,7 +101,7 @@ class StudentInfoController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _start() async {
+  Future<void> _loadCacheAndBinding() async {
     final generation = _bindingGeneration;
     await _readInitialCache(generation);
     if (generation != _bindingGeneration) return;
@@ -83,6 +109,12 @@ class StudentInfoController extends ChangeNotifier {
     if (generation != _bindingGeneration) return;
     _portalBound = bound;
     notifyListeners();
+  }
+
+  Future<void> _start() async {
+    final generation = _bindingGeneration;
+    await ensureCacheLoaded();
+    if (generation != _bindingGeneration) return;
     final cached = _info;
     if (_portalBound && (cached == null || !isFetchedToday(cached.fetchedAt))) {
       await _runRefresh();
@@ -95,12 +127,18 @@ class StudentInfoController extends ChangeNotifier {
     _portalBound = bound;
     _error = null;
     _loading = bound;
+    if (!_cacheLoaded) {
+      _cacheLoaded = true;
+      _loadingCache = _readInitialCache(generation);
+    }
     if (!_started) {
       _started = true;
-      _starting = _readInitialCache(generation);
+      _starting = _loadingCache;
     }
     notifyListeners();
     if (!bound) return;
+    await _loadingCache;
+    if (generation != _bindingGeneration) return;
     await _starting;
     if (generation != _bindingGeneration) return;
     // 旧请求及其写盘先结束，避免旧账号结果覆盖这次绑定后的数据。
@@ -115,18 +153,23 @@ class StudentInfoController extends ChangeNotifier {
   Future<void> _runRefresh({
     bool checkBinding = true,
     bool userInitiated = false,
-  }) => SilentRefresh.join(
-    _refreshing ??= SilentRefresh.track(
+  }) {
+    if (_refreshing case final current?) return SilentRefresh.join(current);
+    final generation = _bindingGeneration;
+    late final Future<void> task;
+    task = SilentRefresh.track(
       () =>
           _refresh(
-            _bindingGeneration,
+            generation,
             checkBinding: checkBinding,
             userInitiated: userInitiated,
           ).whenComplete(() {
-            _refreshing = null;
+            if (identical(_refreshing, task)) _refreshing = null;
           }),
-    ),
-  );
+    );
+    _refreshing = task;
+    return SilentRefresh.join(task);
+  }
 
   Future<void> _refresh(
     int generation, {

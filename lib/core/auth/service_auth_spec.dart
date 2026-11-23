@@ -25,6 +25,26 @@ abstract class ServiceAuthSpec<TSession> {
 bool isGlobalAuthExpired(Response<dynamic> response, {bool treat403 = true}) =>
     CampusTransport.isGlobalAuthExpired(response, treat403: treat403);
 
+/// 解析业务正文前校验 HTTP 成功状态，避免把服务器错误页当作有效数据。
+void requireServiceSuccess(
+  Response<dynamic> response, {
+  required String endpoint,
+  required String service,
+}) {
+  final status = response.statusCode ?? 0;
+  if (status >= 200 && status < 300) return;
+  throw DiagnosticException(
+    '服务返回异常状态，请稍后重试',
+    code: 'http_status_rejected',
+    stage: 'response.validate',
+    context: {
+      'endpoint': endpoint,
+      'service': service,
+      'status_code': response.statusCode,
+    },
+  );
+}
+
 Map<String, dynamic>? _json(Object? value) {
   if (value is String) {
     try {
@@ -193,6 +213,7 @@ class IcardSpec extends ServiceAuthSpec<IcardSession> {
   bool isSubsystemExpired(Response<dynamic> response) {
     final body = _json(response.data);
     final code = '${body?['code']}';
+    if (code == '200') return false;
     final msg = '${body?['msg'] ?? body?['message'] ?? ''}'.toLowerCase();
     return code == '401' ||
         code == '403' ||
@@ -245,6 +266,7 @@ class LibrarySpec extends ServiceAuthSpec<LibrarySession> {
   bool isSubsystemExpired(Response<dynamic> response) {
     final body = _json(response.data);
     final code = '${body?['code']}';
+    if (code == '0') return false;
     final msg = '${body?['msg'] ?? body?['message'] ?? ''}'.toLowerCase();
     return code == '401' ||
         code == '403' ||

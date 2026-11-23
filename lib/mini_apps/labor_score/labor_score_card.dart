@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/navigation/app_navigation.dart';
@@ -25,11 +27,21 @@ class LaborScoreCard extends StatefulWidget {
 
 class _LaborScoreCardState extends State<LaborScoreCard> {
   late final _controller = widget.controller ?? LaborScoreController.instance;
+  bool _cacheLoadRequested = false;
+  bool _startRequested = false;
 
   @override
-  void initState() {
-    super.initState();
-    _controller.ensureStarted();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_startRequested) return;
+    if (AppNavigation.isVisibleOf(context)) {
+      _startRequested = true;
+      _cacheLoadRequested = true;
+      unawaited(_controller.ensureStarted());
+    } else if (!_cacheLoadRequested) {
+      _cacheLoadRequested = true;
+      unawaited(_controller.ensureCacheLoaded());
+    }
   }
 
   @override

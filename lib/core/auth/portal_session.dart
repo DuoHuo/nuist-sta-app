@@ -228,7 +228,11 @@ class PortalSession {
     final pending = _pending[service];
     if (pending != null) {
       if (forceFreshWebAuthn && _pendingFreshWebAuthn[service] != true) {
-        await pending;
+        try {
+          await pending;
+        } catch (_) {
+          // 显式验证仍须开始新的完整认证，旧普通登录的失败不能替代它。
+        }
         _cas.cookies.checkGeneration(generation);
         return _ensureLoggedIn(
           service,
@@ -269,13 +273,15 @@ class PortalSession {
         );
         // 读取诊断文件期间可能解绑；新增的 await 不能让旧凭据继续出网。
         _cas.cookies.checkGeneration(generation);
-        executor.restoreSession(
-          _PortalLandingSpec(service),
-          Response<dynamic>(
-            requestOptions: RequestOptions(path: cached.landing),
-            statusCode: 200,
-          ),
-        );
+        if (!cached.restored) {
+          executor.restoreSession(
+            _PortalLandingSpec(service),
+            Response<dynamic>(
+              requestOptions: RequestOptions(path: cached.landing),
+              statusCode: 200,
+            ),
+          );
+        }
         return result;
       }
     }
@@ -308,7 +314,6 @@ class PortalSession {
                 generation,
                 onStage,
                 cancelToken,
-                force: force,
                 forceFreshWebAuthn: forceFreshWebAuthn,
               );
             },
@@ -744,7 +749,6 @@ class PortalSession {
     int generation,
     void Function(String stage)? onStage,
     CancelToken cancelToken, {
-    required bool force,
     required bool forceFreshWebAuthn,
   }) async {
     void check() {
@@ -767,7 +771,7 @@ class PortalSession {
       portalLog('session.restore_started', fields: {'host': host});
       final sessionEntry = await executor.ensureSession(
         _PortalLandingSpec(service, cancelToken: cancelToken),
-        force: force,
+        force: true,
         forceFreshWebAuthn: forceFreshWebAuthn,
         onStage: onStage,
       );

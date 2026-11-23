@@ -244,6 +244,11 @@ class FreeClassroomApi {
           ),
           idempotent: true,
         );
+    requireServiceSuccess(
+      response,
+      endpoint: 'free_classroom.$name',
+      service: 'jwxt',
+    );
     final raw = response.data;
 
     try {

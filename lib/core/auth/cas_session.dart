@@ -53,7 +53,20 @@ class CasSession {
     closeClient();
     _clientGeneration = generation;
     final jar = cookies.openJar();
-    if (createHttp case final factory?) return _client = factory(jar);
+    if (createHttp case final factory?) {
+      final http = factory(jar);
+      final index = http.dio.interceptors.indexWhere(
+        (interceptor) => interceptor is PortalCookieManager,
+      );
+      if (index >= 0) {
+        http.dio.interceptors[index] = PortalCookieManager(
+          jar,
+          store: cookies,
+          checkSession: () => cookies.checkGeneration(generation),
+        );
+      }
+      return _client = http;
+    }
     final trust = AiaTrust.shared;
     final dio =
         Dio(
@@ -99,6 +112,7 @@ class CasSession {
     final epoch = _accountGeneration;
     final queued = Stopwatch()..start();
     final cancel = CancelToken();
+    Future<void> timeoutCleanup = Future.value();
     var stage = 'cas.queue';
     void check() {
       cookies.checkGeneration(generation);
@@ -177,6 +191,11 @@ class CasSession {
             authenticationTimeout,
             onTimeout: () {
               cancel.cancel('本次 CAS 认证超时');
+              cookies.invalidateHostRevision(CampusHosts.authserver);
+              timeoutCleanup = cookies.clearHost(
+                Uri(scheme: 'https', host: CampusHosts.authserver),
+                names: {'CASTGC'},
+              );
               vpnLog(
                 'cas.authentication_timeout',
                 fields: {'timeout_ms': authenticationTimeout.inMilliseconds},
@@ -191,7 +210,12 @@ class CasSession {
           )
           .whenComplete(() => _active.remove(cancel));
     });
-    _queue = result.then((_) {}, onError: (_) {});
+    // 已开始的 Cookie 存储先排空并清理，迟到网络响应则被 CancelToken 阻断写回。
+    // 不等待可能无法取消的凭据平台读取，避免阻塞排在后面的正常认证。
+    _queue = result.then<void>(
+      (_) => timeoutCleanup,
+      onError: (_) => timeoutCleanup,
+    );
     return result;
   }
 

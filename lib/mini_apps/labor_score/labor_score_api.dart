@@ -56,7 +56,7 @@ class LaborScoreApi {
     );
   }
 
-  /// 拉页面并截取表格；页面里没有该表格（多半是登录页）返回 null。
+  /// 校验 HTTP 状态后解析目标表格，缺失表格保留为解析异常。
   static Future<List<Map<String, String>>> _table(
     Uri page,
     String tableId,
@@ -72,6 +72,11 @@ class LaborScoreApi {
           ),
           idempotent: true,
         );
+    requireServiceSuccess(
+      response,
+      endpoint: _endpoint(page),
+      service: 'labor',
+    );
     final body = '${response.data ?? ''}';
     final rows = parseHtmlTable(body, tableId);
     if (rows != null) return rows;
@@ -98,14 +103,30 @@ class LaborScoreApi {
     try {
       return await _table(page, tableId);
     } on PortalLoginError catch (error, stackTrace) {
-      SilentRefresh.degradeCurrent(reason: 'optional_section_unavailable');
-      _log.warning(
-        'section.unavailable',
-        fields: {'endpoint': _endpoint(page), 'outcome': 'degraded'},
-        error: error,
-        stackTrace: stackTrace,
-      );
+      _degradeSection(page, error, stackTrace);
+      return null;
+    } on DiagnosticException catch (error, stackTrace) {
+      final status = error.context['status_code'];
+      final serverError =
+          error.code == 'http_status_rejected' &&
+          status is int &&
+          status >= 500;
+      if (!serverError && error.code != 'response_table_missing') rethrow;
+      _degradeSection(page, error, stackTrace);
+      return null;
+    } on FormatException catch (error, stackTrace) {
+      _degradeSection(page, error, stackTrace);
       return null;
     }
+  }
+
+  static void _degradeSection(Uri page, Object error, StackTrace stackTrace) {
+    SilentRefresh.degradeCurrent(reason: 'optional_section_unavailable');
+    _log.warning(
+      'section.unavailable',
+      fields: {'endpoint': _endpoint(page), 'outcome': 'degraded'},
+      error: error,
+      stackTrace: stackTrace,
+    );
   }
 }

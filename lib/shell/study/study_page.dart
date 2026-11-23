@@ -33,7 +33,7 @@ class StudyPage extends StatelessWidget {
           children: [
             for (final (index, app) in apps.indexed) ...[
               if (index > 0) const SizedBox(height: 12),
-              // 页签在后台预加载：卡片空闲时逐张构建，首次切换只需绘制。
+              // 页签在后台预加载：卡片空闲时逐张构建并仅读本地缓存，进入可见态再按需远端刷新。
               DeferredWhileHidden(
                 key: ValueKey(app.id),
                 delay: Duration(milliseconds: 2000 + index * 200),

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cookie_jar/cookie_jar.dart';
@@ -26,6 +27,13 @@ class PortalCookieStore {
   Future<void> _queue = Future.value();
   int _generation = 0;
   final Map<String, int> _hostRevisions = {};
+  final Map<String, Object> _refreshOwners = {};
+  static final _sessionScopeKey = Object();
+  static final _refreshScopeKey = Object();
+
+  /// 业务请求使用取得会话时的域代次，不能在 Cookie 拦截器中改成最新代次。
+  static const hostRevisionsKey = 'portal.sessionHostRevisions';
+  static const accountGenerationKey = 'portal.sessionCookieGeneration';
 
   /// 当前账号会话的代次，清空后递增。
   int get generation => _generation;
@@ -33,14 +41,89 @@ class PortalCookieStore {
   /// 指定子系统 Cookie 的代次，与账号解绑代次互相独立。
   int hostRevision(String host) => _hostRevisions[host] ?? 0;
 
+  /// 兼容回调请求仍固化其原始会话快照，异步 Dio 拦截器按此快照校验。
+  Future<T> runWithSession<T>(
+    Map<String, int> revisions,
+    int generation,
+    Future<T> Function() action,
+  ) => runZoned(
+    action,
+    zoneValues: {
+      _sessionScopeKey: _CookieSessionScope(
+        Map.unmodifiable(revisions),
+        generation,
+      ),
+    },
+  );
+
+  /// 当前兼容请求的原始域快照。
+  Map<String, int>? get requestHostRevisions =>
+      (Zone.current[_sessionScopeKey] as _CookieSessionScope?)?.revisions;
+
+  /// 当前兼容请求的原始账号代次。
+  int? get requestAccountGeneration =>
+      (Zone.current[_sessionScopeKey] as _CookieSessionScope?)?.generation;
+
+  /// 单次刷新期间，仅该刷新建立会话的响应可以向所锁域写 Cookie。
+  Future<T> runRefreshing<T>(
+    Iterable<String> hosts,
+    Future<T> Function() action,
+  ) async {
+    final owner = Object();
+    final domains = hosts.toSet();
+    for (final host in domains) {
+      _refreshOwners[host] = owner;
+    }
+    try {
+      return await runZoned(action, zoneValues: {_refreshScopeKey: owner});
+    } finally {
+      for (final host in domains) {
+        if (identical(_refreshOwners[host], owner)) _refreshOwners.remove(host);
+      }
+    }
+  }
+
+  /// 发出会话建立请求时固化刷新写权限，迟到响应不能冒用其他刷新。
+  Object? get requestRefreshOwner => Zone.current[_refreshScopeKey];
+
+  /// 校验业务请求携带的全部域代次。
+  void checkHostRevisions(Map<String, int> revisions) {
+    if (revisions.entries.any(
+      (entry) => hostRevision(entry.key) != entry.value,
+    )) {
+      throw const PortalLoginError(
+        '子系统会话已更新，请重新发起请求',
+        code: 'service_cookie_revision_changed',
+        stage: 'session.cookie.validate',
+      );
+    }
+  }
+
+  /// 作废已取消认证的旧响应，清理动作由存储队列随后执行。
+  void invalidateHostRevision(String host) {
+    _hostRevisions.update(host, (value) => value + 1, ifAbsent: () => 1);
+  }
+
   /// 在存储队列内校验响应代次，旧响应不能污染新会话。
   Future<void> saveForRevision(
     Uri uri,
     List<Cookie> cookies, {
     required int generation,
     required int hostRevision,
+    Object? refreshOwner,
+    Map<String, int>? sessionRevisions,
+    bool Function()? isCancelled,
   }) => _forGeneration(generation, () async {
+    if (isCancelled?.call() == true) return;
     if (this.hostRevision(uri.host) != hostRevision) return;
+    if (sessionRevisions != null &&
+        sessionRevisions.entries.any(
+          (entry) => this.hostRevision(entry.key) != entry.value,
+        )) {
+      return;
+    }
+    final owner = _refreshOwners[uri.host];
+    if (owner != null && !identical(owner, refreshOwner)) return;
     await _jar.saveFromResponse(uri, cookies);
   });
 
@@ -139,7 +222,9 @@ class PortalCookieStore {
           );
           // 损坏的持久化条目按没有存储处理，后续请求可重新建立会话。
           _jar.hostCookies.remove(uri.host);
+          _jar.domainCookies.clear();
           await _jar.storage.delete(uri.host);
+          await _jar.storage.delete('.domains');
           return const [];
         }
       });
@@ -187,6 +272,7 @@ class PortalCookieStore {
   Future<void> clearAll() {
     _generation++;
     _hostRevisions.clear();
+    _refreshOwners.clear();
     return _serialize(_jar.deleteAll);
   }
 
@@ -194,10 +280,17 @@ class PortalCookieStore {
   void invalidateAccount() {
     _generation++;
     _hostRevisions.clear();
+    _refreshOwners.clear();
   }
 
   /// 清理已作废账号的存储，不再次改变账号代次。
   Future<void> deleteAll() => _serialize(_jar.deleteAll);
+}
+
+class _CookieSessionScope {
+  const _CookieSessionScope(this.revisions, this.generation);
+  final Map<String, int> revisions;
+  final int generation;
 }
 
 class _SessionCookieJar implements CookieJar {

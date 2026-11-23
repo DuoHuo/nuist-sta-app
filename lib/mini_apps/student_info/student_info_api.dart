@@ -54,6 +54,11 @@ class StudentInfoApi {
       ),
       idempotent: true,
     );
+    requireServiceSuccess(
+      response,
+      endpoint: 'student_info.user',
+      service: 'portal',
+    );
     final body = _decode(response.data, 'student_info.user');
     final data = body['data'];
     if (data is! Map<String, dynamic>) {
@@ -92,6 +97,11 @@ class StudentInfoApi {
         },
       ),
       idempotent: true,
+    );
+    requireServiceSuccess(
+      response,
+      endpoint: 'student_info.calendar',
+      service: 'portal',
     );
     final body = _decode(response.data, 'student_info.calendar');
     if ('${body['errcode']}' != '0') {

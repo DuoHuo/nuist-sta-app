@@ -87,5 +87,7 @@ class PortalHttp {
   Future<Response<dynamic>> followRedirects(
     Response<dynamic> response, {
     CancelToken? cancelToken,
-  }) => _transport.followRedirects(response, cancelToken: cancelToken);
+  }) => _transport.sendCallback(
+    () => _transport.followRedirects(response, cancelToken: cancelToken),
+  );
 }
