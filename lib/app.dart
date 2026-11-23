@@ -70,6 +70,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   late final _consent = widget.consent ?? PrivacyConsent.instance;
   late final _vpnGateway = widget.vpnGateway ?? VpnGateway.instance;
   bool _openingUpdate = false;
+  bool _consentPendingSet = false;
   bool get _askConsent =>
       widget.consent != null ||
       (!kIsWeb &&
@@ -123,6 +124,12 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
       context,
       rootNavigator: true,
     ).push(AppPageRoute<void>(builder: (_) => const PrivacyPolicyPage()));
+    final deferUpdates =
+        _askConsent && _consent.value == PrivacyDecision.undecided;
+    if (deferUpdates) {
+      _consentPendingSet = true;
+      PrivacyConsent.dialogPending.value = true;
+    }
     if (_askConsent) unawaited(_showConsentIfNeeded());
     // 点击上课提醒 / 桌面小组件 → 打开课表（今天所在周）。
     final bridge = TimetableNotifyBridge.instance;
@@ -143,7 +150,9 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
               errorKind: AppLog.errorKindFor(error),
             );
           });
-      unawaited(_updates.onLaunch());
+      if (!deferUpdates) {
+        unawaited(_updates.onLaunch());
+      }
     }
     WidgetsBinding.instance.addObserver(this);
     SilentRefresh.updated.addListener(_onRefreshUpdated);
@@ -205,6 +214,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
 
   /// 首次启动或隐私政策版本更新后，在首帧后弹出一次同意框。
   Future<void> _showConsentIfNeeded() async {
+    final hadPending = _consentPendingSet;
     try {
       await _consent.load();
       if (_consent.value != PrivacyDecision.undecided || !mounted) return;
@@ -223,6 +233,14 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
         error: error,
         stackTrace: stackTrace,
       );
+    } finally {
+      if (_consentPendingSet) {
+        _consentPendingSet = false;
+        PrivacyConsent.dialogPending.value = false;
+      }
+      if (hadPending && _listenForUpdates && mounted) {
+        unawaited(_updates.onLaunch());
+      }
     }
   }
 
@@ -356,6 +374,10 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     _navigation.dispose();
     _router.dispose();
     super.dispose();
+    if (_consentPendingSet) {
+      _consentPendingSet = false;
+      PrivacyConsent.dialogPending.value = false;
+    }
   }
 
   @override

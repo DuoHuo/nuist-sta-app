@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:nuist_sta_app/app.dart';
 import 'package:nuist_sta_app/core/network/client_metadata.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
+import 'package:nuist_sta_app/core/privacy/privacy_consent.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/router.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_api.dart';
@@ -88,6 +89,7 @@ class FakeBridge implements UpdateDownloadBridge {
   int resumes = 0;
   int settingsRequests = 0;
   Map<String, String>? lastHeaders;
+  Map<String, String>? lastResumeHeaders;
   Completer<UpdateTask>? pendingState;
   Completer<void>? pendingSettings;
   Object? settingsError;
@@ -112,8 +114,9 @@ class FakeBridge implements UpdateDownloadBridge {
   }
 
   @override
-  Future<UpdateTask> resume() async {
+  Future<UpdateTask> resume([Map<String, String>? headers]) async {
     resumes++;
+    lastResumeHeaders = headers;
     return value;
   }
 
@@ -272,6 +275,8 @@ void main() {
     );
   });
   tearDown(() async {
+    PrivacyConsent.dialogPending.value = false;
+    PrivacyConsent.openPolicy = null;
     controller.dispose();
     await bridge.events.close();
   });
@@ -549,6 +554,7 @@ void main() {
       expect(bridge.lastHeaders, metadata.headers);
       await controller.resume();
       expect(bridge.resumes, 1);
+      expect(bridge.lastResumeHeaders, metadata.headers);
     });
   }
 
@@ -668,7 +674,9 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
 
-    testWidgets('${dark ? '深色' : '浅色'}更新伪公告并入悬浮条和公告列表，不自动弹窗', (tester) async {
+    testWidgets('${dark ? '深色' : '浅色'}新版本悬浮条与公告悬浮条分离，公告列表仍置顶更新入口', (
+      tester,
+    ) async {
       final announcements = AnnouncementController.test(
         fetch: ({etag, lastModified}) async => AnnouncementFetchResult(
           notModified: false,
@@ -722,7 +730,11 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byType(UpdateDetailsDialog), findsNothing);
-      expect(find.text('共 2 条公告'), findsOneWidget);
+      expect(find.text('发现新版本 v0.2.9'), findsOneWidget);
+      expect(find.text('共 2 条公告'), findsNothing);
+      expect(find.text('普通公告'), findsNothing);
+      expect(tester.widget<Badge>(find.byType(Badge)).isLabelVisible, isTrue);
+
       await tester.tap(find.byTooltip('公告'));
       await tester.pumpAndSettle();
       expect(find.text('普通公告'), findsWidgets);
@@ -737,6 +749,7 @@ void main() {
         ['app-update:revision-a', ...realOrder],
       );
       expect(controller.hasUnreadAnnouncement, isFalse);
+      expect(tester.widget<Badge>(find.byType(Badge)).isLabelVisible, isFalse);
       // 已打开的列表不随提醒方式变化移除更新，只有候选撤回才移除。
       for (final popup in [true, false]) {
         api.value = release(popup: popup);
@@ -744,7 +757,8 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byType(UpdateDetailsDialog), findsNothing);
         expect(find.text('查看更新'), findsOneWidget);
-        expect(find.text('共 2 条公告'), popup ? findsNothing : findsOneWidget);
+        expect(find.text('共 2 条公告'), findsNothing);
+        expect(find.text('发现新版本 v0.2.9'), findsOneWidget);
         expect(
           tester
               .widget<AnnouncementDialog>(find.byType(AnnouncementDialog))
@@ -777,6 +791,8 @@ void main() {
       await tester.tap(find.text('我知道了'));
       await tester.pumpAndSettle();
       expect(find.text('共 2 条公告'), findsNothing);
+      expect(find.text('发现新版本 v0.2.9'), findsNothing);
+      expect(find.byTooltip('收起'), findsNothing);
       await tester.pumpWidget(const SizedBox());
     });
 
@@ -1324,6 +1340,571 @@ void main() {
     expect(find.text('更新说明', findRichText: true), findsWidgets);
     await tester.tap(find.byTooltip('关闭更新详情'));
     await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('点击新版本悬浮条直接打开更新详情并标已读，关闭/超时后不补弹公告悬浮条', (tester) async {
+    for (final dismissMode in ['tap', 'close', 'timeout']) {
+      api = FakeApi();
+      bridge = FakeBridge();
+      controller.dispose();
+      controller = UpdateController(
+        api: api,
+        bridge: bridge,
+        metadataProvider: () async => current,
+        now: () => now,
+        savePreferences: (preferences) async => saved = preferences,
+      );
+      final announcements = AnnouncementController.test(
+        fetch: ({etag, lastModified}) async => AnnouncementFetchResult(
+          notModified: false,
+          items: [
+            Announcement(
+              id: 'badge-1',
+              title: '公告悬浮条标题',
+              remind: AnnouncementRemind.badge,
+            ),
+          ],
+        ),
+      );
+      addTearDown(announcements.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: appLightTheme(),
+          home: Scaffold(
+            appBar: AppBar(
+              actions: [
+                AnnouncementBell(
+                  controller: announcements,
+                  updates: controller,
+                ),
+              ],
+            ),
+            body: AnnouncementOverlay(
+              controller: announcements,
+              updates: controller,
+              child: const SizedBox.expand(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('发现新版本 v0.2.9'), findsOneWidget);
+      expect(find.text('公告悬浮条标题'), findsNothing);
+      expect(find.byIcon(Icons.system_update_rounded), findsOneWidget);
+
+      if (dismissMode == 'tap') {
+        await tester.tap(find.text('发现新版本 v0.2.9'));
+        await tester.pumpAndSettle();
+        expect(find.byType(AnnouncementDialog), findsNothing);
+        expect(find.byType(UpdateDetailsDialog), findsOneWidget);
+        expect(controller.hasUnreadAnnouncement, isFalse);
+        expect(tester.widget<Badge>(find.byType(Badge)).isLabelVisible, isTrue);
+        await tester.tap(find.byTooltip('关闭更新详情'));
+        await tester.pumpAndSettle();
+      } else if (dismissMode == 'close') {
+        await tester.tap(find.byTooltip('收起'));
+        await tester.pumpAndSettle();
+        expect(controller.hasUnreadAnnouncement, isTrue);
+      } else {
+        await tester.pump(
+          kAnnouncementBannerDuration + const Duration(seconds: 1),
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('发现新版本 v0.2.9'), findsNothing);
+      expect(find.text('公告悬浮条标题'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    }
+  });
+
+  testWidgets('更新检查进行中先等待更新结果再决定悬浮条，公告先返回不抢弹', (tester) async {
+    api.pending = Completer<UpdateRelease?>();
+    final announcements = AnnouncementController.test(
+      fetch: ({etag, lastModified}) async => AnnouncementFetchResult(
+        notModified: false,
+        items: [
+          Announcement(
+            id: 'badge-1',
+            title: '延迟对比公告',
+            remind: AnnouncementRemind.badge,
+          ),
+        ],
+      ),
+    );
+    addTearDown(announcements.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        home: Scaffold(
+          body: AnnouncementOverlay(
+            controller: announcements,
+            updates: controller,
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    // 公告已经拉回，但更新还在检查中，此时不能抢弹公告悬浮条。
+    expect(find.text('延迟对比公告'), findsNothing);
+    expect(find.text('发现新版本 v0.2.9'), findsNothing);
+
+    api.pending!.complete(release());
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('发现新版本 v0.2.9'), findsOneWidget);
+    expect(find.text('延迟对比公告'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  test('旧的非活跃任务不屏蔽新版本且允许替换下载，活跃任务或同修订仍拦截', () async {
+    final revA = release(revision: 'revision-a');
+    final revB = release(revision: 'revision-b', popup: true);
+    for (final status in [
+      UpdateTaskStatus.revoked,
+      UpdateTaskStatus.paused,
+      UpdateTaskStatus.failed,
+      UpdateTaskStatus.ready,
+    ]) {
+      bridge.value = UpdateTask(status: status, release: revA);
+      await controller.refreshTask();
+      api.value = revB;
+      await controller.check(manual: true);
+      expect(controller.hasActiveTask, isFalse);
+      expect(controller.taskSuperseded, isTrue);
+      expect(controller.shouldPrompt, isTrue);
+
+      api.value = release(revision: 'revision-b', popup: false);
+      await controller.check(manual: true);
+      expect(controller.shouldShowBanner, isTrue);
+
+      await controller.download();
+      expect(controller.actionError, isNull);
+      expect(controller.task.release?.revision, 'revision-b');
+      await controller.cancel();
+    }
+
+    // 同修订非 revoked 任务不可重复下载。
+    bridge.value = UpdateTask(status: UpdateTaskStatus.paused, release: revA);
+    await controller.refreshTask();
+    await controller.download(revA);
+    expect(controller.actionError, '已有更新任务');
+
+    // revoked 的同修订经过服务端校验可重新下载。
+    bridge.value = UpdateTask(status: UpdateTaskStatus.revoked, release: revA);
+    await controller.refreshTask();
+    await controller.download(revA);
+    expect(controller.actionError, isNull);
+    expect(controller.task.status, UpdateTaskStatus.downloading);
+
+    // 活跃任务（downloading/verifying/installing）不能被新版本打断。
+    for (final activeStatus in [
+      UpdateTaskStatus.downloading,
+      UpdateTaskStatus.verifying,
+      UpdateTaskStatus.installing,
+    ]) {
+      bridge.value = UpdateTask(status: activeStatus, release: revA);
+      await controller.refreshTask();
+      api.value = revB;
+      await controller.check(manual: true);
+      expect(controller.hasActiveTask, isTrue);
+      expect(controller.taskSuperseded, isFalse);
+      expect(controller.shouldPrompt, isFalse);
+      await controller.download();
+      expect(controller.actionError, '已有更新任务');
+    }
+  });
+
+  testWidgets('被新版本取代的旧任务在详情弹窗中直接展示新版本与下载按钮', (tester) async {
+    final revA = release(revision: 'revision-a', changelog: '旧版本日志');
+    final revB = release(revision: 'revision-b', changelog: '新版本日志');
+    bridge.value = UpdateTask(
+      status: UpdateTaskStatus.failed,
+      release: revA,
+      errorCode: 'incompatible',
+    );
+    api.value = revB;
+    await controller.check(manual: true);
+    expect(controller.taskSuperseded, isTrue);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () =>
+                  showUpdateDetails(context, controller: controller),
+              child: const Text('打开'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+    expect(find.text('新版本日志', findRichText: true), findsOneWidget);
+    expect(find.text('下载更新'), findsOneWidget);
+    expect(find.text('清除任务'), findsNothing);
+    expect(find.text('安装包与当前设备或签名不兼容'), findsNothing);
+    await tester.tap(find.text('下载更新'));
+    await pumpInteraction(tester);
+    expect(bridge.starts, 1);
+    expect(controller.task.release?.revision, 'revision-b');
+    await tester.tap(find.byTooltip('关闭更新详情'));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  test('download 与 resume 每次实时读取最新隐私元数据', () async {
+    var dynamicMeta = const ClientMetadata(
+      platform: 'android',
+      appPackage: 'dev.duohuo.nuist_sta_app',
+      appChannel: 'release',
+      appVersion: '0.2.8',
+      appVersionCode: 2800,
+    );
+    controller.dispose();
+    controller = UpdateController(
+      api: api,
+      bridge: bridge,
+      metadataProvider: () async => dynamicMeta,
+    );
+    await controller.check(manual: true);
+
+    dynamicMeta = const ClientMetadata(
+      platform: 'android',
+      appPackage: 'dev.duohuo.nuist_sta_app',
+      appChannel: 'release',
+      appVersion: '0.2.9',
+      appVersionCode: 2900,
+      anonymousId: 'anon-1',
+    );
+    await controller.download();
+    expect(bridge.lastHeaders, dynamicMeta.headers);
+
+    dynamicMeta = const ClientMetadata(
+      platform: 'android',
+      appPackage: 'dev.duohuo.nuist_sta_app',
+      appChannel: 'release',
+      appVersion: '0.2.10',
+      appVersionCode: 2901,
+      anonymousId: 'anon-2',
+    );
+    await controller.resume();
+    expect(bridge.lastResumeHeaders, dynamicMeta.headers);
+    expect(bridge.lastResumeHeaders, isNot(equals(bridge.lastHeaders)));
+  });
+
+  test('错误码映射新增项精确返回中文提示', () {
+    expect(updateErrorMessage('install_foreground_required'), '请回到应用前台后再安装');
+    expect(updateErrorMessage('incompatible'), '安装包与当前设备或签名不兼容');
+    expect(updateErrorMessage('invalid_release'), '更新信息无效');
+    expect(updateErrorMessage('foreground_required'), '下载启动失败');
+    expect(updateErrorMessage('foreground_unavailable'), '下载启动失败');
+  });
+
+  testWidgets('incompatible、普通 failed、paused 与 installing 按钮及文案区分', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () =>
+                  showUpdateDetails(context, controller: controller),
+              child: const Text('打开'),
+            ),
+          ),
+        ),
+      ),
+    );
+    api.value = release();
+    bridge.value = UpdateTask(
+      status: UpdateTaskStatus.failed,
+      release: release(),
+      errorCode: 'incompatible',
+    );
+    await controller.check(manual: true);
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+    expect(find.text('安装失败'), findsOneWidget);
+    expect(find.text('安装包与当前设备或签名不兼容'), findsOneWidget);
+    expect(find.text('清除任务'), findsOneWidget);
+    expect(find.text('关闭'), findsOneWidget);
+    expect(find.text('继续下载'), findsNothing);
+    expect(find.text('重新下载'), findsNothing);
+
+    bridge.value = UpdateTask(
+      status: UpdateTaskStatus.failed,
+      release: release(),
+      errorCode: 'network_error',
+    );
+    bridge.events.add(bridge.value);
+    await tester.pumpAndSettle();
+    expect(find.text('下载失败'), findsOneWidget);
+    expect(find.text('网络连接失败'), findsOneWidget);
+    expect(find.text('取消下载'), findsOneWidget);
+    expect(find.text('重新下载'), findsOneWidget);
+
+    bridge.value = UpdateTask(
+      status: UpdateTaskStatus.paused,
+      release: release(),
+    );
+    bridge.events.add(bridge.value);
+    await tester.pumpAndSettle();
+    expect(find.text('下载已暂停'), findsOneWidget);
+    expect(find.text('继续下载'), findsOneWidget);
+
+    bridge.value = UpdateTask(
+      status: UpdateTaskStatus.installing,
+      release: release(),
+    );
+    bridge.events.add(bridge.value);
+    await tester.pumpAndSettle();
+    expect(find.text('正在安装'), findsOneWidget);
+    expect(find.text('取消安装'), findsOneWidget);
+
+    await tester.tap(find.text('取消安装'));
+    await pumpInteraction(tester);
+    expect(bridge.cancellations, 1);
+    expect(find.text('下载更新'), findsOneWidget);
+    await tester.tap(find.text('下载更新'));
+    await pumpInteraction(tester);
+    expect(bridge.starts, 1);
+
+    await tester.tap(find.byTooltip('关闭更新详情'));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('actionError 在关闭详情、检查成功和正常状态推进时清理，撤包取消后保留', (tester) async {
+    await controller.check(manual: true);
+    await controller.download(release(revision: 'revision-a'));
+    // 同修订在下载中再次触发 download 产生 actionError。
+    await controller.download(release(revision: 'revision-a'));
+    expect(controller.actionError, '已有更新任务');
+
+    // 收到无 errorCode 的状态推进时清空 actionError；重复的同状态快照不会误清。
+    bridge.events.add(
+      UpdateTask(
+        status: UpdateTaskStatus.downloading,
+        release: release(revision: 'revision-a'),
+        downloadedBytes: 100,
+        totalBytes: 1000,
+      ),
+    );
+    expect(controller.actionError, '已有更新任务');
+    bridge.events.add(
+      UpdateTask(
+        status: UpdateTaskStatus.verifying,
+        release: release(revision: 'revision-a'),
+        downloadedBytes: 1000,
+        totalBytes: 1000,
+      ),
+    );
+    expect(controller.actionError, isNull);
+
+    // idle 状态下因操作失败保留 actionError 时，重复 idle 快照不会误清。
+    bridge.value = const UpdateTask();
+    await controller.refreshTask();
+    api.revoked = true;
+    await controller.download(release(revision: 'revision-a'));
+    expect(controller.actionError, '此版本已停止分发');
+    await controller.refreshTask();
+    expect(controller.actionError, '此版本已停止分发');
+    api.revoked = false;
+
+    // 再次产生 actionError，check 成功时清空。
+    await controller.download(release(revision: 'revision-a'));
+    await controller.download(release(revision: 'revision-a'));
+    expect(controller.actionError, '已有更新任务');
+    await controller.check(manual: true);
+    expect(controller.actionError, isNull);
+
+    // 打开详情后，安装前撤包保留 actionError，关闭详情时自动清理。
+    bridge.value = UpdateTask(
+      status: UpdateTaskStatus.ready,
+      release: release(),
+      installAllowed: true,
+    );
+    await controller.refreshTask();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () =>
+                  showUpdateDetails(context, controller: controller),
+              child: const Text('打开'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+    api.revoked = true;
+    await tester.tap(find.text('安装更新'));
+    await tester.pumpAndSettle();
+    expect(controller.actionError, '此版本已停止分发');
+    expect(find.byType(UpdateDetailsDialog), findsOneWidget);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    expect(controller.actionError, isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  test('并发手动检查不被节流跳过阻塞；检查失败不写入 6 小时节流，仅退避 2 分钟', () async {
+    // 先完成一次成功检查，进入 6 小时自动节流期。
+    await controller.check(manual: true);
+    expect(api.checks, 1);
+    expect(saved.lastAttempt, now);
+
+    // 自动检查被节流跳过，不应阻塞并发发起的手动检查。
+    await Future.wait([controller.onResumed(), controller.check(manual: true)]);
+    expect(api.checks, 2);
+
+    // 6 小时后触发失败检查：不更新持久化的 lastAttempt，只设内存 2 分钟冷却。
+    now = now.add(const Duration(hours: 6));
+    final previousAttempt = saved.lastAttempt;
+    api.failed = true;
+    await controller.onResumed();
+    expect(api.checks, 3);
+    expect(controller.checkError, '检查更新失败');
+    expect(saved.lastAttempt, previousAttempt);
+
+    // 2 分钟内自动检查被退避拦截，但手动检查仍可立即重试。
+    await controller.onResumed();
+    expect(api.checks, 3);
+    api.failed = false;
+    await controller.check(manual: true);
+    expect(api.checks, 4);
+    expect(controller.checkError, isNull);
+
+    // 再次制造失败并在 2 分钟后允许自动重试。
+    now = now.add(const Duration(hours: 6));
+    api.failed = true;
+    await controller.onResumed();
+    expect(api.checks, 5);
+    now = now.add(const Duration(minutes: 2));
+    api.failed = false;
+    await controller.onResumed();
+    expect(api.checks, 6);
+  });
+
+  testWidgets('首次未选隐私政策时推迟更新检查，选择后触发更新展示', (tester) async {
+    api.value = release(popup: true);
+    const channel = MethodChannel('nuist/app_update/test_privacy');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (_) async => false,
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+    final consent = PrivacyConsent(directory: () async => null);
+    await tester.pumpWidget(
+      NuistApp(
+        updates: controller,
+        updateBridge: AppUpdateBridge(channel: channel),
+        consent: consent,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(PrivacyConsent.dialogPending.value, isTrue);
+    expect(api.checks, 0);
+    expect(find.textContaining('欢迎使用 NUIST++'), findsOneWidget);
+    expect(find.byType(UpdateDetailsDialog), findsNothing);
+
+    await tester.tap(find.text('同意'));
+    await tester.pumpAndSettle();
+    expect(PrivacyConsent.dialogPending.value, isFalse);
+    expect(api.checks, 1);
+    expect(find.byType(UpdateDetailsDialog), findsOneWidget);
+
+    await tester.tap(find.text('稍后提醒'));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('AboutPage 在 updates.disabled 为 true 时隐藏检查更新入口', (tester) async {
+    final disabledController = UpdateController(
+      api: api,
+      bridge: bridge,
+      metadataProvider: () async => current,
+      disabled: true,
+    );
+    addTearDown(disabledController.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        home: AboutPage(updates: disabledController),
+      ),
+    );
+    await pumpInteraction(tester);
+    expect(find.text('检查更新'), findsNothing);
+    expect(find.text('正在检查更新…'), findsNothing);
+    expect(find.byKey(const Key('about_privacy')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('冷启动更新尚未开始 HTTP 前的初始化空窗期，不抢先弹出公告悬浮条', (tester) async {
+    final metadataCompleter = Completer<ClientMetadata>();
+    final slowController = UpdateController(
+      api: api,
+      bridge: bridge,
+      metadataProvider: () => metadataCompleter.future,
+      now: () => now,
+    );
+    addTearDown(slowController.dispose);
+    final announcements = AnnouncementController.test(
+      fetch: ({etag, lastModified}) async => AnnouncementFetchResult(
+        notModified: false,
+        items: [
+          const Announcement(
+            id: 'notice-early',
+            title: '普通公告',
+            remind: AnnouncementRemind.badge,
+          ),
+        ],
+      ),
+    );
+    addTearDown(announcements.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        home: Scaffold(
+          body: AnnouncementOverlay(
+            controller: announcements,
+            updates: slowController,
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(slowController.awaitingInitialCheck, isTrue);
+
+    metadataCompleter.complete(current);
+    await tester.pump();
+    // 此时 initialize 已完成但 _performCheck 仍在调度，公告悬浮条不能抢先闪现。
+    expect(find.text('普通公告'), findsNothing);
+
+    await tester.pumpAndSettle();
+    expect(slowController.awaitingInitialCheck, isFalse);
+    expect(find.text('发现新版本 v0.2.9'), findsOneWidget);
+    expect(find.text('普通公告'), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
 }

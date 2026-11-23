@@ -43,7 +43,23 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
     private var pendingOpen = false
     private var permissionResult: MethodChannel.Result? = null
     private var notificationResultReady = false
-    private val listener: () -> Unit = { if (attached) sink?.success(AppUpdateStore.snapshot()) }
+    @Volatile private var installPreparing = false
+    @Volatile private var confirmationLaunchedToken = -1L
+    private var installTimeoutRunnable: Runnable? = null
+    private val listener: () -> Unit = {
+        if (AppUpdateStore.status != "installing") clearConfirmationTracking()
+        if (attached) sink?.success(AppUpdateStore.snapshot())
+    }
+
+    private fun clearPendingInstallTimeout() {
+        installTimeoutRunnable?.let(main::removeCallbacks)
+        installTimeoutRunnable = null
+    }
+
+    private fun clearConfirmationTracking() {
+        clearPendingInstallTimeout()
+        confirmationLaunchedToken = -1L
+    }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         app = binding.applicationContext
@@ -60,6 +76,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         attached = false
+        clearConfirmationTracking()
         methods.setMethodCallHandler(null)
         events.setStreamHandler(null)
         AppUpdateStore.listeners.remove(listener)
@@ -110,12 +127,16 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
                     foregroundActivity()
                     val release = AppUpdateStore.release ?: throw AppUpdateFailure("no_download")
                     if (AppUpdateStore.status == "revoked") throw AppUpdateFailure("revoked")
-                    val token = AppUpdateStore.prepare(release, AppUpdateStore.headers)
+                    val headers = call.argument<Map<*, *>>("headers") ?: AppUpdateStore.headers
+                    val token = AppUpdateStore.prepare(release, headers)
                     startService(token)
                     result.success(AppUpdateStore.snapshot())
                 }
                 "cancelDownload" -> {
-                    if (AppUpdateStore.status == "installing") throw AppUpdateFailure("busy")
+                    if (AppUpdateStore.status == "installing" && installPreparing) {
+                        throw AppUpdateFailure("busy")
+                    }
+                    clearConfirmationTracking()
                     AppUpdateStore.cancel()
                     app.stopService(Intent(app, AppUpdateService::class.java))
                     app.getSystemService(NotificationManager::class.java)?.cancel(AppUpdateService.NOTIFICATION_ID)
@@ -146,17 +167,19 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         }
     }
 
-    private fun foregroundActivity(): Activity {
+    private fun foregroundActivity(errorCode: String = "foreground_required"): Activity {
         val activity = binding?.activity
         if (!resumed || activity == null || activity.isFinishing || activity.isDestroyed) {
-            throw AppUpdateFailure("foreground_required")
+            throw AppUpdateFailure(errorCode)
         }
         return activity
     }
 
     private fun requestNotifications(result: MethodChannel.Result) {
         val activity = foregroundActivity()
-        if (Build.VERSION.SDK_INT < 33 || AppUpdateStore.notificationsAllowed(app)) {
+        if (Build.VERSION.SDK_INT < 33 ||
+            app.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
             result.success(AppUpdateStore.notificationsAllowed(app))
             return
         }
@@ -183,105 +206,111 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
     }
 
     private fun beginInstall(result: MethodChannel.Result) {
-        foregroundActivity()
+        foregroundActivity("install_foreground_required")
         if (!AppUpdateStore.installAllowed(app)) throw AppUpdateFailure("install_permission")
         if (AppUpdateStore.status != "ready") throw AppUpdateFailure("not_ready")
         val item = AppUpdateStore.release ?: throw AppUpdateFailure("no_download")
         val token = AppUpdateStore.token
+        clearConfirmationTracking()
+        installPreparing = true
         try {
             AppUpdateStore.update(token, "installing")
         } catch (failure: AppUpdateFailure) {
+            installPreparing = false
             // 安装尚未启动；即使存储仍不可写，也必须恢复安装与取消入口。
             installFailed(token, failure.code)
             throw failure
         }
-        worker.execute {
-            var sessionId = -1
-            try {
-                val file = AppUpdateStore.completeFile(item)
-                AppUpdateStore.verify(item, file) { AppUpdateStore.active(token) && !Thread.currentThread().isInterrupted }
-                AppUpdateHttp.check(item, AppUpdateStore.headers)
-                val installer = app.packageManager.packageInstaller
-                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
-                    setAppPackageName(item.packageName)
-                    setSize(item.size)
-                    setInstallReason(PackageManager.INSTALL_REASON_USER)
-                    if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
-                }
-                sessionId = installer.createSession(params)
-                AppUpdateStore.setSession(token, sessionId)
-                installer.openSession(sessionId).use { session ->
-                    file.inputStream().use { input ->
-                        session.openWrite("base.apk", 0, item.size).use { output ->
-                            val buffer = ByteArray(65536)
-                            while (true) {
-                                if (!AppUpdateStore.active(token) || Thread.currentThread().isInterrupted) throw AppUpdateFailure("cancelled")
-                                val count = input.read(buffer)
-                                if (count < 0) break
-                                output.write(buffer, 0, count)
+        try {
+            worker.execute {
+                var sessionId = -1
+                var postedToMain = false
+                try {
+                    val file = AppUpdateStore.completeFile(item)
+                    AppUpdateStore.verify(item, file) { AppUpdateStore.active(token) && !Thread.currentThread().isInterrupted }
+                    val installer = app.packageManager.packageInstaller
+                    val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+                        setAppPackageName(item.packageName)
+                        setSize(item.size)
+                        setInstallReason(PackageManager.INSTALL_REASON_USER)
+                        if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
+                    }
+                    sessionId = installer.createSession(params)
+                    AppUpdateStore.setSession(token, sessionId)
+                    installer.openSession(sessionId).use { session ->
+                        file.inputStream().use { input ->
+                            session.openWrite("base.apk", 0, item.size).use { output ->
+                                val buffer = ByteArray(65536)
+                                while (true) {
+                                    if (!AppUpdateStore.active(token) || Thread.currentThread().isInterrupted) throw AppUpdateFailure("cancelled")
+                                    val count = input.read(buffer)
+                                    if (count < 0) break
+                                    output.write(buffer, 0, count)
+                                }
+                                session.fsync(output)
                             }
-                            session.fsync(output)
                         }
                     }
-                }
-                // 拷贝安装会话可能耗时，提交前再次查询精确修订的撤包状态。
-                AppUpdateHttp.check(item, AppUpdateStore.headers)
-                val finalSession = sessionId
-                main.post {
-                    try {
-                        foregroundActivity()
-                        if (!AppUpdateStore.active(token)) throw AppUpdateFailure("cancelled")
-                        val callback = Intent(app, AppUpdateInstallReceiver::class.java)
-                            .setAction("nuist.app_update.INSTALL_RESULT")
-                            .setData(Uri.parse("nuist-update://install/$finalSession"))
-                            .putExtra(AppUpdateService.EXTRA_TOKEN, token)
-                        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
-                            if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
-                        val pending = PendingIntent.getBroadcast(app, finalSession, callback, flags)
-                        installer.openSession(finalSession).use { it.commit(pending.intentSender) }
-                        result.success(AppUpdateStore.snapshot())
-                    } catch (failure: AppUpdateFailure) {
-                        installFailed(token, failure.code)
-                        result.error(failure.code, "安装暂时无法继续", null)
-                    } catch (_: Exception) {
-                        installFailed(token, "install_failed")
-                        result.error("install_failed", "安装暂时无法继续", null)
+                    // 拷贝安装会话可能耗时，提交前再次查询精确修订的撤包状态。
+                    AppUpdateHttp.check(item, AppUpdateStore.headers)
+                    val finalSession = sessionId
+                    postedToMain = main.post {
+                        try {
+                            foregroundActivity("install_foreground_required")
+                            if (!AppUpdateStore.active(token)) throw AppUpdateFailure("cancelled")
+                            val callback = Intent(app, AppUpdateInstallReceiver::class.java)
+                                .setAction("nuist.app_update.INSTALL_RESULT")
+                                .setData(Uri.parse("nuist-update://install/$finalSession"))
+                                .putExtra(AppUpdateService.EXTRA_TOKEN, token)
+                            val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                                if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
+                            val pending = PendingIntent.getBroadcast(app, finalSession, callback, flags)
+                            installer.openSession(finalSession).use { it.commit(pending.intentSender) }
+                            result.success(AppUpdateStore.snapshot())
+                        } catch (failure: AppUpdateFailure) {
+                            installFailed(token, failure.code)
+                            result.error(failure.code, "安装暂时无法继续", null)
+                        } catch (_: Exception) {
+                            installFailed(token, "install_failed")
+                            result.error("install_failed", "安装暂时无法继续", null)
+                        } finally {
+                            installPreparing = false
+                        }
                     }
+                } catch (failure: AppUpdateFailure) {
+                    installFailed(token, failure.code)
+                    main.post { result.error(failure.code, "安装暂时无法继续", null) }
+                } catch (_: IOException) {
+                    installFailed(token, "network")
+                    main.post { result.error("network", "暂时无法确认更新状态", null) }
+                } catch (_: Exception) {
+                    installFailed(token, "install_failed")
+                    main.post { result.error("install_failed", "安装暂时无法继续", null) }
+                } finally {
+                    if (!postedToMain) installPreparing = false
                 }
-            } catch (failure: AppUpdateFailure) {
-                installFailed(token, failure.code)
-                main.post { result.error(failure.code, "安装暂时无法继续", null) }
-            } catch (_: IOException) {
-                installFailed(token, "network")
-                main.post { result.error("network", "暂时无法确认更新状态", null) }
-            } catch (_: Exception) {
-                installFailed(token, "install_failed")
-                main.post { result.error("install_failed", "安装暂时无法继续", null) }
             }
+        } catch (_: Exception) {
+            installPreparing = false
+            installFailed(token, "install_failed")
+            throw AppUpdateFailure("install_failed")
         }
     }
 
-    /** 安装器要求用户确认时，只在应用仍位于前台且版本未撤销时显示系统界面。 */
+    /** 安装器要求用户确认时，仅在应用仍位于前台且任务有效时直接拉起系统确认界面。 */
     private fun showInstallConfirmation(intent: Intent, token: Long): Boolean {
         if (!attached || !resumed) return false
-        worker.execute {
-            try {
-                val item = AppUpdateStore.release ?: throw AppUpdateFailure("cancelled")
-                AppUpdateHttp.check(item, AppUpdateStore.headers)
-                main.post {
-                    try {
-                        if (!AppUpdateStore.active(token)) throw AppUpdateFailure("cancelled")
-                        foregroundActivity().startActivity(intent)
-                    } catch (_: Exception) {
-                        installFailed(token, "foreground_required")
-                        AppUpdateService.notifyReady(app)
-                    }
-                }
-            } catch (failure: AppUpdateFailure) {
-                installFailed(token, failure.code)
-            } catch (_: Exception) {
-                installFailed(token, "network")
-            }
+        try {
+            if (!AppUpdateStore.active(token)) return true
+            foregroundActivity("install_foreground_required").startActivity(intent)
+            clearPendingInstallTimeout()
+            confirmationLaunchedToken = token
+        } catch (failure: AppUpdateFailure) {
+            installFailed(token, failure.code)
+            AppUpdateService.notifyReady(app)
+        } catch (_: Exception) {
+            installFailed(token, "install_failed")
+            AppUpdateService.notifyReady(app)
         }
         return true
     }
@@ -307,6 +336,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         binding?.removeRequestPermissionsResultListener(this)
         binding = null
         resumed = false
+        clearPendingInstallTimeout()
         permissionResult?.success(AppUpdateStore.notificationsAllowed(app))
         permissionResult = null
         notificationResultReady = false
@@ -315,14 +345,63 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) = attach(binding)
     override fun onDetachedFromActivityForConfigChanges() = detach()
     override fun onDetachedFromActivity() = detach()
+
+    /** 若回到前台时仍停留在未准备中的 installing 状态，延迟 3 秒兜底回收孤立安装会话。 */
+    private fun scheduleInstallTimeoutIfNeeded() {
+        if (AppUpdateStore.status == "installing" && !installPreparing) {
+            val pendingToken = AppUpdateStore.token
+            if (AppUpdateStore.active(pendingToken)) {
+                clearPendingInstallTimeout()
+                val check = Runnable {
+                    installTimeoutRunnable = null
+                    if (resumed &&
+                        AppUpdateStore.status == "installing" &&
+                        AppUpdateStore.active(pendingToken) &&
+                        !installPreparing
+                    ) {
+                        confirmationLaunchedToken = -1L
+                        val item = AppUpdateStore.release
+                        val completeExists = item != null &&
+                            AppUpdateStore.completeFile(item).exists() &&
+                            AppUpdateStore.completeFile(item).length() == item.size
+                        if (completeExists) {
+                            installFailed(pendingToken, "install_cancelled")
+                        } else {
+                            try {
+                                AppUpdateStore.abandonSession()
+                                val partialBytes = item?.let {
+                                    val part = AppUpdateStore.partFile(it)
+                                    if (part.exists()) part.length() else 0L
+                                } ?: 0L
+                                AppUpdateStore.update(pendingToken, "paused", count = partialBytes, error = "install_cancelled")
+                            } catch (_: Exception) { }
+                        }
+                    }
+                }
+                installTimeoutRunnable = check
+                main.postDelayed(check, 3000L)
+            } else {
+                clearConfirmationTracking()
+            }
+        } else if (AppUpdateStore.status != "installing") {
+            clearConfirmationTracking()
+        }
+    }
+
     override fun onActivityResumed(activity: Activity) {
         if (binding?.activity === activity) {
             resumed = true
             completeNotificationRequest()
+            scheduleInstallTimeoutIfNeeded()
             AppUpdateStore.notifyChanged()
         }
     }
-    override fun onActivityPaused(activity: Activity) { if (binding?.activity === activity) resumed = false }
+    override fun onActivityPaused(activity: Activity) {
+        if (binding?.activity === activity) {
+            resumed = false
+            clearPendingInstallTimeout()
+        }
+    }
     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
     override fun onActivityStarted(activity: Activity) = Unit
     override fun onActivityStopped(activity: Activity) = Unit
@@ -336,15 +415,31 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         internal fun deliverInstallConfirmation(intent: Intent, token: Long): Boolean =
             instance?.get()?.showInstallConfirmation(intent, token) == true
 
+        internal fun clearConfirmationTracking() {
+            instance?.get()?.let { plugin ->
+                if (Looper.myLooper() == Looper.getMainLooper()) {
+                    plugin.clearConfirmationTracking()
+                } else {
+                    plugin.confirmationLaunchedToken = -1L
+                    plugin.main.post { plugin.clearPendingInstallTimeout() }
+                }
+            }
+        }
+
         internal fun installFailed(token: Long, code: String) {
             if (!AppUpdateStore.active(token)) return
             try {
+                clearConfirmationTracking()
                 AppUpdateStore.abandonSession()
                 if (code == "revoked") AppUpdateStore.cancel(token, revoked = true)
                 else {
                     val invalid = code in setOf("hash_mismatch", "size_mismatch", "incompatible")
-                    if (invalid) AppUpdateStore.release?.let(AppUpdateStore::deleteFiles)
-                    AppUpdateStore.update(token, if (invalid) "failed" else "ready", error = code)
+                    if (invalid) {
+                        AppUpdateStore.release?.let(AppUpdateStore::deleteFiles)
+                        AppUpdateStore.update(token, "failed", count = 0L, error = code, nextEtag = null)
+                    } else {
+                        AppUpdateStore.update(token, "ready", error = code)
+                    }
                 }
             } catch (_: Exception) { }
         }
@@ -363,12 +458,16 @@ class AppUpdateInstallReceiver : BroadcastReceiver() {
                 @Suppress("DEPRECATION")
                 val prompt = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
                     else intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
-                if (prompt == null || !AppUpdatePlugin.deliverInstallConfirmation(prompt, token)) {
-                    AppUpdatePlugin.installFailed(token, "foreground_required")
+                if (prompt == null) {
+                    AppUpdatePlugin.installFailed(token, "install_failed")
+                    AppUpdateService.notifyReady(context)
+                } else if (!AppUpdatePlugin.deliverInstallConfirmation(prompt, token)) {
+                    AppUpdatePlugin.installFailed(token, "install_foreground_required")
                     AppUpdateService.notifyReady(context)
                 }
             }
             PackageInstaller.STATUS_SUCCESS -> {
+                AppUpdatePlugin.clearConfirmationTracking()
                 try { AppUpdateStore.cancel(token) } catch (_: Exception) { }
                 context.getSystemService(NotificationManager::class.java)?.cancel(AppUpdateService.NOTIFICATION_ID)
             }

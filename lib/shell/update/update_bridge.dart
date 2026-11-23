@@ -12,7 +12,7 @@ abstract interface class UpdateDownloadBridge {
   Stream<UpdateTask> get states;
   Future<UpdateTask> getState();
   Future<UpdateTask> start(UpdateRelease release, Map<String, String> headers);
-  Future<UpdateTask> resume();
+  Future<UpdateTask> resume([Map<String, String>? headers]);
   Future<UpdateTask> cancel();
   Future<UpdateTask> install();
   Future<void> openInstallSettings();
@@ -110,7 +110,9 @@ class AppUpdateBridge implements UpdateDownloadBridge {
   });
 
   @override
-  Future<UpdateTask> resume() => _state('resumeDownload');
+  Future<UpdateTask> resume([Map<String, String>? headers]) => headers != null
+      ? _state('resumeDownload', {'headers': headers})
+      : _state('resumeDownload');
 
   @override
   Future<UpdateTask> cancel() => _state('cancelDownload');

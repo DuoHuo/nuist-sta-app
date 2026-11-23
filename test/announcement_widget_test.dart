@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/colors.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/network/client_metadata.dart';
+import 'package:nuist_sta_app/core/privacy/privacy_consent.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_api.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_controller.dart';
@@ -561,6 +562,68 @@ void main() {
     navKey.currentState!.pop();
     await tester.pumpAndSettle();
     expect(find.text('标题p'), findsOneWidget);
+  });
+
+  testWidgets('PrivacyConsent.dialogPending 为 true 时推迟公告弹出与悬浮条，复位后正常展示', (
+    tester,
+  ) async {
+    PrivacyConsent.dialogPending.value = true;
+    addTearDown(() => PrivacyConsent.dialogPending.value = false);
+    final c = controllerWith([
+      a('p', remind: AnnouncementRemind.popup),
+      a('b', remind: AnnouncementRemind.badge),
+    ]);
+    addTearDown(c.dispose);
+    await tester.pumpWidget(app(c));
+    await tester.pumpAndSettle();
+    expect(find.text('标题p'), findsNothing);
+    expect(find.text('标题b'), findsNothing);
+
+    PrivacyConsent.dialogPending.value = false;
+    await tester.pumpAndSettle();
+    expect(find.text('标题p'), findsOneWidget);
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+    expect(find.text('标题b'), findsOneWidget);
+  });
+
+  testWidgets('弹窗打开期间晚到的真实 badge 公告在关闭后标为已读，不再弹悬浮条', (tester) async {
+    final fetchCompleter = Completer<AnnouncementFetchResult>();
+    final c = controllerWith([], fetch: () => fetchCompleter.future);
+    addTearDown(c.dispose);
+    await tester.pumpWidget(app(c));
+    await tester.pump();
+    await tester.tap(find.byTooltip('公告'));
+    await tester.pumpAndSettle();
+    expect(find.text('暂无公告'), findsOneWidget);
+
+    fetchCompleter.complete(
+      AnnouncementFetchResult(
+        notModified: false,
+        items: [a('late', remind: AnnouncementRemind.badge)],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('标题late'), findsOneWidget);
+
+    await tester.tap(find.text('我知道了'));
+    await tester.pumpAndSettle();
+    expect(c.hasUnread, isFalse);
+    expect(redDot(tester), isFalse);
+    expect(find.text('标题late'), findsNothing);
+  });
+
+  testWidgets('悬浮条展示期间被标为已读后立即消失', (tester) async {
+    final c = controllerWith([a('b', remind: AnnouncementRemind.badge)]);
+    addTearDown(c.dispose);
+    await tester.pumpWidget(app(c));
+    await tester.pumpAndSettle();
+    expect(find.text('标题b'), findsOneWidget);
+
+    await c.markRead(['b']);
+    await tester.pumpAndSettle();
+    expect(find.text('标题b'), findsNothing);
+    expect(redDot(tester), isFalse);
   });
 }
 

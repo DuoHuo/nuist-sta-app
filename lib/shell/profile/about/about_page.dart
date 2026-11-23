@@ -176,32 +176,37 @@ class _AboutPageState extends State<AboutPage> {
             ),
           ),
           const SizedBox(height: 24),
-          ListenableBuilder(
-            listenable: _updates,
-            builder: (context, _) => ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-              tileColor: palette.surface,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+          if (!_updates.disabled) ...[
+            ListenableBuilder(
+              listenable: _updates,
+              builder: (context, _) => ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                tileColor: palette.surface,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                leading: Icon(
+                  Icons.system_update_rounded,
+                  color: palette.accent,
+                ),
+                title: Text(_checkingUpdate ? '正在检查更新…' : '检查更新'),
+                trailing: _checkingUpdate
+                    ? const SizedBox.square(
+                        dimension: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : _updates.task.hasTask || _updates.available != null
+                    ? TextButton(
+                        onPressed: () =>
+                            showUpdateDetails(context, controller: _updates),
+                        child: Text(_updates.task.hasTask ? '下载进度' : '查看更新'),
+                      )
+                    : null,
+                onTap: _checkingUpdate ? null : _checkUpdates,
               ),
-              leading: Icon(Icons.system_update_rounded, color: palette.accent),
-              title: Text(_checkingUpdate ? '正在检查更新…' : '检查更新'),
-              trailing: _checkingUpdate
-                  ? const SizedBox.square(
-                      dimension: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : _updates.task.hasTask || _updates.available != null
-                  ? TextButton(
-                      onPressed: () =>
-                          showUpdateDetails(context, controller: _updates),
-                      child: Text(_updates.task.hasTask ? '下载进度' : '查看更新'),
-                    )
-                  : null,
-              onTap: _checkingUpdate ? null : _checkUpdates,
             ),
-          ),
-          const SizedBox(height: 16),
+            const SizedBox(height: 16),
+          ],
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(

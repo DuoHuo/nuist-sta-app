@@ -43,6 +43,9 @@ class PrivacyConsent extends ValueNotifier<PrivacyDecision> {
   /// 为空时弹窗不显示「查看完整隐私政策」。
   static void Function(BuildContext context)? openPolicy;
 
+  /// 首次或政策升级时的隐私同意弹窗是否待展示或正在展示，用于推迟更新检查与公告浮层。
+  static final ValueNotifier<bool> dialogPending = ValueNotifier<bool>(false);
+
   static final _log = AppLog.logger('core.privacy_consent');
   static const _consentFile = 'privacy_consent';
   static const _anonymousIdFile = 'anonymous_id';

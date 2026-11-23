@@ -23,9 +23,12 @@ import java.util.concurrent.Executors
 class AppUpdateService : Service() {
     private val worker = Executors.newSingleThreadExecutor()
     @Volatile private var connection: HttpURLConnection? = null
+    @Volatile private var checkConnection: HttpURLConnection? = null
     @Volatile private var stopping = false
+    @Volatile private var inStatusCheck = false
     private var running = false
     private var taskToken = -1L
+    private var latestStartId = -1
     private val main = Handler(Looper.getMainLooper())
     private var nextStart: Pair<Intent, Int>? = null
 
@@ -37,56 +40,91 @@ class AppUpdateService : Service() {
         createChannel(this)
     }
 
+    /** 满足 Android 8+ 前台服务启动契约，调用后立即绑定通知。 */
+    private fun promoteForeground(text: String, ongoing: Boolean) {
+        val notice = notification(this, text, ongoing)
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIFICATION_ID, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(NOTIFICATION_ID, notice)
+        }
+    }
+
+    /** 在独立轻量线程中断开连接，避免在主线程或阻塞的下载工作线程中卡死。 */
+    private fun abortActiveConnection() {
+        val dl = connection
+        val chk = checkConnection
+        if (dl == null && chk == null) return
+        Thread {
+            try { dl?.disconnect() } catch (_: Exception) { }
+            try { chk?.disconnect() } catch (_: Exception) { }
+        }.apply {
+            name = "app-update-abort"
+            isDaemon = true
+            start()
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val token = intent?.getLongExtra(EXTRA_TOKEN, -1) ?: -1
+        latestStartId = startId
+        try {
+            promoteForeground("准备下载更新", true)
+        } catch (_: Exception) {
+            if (!running) {
+                running = false
+                failSafely(token, "foreground_unavailable")
+                stopSelf(latestStartId)
+            }
+            return START_NOT_STICKY
+        }
         if (running) {
             if (token != taskToken && token >= 0 && AppUpdateStore.active(token) && intent != null) {
                 nextStart = intent to startId
-                connection?.disconnect()
+                abortActiveConnection()
             }
             return START_NOT_STICKY
         }
         if (token < 0 || !AppUpdateStore.active(token)) {
-            if (!running) stopSelf()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf(latestStartId)
             return START_NOT_STICKY
         }
         taskToken = token
         running = true
         stopping = false
-        try {
-            val notice = notification(this, "准备下载更新", true)
-            if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-            else startForeground(NOTIFICATION_ID, notice)
-        } catch (_: Exception) {
-            failSafely(token, "foreground_unavailable")
-            stopSelf()
-            return START_NOT_STICKY
-        }
         worker.execute {
             try {
                 download(token)
             } catch (failure: AppUpdateFailure) {
-                recordDownloadFailure(failure)
+                if (!inStatusCheck) recordDownloadFailure(failure)
                 if (failure.code == "revoked") {
                     try { AppUpdateStore.cancel(token, revoked = true) } catch (_: Exception) { }
                 } else if (failure.code != "cancelled" && active(token)) {
                     val keep = failure.code in setOf("network", "storage", "insufficient_storage", "timeout")
                     try {
-                        if (!keep) AppUpdateStore.guarded(token) {
-                            AppUpdateStore.release?.let { AppUpdateStore.deleteFiles(it) }
+                        if (!keep) {
+                            AppUpdateStore.guarded(token) {
+                                AppUpdateStore.release?.let { AppUpdateStore.deleteFiles(it) }
+                            }
+                            AppUpdateStore.update(token, "failed", count = 0L, error = failure.code, nextEtag = null)
+                        } else {
+                            AppUpdateStore.update(token, "paused", error = failure.code)
                         }
-                        AppUpdateStore.update(token, if (keep) "paused" else "failed", error = failure.code)
                     } catch (_: Exception) { }
                 }
             } catch (error: IOException) {
-                recordDownloadFailure(error)
+                if (!inStatusCheck) recordDownloadFailure(error)
                 failSafely(token, "network")
             } catch (error: Exception) {
-                recordDownloadFailure(error)
+                if (!inStatusCheck) recordDownloadFailure(error)
                 failSafely(token, "download_failed")
             } finally {
-                connection?.disconnect()
+                inStatusCheck = false
+                try { connection?.disconnect() } catch (_: Exception) { }
                 connection = null
+                try { checkConnection?.disconnect() } catch (_: Exception) { }
+                checkConnection = null
                 main.post {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     if (AppUpdateStore.active(token) && AppUpdateStore.status == "ready") notifyReady(this)
@@ -94,7 +132,7 @@ class AppUpdateService : Service() {
                     val next = nextStart
                     nextStart = null
                     if (!stopping && next != null) onStartCommand(next.first, 0, next.second)
-                    else stopSelf(startId)
+                    else stopSelf(latestStartId)
                 }
             }
         }
@@ -104,12 +142,19 @@ class AppUpdateService : Service() {
 
     private fun active(token: Long) = !stopping && AppUpdateStore.active(token) && !Thread.currentThread().isInterrupted
 
+    private fun checkStatus(item: AppUpdateRelease, headers: Map<String, String>) {
+        inStatusCheck = true
+        AppUpdateHttp.check(item, headers) { checkConnection = it }
+        inStatusCheck = false
+    }
+
     private fun download(token: Long) {
+        inStatusCheck = false
         diagnosticResponse = null
         diagnosticRequest = null
         val item = AppUpdateStore.release ?: throw AppUpdateFailure("cancelled")
         val headers = AppUpdateStore.headers
-        AppUpdateHttp.check(item, headers)
+        checkStatus(item, headers)
         if (!active(token)) throw AppUpdateFailure("cancelled")
         val complete = AppUpdateStore.completeFile(item)
         val part = AppUpdateStore.partFile(item)
@@ -173,7 +218,7 @@ class AppUpdateService : Service() {
                                 lastEvent = now
                             }
                             if (now - lastCheck >= 30000) {
-                                AppUpdateHttp.check(item, headers)
+                                checkStatus(item, headers)
                                 lastCheck = now
                             }
                         }
@@ -189,7 +234,7 @@ class AppUpdateService : Service() {
         AppUpdateStore.update(token, "verifying", item.size)
         updateNotification("正在校验安装包")
         AppUpdateStore.verify(item, if (complete.exists()) complete else part) { active(token) }
-        AppUpdateHttp.check(item, headers)
+        checkStatus(item, headers)
         if (!active(token)) throw AppUpdateFailure("cancelled")
         AppUpdateStore.guarded(token) {
             if (!complete.exists() && !part.renameTo(complete)) throw AppUpdateFailure("storage")
@@ -198,11 +243,16 @@ class AppUpdateService : Service() {
         AppUpdateDiagnostics.publish(mapOf(
             "source" to "android_update", "stage" to "update.download",
             "request" to (diagnosticRequest ?: mapOf("url" to item.downloadUrl, "method" to "GET")),
-            "response" to diagnosticResponse.orEmpty().plus(mapOf("content_type" to "application/vnd.android.package-archive",
-                "captured_bytes" to complete.length(), "representation" to "assembled_download_file"),
-            ),
-            "capture" to mapOf("complete" to true, "reason" to "complete"),
-        ), complete)
+            "response" to diagnosticResponse.orEmpty().plus(mapOf(
+                "content_type" to "application/vnd.android.package-archive",
+                "total_bytes" to complete.length(),
+                "captured_bytes" to 0,
+                "sha256" to item.sha256,
+                "complete" to false,
+                "incomplete_reason" to "binary_apk_omitted",
+            )),
+            "capture" to mapOf("complete" to false, "reason" to "binary_apk_omitted"),
+        ))
     }
 
     private var diagnosticResponse: Map<String, Any?>? = null
@@ -214,7 +264,11 @@ class AppUpdateService : Service() {
         var captured = false
         if (current != null && diagnosticResponse != null) {
             try {
-                current.errorStream?.bufferedReader()?.use { body = it.readText(); captured = true }
+                val (bytes, complete) = AppUpdateHttp.readBoundedStream(current.errorStream)
+                if (bytes.isNotEmpty() || complete) {
+                    body = bytes.toString(Charsets.UTF_8)
+                }
+                captured = complete
             } catch (_: Exception) { }
         }
         AppUpdateDiagnostics.publish(mapOf(
@@ -242,7 +296,7 @@ class AppUpdateService : Service() {
     override fun onTimeout(startId: Int, fgsType: Int) {
         failSafely(taskToken, "timeout")
         stopping = true
-        connection?.disconnect()
+        abortActiveConnection()
         worker.shutdownNow()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -251,7 +305,7 @@ class AppUpdateService : Service() {
     override fun onDestroy() {
         if (AppUpdateStore.status in setOf("downloading", "verifying")) failSafely(taskToken, "interrupted")
         stopping = true
-        connection?.disconnect()
+        abortActiveConnection()
         worker.shutdownNow()
         super.onDestroy()
     }
@@ -285,7 +339,7 @@ class AppUpdateService : Service() {
             val view = PendingIntent.getActivity(context, NOTIFICATION_ID, open,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val builder = Notification.Builder(context, CHANNEL_ID)
-            builder.setSmallIcon(android.R.drawable.stat_sys_download)
+            builder.setSmallIcon(if (ongoing) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_download_done)
                 .setContentTitle("NUIST++ 应用更新").setContentText(text).setContentIntent(view)
                 .setOnlyAlertOnce(true).setOngoing(ongoing).setAutoCancel(!ongoing)
                 .setCategory(Notification.CATEGORY_PROGRESS)

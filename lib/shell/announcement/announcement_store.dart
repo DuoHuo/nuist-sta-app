@@ -10,6 +10,7 @@ import 'announcement_models.dart';
 /// 所有读写失败都退化成「没有存储」。
 abstract final class AnnouncementStore {
   static final _log = AppLog.logger('shell.announcement.store');
+  static Future<void> _writingReadIds = Future.value();
 
   static Future<File?> _file(String name) async {
     try {
@@ -80,18 +81,21 @@ abstract final class AnnouncementStore {
     }
   }
 
-  /// 写已读 id，失败静默。
-  static Future<void> saveReadIds(Set<String> ids) async {
-    try {
-      final file = await _file('read_ids.json');
-      if (file == null) return;
-      await file.writeAsString(jsonEncode(ids.toList()), flush: true);
-    } catch (error, stackTrace) {
-      _log.warning(
-        'read_state.write_failed',
-        error: error,
-        stackTrace: stackTrace,
-      );
-    }
+  /// 写已读 id，失败静默；同进程顺序写入，避免并发丢失较新的已读集合。
+  static Future<void> saveReadIds(Set<String> ids) {
+    final snapshot = ids.toList();
+    return _writingReadIds = _writingReadIds.then((_) async {
+      try {
+        final file = await _file('read_ids.json');
+        if (file == null) return;
+        await file.writeAsString(jsonEncode(snapshot), flush: true);
+      } catch (error, stackTrace) {
+        _log.warning(
+          'read_state.write_failed',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    });
   }
 }

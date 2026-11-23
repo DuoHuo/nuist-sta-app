@@ -61,6 +61,7 @@ class AnnouncementController extends ChangeNotifier {
   final Future<ClientMetadata> Function() _metadataProvider;
 
   Future<void>? _started;
+  bool _initialized = false;
   bool _disposed = false;
   AnnouncementCache? _cache;
   Set<String> _readIds = <String>{};
@@ -87,96 +88,118 @@ class AnnouncementController extends ChangeNotifier {
     }
   }
 
+  /// 是否已完成首次启动加载。
+  bool get initialized => _initialized;
+
   /// 幂等启动，多次调用返回同一个 Future。测试环境下的单例不发请求。
-  Future<void> ensureStarted() => _started ??= _start();
+  Future<void> ensureStarted() =>
+      _initialized ? Future.value() : (_started ??= _start());
 
   Future<void> _start() async {
-    if (_fetcher == null && _inFlutterTest) return;
-    String? cacheKey;
     try {
-      cacheKey = _cacheContext(await _metadataProvider());
-    } catch (error, stackTrace) {
-      _log.warning(
-        'metadata.read_failed',
-        fields: {'secret_context': true, 'stage': 'metadata.load'},
-        error: error,
-        stackTrace: stackTrace,
-      );
-    }
-    try {
-      final stored = await _readCache();
-      if (stored != null && stored.matches(cacheKey)) _cache = stored;
-    } catch (error, stackTrace) {
-      _log.warning('cache.read_failed', error: error, stackTrace: stackTrace);
-    }
-    // 缓存迁移不能丢掉已读状态；服务端筛选后缺少的条目也不代表已经删除。
-    try {
-      _readIds = await _readReadIds();
-    } catch (error, stackTrace) {
-      _log.warning(
-        'read_state.load_failed',
-        error: error,
-        stackTrace: stackTrace,
-      );
-    }
-    _notify();
-    final api = _fetcher == null ? AnnouncementApi() : null;
-    final fetch = _fetcher ?? api!.fetch;
-    try {
-      await _log.operation(
-        'refresh',
-        () async {
-          final cache = _cache;
-          var result = await fetch(
-            etag: cache?.etag,
-            lastModified: cache?.lastModified,
+      if (_fetcher == null && _inFlutterTest) return;
+      String? cacheKey;
+      try {
+        cacheKey = _cacheContext(await _metadataProvider());
+      } catch (error, stackTrace) {
+        _log.warning(
+          'metadata.read_failed',
+          fields: {'secret_context': true, 'stage': 'metadata.load'},
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+      try {
+        final stored = await _readCache();
+        if (stored != null && stored.matches(cacheKey)) _cache = stored;
+      } catch (error, stackTrace) {
+        _log.warning('cache.read_failed', error: error, stackTrace: stackTrace);
+      }
+      // 缓存迁移不能丢掉已读状态；服务端筛选后缺少的条目也不代表已经删除。
+      var mergedEarlyRead = false;
+      try {
+        final storedReadIds = await _readReadIds();
+        _readIds = {..._readIds, ...storedReadIds};
+        mergedEarlyRead = _readIds.length > storedReadIds.length;
+      } catch (error, stackTrace) {
+        _log.warning(
+          'read_state.load_failed',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+      if (mergedEarlyRead) {
+        try {
+          await _saveReadIds(_readIds);
+        } catch (error, stackTrace) {
+          _log.warning(
+            'read_state.write_failed',
+            error: error,
+            stackTrace: stackTrace,
           );
-          if (result.notModified && cache == null) {
-            // 不能把没有响应正文的 304 当成更新成功；最多补一次无条件请求。
-            result = await fetch();
-            if (result.notModified) {
-              throw const FormatException('没有可复用的公告缓存');
+        }
+      }
+      _notify();
+      final api = _fetcher == null ? AnnouncementApi() : null;
+      final fetch = _fetcher ?? api!.fetch;
+      try {
+        await _log.operation(
+          'refresh',
+          () async {
+            final cache = _cache;
+            var result = await fetch(
+              etag: cache?.etag,
+              lastModified: cache?.lastModified,
+            );
+            if (result.notModified && cache == null) {
+              // 不能把没有响应正文的 304 当成更新成功；最多补一次无条件请求。
+              result = await fetch();
+              if (result.notModified) {
+                throw const FormatException('没有可复用的公告缓存');
+              }
             }
-          }
-          if (result.notModified) {
-            if (cache != null) {
+            if (result.notModified) {
+              if (cache != null) {
+                _cache = AnnouncementCache(
+                  items: cache.items,
+                  cacheKey: cacheKey,
+                  etag: cache.etag,
+                  lastModified: cache.lastModified,
+                  fetchedAt: _now(),
+                );
+                await _saveCache(_cache!);
+              }
+            } else {
+              // 整体替换：服务端已删除的条目（含不可关闭的）随之从缓存消失。
+              final items = (result.items ?? const <Announcement>[])
+                  .take(kMaxAnnouncements)
+                  .toList();
               _cache = AnnouncementCache(
-                items: cache.items,
+                items: items,
                 cacheKey: cacheKey,
-                etag: cache.etag,
-                lastModified: cache.lastModified,
+                etag: result.etag,
+                lastModified: result.lastModified,
                 fetchedAt: _now(),
               );
-              await _saveCache(_cache!);
+              if (cacheKey != null) await _saveCache(_cache!);
             }
-          } else {
-            // 整体替换：服务端已删除的条目（含不可关闭的）随之从缓存消失。
-            final items = (result.items ?? const <Announcement>[])
-                .take(kMaxAnnouncements)
-                .toList();
-            _cache = AnnouncementCache(
-              items: items,
-              cacheKey: cacheKey,
-              etag: result.etag,
-              lastModified: result.lastModified,
-              fetchedAt: _now(),
-            );
-            if (cacheKey != null) await _saveCache(_cache!);
-          }
-        },
-        failureEvent: 'refresh.failed',
-        resultFields: (_) => {'count': _cache?.items.length ?? 0},
-        errorFields: (_) => {
-          'has_cache': _cache != null,
-          'outcome': _cache == null ? 'unavailable' : 'cache_fallback',
-        },
-      );
-    } catch (_) {
-      // 原 Trace 中已记录失败；继续使用已有缓存。
+          },
+          failureEvent: 'refresh.failed',
+          resultFields: (_) => {'count': _cache?.items.length ?? 0},
+          errorFields: (_) => {
+            'has_cache': _cache != null,
+            'outcome': _cache == null ? 'unavailable' : 'cache_fallback',
+          },
+        );
+      } catch (_) {
+        // 原 Trace 中已记录失败；继续使用已有缓存。
+      } finally {
+        api?.close();
+      }
+      _notify();
     } finally {
-      api?.close();
+      _initialized = true;
     }
-    _notify();
   }
 
   /// 当前可见公告（实时按 now 过滤过期并排序，版本范围由服务端筛选）。

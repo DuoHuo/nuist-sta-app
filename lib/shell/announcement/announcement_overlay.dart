@@ -5,8 +5,10 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/colors.dart';
 import '../../core/navigation/app_navigation.dart';
+import '../../core/privacy/privacy_consent.dart';
 import '../update/update_controller.dart';
 import '../update/update_dialog.dart';
+import '../update/update_models.dart';
 import 'announcement_controller.dart';
 import 'announcement_models.dart';
 import 'announcement_sheet.dart';
@@ -63,12 +65,13 @@ class AnnouncementBell extends StatelessWidget {
   }
 }
 
-/// 打开公告列表：先把当前可见项全部标为已读。
+/// 打开公告列表：先把当前可见项全部标为已读，并在关闭时补标打开期间渲染过的公告。
 Future<void> openAnnouncements(
   BuildContext context,
   AnnouncementController c, {
   UpdateController? updates,
 }) {
+  final shownAnnouncementIds = <String>{for (final item in c.visible) item.id};
   // 对话框持续订阅，更新撤回后同步移除对应条目。
   final dialog = showDialog<void>(
     context: context,
@@ -77,9 +80,15 @@ Future<void> openAnnouncements(
       listenable: Listenable.merge([c, updates]),
       builder: (_, _) {
         final update = _updateAnnouncement(updates);
+        final realItems = c.visible
+            .where((item) => item.id != update?.id)
+            .toList();
+        for (final item in realItems) {
+          shownAnnouncementIds.add(item.id);
+        }
         return AnnouncementDialog(
           // 更新固定排首位，普通公告继续沿用置顶和发布时间顺序。
-          items: [?update, ...c.visible.where((item) => item.id != update?.id)],
+          items: [?update, ...realItems],
           localActions: {
             if (update != null)
               update.id: AnnouncementLocalAction(
@@ -94,7 +103,11 @@ Future<void> openAnnouncements(
   );
   c.markAllVisibleRead();
   if (_updateAnnouncement(updates) != null) updates?.markAnnouncementRead();
-  return dialog;
+  return dialog.whenComplete(() {
+    if (shownAnnouncementIds.isNotEmpty) {
+      unawaited(c.markRead(shownAnnouncementIds));
+    }
+  });
 }
 
 Announcement? _updateAnnouncement(UpdateController? updates) {
@@ -139,7 +152,9 @@ class _AnnouncementOverlayState extends State<AnnouncementOverlay> {
 
   bool _presenting = false;
   bool _dirty = false;
-  List<Announcement>? _banner;
+  UpdateRelease? _updateBanner;
+  List<Announcement>? _announcementBanner;
+  bool _updateBannerShownThisLaunch = false;
   Timer? _bannerTimer;
   bool _announcementsReady = false;
   GoRouter? _router;
@@ -147,15 +162,18 @@ class _AnnouncementOverlayState extends State<AnnouncementOverlay> {
   @override
   void initState() {
     super.initState();
-    _c.addListener(_maybePresent);
+    _c.addListener(_onAnnouncementsChanged);
     widget.updates?.addListener(_onUpdatesChanged);
+    PrivacyConsent.dialogPending.addListener(_onPrivacyPendingChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _c.ensureStarted().whenComplete(() {
         _announcementsReady = true;
         if (mounted) _maybePresent();
       });
-      widget.updates?.onLaunch();
+      if (!PrivacyConsent.dialogPending.value) {
+        widget.updates?.onLaunch();
+      }
       _maybePresent();
     });
   }
@@ -178,8 +196,9 @@ class _AnnouncementOverlayState extends State<AnnouncementOverlay> {
 
   @override
   void dispose() {
-    _c.removeListener(_maybePresent);
+    _c.removeListener(_onAnnouncementsChanged);
     widget.updates?.removeListener(_onUpdatesChanged);
+    PrivacyConsent.dialogPending.removeListener(_onPrivacyPendingChanged);
     _router?.routerDelegate.removeListener(_onRouteChanged);
     _bannerTimer?.cancel();
     super.dispose();
@@ -187,6 +206,7 @@ class _AnnouncementOverlayState extends State<AnnouncementOverlay> {
 
   bool get _onTop {
     if (!mounted ||
+        PrivacyConsent.dialogPending.value ||
         !TickerMode.valuesOf(context).enabled ||
         !(ModalRoute.of(context)?.isCurrent ?? true)) {
       return false;
@@ -207,10 +227,34 @@ class _AnnouncementOverlayState extends State<AnnouncementOverlay> {
     });
   }
 
+  void _onAnnouncementsChanged() {
+    if (!mounted) return;
+    setState(() {});
+    unawaited(_maybePresent());
+  }
+
   void _onUpdatesChanged() {
     if (!mounted) return;
     setState(() {});
     unawaited(_maybePresent());
+  }
+
+  void _onPrivacyPendingChanged() {
+    if (!mounted || PrivacyConsent.dialogPending.value) return;
+    widget.updates?.onLaunch();
+    _schedulePresentAfterRootPop();
+  }
+
+  void _schedulePresentAfterRootPop([int remainingFrames = 30]) {
+    if (!mounted || PrivacyConsent.dialogPending.value) return;
+    if (!Navigator.of(context, rootNavigator: true).canPop() ||
+        remainingFrames <= 0) {
+      unawaited(_maybePresent());
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _schedulePresentAfterRootPop(remainingFrames - 1);
+    });
   }
 
   Future<void> _maybePresent() async {
@@ -255,24 +299,37 @@ class _AnnouncementOverlayState extends State<AnnouncementOverlay> {
         await showUpdateDetails(context, controller: updates, automatic: true);
       }
       if (!_onTop) return;
-      // 3. 弱提醒悬浮条：本次进程只弹一次，收起不算已读。
-      final badge = !_c.bannerShownThisLaunch
-          ? _c.unreadBadge
-          : const <Announcement>[];
-      final update = updates?.shouldShowBanner ?? false
-          ? _updateAnnouncement(updates)
-          : null;
-      if (badge.isNotEmpty || update != null) {
-        if (badge.isNotEmpty) _c.markBannerShown();
-        if (update != null) updates!.markBannerShown();
-        final combined = <String, Announcement>{
-          for (final item in _banner ?? const <Announcement>[]) item.id: item,
-          for (final item in badge) item.id: item,
-          ?update?.id: ?update,
-        };
-        setState(() => _banner = combined.values.toList());
+      // 3. 弱提醒悬浮条：新版本与公告彻底分离，本次进程有新版本时只弹新版本悬浮条。
+      if (updates != null && updates.shouldShowBanner) {
+        updates.markBannerShown();
+        _updateBannerShownThisLaunch = true;
+        _c.markBannerShown();
+        setState(() {
+          _updateBanner = updates.available;
+          _announcementBanner = null;
+        });
         _bannerTimer?.cancel();
         _bannerTimer = Timer(kAnnouncementBannerDuration, _hideBanner);
+      } else {
+        final waitingForUpdates =
+            updates != null &&
+            !updates.disabled &&
+            (!updates.initialized ||
+                updates.checking ||
+                updates.awaitingInitialCheck);
+        if (!waitingForUpdates &&
+            !_updateBannerShownThisLaunch &&
+            !(updates?.hasUnreadAnnouncement ?? false) &&
+            !_c.bannerShownThisLaunch &&
+            _c.unreadBadge.isNotEmpty) {
+          _c.markBannerShown();
+          setState(() {
+            _announcementBanner = List<Announcement>.of(_c.unreadBadge);
+            _updateBanner = null;
+          });
+          _bannerTimer?.cancel();
+          _bannerTimer = Timer(kAnnouncementBannerDuration, _hideBanner);
+        }
       }
     } finally {
       _presenting = false;
@@ -286,34 +343,59 @@ class _AnnouncementOverlayState extends State<AnnouncementOverlay> {
   void _hideBanner() {
     _bannerTimer?.cancel();
     _bannerTimer = null;
-    if (mounted) setState(() => _banner = null);
+    if (mounted) {
+      setState(() {
+        _updateBanner = null;
+        _announcementBanner = null;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // 更新被撤包或重新检查失败后，不继续展示之前的伪公告快照。
-    final update = widget.updates?.available?.popupEnabled == false
-        ? _updateAnnouncement(widget.updates)
-        : null;
-    final currentIds = {
-      for (final item in _c.visible) item.id,
-      if (update != null) update.id,
-    };
-    final banner = _banner
-        ?.where((item) => currentIds.contains(item.id))
-        .toList();
+    final updates = widget.updates;
+    final updateBanner = _updateBanner;
+    final showUpdateBanner =
+        updateBanner != null &&
+        updates != null &&
+        updates.hasUnreadAnnouncement &&
+        updates.available?.revision == updateBanner.revision &&
+        (!updates.task.hasTask || updates.taskSuperseded);
+    final unreadBadgeIds = {for (final item in _c.unreadBadge) item.id};
+    final announcementBanner = showUpdateBanner
+        ? null
+        : _announcementBanner
+              ?.where((item) => unreadBadgeIds.contains(item.id))
+              .toList();
     return Stack(
       children: [
         widget.child,
-        if (banner != null && banner.isNotEmpty)
+        if (showUpdateBanner)
           Positioned(
             left: 16,
             right: 16,
             top: 8,
             child: _AnnouncementBanner(
-              text: banner.length == 1
-                  ? banner.first.title
-                  : '共 ${banner.length} 条公告',
+              icon: Icons.system_update_rounded,
+              text: '发现新版本 v${updateBanner.versionName}',
+              onTap: () {
+                _hideBanner();
+                unawaited(updates.markAnnouncementRead());
+                showUpdateDetails(context, controller: updates);
+              },
+              onClose: _hideBanner,
+            ),
+          )
+        else if (announcementBanner != null && announcementBanner.isNotEmpty)
+          Positioned(
+            left: 16,
+            right: 16,
+            top: 8,
+            child: _AnnouncementBanner(
+              icon: Icons.campaign_outlined,
+              text: announcementBanner.length == 1
+                  ? announcementBanner.first.title
+                  : '共 ${announcementBanner.length} 条公告',
               onTap: () {
                 _hideBanner();
                 openAnnouncements(context, _c, updates: widget.updates);
@@ -328,11 +410,13 @@ class _AnnouncementOverlayState extends State<AnnouncementOverlay> {
 
 class _AnnouncementBanner extends StatelessWidget {
   const _AnnouncementBanner({
+    required this.icon,
     required this.text,
     required this.onTap,
     required this.onClose,
   });
 
+  final IconData icon;
   final String text;
   final VoidCallback onTap;
   final VoidCallback onClose;
@@ -352,7 +436,7 @@ class _AnnouncementBanner extends StatelessWidget {
           padding: const EdgeInsets.only(left: 14),
           child: Row(
             children: [
-              Icon(Icons.campaign_outlined, size: 20, color: palette.accent),
+              Icon(icon, size: 20, color: palette.accent),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(

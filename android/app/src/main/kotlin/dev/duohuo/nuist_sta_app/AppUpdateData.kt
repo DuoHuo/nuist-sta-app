@@ -22,6 +22,7 @@ internal class AppUpdateFailure(val code: String) : IOException(code)
 /** 一次可分发缓存修订；所有本地文件及续传都绑定该修订的完整哈希。 */
 internal data class AppUpdateRelease(val values: Map<String, Any>) {
     val revision get() = values["revision"] as String
+    val versionCode get() = values["versionCode"] as Long
     val sha256 get() = values["sha256"] as String
     val size get() = values["size"] as Long
     val packageName get() = values["packageName"] as String
@@ -53,7 +54,7 @@ internal data class AppUpdateRelease(val values: Map<String, Any>) {
                 data[key] = value
             }
             val release = AppUpdateRelease(data.toMap())
-            if (!Regex("^[A-Za-z0-9_.-]{1,128}$").matches(release.revision) ||
+            if (!Regex("^[A-Za-z0-9_-]{1,128}$").matches(release.revision) ||
                 !Regex("^[0-9a-f]{64}$").matches(release.sha256) ||
                 release.size > 2L * 1024 * 1024 * 1024
             ) throw AppUpdateFailure("invalid_release")
@@ -90,6 +91,8 @@ internal object AppUpdateStore {
         private set
     @Volatile var sessionId = -1
         private set
+    @Volatile var installingSince = 0L
+        private set
 
     @Synchronized fun initialize(context: Context) {
         if (::app.isInitialized) return
@@ -107,6 +110,7 @@ internal object AppUpdateStore {
             } ?: emptyMap()
             token = json.optLong("token", 0)
             sessionId = json.optInt("sessionId", -1)
+            installingSince = json.optLong("installingSince", 0L)
             status = json.optString("status", "idle")
             errorCode = json.optString("errorCode").takeIf { it.isNotEmpty() }
             etag = json.optString("etag").takeIf(::validEtag)
@@ -114,31 +118,81 @@ internal object AppUpdateStore {
                 throw AppUpdateFailure("storage")
             }
             val item = release
+            if (item != null && item.packageName == app.packageName) {
+                val installedVersion = try {
+                    val info = app.packageManager.getPackageInfo(app.packageName, 0)
+                    if (Build.VERSION.SDK_INT >= 28) info.longVersionCode
+                    else @Suppress("DEPRECATION") info.versionCode.toLong()
+                } catch (_: Exception) {
+                    null
+                }
+                if (installedVersion != null && installedVersion >= item.versionCode) {
+                    // 当前应用已安装到目标或更高版本，清理缓存修订、旧通知并回归空闲状态。
+                    deleteFiles(item)
+                    abandonSession()
+                    try {
+                        app.getSystemService(NotificationManager::class.java)?.cancel(AppUpdateService.NOTIFICATION_ID)
+                    } catch (_: Exception) { }
+                    status = "idle"
+                    release = null
+                    headers = emptyMap()
+                    errorCode = null
+                    bytes = 0
+                    etag = null
+                    installingSince = 0L
+                    persist()
+                    return
+                }
+            }
             if (status == "installing" && item != null) {
                 val session = if (sessionId >= 0) app.packageManager.packageInstaller.getSessionInfo(sessionId) else null
-                if (session?.isSealed != true) {
-                    // 未提交的会话可重新安装；已消失的会话保留标识，以接收迟到的系统结果。
+                if (session == null || !session.isSealed || installingSince == 0L ||
+                    System.currentTimeMillis() - installingSince > 60_000L
+                ) {
+                    // 未提交或已超时的会话回退至可继续状态；已消失会话保留标识以接收迟到的系统结果。
                     if (session != null) abandonSession()
-                    status = "paused"
+                    installingSince = 0L
+                    val completeReady = completeFile(item).exists() && completeFile(item).length() == item.size
+                    status = if (completeReady) "ready" else "paused"
                     errorCode = "interrupted"
                 }
             } else {
                 token++
                 abandonSession()
-                if (status in setOf("downloading", "verifying", "ready")) {
-                    status = "paused"
-                    errorCode = "interrupted"
+                installingSince = 0L
+                if (status == "ready" && item != null &&
+                    completeFile(item).exists() && completeFile(item).length() == item.size
+                ) {
+                    // 完整 APK 仍存在且大小匹配时保留 ready 状态，避免每次冷启动都误标中断。
+                    status = "ready"
+                    errorCode = null
+                } else if (status in setOf("downloading", "verifying", "ready", "installing")) {
+                    status = if (item != null) "paused" else "idle"
+                    errorCode = if (item != null) "interrupted" else null
                 }
             }
             bytes = item?.let { if (completeFile(it).exists()) completeFile(it).length() else partFile(it).length() } ?: 0
             persist()
         } catch (_: Exception) {
+            // 状态文件或更新目录损坏时彻底清理，避免残留错误码污染下次启动体验。
+            val dir = File(app.noBackupFilesDir, "app_updates")
+            if (dir.isDirectory) {
+                dir.listFiles()?.forEach { file ->
+                    if (file.isFile && (file.name.endsWith(".part") || file.name.endsWith(".apk"))) {
+                        try { file.delete() } catch (_: Exception) { }
+                    }
+                }
+            }
+            try { stateFile.delete() } catch (_: Exception) { }
             release = null
             headers = emptyMap()
             status = "idle"
             bytes = 0
-            errorCode = "storage"
+            errorCode = null
             etag = null
+            sessionId = -1
+            installingSince = 0L
+            try { persist() } catch (_: Exception) { }
         }
     }
 
@@ -164,6 +218,7 @@ internal object AppUpdateStore {
         headers = clean
         status = "paused"
         errorCode = null
+        installingSince = 0L
         token++
         persist()
         notifyChanged()
@@ -181,10 +236,16 @@ internal object AppUpdateStore {
     @Synchronized fun update(expected: Long, nextStatus: String = status, count: Long = bytes,
                              error: String? = null, nextEtag: String? = etag, save: Boolean = true) {
         if (!active(expected)) return
+        val previousStatus = status
         status = nextStatus
         bytes = count
         errorCode = error
         etag = nextEtag
+        if (nextStatus == "installing") {
+            if (previousStatus != "installing") installingSince = System.currentTimeMillis()
+        } else {
+            installingSince = 0L
+        }
         if (save) {
             try { persist() } finally { notifyChanged() }
         } else notifyChanged()
@@ -199,6 +260,7 @@ internal object AppUpdateStore {
         errorCode = if (revoked) "revoked" else null
         bytes = 0
         etag = null
+        installingSince = 0L
         if (!revoked) { release = null; headers = emptyMap() }
         persist()
         notifyChanged()
@@ -230,6 +292,7 @@ internal object AppUpdateStore {
         val json = JSONObject().put("release", release?.let { JSONObject(it.values) })
             .put("headers", JSONObject(headers)).put("status", status).put("token", token)
             .put("errorCode", errorCode).put("etag", etag).put("sessionId", sessionId)
+            .put("installingSince", installingSince)
         var stream: java.io.FileOutputStream? = null
         try {
             stream = stateFile.startWrite()
@@ -358,8 +421,30 @@ internal object AppUpdateHttp {
         }
     }
 
-    fun check(item: AppUpdateRelease, headers: Map<String, String>) {
+    /** 有上限地读取响应/错误流，防止异常响应过大导致内存溢出；同时返回是否完整未截断。 */
+    fun readBoundedStream(stream: java.io.InputStream?, maxBytes: Int = 256 * 1024): Pair<ByteArray, Boolean> {
+        if (stream == null) return ByteArray(0) to false
+        val out = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        var complete = true
+        stream.use { input ->
+            while (true) {
+                val remaining = maxBytes - out.size()
+                if (remaining <= 0) {
+                    if (input.read() >= 0) complete = false
+                    break
+                }
+                val count = input.read(buffer, 0, minOf(buffer.size, remaining))
+                if (count < 0) break
+                out.write(buffer, 0, count)
+            }
+        }
+        return out.toByteArray() to complete
+    }
+
+    fun check(item: AppUpdateRelease, headers: Map<String, String>, onConnect: ((HttpURLConnection?) -> Unit)? = null) {
         val connection = connect(item.statusUrl, headers)
+        onConnect?.invoke(connection)
         val requestHeaders = connection.requestProperties.toMap()
         val started = android.os.SystemClock.elapsedRealtime()
         val output = java.io.ByteArrayOutputStream()
@@ -395,22 +480,27 @@ internal object AppUpdateHttp {
             // 非成功状态的错误体只能从 errorStream 取得，不能重新发送请求。
             if (output.size() == 0 && status != null) {
                 try {
-                    connection.errorStream?.use { input -> input.copyTo(output) }
-                    complete = connection.errorStream != null
+                    val (errBytes, errComplete) = readBoundedStream(connection.errorStream)
+                    if (errBytes.isNotEmpty()) output.write(errBytes)
+                    complete = errComplete
                 } catch (_: Exception) { complete = false }
             }
             throw error
         } finally {
-            AppUpdateDiagnostics.publish(mapOf(
-                "source" to "android_update", "stage" to "update.validate",
-                "request" to mapOf("url" to item.statusUrl, "method" to "GET", "headers" to requestHeaders),
-                "response" to AppUpdateDiagnostics.response(status, responseHeaders, output.toString("UTF-8"), complete),
-                "capture" to mapOf("complete" to complete, "reason" to if (complete) "complete" else "response_incomplete"),
-                "duration_ms" to android.os.SystemClock.elapsedRealtime() - started,
-                "error" to failure?.let { mapOf("type" to it.javaClass.simpleName, "message" to it.message,
-                    "stack" to it.stackTraceToString(), "code" to (it as? AppUpdateFailure)?.code) },
-            ))
-            connection.disconnect()
+            try {
+                AppUpdateDiagnostics.publish(mapOf(
+                    "source" to "android_update", "stage" to "update.validate",
+                    "request" to mapOf("url" to item.statusUrl, "method" to "GET", "headers" to requestHeaders),
+                    "response" to AppUpdateDiagnostics.response(status, responseHeaders, output.toString("UTF-8"), complete),
+                    "capture" to mapOf("complete" to complete, "reason" to if (complete) "complete" else "response_incomplete"),
+                    "duration_ms" to android.os.SystemClock.elapsedRealtime() - started,
+                    "error" to failure?.let { mapOf("type" to it.javaClass.simpleName, "message" to it.message,
+                        "stack" to it.stackTraceToString(), "code" to (it as? AppUpdateFailure)?.code) },
+                ))
+            } finally {
+                onConnect?.invoke(null)
+                connection.disconnect()
+            }
         }
     }
 }

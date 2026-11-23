@@ -6,6 +6,7 @@ import 'package:nuist_sta_app/core/network/client_metadata.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_api.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_controller.dart';
 import 'package:nuist_sta_app/shell/announcement/announcement_models.dart';
+import 'package:nuist_sta_app/shell/announcement/announcement_store.dart';
 
 const currentMetadata = ClientMetadata(
   platform: 'android',
@@ -344,5 +345,38 @@ void main() {
       expect(h.controller.blocking, isEmpty);
       expect(h.cache!.items.map((x) => x.id), ['y']);
     });
+  });
+
+  test('启动读盘完成前调用 markRead，合并持久化已读集合时不丢失内存已读项', () async {
+    final readCompleter = Completer<Set<String>>();
+    Set<String> saved = {};
+    final c = AnnouncementController.test(
+      metadataProvider: () async => currentMetadata,
+      readReadIds: () => readCompleter.future,
+      saveReadIds: (ids) async => saved = ids,
+      fetch: ({etag, lastModified}) async => AnnouncementFetchResult(
+        notModified: false,
+        items: [
+          a('early', remind: AnnouncementRemind.badge),
+          a('stored', remind: AnnouncementRemind.badge),
+          a('fresh', remind: AnnouncementRemind.badge),
+        ],
+      ),
+    );
+    addTearDown(c.dispose);
+    final started = c.ensureStarted();
+    await Future<void>.delayed(Duration.zero);
+    await c.markRead(['early']);
+    readCompleter.complete({'stored'});
+    await started;
+    expect(c.unreadBadge.map((x) => x.id), ['fresh']);
+    expect(saved, containsAll(['early', 'stored']));
+  });
+
+  test('AnnouncementStore.saveReadIds 并发调用在无存储环境下安全顺序结束', () async {
+    await Future.wait([
+      AnnouncementStore.saveReadIds({'a'}),
+      AnnouncementStore.saveReadIds({'a', 'b'}),
+    ]);
   });
 }

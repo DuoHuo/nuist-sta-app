@@ -22,6 +22,7 @@ Future<void> showUpdateDetails(
   final c = controller ?? UpdateController.instance;
   final future = _presentDetails(navigator, c, automatic).whenComplete(() {
     _openDetails[navigator] = null;
+    if (!c.acting) c.clearActionError();
   });
   _openDetails[navigator] = future;
   return future;
@@ -47,7 +48,11 @@ Future<void> _presentDetails(
 }
 
 UpdateRelease? _releaseFor(UpdateController controller) =>
-    controller.task.hasTask ? controller.task.release : controller.available;
+    controller.taskSuperseded
+    ? controller.available
+    : controller.task.hasTask
+    ? controller.task.release
+    : controller.available;
 
 /// 更新日志与下载操作共用的可关闭详情弹层。
 class UpdateDetailsDialog extends StatefulWidget {
@@ -74,6 +79,9 @@ class _UpdateDetailsDialogState extends State<UpdateDetailsDialog> {
     super.initState();
     _release = _releaseFor(widget.controller);
     widget.controller.addListener(_onChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _markAnnouncementReadIfNeeded(_release);
+    });
   }
 
   @override
@@ -83,6 +91,19 @@ class _UpdateDetailsDialogState extends State<UpdateDetailsDialog> {
       oldWidget.controller.removeListener(_onChanged);
       widget.controller.addListener(_onChanged);
       _release = _releaseFor(widget.controller);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _markAnnouncementReadIfNeeded(_release);
+      });
+    }
+  }
+
+  void _markAnnouncementReadIfNeeded(UpdateRelease? release) {
+    final controller = widget.controller;
+    if (release != null &&
+        controller.available?.revision == release.revision &&
+        !release.popupEnabled &&
+        controller.hasUnreadAnnouncement) {
+      unawaited(controller.markAnnouncementRead());
     }
   }
 
@@ -110,6 +131,9 @@ class _UpdateDetailsDialogState extends State<UpdateDetailsDialog> {
         release.size != previous?.size ||
         release.publishedAt != previous?.publishedAt) {
       setState(() => _release = release);
+    }
+    if (release.revision != previous?.revision) {
+      _markAnnouncementReadIfNeeded(release);
     }
   }
 
@@ -246,38 +270,49 @@ class _UpdateActions extends StatelessWidget {
       builder: (context, _) {
         final c = controller;
         final task = c.task;
+        final showTask = task.hasTask && !c.taskSuperseded;
         final release = _releaseFor(c);
+        final isIncompatible =
+            showTask &&
+            task.status == UpdateTaskStatus.failed &&
+            task.errorCode == 'incompatible';
         final error =
             c.actionError ??
-            (task.errorCode == null
+            (!showTask || task.errorCode == null
                 ? null
                 : updateErrorMessage(task.errorCode));
         final buttons = <Widget>[
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: Text(automatic && !task.hasTask ? '稍后提醒' : '关闭'),
+            child: Text(automatic && !showTask ? '稍后提醒' : '关闭'),
           ),
-          if (!task.hasTask && release != null)
+          if (!showTask && release != null)
             FilledButton.icon(
               onPressed: c.acting ? null : () => c.download(release),
               icon: const Icon(Icons.download_rounded),
               label: Text(automatic ? '立即下载' : '下载更新'),
             ),
-          if (task.hasTask && task.status != UpdateTaskStatus.installing)
+          if (showTask)
             TextButton(
               onPressed: c.acting ? null : c.cancel,
-              child: Text(
-                task.status == UpdateTaskStatus.revoked ? '清除任务' : '取消下载',
-              ),
+              child: Text(switch (task.status) {
+                UpdateTaskStatus.installing => '取消安装',
+                UpdateTaskStatus.revoked => '清除任务',
+                _ when isIncompatible => '清除任务',
+                _ => '取消下载',
+              }),
             ),
-          if (task.status == UpdateTaskStatus.paused ||
-              task.status == UpdateTaskStatus.failed)
+          if (showTask &&
+              (task.status == UpdateTaskStatus.paused ||
+                  (task.status == UpdateTaskStatus.failed && !isIncompatible)))
             FilledButton.icon(
               onPressed: c.acting ? null : c.resume,
               icon: const Icon(Icons.play_arrow_rounded),
-              label: const Text('继续下载'),
+              label: Text(
+                task.status == UpdateTaskStatus.paused ? '继续下载' : '重新下载',
+              ),
             ),
-          if (task.status == UpdateTaskStatus.ready)
+          if (showTask && task.status == UpdateTaskStatus.ready)
             FilledButton.icon(
               onPressed: c.acting
                   ? null
@@ -298,7 +333,7 @@ class _UpdateActions extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (task.hasTask) ...[
+                if (showTask) ...[
                   Text(
                     _taskLabel(task),
                     style: TextStyle(
@@ -369,6 +404,6 @@ String _taskLabel(UpdateTask task) => switch (task.status) {
   UpdateTaskStatus.verifying => '正在校验安装包',
   UpdateTaskStatus.ready => '下载完成',
   UpdateTaskStatus.installing => '正在安装',
-  UpdateTaskStatus.failed => '下载失败',
+  UpdateTaskStatus.failed => task.errorCode == 'incompatible' ? '安装失败' : '下载失败',
   UpdateTaskStatus.revoked => '此版本已停止分发',
 };

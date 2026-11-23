@@ -45,6 +45,7 @@ class UpdateController extends ChangeNotifier {
   static final instance = UpdateController._();
   static final _log = AppLog.logger('shell.update.controller');
   static const checkInterval = Duration(hours: 6);
+  static const failureCooldown = Duration(minutes: 2);
 
   final UpdateClient api;
   final UpdateDownloadBridge bridge;
@@ -54,7 +55,8 @@ class UpdateController extends ChangeNotifier {
   final DateTime Function() _now;
   final bool disabled;
   Future<void>? _initializing;
-  Future<void>? _checking;
+  Future<void>? _checkingRequest;
+  DateTime? _lastFailureAt;
   StreamSubscription<UpdateTask>? _subscription;
   ClientMetadata _metadata = const ClientMetadata();
   UpdatePreferences _preferences = const UpdatePreferences();
@@ -62,6 +64,7 @@ class UpdateController extends ChangeNotifier {
   final Set<String> _bannerShown = {};
   bool _disposed = false;
   bool _launched = false;
+  bool _initialCheckDone = false;
   int _nativeEpoch = 0;
   _InstallPermissionRequest? _installPermissionRequest;
 
@@ -107,11 +110,19 @@ class UpdateController extends ChangeNotifier {
     _notify();
   }
 
+  /// 首次冷启动检查是否仍在等待或进行中，避免缓存公告悬浮条抢先闪现。
+  bool get awaitingInitialCheck => !disabled && _launched && !_initialCheckDone;
+
   /// 每次冷启动静默检查一次，页面重建不重复启动。
   Future<void> onLaunch() async {
     if (_launched) return;
     _launched = true;
-    await check(coldStart: true);
+    try {
+      await check(coldStart: true);
+    } finally {
+      _initialCheckDone = true;
+      _notify();
+    }
   }
 
   /// 权限页或后台返回后恢复任务状态，远程检查仍受六小时节流。
@@ -129,52 +140,92 @@ class UpdateController extends ChangeNotifier {
   }
 
   /// 同时发起的检查共用请求；手动操作绕过自动节流。
-  Future<void> check({bool manual = false, bool coldStart = false}) =>
-      _checking ??= _check(
-        manual: manual,
-        coldStart: coldStart,
-      ).whenComplete(() => _checking = null);
-
-  Future<void> _check({required bool manual, required bool coldStart}) async {
+  Future<void> check({bool manual = false, bool coldStart = false}) async {
     await ensureStarted();
     if (_disposed) return;
     if (disabled) {
-      if (manual) checkError = '检查更新失败';
-      _notify();
+      if (manual) {
+        checkError = '检查更新失败';
+        _notify();
+      }
       return;
     }
+    if (_checkingRequest case final inFlight?) {
+      return inFlight;
+    }
+    if (_shouldThrottle(manual: manual, coldStart: coldStart)) {
+      return;
+    }
+    final request = _performCheck().whenComplete(() {
+      _checkingRequest = null;
+    });
+    _checkingRequest = request;
+    return request;
+  }
+
+  bool _shouldThrottle({required bool manual, required bool coldStart}) {
+    if (manual) return false;
     final now = _now();
+    final lastFailure = _lastFailureAt;
+    if (!coldStart &&
+        lastFailure != null &&
+        !lastFailure.isAfter(now) &&
+        now.difference(lastFailure) < failureCooldown) {
+      return true;
+    }
     final last = _preferences.lastAttempt;
-    if (!manual &&
-        !coldStart &&
+    return !coldStart &&
         last != null &&
         !last.isAfter(now) &&
-        now.difference(last) < checkInterval) {
-      return;
-    }
+        now.difference(last) < checkInterval;
+  }
+
+  Future<void> _performCheck() async {
     checking = true;
     checkError = null;
-    _preferences = UpdatePreferences(
-      lastAttempt: now,
-      readRevision: _preferences.readRevision,
-    );
     _notify();
+    var succeeded = false;
     try {
       await _log.operation('check', () async {
         final release = await api.check();
         if (_disposed) return;
         available = release;
+        actionError = null;
+        succeeded = true;
       });
     } catch (_) {
       // 失败时不继续用旧候选自动弹窗，也不把失败当成“最新版本”。
-      available = null;
-      checkError = '检查更新失败';
+      if (!_disposed) {
+        available = null;
+        checkError = '检查更新失败';
+        _lastFailureAt = _now();
+      }
     } finally {
       checking = false;
-      await _save();
+      if (succeeded && !_disposed) {
+        _lastFailureAt = null;
+        _preferences = UpdatePreferences(
+          lastAttempt: _now(),
+          readRevision: _preferences.readRevision,
+        );
+        await _save();
+      }
       _notify();
     }
   }
+
+  bool get hasActiveTask =>
+      task.hasTask &&
+      (task.status == UpdateTaskStatus.downloading ||
+          task.status == UpdateTaskStatus.verifying ||
+          task.status == UpdateTaskStatus.installing);
+
+  bool get taskSuperseded =>
+      available != null &&
+      task.hasTask &&
+      !hasActiveTask &&
+      (task.status == UpdateTaskStatus.revoked ||
+          task.release?.revision != available!.revision);
 
   bool get shouldPrompt {
     final release = available;
@@ -182,12 +233,19 @@ class UpdateController extends ChangeNotifier {
         release.popupEnabled &&
         !checking &&
         !acting &&
-        !task.hasTask &&
+        (!task.hasTask || taskSuperseded) &&
         !_prompted.contains(release.revision);
   }
 
   /// 显示之前标记本次进程；返回前台不重弹，完全退出后重新提醒。
   void markPrompted(UpdateRelease release) => _prompted.add(release.revision);
+
+  /// 清理最近一次操作错误提示。
+  void clearActionError() {
+    if (actionError == null) return;
+    actionError = null;
+    _notify();
+  }
 
   Future<void> _save() async {
     try {
@@ -205,7 +263,7 @@ class UpdateController extends ChangeNotifier {
 
   bool get shouldShowBanner =>
       hasUnreadAnnouncement &&
-      !task.hasTask &&
+      (!task.hasTask || taskSuperseded) &&
       !_bannerShown.contains(available!.revision);
 
   void markBannerShown() {
@@ -222,7 +280,7 @@ class UpdateController extends ChangeNotifier {
     await _save();
   }
 
-  void _acceptTask(UpdateTask value) {
+  void _acceptTask(UpdateTask value, {bool clearActionError = true}) {
     if (_disposed) return;
     _nativeEpoch++;
     final previous = task;
@@ -250,6 +308,17 @@ class UpdateController extends ChangeNotifier {
       }
     }
     task = value;
+    final stateProgressed =
+        previous.status != value.status ||
+        previous.release?.revision != value.release?.revision;
+    if (clearActionError &&
+        stateProgressed &&
+        (value.status == UpdateTaskStatus.idle ||
+            (value.errorCode == null &&
+                value.status != UpdateTaskStatus.failed &&
+                value.status != UpdateTaskStatus.revoked))) {
+      actionError = null;
+    }
     final permissionRequest = _installPermissionRequest;
     if (permissionRequest != null &&
         !_isReadyRelease(permissionRequest.release)) {
@@ -283,7 +352,12 @@ class UpdateController extends ChangeNotifier {
       _action('download.start_command', () async {
         final release = selected ?? available;
         if (release == null) throw PlatformException(code: 'not_ready');
-        if (task.hasTask) throw PlatformException(code: 'task_exists');
+        if (hasActiveTask ||
+            (task.hasTask &&
+                task.release?.revision == release.revision &&
+                task.status != UpdateTaskStatus.revoked)) {
+          throw PlatformException(code: 'task_exists');
+        }
         await api.validate(release);
         // 通知授权只影响通知展示，不影响下载任务。
         try {
@@ -295,6 +369,7 @@ class UpdateController extends ChangeNotifier {
             stackTrace: stackTrace,
           );
         }
+        _metadata = await metadataProvider();
         _acceptTask(await bridge.start(release, _metadata.headers));
       });
 
@@ -302,7 +377,8 @@ class UpdateController extends ChangeNotifier {
     final release = task.release;
     if (release == null) throw PlatformException(code: 'not_ready');
     await api.validate(release);
-    _acceptTask(await bridge.resume());
+    _metadata = await metadataProvider();
+    _acceptTask(await bridge.resume(_metadata.headers));
   });
 
   Future<void> cancel() {
@@ -387,7 +463,7 @@ class UpdateController extends ChangeNotifier {
       actionError = '此版本已停止分发';
       // 本机任务不能在校验失败后仍保留可点击安装的状态。
       try {
-        _acceptTask(await bridge.cancel());
+        _acceptTask(await bridge.cancel(), clearActionError: false);
       } catch (error, stackTrace) {
         _log.warning(
           'revoked_task.cancel_failed',
@@ -434,9 +510,12 @@ String updateErrorMessage(String? code) => switch (code) {
   'insufficient_space' || 'insufficient_storage' || 'no_space' => '存储空间不足',
   'storage' => '安装包保存失败',
   'foreground_required' || 'foreground_unavailable' => '下载启动失败',
+  'install_foreground_required' => '请回到应用前台后再安装',
   'interrupted' => '下载已中断',
   'install_blocked' => '安装被系统阻止',
   'install_failed' => '安装失败',
+  'incompatible' => '安装包与当前设备或签名不兼容',
+  'invalid_release' => '更新信息无效',
   'invalid_response' => '更新服务响应异常',
   'install_permission_required' || 'install_permission' => '请允许安装此来源的应用',
   'install_cancelled' => '已取消安装',
