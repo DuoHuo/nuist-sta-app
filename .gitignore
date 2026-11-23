@@ -76,7 +76,8 @@ test/failures/
 passkey*.json
 
 # AI 代理的个人本地配置
-.claude/settings.local.json
+!.claude/settings.json
+.claude/*
 CLAUDE.local.md
 .agents/
 # Personal timetable capture — never commit; use kb_lab_tuesday_sample.json / kb_mock.json
