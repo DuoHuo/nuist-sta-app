@@ -86,11 +86,17 @@ class _TimetablePageState extends State<TimetablePage> {
   void _syncViewingListener() {
     final current = _controller;
     if (identical(_attachedViewing, current)) return;
-    _attachedViewing?.removeListener(_syncPageToViewingWeek);
-    _attachedViewing?.removeListener(_queuePendingChangeAlert);
+    _attachedViewing?.viewingWeekListenable.removeListener(
+      _syncPageToViewingWeek,
+    );
+    if (!identical(_attachedViewing, _host)) {
+      _attachedViewing?.removeListener(_syncPageToViewingWeek);
+      _attachedViewing?.removeListener(_queuePendingChangeAlert);
+    }
     _viewingOutcomeSub?.cancel();
     _viewingOutcomeSub = null;
     _attachedViewing = current;
+    current.viewingWeekListenable.addListener(_syncPageToViewingWeek);
     if (!identical(current, _host)) {
       current.addListener(_syncPageToViewingWeek);
       current.addListener(_queuePendingChangeAlert);
@@ -445,8 +451,13 @@ class _TimetablePageState extends State<TimetablePage> {
   void dispose() {
     _outcomeSub?.cancel();
     _viewingOutcomeSub?.cancel();
-    _attachedViewing?.removeListener(_syncPageToViewingWeek);
-    _attachedViewing?.removeListener(_queuePendingChangeAlert);
+    _attachedViewing?.viewingWeekListenable.removeListener(
+      _syncPageToViewingWeek,
+    );
+    if (!identical(_attachedViewing, _host)) {
+      _attachedViewing?.removeListener(_syncPageToViewingWeek);
+      _attachedViewing?.removeListener(_queuePendingChangeAlert);
+    }
     _host.removeListener(_maybeShowSessionExpired);
     _host.removeListener(_onHostChanged);
     _host.removeListener(_queuePendingChangeAlert);
@@ -573,27 +584,33 @@ class _TimetablePageState extends State<TimetablePage> {
                     meta?.name ?? active.settings.scheduleName;
                 return Column(
                   children: [
-                    _TopBar(
-                      week: active.viewingWeek,
-                      isCurrent: active.isViewingCurrentWeek,
-                      endedCurrentWeek: _termEnded ? active.currentWeek : null,
-                      dateLabel: _dateLabel(),
-                      scheduleLabel: scheduleLabel,
-                      weekPending: active.weekPending,
-                      onWeekTap: _openWeekAndSchedulePopup,
-                      onSwitchSchedule: _openWeekAndSchedulePopup,
-                      weekSelectorOpen: _weekStripOpen,
-                      // §14.1：「+」三选一（课程 / 考试 / 其他）；「课程」仍是原手动课表单。
-                      onAdd: () =>
-                          showAddEntrySheet(context, controller: active),
-                      onSync: _manualSync,
-                      syncing:
-                          active.syncStatus == TimetableSyncStatus.syncing ||
-                          (_host.isViewingPrimary &&
-                              _host.syncStatus == TimetableSyncStatus.syncing),
-                      syncError: _showSyncErrorDot,
-                      onSettings: _openSettings,
-                      onExport: _openExport,
+                    ValueListenableBuilder<int>(
+                      valueListenable: active.viewingWeekListenable,
+                      builder: (context, viewingWeek, _) => _TopBar(
+                        week: viewingWeek,
+                        isCurrent: active.isViewingCurrentWeek,
+                        endedCurrentWeek: _termEnded
+                            ? active.currentWeek
+                            : null,
+                        dateLabel: _dateLabel(),
+                        scheduleLabel: scheduleLabel,
+                        weekPending: active.weekPending,
+                        onWeekTap: _openWeekAndSchedulePopup,
+                        onSwitchSchedule: _openWeekAndSchedulePopup,
+                        weekSelectorOpen: _weekStripOpen,
+                        // §14.1：「+」三选一（课程 / 考试 / 其他）；「课程」仍是原手动课表单。
+                        onAdd: () =>
+                            showAddEntrySheet(context, controller: active),
+                        onSync: _manualSync,
+                        syncing:
+                            active.syncStatus == TimetableSyncStatus.syncing ||
+                            (_host.isViewingPrimary &&
+                                _host.syncStatus ==
+                                    TimetableSyncStatus.syncing),
+                        syncError: _showSyncErrorDot,
+                        onSettings: _openSettings,
+                        onExport: _openExport,
+                      ),
                     ),
                     Expanded(
                       // 只有日程（考试 / 其他）没有课程时也显示周视图。

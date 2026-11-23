@@ -125,14 +125,19 @@ void main() {
       expect(outcomes.single.automatic, isFalse);
       expect(c.lastSyncOutcome?.success, isTrue);
 
-      var notified = 0;
-      void listener() => notified++;
-      c.addListener(listener);
+      var weekNotified = 0;
+      var controllerNotified = 0;
+      void weekListener() => weekNotified++;
+      void controllerListener() => controllerNotified++;
+      c.viewingWeekListenable.addListener(weekListener);
+      c.addListener(controllerListener);
       c.jumpToCurrentWeek();
-      c.removeListener(listener);
+      c.viewingWeekListenable.removeListener(weekListener);
+      c.removeListener(controllerListener);
       expect(c.viewingWeek, 2);
       expect(c.isViewingCurrentWeek, isTrue);
-      expect(notified, 1);
+      expect(weekNotified, 1);
+      expect(controllerNotified, 0);
       await sub.cancel();
     });
 

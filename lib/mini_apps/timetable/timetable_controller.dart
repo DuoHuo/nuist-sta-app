@@ -310,7 +310,7 @@ class TimetableController extends ChangeNotifier {
   bool get isInitialized => _initialized;
 
   TimetableSnapshot _snapshot = const TimetableSnapshot();
-  int _viewingWeek = 1;
+  final _viewingWeekNotifier = _ViewingWeekNotifier(1);
 
   /// 上次 [followCurrentWeekIfChanged] 观察到的 [currentWeek]。
   /// 变了才把 [viewingWeek] 拉回本周；同周内手动翻周不打断。
@@ -606,28 +606,32 @@ class TimetableController extends ChangeNotifier {
       daySwaps: daySwaps,
       dateEdits: dateEdits,
     );
-    final payloads = <String, Object?>{};
-    for (var offset = 0; offset < 400; offset++) {
-      final eve = DateTime(today.year, today.month, today.day + offset);
-      final tomorrow = DateTime(eve.year, eve.month, eve.day + 1);
-      final week = helper.actualWeek(tomorrow);
-      if (week == null) break;
-      final outsideTerm = week < 1 || week > totalWeeks;
-      final payload = buildNextDayReminder(
-        tomorrow: tomorrow,
-        courses: outsideTerm ? const [] : helper.coursesOnDate(tomorrow),
-        periods: helper.periods,
-        startTimeOf: (item) =>
-            helper.timeForSlot(item.course, item.slot, date: tomorrow).start,
-        loggedIn: loggedIn,
-        hasCache: true,
-        outsideTerm: outsideTerm,
-      );
-      if (payload != null) {
-        payloads[nextDayReminderDateKey(eve)] = payload.toJson();
+    try {
+      final payloads = <String, Object?>{};
+      for (var offset = 0; offset < 400; offset++) {
+        final eve = DateTime(today.year, today.month, today.day + offset);
+        final tomorrow = DateTime(eve.year, eve.month, eve.day + 1);
+        final week = helper.actualWeek(tomorrow);
+        if (week == null) break;
+        final outsideTerm = week < 1 || week > totalWeeks;
+        final payload = buildNextDayReminder(
+          tomorrow: tomorrow,
+          courses: outsideTerm ? const [] : helper.coursesOnDate(tomorrow),
+          periods: helper.periods,
+          startTimeOf: (item) =>
+              helper.timeForSlot(item.course, item.slot, date: tomorrow).start,
+          loggedIn: loggedIn,
+          hasCache: true,
+          outsideTerm: outsideTerm,
+        );
+        if (payload != null) {
+          payloads[nextDayReminderDateKey(eve)] = payload.toJson();
+        }
       }
+      return payloads;
+    } finally {
+      helper.dispose();
     }
-    return payloads;
   }
 
   final StreamController<TimetableSyncOutcome> _syncOutcomes =
@@ -1035,7 +1039,10 @@ class TimetableController extends ChangeNotifier {
 
   /// 课程变动后把浏览周钳回 1..totalWeeks（页面无需自行处理）。
   void _clampViewingWeek() {
-    _viewingWeek = _viewingWeek.clamp(1, totalWeeks);
+    _viewingWeekNotifier.value = _viewingWeekNotifier.value.clamp(
+      1,
+      totalWeeks,
+    );
   }
 
   /// 每学期固定的总周数。
@@ -1131,7 +1138,11 @@ class TimetableController extends ChangeNotifier {
   /// 构造下一次设置编辑时使用的基线，包含排队中的选择。
   /// 展示、配色及提醒排程读取 [settings]，只使用已成功保存的状态。
   TimetableSettings get settingsForEditing => _pendingSettings ?? settings;
-  int get viewingWeek => _viewingWeek;
+
+  /// 当前浏览周次的独立可监听对象；仅切换浏览周时通知，不唤醒监听整棵控制器的组件。
+  ValueListenable<int> get viewingWeekListenable => _viewingWeekNotifier;
+
+  int get viewingWeek => _viewingWeekNotifier.value;
   bool get loading => _loading;
   String? get statusMessage => _statusMessage;
   bool get portalBound => _portalBound;
@@ -1180,21 +1191,21 @@ class TimetableController extends ChangeNotifier {
   /// 打开课表时默认浏览的周：本周，钳到 1..totalWeeks。
   int get _defaultViewingWeek => currentWeek.clamp(1, totalWeeks);
 
-  bool get isViewingCurrentWeek => _viewingWeek == currentWeek;
+  bool get isViewingCurrentWeek => _viewingWeekNotifier.value == currentWeek;
 
   /// 若 [currentWeek] 相对上次检查已变（改系统日期 / 跨周 / App 回前台），
   /// 把 [viewingWeek] 跳到 [_defaultViewingWeek]（本周，钳到 1..totalWeeks）。
   /// 同一本周内用户手动翻周不打断。返回是否改了 viewingWeek。
   ///
   /// 打开周课表、[onAppResumed] 时调用；PageView 由页面监听
-  /// [setViewingWeek] 的 notify 对齐页码。
+  /// [viewingWeekListenable] 对齐页码。
   bool followCurrentWeekIfChanged() {
     final week = currentWeek;
     final prev = _lastSeenCurrentWeek;
     if (prev == week) return false;
     _lastSeenCurrentWeek = week;
     final target = _defaultViewingWeek;
-    if (_viewingWeek == target) return false;
+    if (_viewingWeekNotifier.value == target) return false;
     setViewingWeek(target);
     return true;
   }
@@ -1275,9 +1286,9 @@ class TimetableController extends ChangeNotifier {
         // 保留内存中可用的固定色，下次启动仍可补写。
       }
     }
-    _viewingWeek = _defaultViewingWeek;
     _lastSeenCurrentWeek = currentWeek;
     _lastSeenDate = _today;
+    _viewingWeekNotifier.value = _defaultViewingWeek;
     final preloadedChanges = _preloadedSyncChangesRaw;
     _preloadedSyncChangesRaw = null;
     if (_snapshot.syncedAt != null || _snapshot.courses.isNotEmpty) {
@@ -1475,9 +1486,8 @@ class TimetableController extends ChangeNotifier {
 
   void setViewingWeek(int week) {
     final clamped = week.clamp(1, totalWeeks);
-    if (clamped == _viewingWeek) return;
-    _viewingWeek = clamped;
-    notifyListeners();
+    if (clamped == _viewingWeekNotifier.value) return;
+    _viewingWeekNotifier.value = clamped;
   }
 
   void goToCurrentWeek() => setViewingWeek(currentWeek);
@@ -1485,7 +1495,7 @@ class TimetableController extends ChangeNotifier {
   /// 课表页退出时清除临时浏览周，下一次进入从本周开始。
   /// 不通知正在退出或销毁的页面，避免退出动画跳周及卸载时重建。
   void clearViewingWeek() {
-    _viewingWeek = _defaultViewingWeek;
+    _viewingWeekNotifier.setSilent(_defaultViewingWeek);
     _lastSeenCurrentWeek = currentWeek;
   }
 
@@ -1886,7 +1896,7 @@ class TimetableController extends ChangeNotifier {
               : '2026-2027-1';
           final previous = settings;
           // SW01：记下同步前浏览周与是否在看本周。
-          final viewingWeekBeforeSync = _viewingWeek;
+          final viewingWeekBeforeSync = viewingWeek;
           final wasOnCurrentWeek = isViewingCurrentWeek;
           var snapshot = await fetchSnapshot(
             term,
@@ -2027,19 +2037,20 @@ class TimetableController extends ChangeNotifier {
           // SW01（§13.10）：同步成功后停留在正在看的周（只钳到 1..totalWeeks）。
           // 同步期间未手动切周，且（同步前就在看本周 / 之前无开学日 / 从已知旧学期切到新学期）
           // 时才跟到新的本周；不再调用 followCurrentWeekIfChanged，避免把非当前周拉回本周。
-          final switchedDuringSync = _viewingWeek != viewingWeekBeforeSync;
+          final switchedDuringSync = viewingWeek != viewingWeekBeforeSync;
           final termChanged =
               previous.termCode.isNotEmpty &&
               previous.termCode != _snapshot.settings.termCode;
+          _lastSeenCurrentWeek = currentWeek;
           if (!switchedDuringSync &&
               (wasOnCurrentWeek ||
                   previous.termStartDate == null ||
                   termChanged)) {
-            _viewingWeek = _defaultViewingWeek; // 已钳到 1..totalWeeks
+            _viewingWeekNotifier.value =
+                _defaultViewingWeek; // 已钳到 1..totalWeeks
           } else {
             _clampViewingWeek();
           }
-          _lastSeenCurrentWeek = currentWeek;
           // 教务优先（jwxt §3.2）：原课被删、SKZC 与 origWeeks 不同（含缺 origWeeks
           // 的旧记录）、或原时段星期/节次变了 → 删掉记录，显示教务数据。其余保留。
           // 只在同步成功这里比较；解绑不删。
@@ -2244,10 +2255,10 @@ class TimetableController extends ChangeNotifier {
     _colorMap = null;
     _started = true;
     _initialized = true;
-    _viewingWeek = viewingWeek ?? _defaultViewingWeek;
     _lastSeenCurrentWeek = currentWeek;
     _lastSeenDate = _today;
     _scheduleVersion++;
+    _viewingWeekNotifier.value = viewingWeek ?? _defaultViewingWeek;
     notifyListeners();
   }
 
@@ -2257,6 +2268,7 @@ class TimetableController extends ChangeNotifier {
     lastSyncDiff = null;
     _pendingChangeAlerts.clear();
     _changeAlertRevision++;
+    _viewingWeekNotifier.setSilent(1);
     _lastSeenCurrentWeek = null;
     _lastSeenDate = null;
     _scheduleVersion++;
@@ -2632,7 +2644,8 @@ class TimetableController extends ChangeNotifier {
         host.scheduleMetaOf(scheduleId) == null) {
       return;
     }
-    if (host._primaryScheduleId != scheduleId) {
+    final primaryChanged = host._primaryScheduleId != scheduleId;
+    if (primaryChanged) {
       host._primaryScheduleId = scheduleId;
       host._schedulesIndex = host._schedulesIndex.copyWith(
         primaryScheduleId: scheduleId,
@@ -2643,10 +2656,12 @@ class TimetableController extends ChangeNotifier {
       await host._reloadFromDisk();
       host._colorMap = null;
       await host._loadColorMap();
-      host._viewingWeek = host._defaultViewingWeek;
       host._lastSeenCurrentWeek = host.currentWeek;
     }
     host._viewingScheduleId = scheduleId;
+    if (primaryChanged) {
+      host._viewingWeekNotifier.value = host._defaultViewingWeek;
+    }
     host.notifyListeners();
     host._fireScheduleChanged(ScheduleChangeReason.settings);
   }
@@ -2733,8 +2748,8 @@ class TimetableController extends ChangeNotifier {
       await host._reloadFromDisk();
       host._colorMap = null;
       await host._loadColorMap();
-      host._viewingWeek = host._defaultViewingWeek;
       host._lastSeenCurrentWeek = host.currentWeek;
+      host._viewingWeekNotifier.value = host._defaultViewingWeek;
       host._fireScheduleChanged(ScheduleChangeReason.settings);
     }
     host.notifyListeners();
@@ -4925,7 +4940,7 @@ class TimetableController extends ChangeNotifier {
     final dateChanged = _lastSeenDate != null && _lastSeenDate != today;
     _lastSeenDate = today;
     final weekChanged = followCurrentWeekIfChanged();
-    if (dateChanged && !weekChanged) {
+    if (dateChanged) {
       notifyListeners();
     }
     if (dateChanged || weekChanged) {
@@ -5528,7 +5543,7 @@ class TimetableController extends ChangeNotifier {
       final i = _indexOfEqualSlot(course.slots, cell.slot, -1);
       return i < 0
           ? null
-          : (course: course, slotIndex: i, week: week ?? _viewingWeek);
+          : (course: course, slotIndex: i, week: week ?? viewingWeek);
     }
     final baseDate = swapPartnerIn(_daySwaps, key.date) ?? key.date;
     final w = _weekOfDate(baseDate);
@@ -6319,6 +6334,33 @@ class TimetableController extends ChangeNotifier {
     final m = int.tryParse(parts[1]);
     if (h == null || m == null) return null;
     return DateTime(day.year, day.month, day.day, h, m);
+  }
+
+  @override
+  void dispose() {
+    _viewingWeekNotifier.dispose();
+    super.dispose();
+  }
+}
+
+/// 浏览周次独立通知器：写入 [value] 仅通知周次监听方，[setSilent] 供退出清理与测试重置静默写回。
+class _ViewingWeekNotifier extends ValueNotifier<int> {
+  _ViewingWeekNotifier(super.value) : _current = value;
+
+  int _current;
+
+  @override
+  int get value => _current;
+
+  @override
+  set value(int newValue) {
+    if (_current == newValue) return;
+    _current = newValue;
+    notifyListeners();
+  }
+
+  void setSilent(int newValue) {
+    _current = newValue;
   }
 }
 
