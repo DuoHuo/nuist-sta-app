@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -129,6 +130,10 @@ class _AboutPageState extends State<AboutPage> {
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
+    final iconCacheSize = math.max(
+      1,
+      (72 * MediaQuery.devicePixelRatioOf(context)).round(),
+    );
     return Scaffold(
       appBar: AppBar(title: const Text('关于')),
       body: ListView(
@@ -141,6 +146,8 @@ class _AboutPageState extends State<AboutPage> {
                 'assets/images/app_icon.png',
                 width: 72,
                 height: 72,
+                cacheWidth: iconCacheSize,
+                cacheHeight: iconCacheSize,
                 semanticLabel: '$kAppName 图标',
               ),
             ),

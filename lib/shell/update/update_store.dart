@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
+import '../../core/app_directories.dart';
 import '../../core/logging/app_log.dart';
 
 /// 只持久化检查时间与已读修订；稍后提醒仅在当前进程生效。
@@ -36,7 +35,7 @@ class UpdateStore {
   static Future<void> _writing = Future.value();
 
   static Future<File> _file() async {
-    final base = await getApplicationSupportDirectory();
+    final base = await AppDirectories.applicationSupport();
     final dir = Directory('${base.path}/updates');
     await dir.create(recursive: true);
     return File('${dir.path}/preferences.json');

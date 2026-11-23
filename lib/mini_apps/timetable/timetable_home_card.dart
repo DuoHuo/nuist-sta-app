@@ -491,122 +491,125 @@ class _CourseRow extends StatelessWidget {
       child: Padding(
         // spec-next-1020b：项内上下 8、项间距 2（bottom 含间距）。
         padding: const EdgeInsets.fromLTRB(0, 8, 0, 2),
-        // 色条随内容高度伸缩（不固定高度）：课名 / 地点换行时整行变高。
-        child: IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                width: 3,
-                margin: const EdgeInsets.symmetric(vertical: 2),
+        // 色条随内容高度伸缩（单遍 Stack 布局，避免 IntrinsicHeight 双遍测量）：
+        // 左侧 3dp 色条（上下各缩进 2dp）+ 8dp 间距 = 11dp，右侧内容随换行增高。
+        child: Stack(
+          children: [
+            Positioned(
+              left: 0,
+              top: 2,
+              bottom: 2,
+              width: 3,
+              child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: done ? colors.divider : color,
                   borderRadius: BorderRadius.circular(1.5),
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(minHeight: 40),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // 长课名换行显示，不截断；实验课轻标「实验」提示压缩课间规则。
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              courseDisplayName(
-                                course: item.course,
-                                slot: item.slot,
-                              ),
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                height: 1.2,
-                                color: fg,
-                              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 11),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minWidth: double.infinity,
+                  minHeight: 40,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // 长课名换行显示，不截断；实验课轻标「实验」提示压缩课间规则。
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            courseDisplayName(
+                              course: item.course,
+                              slot: item.slot,
+                            ),
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              height: 1.2,
+                              color: fg,
                             ),
                           ),
-                          if (isLab) ...[
-                            const SizedBox(width: 6),
-                            SchedulePill(
-                              key: const Key('home_course_lab_pill'),
-                              text: '实验',
-                              color: done
-                                  ? colors.hint
-                                  : TimetableTheme.readableCellText(
-                                      colors.surface,
-                                      pair.fg,
-                                    ),
-                            ),
-                          ],
+                        ),
+                        if (isLab) ...[
+                          const SizedBox(width: 6),
+                          SchedulePill(
+                            key: const Key('home_course_lab_pill'),
+                            text: '实验',
+                            color: done
+                                ? colors.hint
+                                : TimetableTheme.readableCellText(
+                                    colors.surface,
+                                    pair.fg,
+                                  ),
+                          ),
                         ],
-                      ),
-                      // item 2：课名与第二行间距 2。
-                      const SizedBox(height: 2),
-                      // item 13：时间 · 节次 / 地点 / 老师各一行，长文本换行、不截断；
-                      // 地点、老师为空时不占行。
+                      ],
+                    ),
+                    // item 2：课名与第二行间距 2。
+                    const SizedBox(height: 2),
+                    // item 13：时间 · 节次 / 地点 / 老师各一行，长文本换行、不截断；
+                    // 地点、老师为空时不占行。
+                    Text(
+                      timeLine,
+                      key: const Key('home_course_time'),
+                      style: subStyle,
+                    ),
+                    if (item.slot.location.isNotEmpty)
                       Text(
-                        timeLine,
-                        key: const Key('home_course_time'),
+                        item.slot.location,
+                        key: const Key('home_course_location'),
                         style: subStyle,
                       ),
-                      if (item.slot.location.isNotEmpty)
-                        Text(
-                          item.slot.location,
-                          key: const Key('home_course_location'),
-                          style: subStyle,
+                    if (item.slot.teacher.isNotEmpty)
+                      Text(
+                        item.slot.teacher,
+                        key: const Key('home_course_teacher'),
+                        style: subStyle,
+                      ),
+                    if (item.status == TodayCourseStatus.ongoing) ...[
+                      const SizedBox(height: 2),
+                      // item 4：「上课中·还剩 N 分钟」+ 2dp 主色进度条（已过去的比例）。
+                      Text(
+                        remaining == null
+                            ? '上课中'
+                            : formatClassRemaining(remaining),
+                        key: const Key('home_course_remaining'),
+                        style: TimetableTheme.microStyle(color: colors.accent),
+                      ),
+                      const SizedBox(height: 3),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(1),
+                        child: LinearProgressIndicator(
+                          key: const Key('home_course_progress'),
+                          value: (item.progress ?? 0).clamp(0.0, 1.0),
+                          minHeight: 2,
+                          backgroundColor: colors.divider,
+                          color: colors.accent,
                         ),
-                      if (item.slot.teacher.isNotEmpty)
-                        Text(
-                          item.slot.teacher,
-                          key: const Key('home_course_teacher'),
-                          style: subStyle,
-                        ),
-                      if (item.status == TodayCourseStatus.ongoing) ...[
-                        const SizedBox(height: 2),
-                        // item 4：「上课中·还剩 N 分钟」+ 2dp 主色进度条（已过去的比例）。
-                        Text(
-                          remaining == null
-                              ? '上课中'
-                              : formatClassRemaining(remaining),
-                          key: const Key('home_course_remaining'),
+                      ),
+                    ],
+                    if (item.status == TodayCourseStatus.upcoming &&
+                        item.minutesUntilStart != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          formatClassCountdown(item.minutesUntilStart!),
+                          key: const Key('home_course_countdown'),
                           style: TimetableTheme.microStyle(
                             color: colors.accent,
                           ),
                         ),
-                        const SizedBox(height: 3),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(1),
-                          child: LinearProgressIndicator(
-                            key: const Key('home_course_progress'),
-                            value: (item.progress ?? 0).clamp(0.0, 1.0),
-                            minHeight: 2,
-                            backgroundColor: colors.divider,
-                            color: colors.accent,
-                          ),
-                        ),
-                      ],
-                      if (item.status == TodayCourseStatus.upcoming &&
-                          item.minutesUntilStart != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: Text(
-                            formatClassCountdown(item.minutesUntilStart!),
-                            key: const Key('home_course_countdown'),
-                            style: TimetableTheme.microStyle(
-                              color: colors.accent,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
+                      ),
+                  ],
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

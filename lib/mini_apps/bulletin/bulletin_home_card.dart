@@ -32,16 +32,39 @@ class _BulletinHomeCardState extends State<BulletinHomeCard>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_controller.ensureStarted());
-    _refreshTimer = Timer.periodic(
-      const Duration(minutes: 15),
-      (_) => _refreshIfEnabled(),
-    );
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _isForeground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    if (_isForeground) _startRefreshTimer();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _isForeground = state == AppLifecycleState.resumed;
-    if (_isForeground) _refreshIfEnabled();
+    switch (state) {
+      case AppLifecycleState.resumed:
+        final wasForeground = _isForeground;
+        _isForeground = true;
+        _startRefreshTimer();
+        if (!wasForeground) _refreshIfEnabled();
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        _isForeground = false;
+        _stopRefreshTimer();
+      case AppLifecycleState.inactive:
+        _isForeground = false;
+    }
+  }
+
+  void _startRefreshTimer() {
+    _refreshTimer ??= Timer.periodic(
+      BulletinController.automaticRefreshInterval,
+      (_) => _refreshIfEnabled(),
+    );
+  }
+
+  void _stopRefreshTimer() {
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
   }
 
   void _refreshIfEnabled() {
@@ -52,7 +75,7 @@ class _BulletinHomeCardState extends State<BulletinHomeCard>
 
   @override
   void dispose() {
-    _refreshTimer?.cancel();
+    _stopRefreshTimer();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

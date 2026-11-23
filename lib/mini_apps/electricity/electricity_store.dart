@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
+import '../../core/app_directories.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/refresh/silent_refresh.dart';
 import 'electricity_models.dart';
@@ -25,7 +24,7 @@ class ElectricityStore {
 
   static Future<Directory?> _dir() async {
     try {
-      final base = await getApplicationDocumentsDirectory();
+      final base = await AppDirectories.applicationDocuments();
       final dir = Directory('${base.path}${Platform.pathSeparator}electricity');
       if (!await dir.exists()) await dir.create(recursive: true);
       return dir;

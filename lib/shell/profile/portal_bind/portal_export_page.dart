@@ -3,10 +3,10 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../../core/app_directories.dart';
 import '../../../core/app_snack_bar.dart';
 import '../../../core/auth/passkey_bundle.dart';
 import '../../../core/auth/passkey_store.dart';
@@ -97,7 +97,7 @@ class _PortalExportPageState extends State<PortalExportPage> {
     var stage = 'passkey.export.file';
     try {
       await _log.operation('file.share', () async {
-        final dir = await getTemporaryDirectory();
+        final dir = await AppDirectories.temporary();
         final now = DateTime.now();
         String two(int n) => n.toString().padLeft(2, '0');
         final stamp = '${now.year}${two(now.month)}${two(now.day)}';

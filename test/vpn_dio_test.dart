@@ -1573,14 +1573,37 @@ void main() {
     await native.controller.close();
   });
 
-  test('真实 Rust ABI可加载且拒绝不完整配置', () async {
-    final native = VpnNative();
-    expect((await native.call({'method': 'version'}))['abi'], 2);
+  test('真实 Rust FFI 支持多个实例并发调用与错误回调', () async {
+    const first = VpnNative();
+    const second = VpnNative();
+    final versions = await Future.wait([
+      first.call({'method': 'version'}),
+      second.call({'method': 'version'}),
+    ]);
+    expect(versions.map((response) => response['abi']), everyElement(2));
     await expectLater(
-      native.call({'method': 'start'}),
+      first.call({'method': 'start'}),
       throwsA(isA<SocketException>()),
     );
+    expect((await second.call({'method': 'version'}))['abi'], 2);
   }, skip: const String.fromEnvironment('VPN_NATIVE_LIBRARY').isEmpty);
+
+  test('VPN 原生主动状态事件广播给所有共享网关订阅者', () async {
+    const first = VpnNative();
+    const second = VpnNative();
+    final firstEvent = first.events.first;
+    final secondEvent = second.events.first;
+    const event = <String, dynamic>{
+      'engineId': 42,
+      'event': 'draining',
+      'reason': 'remote_fin',
+    };
+
+    VpnNative.debugPublishEventForTesting(event);
+
+    expect(await firstEvent, event);
+    expect(await secondEvent, event);
+  });
 
   for (final method in ['GET', 'POST', 'WRITE', 'FAIL']) {
     test('VPN断连：$method按幂等声明恢复并最多重放一次', () async {

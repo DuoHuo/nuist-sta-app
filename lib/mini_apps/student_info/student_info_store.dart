@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
+import '../../core/app_directories.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/refresh/silent_refresh.dart';
 import 'student_info_models.dart';
@@ -17,7 +16,7 @@ class StudentInfoStore {
 
   static Future<File?> _resolve({bool createDirectory = false}) async {
     try {
-      final base = await getApplicationDocumentsDirectory();
+      final base = await AppDirectories.applicationDocuments();
       final dir = Directory(
         '${base.path}${Platform.pathSeparator}student_info',
       );

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -290,6 +291,10 @@ class _BuiltinCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     final border = selected ? palette.accent : palette.divider;
+    final iconCacheSize = math.max(
+      1,
+      (64 * MediaQuery.devicePixelRatioOf(context)).round(),
+    );
     return Semantics(
       selected: selected,
       button: true,
@@ -318,6 +323,8 @@ class _BuiltinCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(16),
                         child: Image.asset(
                           choice.assetPath,
+                          cacheWidth: iconCacheSize,
+                          cacheHeight: iconCacheSize,
                           fit: BoxFit.cover,
                           filterQuality: FilterQuality.medium,
                           errorBuilder: (_, _, _) => ColoredBox(

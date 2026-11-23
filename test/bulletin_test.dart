@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_directories.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/core/config/campus_config.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_api.dart';
@@ -16,7 +17,7 @@ import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_store.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_tagger.dart';
 
 void main() {
-  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  TestWidgetsFlutterBinding.ensureInitialized();
 
   test('默认无状态Dio按标准拦截器跟随官网重定向并保留最终地址', () async {
     final adapter = _RedirectBulletinAdapter((options) {
@@ -506,21 +507,15 @@ void main() {
   });
 
   group('公告附件下载文件名', () {
-    const channel = MethodChannel('plugins.flutter.io/path_provider');
     late Directory directory;
 
     setUp(() async {
       directory = await Directory.systemTemp.createTemp('bulletin-test-');
-      binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
-        call,
-      ) async {
-        if (call.method == 'getTemporaryDirectory') return directory.path;
-        return null;
-      });
+      AppDirectories.overrideForTesting(temporary: () async => directory);
     });
 
     tearDown(() async {
-      binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+      AppDirectories.resetForTesting();
       await directory.delete(recursive: true);
     });
 

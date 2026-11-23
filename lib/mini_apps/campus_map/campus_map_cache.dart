@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../../core/app_directories.dart';
 import '../../core/logging/app_log.dart';
 import 'campus_map_source.dart';
 
@@ -14,7 +14,7 @@ class CampusMapCache {
   static final _log = AppLog.logger('campus_map.store');
 
   Future<File> _file(String key) async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await AppDirectories.applicationDocuments();
     return File('${dir.path}/campus_map_snapshot_$key.json');
   }
 

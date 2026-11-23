@@ -36,7 +36,17 @@ class _PullToRefreshState extends State<PullToRefresh> {
 
   /// 当前拖拽距离；null 表示没在下拉。
   double? _drag;
+
+  /// 当前下拉进度（0..1）；仅驱动顶部指示器局部重绘，避免拖拽期间整页重建。
+  final ValueNotifier<double> _progress = ValueNotifier<double>(0.0);
   bool _refreshing = false;
+
+  void _setDrag(double? value) {
+    _drag = value;
+    _progress.value = value == null || value <= 0
+        ? 0.0
+        : (value / _threshold).clamp(0.0, 1.0);
+  }
 
   bool _handleScroll(ScrollNotification n) {
     if (n.depth != 0 || n.metrics.axis != Axis.vertical || _refreshing) {
@@ -56,8 +66,8 @@ class _PullToRefreshState extends State<PullToRefresh> {
               (n.scrollDelta ?? 0) < 0);
       if (pullingDown) {
         _detachListDrag(n);
-        setState(
-          () => _drag = n is OverscrollNotification
+        _setDrag(
+          n is OverscrollNotification
               ? -n.overscroll
               : -(n as ScrollUpdateNotification).scrollDelta!,
         );
@@ -94,14 +104,14 @@ class _PullToRefreshState extends State<PullToRefresh> {
   void _handlePointerMove(PointerMoveEvent e) {
     final drag = _drag;
     if (drag == null) return;
-    setState(() => _drag = math.max(0, drag + e.delta.dy));
+    _setDrag(math.max(0.0, drag + e.delta.dy));
   }
 
   /// 松手：仍超过阈值才刷新，否则视为取消。
   void _handlePointerEnd(PointerEvent e) {
     final drag = _drag;
     if (drag == null) return;
-    setState(() => _drag = null);
+    _setDrag(null);
     if (drag >= _threshold) _indicatorKey.currentState?.show();
   }
 
@@ -126,14 +136,19 @@ class _PullToRefreshState extends State<PullToRefresh> {
   }
 
   @override
+  void dispose() {
+    _progress.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final drag = _drag;
-    final progress = drag == null ? 0.0 : (drag / _threshold).clamp(0.0, 1.0);
+    final palette = AppPalette.of(context);
     return Stack(
       children: [
         RefreshIndicator(
           key: _indicatorKey,
-          color: AppColors.accent,
+          color: palette.accent,
           // 拖拽由本组件自己判断，内部指示器只负责刷新动画。
           notificationPredicate: (_) => false,
           onRefresh: _refresh,
@@ -150,25 +165,35 @@ class _PullToRefreshState extends State<PullToRefresh> {
             ),
           ),
         ),
-        if (drag != null && drag > 0)
-          Positioned(
-            top: -40 + 80 * progress,
-            left: 0,
-            right: 0,
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: RepaintBoundary(
             child: IgnorePointer(
-              child: Center(
-                child: Opacity(
-                  opacity: progress,
-                  child: RefreshProgressIndicator(
-                    // 未到阈值时转圈不满，到阈值后完整，松手即刷新。
-                    value: progress >= 1 ? 1 : progress * 0.8,
-                    color: AppColors.accent,
-                    semanticsLabel: progress >= 1 ? '松手刷新' : '下拉刷新',
-                  ),
-                ),
+              child: ValueListenableBuilder<double>(
+                valueListenable: _progress,
+                builder: (context, progress, _) {
+                  if (progress <= 0) return const SizedBox.shrink();
+                  final accent = AppPalette.of(context).accent;
+                  return Transform.translate(
+                    offset: Offset(0, -40 + 80 * progress),
+                    child: Center(
+                      child: RefreshProgressIndicator(
+                        // 未到阈值时转圈不满，到阈值后完整，松手即刷新；
+                        // 通过颜色 alpha 与阴影梯度淡入，避免外层 Opacity 触发离屏 saveLayer。
+                        value: progress >= 1 ? 1 : progress * 0.8,
+                        color: accent.withValues(alpha: progress),
+                        elevation: 2.0 * progress,
+                        semanticsLabel: progress >= 1 ? '松手刷新' : '下拉刷新',
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
           ),
+        ),
       ],
     );
   }

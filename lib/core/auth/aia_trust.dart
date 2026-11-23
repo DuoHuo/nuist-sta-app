@@ -6,8 +6,8 @@ import 'dart:typed_data';
 import 'package:asn1lib/asn1lib.dart';
 import 'package:pointycastle/digests/sha256.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
-import 'package:path_provider/path_provider.dart';
 
+import '../app_directories.dart';
 import '../logging/app_log.dart';
 import 'portal_http.dart';
 
@@ -28,7 +28,7 @@ class AiaTrust {
   /// CAS、VPN 引导与校园业务共用同一证书缓存和信任上下文。
   static final shared = AiaTrust(resolveCacheDir: _sharedCacheDir);
   static Future<Directory?> _sharedCacheDir() async {
-    final base = await getApplicationSupportDirectory();
+    final base = await AppDirectories.applicationSupport();
     return Directory('${base.path}${Platform.pathSeparator}aia_certs');
   }
 
@@ -45,8 +45,7 @@ class AiaTrust {
   final bool _withTrustedRoots;
   final DateTime Function() _now;
 
-  /// 取中间证书的磁盘缓存目录；不给或返回 null 表示不缓存。做成回调是因为
-  /// 目录要问平台（path_provider），而本类要保持纯 Dart 可在桌面直接跑。
+  /// 取中间证书的磁盘缓存目录；不给或返回 null 表示不缓存。
   final Future<Directory?> Function()? resolveCacheDir;
   Future<Directory?>? _cacheDir;
 

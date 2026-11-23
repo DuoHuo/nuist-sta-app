@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../logging/diagnostic_error.dart';
 import 'vpn_log.dart';
 
@@ -99,6 +101,12 @@ class VpnNative {
 
   /// 原生状态推送。订阅不会加载动态库，首次控制调用才初始化。
   Stream<Map<String, dynamic>> get events => _events.stream;
+
+  /// 测试用：模拟原生主动推送的事件，验证所有订阅者共享事件流。
+  @visibleForTesting
+  static void debugPublishEventForTesting(Map<String, dynamic> event) {
+    _events.add(event);
+  }
 
   static void _received(Pointer<Uint8> pointer, int length, int requestId) {
     final pending = requestId == 0 ? null : _pending.remove(requestId);

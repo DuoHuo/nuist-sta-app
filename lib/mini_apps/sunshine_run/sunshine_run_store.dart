@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../../core/app_directories.dart';
 import '../../core/logging/app_log.dart';
 import 'sunshine_run_models.dart';
 
@@ -47,7 +47,7 @@ class SunshineRunStore {
     if (override != null) {
       directory = override;
     } else {
-      final base = await getApplicationDocumentsDirectory();
+      final base = await AppDirectories.applicationDocuments();
       directory = Directory(
         '${base.path}${Platform.pathSeparator}sunshine_run',
       );

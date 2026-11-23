@@ -121,7 +121,7 @@ double _contrast(Color a, Color b) {
 }
 
 void main() {
-  testWidgets('冷首屏不布局屏外夜课，滚动后完整显示且返回顶部恢复早课', (tester) async {
+  testWidgets('垂直滚动复用静态 RepaintBoundary 图层，不重建或重绘早/夜课程格且可正常点击', (tester) async {
     tester.view.physicalSize = const Size(360, 320);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -140,19 +140,117 @@ void main() {
         ],
       ),
     );
-    await _pumpGrid(tester);
-    expect(_cell('首屏早课'), findsOneWidget);
-    expect(_cell('完整屏外夜课'), findsNothing);
-    await tester.drag(
-      find.byType(SingleChildScrollView),
-      const Offset(0, -650),
+    final tapped = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: WeekGrid(
+            key: const ValueKey(_week),
+            week: _week,
+            controller: _c,
+            onCourseTap: (cell) => tapped.add(cell.course.id),
+          ),
+        ),
+      ),
     );
-    await tester.pumpAndSettle();
-    expect(_cell('完整屏外夜课'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-    await tester.drag(find.byType(SingleChildScrollView), const Offset(0, 650));
-    await tester.pumpAndSettle();
+    await tester.pump();
     expect(_cell('首屏早课'), findsOneWidget);
+    expect(_cell('完整屏外夜课'), findsOneWidget);
+
+    final morningWidget = tester.widget<CourseCell>(_cell('首屏早课'));
+    final nightWidget = tester.widget<CourseCell>(_cell('完整屏外夜课'));
+    final morningElement = tester.element(_cell('首屏早课'));
+    final nightElement = tester.element(_cell('完整屏外夜课'));
+    final staticBoundary = tester.renderObject<RenderRepaintBoundary>(
+      find.byKey(const Key('week_grid_static_layer')),
+    );
+    final staticGrid = staticBoundary.child!;
+    final gridStacks = tester
+        .renderObjectList<RenderStack>(
+          find.descendant(
+            of: find.byKey(const Key('week_grid_static_layer')),
+            matching: find.byType(Stack),
+          ),
+        )
+        .map((stack) => stack.toStringShort())
+        .toSet();
+
+    final layouts = <String>[];
+    final paints = <RenderObject>[];
+    final originalDebugPrint = debugPrint;
+    final originalPrintLayouts = debugPrintLayouts;
+    final originalProfilePaint = debugOnProfilePaint;
+    try {
+      debugPrint = (message, {wrapWidth}) {
+        if (message != null && message.startsWith('Laying out')) {
+          layouts.add(message);
+        }
+      };
+      debugPrintLayouts = true;
+      debugOnProfilePaint = paints.add;
+      await tester.drag(
+        find.byType(SingleChildScrollView),
+        const Offset(0, -650),
+      );
+      await tester.pumpAndSettle();
+    } finally {
+      debugPrint = originalDebugPrint;
+      debugPrintLayouts = originalPrintLayouts;
+      debugOnProfilePaint = originalProfilePaint;
+    }
+
+    expect(
+      layouts.where((message) => gridStacks.any(message.contains)),
+      isEmpty,
+      reason: '垂直滚动不得触发布局重算',
+    );
+    expect(
+      paints,
+      isNot(contains(staticGrid)),
+      reason: '垂直滚动期间应复用 week_grid_static_layer 光栅化图层',
+    );
+    expect(tester.widget<CourseCell>(_cell('首屏早课')), same(morningWidget));
+    expect(tester.widget<CourseCell>(_cell('完整屏外夜课')), same(nightWidget));
+    expect(tester.element(_cell('首屏早课')), same(morningElement));
+    expect(tester.element(_cell('完整屏外夜课')), same(nightElement));
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(_cell('完整屏外夜课'));
+    await tester.pumpAndSettle();
+    expect(tapped, ['night']);
+
+    paints.clear();
+    layouts.clear();
+    try {
+      debugPrint = (message, {wrapWidth}) {
+        if (message != null && message.startsWith('Laying out')) {
+          layouts.add(message);
+        }
+      };
+      debugPrintLayouts = true;
+      debugOnProfilePaint = paints.add;
+      await tester.drag(
+        find.byType(SingleChildScrollView),
+        const Offset(0, 650),
+      );
+      await tester.pumpAndSettle();
+    } finally {
+      debugPrint = originalDebugPrint;
+      debugPrintLayouts = originalPrintLayouts;
+      debugOnProfilePaint = originalProfilePaint;
+    }
+
+    expect(
+      layouts.where((message) => gridStacks.any(message.contains)),
+      isEmpty,
+    );
+    expect(paints, isNot(contains(staticGrid)));
+    expect(tester.widget<CourseCell>(_cell('首屏早课')), same(morningWidget));
+    expect(tester.element(_cell('首屏早课')), same(morningElement));
+
+    await tester.tap(_cell('首屏早课'));
+    await tester.pump();
+    expect(tapped, ['night', 'morning']);
     expect(tester.takeException(), isNull);
   });
   late Directory tmp;

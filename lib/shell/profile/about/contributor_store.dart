@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
+import '../../../core/app_directories.dart';
 import '../../../core/logging/app_log.dart';
 import 'contributor_models.dart';
 
@@ -15,7 +14,7 @@ class ContributorStore {
 
   Future<File?> _file() async {
     try {
-      final base = await getApplicationDocumentsDirectory();
+      final base = await AppDirectories.applicationDocuments();
       final dir = Directory('${base.path}${Platform.pathSeparator}about');
       if (!await dir.exists()) await dir.create(recursive: true);
       return File('${dir.path}${Platform.pathSeparator}$_fileName');

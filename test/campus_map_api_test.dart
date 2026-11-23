@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_directories.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_api.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_cache.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
@@ -196,6 +197,7 @@ void main() {
     final directory = await Directory.systemTemp.createTemp(
       'campus-cache-test-',
     );
+    AppDirectories.resetForTesting();
     binding.defaultBinaryMessenger.setMockMethodCallHandler(
       channel,
       (call) async => call.method == 'getApplicationDocumentsDirectory'
@@ -204,6 +206,7 @@ void main() {
     );
     addTearDown(() async {
       binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+      AppDirectories.resetForTesting();
       await directory.delete(recursive: true);
     });
     final geometry = fc(

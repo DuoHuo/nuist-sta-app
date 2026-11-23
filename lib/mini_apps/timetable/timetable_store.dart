@@ -4,8 +4,8 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../../core/app_directories.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/logging/diagnostic_error.dart';
 import '../../core/refresh/silent_refresh.dart';
@@ -265,7 +265,7 @@ class TimetableStore {
       if (inFlight != null) return await inFlight;
       final future = () async {
         try {
-          final base = await getApplicationDocumentsDirectory();
+          final base = await AppDirectories.applicationDocuments();
           final dir = Directory(
             '${base.path}${Platform.pathSeparator}timetable',
           );

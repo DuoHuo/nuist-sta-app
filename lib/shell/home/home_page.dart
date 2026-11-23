@@ -35,6 +35,14 @@ class HomePage extends StatelessWidget {
       app.id: ?app.onHomeRefresh,
   });
 
+  /// 构造单个首页宫格入口。
+  Widget _buildGridItem(BuildContext context, AppManifest app) => AppGridItem(
+    app: app,
+    // 必须 push 而非 go：go 会把小程序页替换成栈底，
+    // 导致顶栏无返回按钮、系统返回键也退不回宫格。
+    onTap: () => AppNavigation.push(context, '/apps/${app.id}'),
+  );
+
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
@@ -92,21 +100,33 @@ class HomePage extends StatelessWidget {
                         (constraints.maxWidth / math.max(46, labelSize * 3))
                             .floor()
                             .clamp(1, 4);
-                    return GridView.count(
-                      crossAxisCount: columns,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      mainAxisSpacing: 14,
-                      mainAxisExtent: 46 + 7 + labelSize * 2.5 + 8,
+                    final gridApps = apps.homeGridApps;
+                    final rowHeight = 46 + 7 + labelSize * 2.5 + 8;
+                    final rowCount = (gridApps.length + columns - 1) ~/ columns;
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        for (final app in apps.homeGridApps)
-                          AppGridItem(
-                            app: app,
-                            // 必须 push 而非 go：go 会把小程序页替换成栈底，
-                            // 导致顶栏无返回按钮、系统返回键也退不回宫格。
-                            onTap: () =>
-                                AppNavigation.push(context, '/apps/${app.id}'),
+                        for (var row = 0; row < rowCount; row++) ...[
+                          if (row > 0) const SizedBox(height: 14),
+                          SizedBox(
+                            height: rowHeight,
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                for (var col = 0; col < columns; col++)
+                                  if (row * columns + col < gridApps.length)
+                                    Expanded(
+                                      child: _buildGridItem(
+                                        context,
+                                        gridApps[row * columns + col],
+                                      ),
+                                    )
+                                  else
+                                    const Spacer(),
+                              ],
+                            ),
                           ),
+                        ],
                       ],
                     );
                   },

@@ -94,68 +94,73 @@ class ScheduleHomeRow extends StatelessWidget {
       child: Padding(
         // 与课程行一致：项内上下 8、项间距 2（spec-next-1020b）。
         padding: const EdgeInsets.fromLTRB(0, 8, 0, 2),
-        // 色条随内容高度伸缩（不固定高度）：课名 / 地点换行时整行变高。
-        child: IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                width: 3,
-                margin: const EdgeInsets.symmetric(vertical: 2),
+        // 色条随内容高度伸缩（单遍 Stack 布局，避免 IntrinsicHeight 双遍测量）：
+        // 左侧 3dp 色条（上下各缩进 2dp）+ 8dp 间距 = 11dp，右侧内容随换行增高。
+        child: Stack(
+          children: [
+            Positioned(
+              left: 0,
+              top: 2,
+              bottom: 2,
+              width: 3,
+              child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: done ? colors.divider : accent,
                   borderRadius: BorderRadius.circular(1.5),
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(minHeight: 40),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              event.title,
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                height: 1.2,
-                                color: fg,
-                              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 11),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minWidth: double.infinity,
+                  minHeight: 40,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            event.title,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              height: 1.2,
+                              color: fg,
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          SchedulePill(
-                            key: Key(
-                              event.isExam
-                                  ? 'home_event_exam_pill'
-                                  : 'home_event_other_pill',
-                            ),
-                            text: schedulePillLabel(event),
-                            color: done ? colors.hint : accent,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        [
-                          if (event.location.isNotEmpty) '@${event.location}',
-                          scheduleTimeText(event),
-                        ].join(' · '),
-                        style: TimetableTheme.microStyle(
-                          color: done ? colors.hint : colors.labelText,
                         ),
+                        const SizedBox(width: 6),
+                        SchedulePill(
+                          key: Key(
+                            event.isExam
+                                ? 'home_event_exam_pill'
+                                : 'home_event_other_pill',
+                          ),
+                          text: schedulePillLabel(event),
+                          color: done ? colors.hint : accent,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      [
+                        if (event.location.isNotEmpty) '@${event.location}',
+                        scheduleTimeText(event),
+                      ].join(' · '),
+                      style: TimetableTheme.microStyle(
+                        color: done ? colors.hint : colors.labelText,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

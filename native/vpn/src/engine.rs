@@ -17,12 +17,13 @@ use std::net::{Ipv4Addr, Shutdown, TcpStream, ToSocketAddrs};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_CONNECTIONS: usize = 64;
 const BUFFER_SIZE: usize = 64 * 1024;
+const IO_BUFFER_SIZE: usize = 16 * 1024;
 const TCP_OPEN_TIMEOUT: Duration = Duration::from_secs(8);
 const DNS_OPEN_TIMEOUT: Duration = Duration::from_secs(3);
 const BLACKHOLE_IDLE: Duration = Duration::from_secs(3);
@@ -334,15 +335,30 @@ impl Handle {
     }
 }
 
+fn build_client_config(roots: RootCertStore) -> io::Result<Arc<ClientConfig>> {
+    let tls = ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .map_err(io::Error::other)?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(Arc::new(tls))
+}
+
+fn default_client_config() -> io::Result<Arc<ClientConfig>> {
+    static DEFAULT_TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
+    if let Some(config) = DEFAULT_TLS_CONFIG.get() {
+        return Ok(Arc::clone(config));
+    }
+    let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = build_client_config(roots)?;
+    Ok(Arc::clone(DEFAULT_TLS_CONFIG.get_or_init(|| config)))
+}
+
 pub fn start_controlled(
     value: &Value,
     control: Arc<StartControl>,
 ) -> io::Result<(Handle, frame::AuthInfo)> {
-    start_with_control(
-        value,
-        RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
-        control,
-    )
+    start_inner(value, None, control, START_TIMEOUT)
 }
 
 #[cfg(test)]
@@ -352,6 +368,7 @@ fn start_with_roots(value: &Value, roots: RootCertStore) -> io::Result<(Handle, 
     start_with_control(value, roots, Arc::new(StartControl::new()))
 }
 
+#[cfg(test)]
 fn start_with_control(
     value: &Value,
     roots: RootCertStore,
@@ -360,9 +377,19 @@ fn start_with_control(
     start_with_deadline(value, roots, control, START_TIMEOUT)
 }
 
+#[cfg(test)]
 fn start_with_deadline(
     value: &Value,
     roots: RootCertStore,
+    control: Arc<StartControl>,
+    timeout: Duration,
+) -> io::Result<(Handle, frame::AuthInfo)> {
+    start_inner(value, Some(roots), control, timeout)
+}
+
+fn start_inner(
+    value: &Value,
+    roots: Option<RootCertStore>,
     control: Arc<StartControl>,
     timeout: Duration,
 ) -> io::Result<(Handle, frame::AuthInfo)> {
@@ -386,12 +413,10 @@ fn start_with_deadline(
         as u16;
     let server_name = rustls::pki_types::ServerName::try_from(host.to_owned())
         .map_err(|_| error(io::ErrorKind::InvalidInput, "VPN 网关主机名不合法"))?;
-    let tls =
-        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-            .with_safe_default_protocol_versions()
-            .map_err(io::Error::other)?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+    let tls = match roots {
+        Some(roots) => build_client_config(roots)?,
+        None => default_client_config()?,
+    };
     control.stage("DNS");
     let addresses = resolve(
         host.to_owned(),
@@ -420,8 +445,7 @@ fn start_with_deadline(
     configure_keepalive(|options| SockRef::from(&raw).set_tcp_keepalive(options));
     *control.socket.lock().unwrap_or_else(|e| e.into_inner()) = Some(raw.try_clone()?);
     control.check(deadline)?;
-    let mut connection =
-        ClientConnection::new(Arc::new(tls), server_name).map_err(io::Error::other)?;
+    let mut connection = ClientConnection::new(tls, server_name).map_err(io::Error::other)?;
     connection.set_buffer_limit(Some(BUFFER_SIZE * 4));
     control.stage("TLS");
     let mut tunnel = StreamOwned::new(
@@ -572,6 +596,7 @@ struct Runner {
     decoder: frame::Decoder,
     output: VecDeque<Vec<u8>>,
     output_offset: usize,
+    io_buffer: Box<[u8]>,
     started: Instant,
     last_received: Instant,
     last_heartbeat: Instant,
@@ -727,6 +752,7 @@ impl Runner {
             decoder: frame::Decoder::default(),
             output: VecDeque::new(),
             output_offset: 0,
+            io_buffer: vec![0; IO_BUFFER_SIZE].into_boxed_slice(),
             started: now,
             last_received: now,
             last_heartbeat: now - HEARTBEAT_INTERVAL,
@@ -1111,7 +1137,7 @@ impl Runner {
                     if !flow.ingress.is_empty() || !socket.can_send() {
                         break;
                     }
-                    let mut bytes = [0u8; 16384];
+                    let bytes = &mut self.io_buffer;
                     let capacity = (socket.send_capacity() - socket.send_queue())
                         .min(bytes.len())
                         .min(chunk_limit);
@@ -1170,7 +1196,7 @@ impl Runner {
             }
             if self.terminal.is_some() && !socket.can_recv() {
                 let _ = flow.local.shutdown(Shutdown::Write);
-                if Self::drain_local(flow) {
+                if Self::drain_local(flow, &mut self.io_buffer) {
                     return Ok(false);
                 }
                 self.budget_exhausted = true;
@@ -1198,10 +1224,9 @@ impl Runner {
     }
 
     /// 关闭前抽干已经到达本地 Socket 的数据，减少有未读请求时内核 RST 冲掉响应尾部。
-    fn drain_local(flow: &mut Flow) -> bool {
-        let mut bytes = [0u8; 16 * 1024];
+    fn drain_local(flow: &mut Flow, bytes: &mut [u8]) -> bool {
         for _ in 0..IO_BUDGET {
-            match flow.local.read(&mut bytes) {
+            match flow.local.read(bytes) {
                 Ok(0) => return true,
                 Ok(_) => {}
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => return true,
@@ -1214,7 +1239,7 @@ impl Runner {
 
     fn remove(&mut self, mut flow: Flow) {
         if self.terminal.is_some() {
-            let _ = Self::drain_local(&mut flow);
+            let _ = Self::drain_local(&mut flow, &mut self.io_buffer);
         }
         let _ = self.poll.registry().deregister(&mut flow.local);
         if let Some(query) = flow.query.take() {
@@ -1237,7 +1262,6 @@ impl Runner {
         let mut read_rounds = 0;
         for _ in 0..budget {
             // 先消耗已解密的数据：握手读取可能已把后续报文一并收进 rustls。
-            let mut bytes = [0; 16 * 1024];
             loop {
                 // 最小 IPv4 帧为 8 字节头 + 20 字节包。为 Decoder 中可能
                 // 已有的半帧预留一个槽，不从可靠 TLS 流主动读出随后要丢弃的包。
@@ -1245,8 +1269,8 @@ impl Runner {
                 if capacity < 2 {
                     break;
                 }
-                let limit = bytes.len().min((capacity - 1) * 28);
-                match self.tunnel.conn.reader().read(&mut bytes[..limit]) {
+                let limit = self.io_buffer.len().min((capacity - 1) * 28);
+                match self.tunnel.conn.reader().read(&mut self.io_buffer[..limit]) {
                     // 非空缓冲读到 0 表示已收到 close_notify；即使 TCP 仍保持
                     // 打开，TLS 也不会再有数据，不能继续把它报告为健康隧道。
                     Ok(0) => {
@@ -1259,7 +1283,7 @@ impl Runner {
                     Ok(count) => {
                         self.io_progress = self.io_progress.wrapping_add(1);
                         let completed = self.decoder.completed_frames();
-                        for packet in self.decoder.push(&bytes[..count])? {
+                        for packet in self.decoder.push(&self.io_buffer[..count])? {
                             self.device.inject(packet);
                         }
                         let mut health = self.health.lock().unwrap_or_else(|e| e.into_inner());
@@ -1637,7 +1661,7 @@ impl Drop for Runner {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Release);
         for flow in &mut self.flows {
-            let _ = Self::drain_local(flow);
+            let _ = Self::drain_local(flow, &mut self.io_buffer);
         }
         let _ = self.tunnel.sock.shutdown(Shutdown::Both);
     }

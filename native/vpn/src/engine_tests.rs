@@ -1562,3 +1562,9 @@ fn exited_event_is_once_only_and_publication_callback_runs_outside_registry_lock
     crate::dispatch(json!({"method":"stop","id":id})).unwrap();
     gateway.finish();
 }
+#[test]
+fn default_tls_config_is_shared_between_starts() {
+    let first = default_client_config().unwrap();
+    let second = default_client_config().unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+}

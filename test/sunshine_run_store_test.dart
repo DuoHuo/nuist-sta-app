@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_directories.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/mini_apps/sunshine_run/sunshine_run_models.dart';
 import 'package:nuist_sta_app/mini_apps/sunshine_run/sunshine_run_store.dart';
@@ -32,6 +33,7 @@ void main() {
   File stateFile() => File('${directory.path}/state.json');
 
   setUp(() async {
+    AppDirectories.resetForTesting();
     await AppLog.resetForTesting();
     directory = await Directory.systemTemp.createTemp('sunshine_run_store_');
     SunshineRunStore.debugDirectory = directory;
@@ -41,6 +43,7 @@ void main() {
     SunshineRunStore.debugDirectory = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(pathProviderChannel, null);
+    AppDirectories.resetForTesting();
     await AppLog.resetForTesting();
     if (await directory.exists()) await directory.delete(recursive: true);
   });

@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
+import '../../core/app_directories.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/refresh/silent_refresh.dart';
 import 'score_models.dart';
@@ -17,7 +16,7 @@ class ScoreStore {
 
   static Future<File?> _file() async {
     try {
-      final base = await getApplicationDocumentsDirectory();
+      final base = await AppDirectories.applicationDocuments();
       final dir = Directory('${base.path}${Platform.pathSeparator}scores');
       if (!await dir.exists()) await dir.create(recursive: true);
       return File('${dir.path}${Platform.pathSeparator}report.json');
