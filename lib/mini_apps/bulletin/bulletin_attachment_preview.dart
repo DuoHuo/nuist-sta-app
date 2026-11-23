@@ -175,14 +175,15 @@ class BulletinPdfDocument {
     );
   }
 
-  /// 将指定页渲染为 PNG，页码从零开始。
-  Future<Uint8List> renderPage(int page) async {
+  /// 将指定页按目标像素宽度渲染为位图字节，页码从零开始。
+  Future<Uint8List> renderPage(int page, {int? targetWidth}) async {
     if (_closed || page < 0 || page >= pageAspectRatios.length) {
       throw StateError('PDF 页面不可用');
     }
     final bytes = await _previewChannel.invokeMethod<Uint8List>('render', {
       'id': _id,
       'page': page,
+      'width': ?targetWidth,
     });
     if (bytes == null || bytes.isEmpty) {
       throw const FormatException('PDF 页面无法预览');

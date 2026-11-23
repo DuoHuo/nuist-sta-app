@@ -36,6 +36,7 @@ class _BulletinPdfViewState extends State<BulletinPdfView> {
 
   late final _pages = <int, MemoryImage?>{0: MemoryImage(widget.firstPage)};
   double? _pageWidth;
+  double _devicePixelRatio = 1.0;
   List<double> _pageOffsets = [];
   ({int first, int last})? _visiblePages;
   bool _renderScheduled = false;
@@ -215,8 +216,13 @@ class _BulletinPdfViewState extends State<BulletinPdfView> {
       if (_pages.containsKey(index)) continue;
       _rendering = true;
       MemoryImage? image;
+      final targetWidth = ((_pageWidth ?? 800) * _devicePixelRatio)
+          .round()
+          .clamp(320, 1600);
       try {
-        image = MemoryImage(await widget.document.renderPage(index));
+        image = MemoryImage(
+          await widget.document.renderPage(index, targetWidth: targetWidth),
+        );
       } catch (error, stackTrace) {
         // 单页失败仍可继续浏览其他页面。
         _log.warning(
@@ -247,6 +253,7 @@ class _BulletinPdfViewState extends State<BulletinPdfView> {
 
   @override
   Widget build(BuildContext context) {
+    _devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
     final palette = AppPalette.of(context);
     final search = _search;
     if (search == null) return _buildReader(palette);

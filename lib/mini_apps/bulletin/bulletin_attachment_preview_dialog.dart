@@ -208,7 +208,12 @@ class _BulletinAttachmentPreviewDialogState
         return;
       }
       updateStage('attachment.render_pdf');
-      final firstPage = await pdf.renderPage(0);
+      final targetWidth =
+          (MediaQuery.sizeOf(context).width *
+                  MediaQuery.devicePixelRatioOf(context))
+              .round()
+              .clamp(320, 1600);
+      final firstPage = await pdf.renderPage(0, targetWidth: targetWidth);
       if (!mounted) {
         await pdf.close();
         return;

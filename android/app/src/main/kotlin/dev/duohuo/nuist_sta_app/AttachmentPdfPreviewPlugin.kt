@@ -3,6 +3,7 @@ package dev.duohuo.nuist_sta_app
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
@@ -131,11 +132,16 @@ class AttachmentPdfPreviewPlugin : FlutterPlugin, MethodChannel.MethodCallHandle
         }
         val pageAspectRatios = try {
             require(renderer.pageCount > 0)
-            List(renderer.pageCount) { index ->
+            val probedCount = min(renderer.pageCount, INITIAL_PROBED_PAGES)
+            val probed = List(probedCount) { index ->
                 renderer.openPage(index).use { page ->
                     require(page.width > 0 && page.height > 0)
                     page.width.toDouble() / page.height
                 }
+            }
+            val defaultRatio = probed.first()
+            List(renderer.pageCount) { index ->
+                if (index < probed.size) probed[index] else defaultRatio
             }
         } catch (error: Exception) {
             renderer.close()
@@ -150,23 +156,34 @@ class AttachmentPdfPreviewPlugin : FlutterPlugin, MethodChannel.MethodCallHandle
         val id = requireNotNull(call.argument<Number>("id")).toInt()
         val renderer = requireNotNull(documents[id])
         val pageIndex = requireNotNull(call.argument<Number>("page")).toInt()
+        val maxWidth = call.argument<Number>("width")?.toInt()?.coerceIn(320, 1600) ?: 1600
         renderer.openPage(pageIndex).use { page ->
             // 限制单页位图大小，避免滚动经过大尺寸页面时占用过多内存。
-            val scale = min(1600.0 / page.width, 2400.0 / page.height)
+            val scale = min(maxWidth.toDouble() / page.width, 2400.0 / page.height)
             val width = (page.width * scale).toInt().coerceAtLeast(1)
             val height = (page.height * scale).toInt().coerceAtLeast(1)
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             try {
                 bitmap.eraseColor(Color.WHITE)
                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                val format = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    Bitmap.CompressFormat.WEBP_LOSSY
+                } else {
+                    @Suppress("DEPRECATION")
+                    Bitmap.CompressFormat.WEBP
+                }
                 return ByteArrayOutputStream().use { output ->
-                    check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+                    check(bitmap.compress(format, 90, output))
                     output.toByteArray()
                 }
             } finally {
                 bitmap.recycle()
             }
         }
+    }
+
+    companion object {
+        private const val INITIAL_PROBED_PAGES = 8
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {

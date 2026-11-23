@@ -189,7 +189,92 @@ class BulletinApi {
       }
       rethrow;
     }
+    await trimAttachmentCache(directory, preserve: target);
     return file;
+  }
+
+  /// 清理过期的或超出容量上限的公告附件缓存目录。
+  @visibleForTesting
+  static Future<void> trimAttachmentCache(
+    Directory directory, {
+    FileSystemEntity? preserve,
+    Duration maxAge = const Duration(days: 7),
+    int maxBytes = 128 * 1024 * 1024,
+    DateTime? now,
+  }) async {
+    try {
+      if (!await directory.exists()) return;
+      final cutoff = (now ?? DateTime.now()).subtract(maxAge);
+      final preservePath = preserve?.path;
+      var keptBytes = 0;
+      if (preserve != null) {
+        final preserved = await _inspectCacheEntry(preserve);
+        if (preserved != null) {
+          keptBytes = preserved.bytes;
+        }
+      }
+      final entries =
+          <({FileSystemEntity entity, int bytes, DateTime modified})>[];
+      await for (final entity in directory.list(followLinks: false)) {
+        if (preservePath != null && entity.path == preservePath) continue;
+        final info = await _inspectCacheEntry(entity);
+        if (info == null) continue;
+        entries.add((
+          entity: entity,
+          bytes: info.bytes,
+          modified: info.modified,
+        ));
+      }
+      entries.sort((a, b) => b.modified.compareTo(a.modified));
+      for (final entry in entries) {
+        final expired = entry.modified.isBefore(cutoff);
+        final overBudget = keptBytes + entry.bytes > maxBytes;
+        if (expired || overBudget) {
+          try {
+            await entry.entity.delete(recursive: true);
+          } on FileSystemException {
+            // 单个缓存目录清理失败不影响其余附件。
+          }
+        } else {
+          keptBytes += entry.bytes;
+        }
+      }
+    } on FileSystemException {
+      // 缓存清理失败不影响当前附件下载结果。
+    }
+  }
+
+  static Future<({int bytes, DateTime modified})?> _inspectCacheEntry(
+    FileSystemEntity entity,
+  ) async {
+    try {
+      if (entity is File) {
+        final stat = await entity.stat();
+        return (bytes: stat.size, modified: stat.modified);
+      }
+      if (entity is Directory) {
+        var bytes = 0;
+        DateTime? newestFileModified;
+        await for (final child in entity.list(
+          recursive: true,
+          followLinks: false,
+        )) {
+          if (child is! File) continue;
+          final stat = await child.stat();
+          bytes += stat.size;
+          final modified = stat.modified;
+          if (newestFileModified == null ||
+              modified.isAfter(newestFileModified)) {
+            newestFileModified = modified;
+          }
+        }
+        final modified = newestFileModified ?? (await entity.stat()).modified;
+        return (bytes: bytes, modified: modified);
+      }
+    } on FileSystemException {
+      return null;
+    }
+    return null;
   }
 }
 
