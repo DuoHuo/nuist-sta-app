@@ -249,9 +249,10 @@ void main() {
     // 预算 120 字节：preserve 占 50 字节（即使超过 7 天也绝不删除），
     // recentDir (60 字节) 可保留（50 + 60 <= 120），
     // oldDir (60 字节) 超出预算被清理，expiredDir 超期被清理。
+    // 用带有「.」的路径指向同一目录，覆盖各平台上的路径别名。
     await BulletinApi.trimAttachmentCache(
       tempDir,
-      preserve: preservedDir,
+      preserve: Directory('${tempDir.path}/./attachment-preserve'),
       maxAge: const Duration(days: 7),
       maxBytes: 120,
       now: now,

@@ -11,9 +11,15 @@ import android.os.Message
 import android.os.Messenger
 import android.os.RemoteException
 import android.util.Base64
-import org.apache.poi.hwpf.HWPFDocument
+import org.apache.poi.hwpf.HWPFDocumentCore
+import org.apache.poi.hwpf.converter.AbstractWordUtils
 import org.apache.poi.hwpf.converter.WordToHtmlConverter
+import org.apache.poi.hwpf.usermodel.Paragraph
 import org.apache.poi.hwpf.usermodel.PictureType
+import org.apache.poi.hwpf.usermodel.Range
+import org.apache.poi.hwpf.usermodel.Section
+import org.apache.poi.poifs.filesystem.POIFSFileSystem
+import org.w3c.dom.Document
 import org.w3c.dom.Element
 import org.w3c.dom.Node
 import java.io.File
@@ -88,7 +94,8 @@ private class BulletinWordHtmlConverter(private val context: Context) {
         require(source.length() in 1L..BulletinOfficeRenderer.MAX_FILE_BYTES)
         val outputDir = File(context.cacheDir, "${BulletinWordHtml.DIRECTORY}/$CACHE_VERSION")
         outputDir.mkdirs()
-        val output = File(outputDir, "${digest(source)}.html")
+        // 旧缓存缺少版心宽度，改用新文件名并沿用原目录的清理策略。
+        val output = File(outputDir, "v2-${digest(source)}.html")
         if (output.isFile) {
             output.setLastModified(System.currentTimeMillis())
             return output
@@ -96,7 +103,7 @@ private class BulletinWordHtmlConverter(private val context: Context) {
         val partial = File.createTempFile("word-", ".part", outputDir)
         try {
             val dom = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument()
-            val converter = WordToHtmlConverter(dom)
+            val converter = AndroidWordToHtmlConverter(dom)
             // 图片内联为 data URI，阅读窗口禁止加载其他资源；WebView 无法显示的格式直接省略。
             converter.setPicturesManager { content, type, _, _, _ ->
                 if (type in webImageTypes && content.size <= MAX_IMAGE_BYTES) {
@@ -105,8 +112,8 @@ private class BulletinWordHtmlConverter(private val context: Context) {
                     null
                 }
             }
-            source.inputStream().buffered().use { input ->
-                HWPFDocument(input).use(converter::processDocument)
+            POIFSFileSystem(source, true).use { fileSystem ->
+                AbstractWordUtils.loadDoc(fileSystem).let(converter::processDocument)
             }
             partial.bufferedWriter().use { writer ->
                 writer.write("<!doctype html>")
@@ -198,5 +205,62 @@ private class BulletinWordHtmlConverter(private val context: Context) {
         private const val MAX_IMAGE_BYTES = 8 * 1024 * 1024
         private val webImageTypes = setOf(PictureType.PNG, PictureType.JPEG, PictureType.GIF, PictureType.BMP)
         private val voidElements = setOf("br", "hr", "img", "meta", "link", "col", "input", "wbr")
+    }
+}
+
+private class AndroidWordToHtmlConverter(document: Document) : WordToHtmlConverter(document) {
+    private val body = document.getElementsByTagName("body").item(0) as Element
+
+    override fun processSingleSection(wordDocument: HWPFDocumentCore, section: Section) {
+        // 单节和多节使用同一种节点结构，方便预览按节适配屏宽。
+        processSection(wordDocument, section, 0)
+    }
+
+    override fun processSection(wordDocument: HWPFDocumentCore, section: Section, sectionCounter: Int) {
+        super.processSection(wordDocument, section, sectionCounter)
+        val contentTwips = section.pageWidth - section.marginLeft - section.marginRight
+        // 1 英寸为 1440 twips、96 CSS 像素。无有效页宽时用普通文档版心宽度。
+        val width = kotlin.math.ceil(contentTwips / 15.0).toInt()
+        (body.lastChild as Element).setAttribute(
+            "data-nuist-word-width",
+            (width.takeIf { it in 240..1920 } ?: 624).toString(),
+        )
+    }
+
+    override fun processCharacters(
+        wordDocument: HWPFDocumentCore,
+        currentTableLevel: Int,
+        range: Range?,
+        block: Element,
+    ): Boolean {
+        val hasText = super.processCharacters(wordDocument, currentTableLevel, range, block)
+        // Android 的 getChildNodes() 返回快照。POI 合并后仍会读取已移除的节点，
+        // 所以在段落生成完毕时先用兄弟节点指针合并，保留原有文字和样式。
+        if (range is Paragraph && block.tagName == "p") mergeAdjacentSpans(block)
+        return hasText
+    }
+
+    private fun mergeAdjacentSpans(parent: Element) {
+        var node: Node? = parent.firstChild
+        while (node != null) {
+            val next = node.nextSibling
+            if (node is Element && next is Element && sameSpanStyle(node, next)) {
+                while (next.hasChildNodes()) node.appendChild(next.firstChild)
+                parent.removeChild(next)
+                continue
+            }
+            if (node is Element) mergeAdjacentSpans(node)
+            node = next
+        }
+    }
+
+    private fun sameSpanStyle(left: Element, right: Element): Boolean {
+        if (left.tagName != "span" || right.tagName != "span") return false
+        val attrs = left.attributes
+        val otherAttrs = right.attributes
+        return attrs.length == otherAttrs.length && (0 until attrs.length).all { index ->
+            val attr = attrs.item(index)
+            attr.isEqualNode(otherAttrs.getNamedItem(attr.nodeName))
+        }
     }
 }

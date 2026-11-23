@@ -227,7 +227,17 @@ class BulletinApi {
       final entries =
           <({FileSystemEntity entity, int bytes, DateTime modified})>[];
       await for (final entity in directory.list(followLinks: false)) {
-        if (preservePath != null && entity.path == preservePath) continue;
+        if (entity.path == preservePath) continue;
+        if (preservePath != null) {
+          try {
+            // 分隔符和路径写法不同，也可能指向同一个缓存条目。
+            if (await FileSystemEntity.identical(entity.path, preservePath)) {
+              continue;
+            }
+          } on PathNotFoundException {
+            // 有条目已移除，继续检查仍存在的缓存。
+          }
+        }
         final info = await _inspectCacheEntry(entity);
         if (info == null) continue;
         entries.add((
