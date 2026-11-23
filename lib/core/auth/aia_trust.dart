@@ -7,6 +7,7 @@ import 'package:asn1lib/asn1lib.dart';
 import 'package:pointycastle/digests/sha256.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
+import '../app_directories.dart';
 import '../logging/app_log.dart';
 import 'portal_http.dart';
 
@@ -24,6 +25,13 @@ import 'portal_http.dart';
 /// 拉到的中间证书会落盘到 [resolveCacheDir] 给的目录，下次冷启动 [preload] 直接预热，省掉
 /// 首次握手失败 + 一次网络往返。缓存文件出于同样的理由不需要防篡改。
 class AiaTrust {
+  /// CAS、VPN 引导与校园业务共用同一证书缓存和信任上下文。
+  static final shared = AiaTrust(resolveCacheDir: _sharedCacheDir);
+  static Future<Directory?> _sharedCacheDir() async {
+    final base = await AppDirectories.applicationSupport();
+    return Directory('${base.path}${Platform.pathSeparator}aia_certs');
+  }
+
   static final _log = AppLog.logger('core.auth.certificate');
   AiaTrust({
     bool withTrustedRoots = true,
@@ -37,8 +45,7 @@ class AiaTrust {
   final bool _withTrustedRoots;
   final DateTime Function() _now;
 
-  /// 取中间证书的磁盘缓存目录；不给或返回 null 表示不缓存。做成回调是因为
-  /// 目录要问平台（path_provider），而本类要保持纯 Dart 可在桌面直接跑。
+  /// 取中间证书的磁盘缓存目录；不给或返回 null 表示不缓存。
   final Future<Directory?> Function()? resolveCacheDir;
   Future<Directory?>? _cacheDir;
 
@@ -102,9 +109,11 @@ class AiaTrust {
     client.badCertificateCallback = onBadCertificate;
     client.connectionTimeout = _fetchTimeout;
     var repaired = false;
+    var verified = false;
     try {
       // getUrl 只建立连接；不 close/send，不发业务 HTTP 或认证信息。
       final request = await client.getUrl(uri).timeout(_fetchTimeout);
+      verified = true;
       request.abort();
     } catch (_) {
       if (_badLeaf.containsKey(uri.host)) {
@@ -116,8 +125,10 @@ class AiaTrust {
     } finally {
       client.close(force: true);
     }
-    _preparedHosts['${uri.host}:${uri.port}'] =
-        _cacheValidUntil ?? _now().add(const Duration(minutes: 5));
+    if (verified) {
+      _preparedHosts['${uri.host}:${uri.port}'] =
+          _cacheValidUntil ?? _now().add(const Duration(minutes: 5));
+    }
     return repaired;
   }
 

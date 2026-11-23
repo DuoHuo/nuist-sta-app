@@ -5,7 +5,9 @@ import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/portal_cookie_manager.dart';
+import 'package:nuist_sta_app/core/auth/portal_cookie_store.dart';
 import 'package:nuist_sta_app/core/auth/portal_http.dart';
+import 'package:nuist_sta_app/core/logging/diagnostic_error.dart';
 
 class _CookieAdapter implements HttpClientAdapter {
   _CookieAdapter(this.respond);
@@ -21,6 +23,32 @@ class _CookieAdapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) {}
+}
+
+class _MemoryCookieStorage implements Storage {
+  final values = <String, String>{};
+  int writes = 0;
+  @override
+  Future<void> init(bool persistSession, bool ignoreExpires) async {}
+  @override
+  Future<String?> read(String key) async => values[key];
+  @override
+  Future<void> write(String key, String value) async {
+    writes++;
+    values[key] = value;
+  }
+
+  @override
+  Future<void> delete(String key) async {
+    values.remove(key);
+  }
+
+  @override
+  Future<void> deleteAll(List<String> keys) async {
+    for (final key in keys) {
+      values.remove(key);
+    }
+  }
 }
 
 Dio _client(
@@ -318,5 +346,104 @@ void main() {
       {'good': '1', 'bad': '2'},
     );
     expect(cookies.firstWhere((c) => c.name == 'bad').sameSite, isNull);
+  });
+
+  test('已取消响应的onResponse与saveCookies都不能写回CAS Cookie', () async {
+    final jar = CookieJar();
+    final manager = PortalCookieManager(jar);
+    final cancel = CancelToken()..cancel('认证已超时');
+    final response = Response<dynamic>(
+      requestOptions: RequestOptions(
+        path: 'https://auth.test/authserver/login',
+        cancelToken: cancel,
+      ),
+      statusCode: 200,
+      headers: Headers.fromMap({
+        HttpHeaders.setCookieHeader: ['CASTGC=stale; Path=/authserver'],
+      }),
+    );
+    await manager.onResponse(response, ResponseInterceptorHandler());
+    await manager.saveCookies(response);
+    expect(
+      await jar.loadForRequest(Uri.https('auth.test', '/authserver/login')),
+      isEmpty,
+    );
+  });
+
+  test('store模式合并Cookie只受保护解析一次，Expires逗号与坏项均不影响合法Cookie', () async {
+    final storage = _MemoryCookieStorage();
+    final store = PortalCookieStore(storage: storage);
+    final jar = store.openJar();
+    final client = _client(
+      jar,
+      (_) => ResponseBody.fromString(
+        '',
+        200,
+        headers: {
+          HttpHeaders.setCookieHeader: [
+            'a=1; Expires=Wed, 09 Jun 2038 10:18:14 GMT, b=2; Path=/, =invalid; Path=/',
+          ],
+        },
+      ),
+    );
+    final managerIndex = client.interceptors.indexWhere(
+      (interceptor) => interceptor is PortalCookieManager,
+    );
+    client.interceptors[managerIndex] = PortalCookieManager(jar, store: store);
+    await client.getUri<dynamic>(auth, options: PortalHttp.options());
+    final cookies = await jar.loadForRequest(auth);
+    expect(
+      {for (final cookie in cookies) cookie.name: cookie.value},
+      {'a': '1', 'b': '2'},
+    );
+    expect(
+      cookies.singleWhere((cookie) => cookie.name == 'a').expires,
+      DateTime.utc(2038, 6, 9, 10, 18, 14),
+    );
+  });
+
+  test('没有合法SetCookie时store模式直接返回，不调用持久化写入', () async {
+    final storage = _MemoryCookieStorage();
+    final store = PortalCookieStore(storage: storage);
+    final manager = PortalCookieManager(store.openJar(), store: store);
+    await manager.saveCookies(
+      Response<dynamic>(
+        requestOptions: RequestOptions(path: 'https://empty.test/'),
+        statusCode: 200,
+        headers: Headers.fromMap({
+          HttpHeaders.setCookieHeader: ['=invalid; Path=/'],
+        }),
+      ),
+    );
+    expect(storage.writes, 0);
+    expect(storage.values, isEmpty);
+  });
+
+  test('PortalHttp手动重定向终点503保留诊断原因，不泄漏裸DioException', () async {
+    final jar = CookieJar();
+    final http = PortalHttp(
+      _client(
+        jar,
+        (options) => options.uri.path == '/start'
+            ? ResponseBody.fromString(
+                '',
+                302,
+                headers: {
+                  HttpHeaders.locationHeader: ['/failed'],
+                },
+              )
+            : ResponseBody.fromString('维护中', 503),
+      ),
+    );
+    final response = await http.get(Uri.https('redirect.test', '/start'));
+    await expectLater(
+      http.followRedirects(response),
+      throwsA(
+        isA<DiagnosticException>()
+            .having((error) => error.context['status_code'], 'status', 503)
+            .having((error) => error.cause, 'cause', isA<DioException>())
+            .having((error) => error.causeStackTrace, 'stack', isNotNull),
+      ),
+    );
   });
 }

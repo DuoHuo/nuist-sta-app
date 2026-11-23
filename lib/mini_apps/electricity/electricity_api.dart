@@ -1,6 +1,10 @@
 import 'dart:convert';
 
-import '../../core/auth/portal_exceptions.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+
+import '../../core/auth/service_auth_spec.dart';
+import '../../core/auth/session_executor.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/logging/app_log.dart';
@@ -10,9 +14,7 @@ import '../../core/auth/safe_message.dart';
 
 /// 一卡通电费接口（对应 notifier/icard/elec_query.py）。
 ///
-/// 鉴权靠请求头 `synjones-auth: bearer <jwt>`，token 从 CAS 登录 icard 后的落地
-/// URL 里取。[PortalSession.request] 靠「被弹回登录页」识别会话过期，对这个
-/// 返回 JSON 的接口不适用，所以这里自己判断 token 失效并强制重登一次。
+/// 一卡通授权头由 IcardSpec 注入，坏会话由统一鉴权执行器重建。
 class ElectricityApi {
   ElectricityApi._();
   static final _log = AppLog.logger('electricity.api');
@@ -21,6 +23,10 @@ class ElectricityApi {
     'https://${CampusHosts.icard}/charge/feeitem/getThirdData',
   );
   static const _feeItemId = '448';
+
+  /// 测试时替换统一鉴权执行器。
+  @visibleForTesting
+  static SessionExecutor? debugExecutor;
 
   static Future<List<ElecOption>> listCampuses() => _log.operation(
     'campuses.query',
@@ -142,30 +148,7 @@ class ElectricityApi {
     required String endpoint,
     PortalSession? session,
   }) async {
-    var result = await _send(
-      fields,
-      force: false,
-      endpoint: endpoint,
-      session: session,
-    );
-    if (_looksUnauthorized(result)) {
-      _log.info(
-        'session.reauth_required',
-        fields: {
-          'service': 'icard',
-          'endpoint': endpoint,
-          'attempt': 1,
-          'reason_code': 'icard_authorization_rejected',
-          'response_code': result['code'],
-        },
-      );
-      result = await _send(
-        fields,
-        force: true,
-        endpoint: endpoint,
-        session: session,
-      );
-    }
+    final result = await _send(fields, endpoint: endpoint, session: session);
     if (result['code'] != 200) {
       throw DiagnosticException(
         prefixedServerMessage(
@@ -173,9 +156,7 @@ class ElectricityApi {
           result['msg'],
           fallback: '电费接口返回错误，请稍后重试',
         ),
-        code: _looksUnauthorized(result)
-            ? 'icard_reauthentication_exhausted'
-            : 'icard_response_rejected',
+        code: 'icard_response_rejected',
         stage: 'icard.response',
         context: {
           'service': 'icard',
@@ -189,31 +170,28 @@ class ElectricityApi {
 
   static Future<Map<String, dynamic>> _send(
     Map<String, String> fields, {
-    required bool force,
     required String endpoint,
     PortalSession? session,
   }) async {
-    final portal = session ?? PortalSession.instance;
-    final login = await portal.ensureLoggedInWithEvidence(
-      PortalServices.icard,
-      force: force,
-    );
-    final token = _tokenFromLanding(login);
-    final http = await portal.clientFor(PortalServices.icard);
     final body = {
       'feeitemid': _feeItemId,
       ...fields,
     }.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&');
-    final response = await http.post(
-      _api,
-      data: body,
-      contentType: 'application/x-www-form-urlencoded',
-      headers: {'synjones-auth': token},
-    );
+    final response =
+        await (debugExecutor ?? (session ?? PortalSession.instance).executor)
+            .execute(
+              const IcardSpec(),
+              () => RequestOptions(
+                path: _api.toString(),
+                method: 'POST',
+                data: body,
+                contentType: 'application/x-www-form-urlencoded',
+                responseType: ResponseType.plain,
+              ),
+              idempotent: true,
+            );
+    requireServiceSuccess(response, endpoint: endpoint, service: 'icard');
     final raw = response.data;
-    if (response.statusCode == 401 || response.statusCode == 403) {
-      return {'code': 401, 'msg': 'unauthorized'};
-    }
     try {
       final decoded = raw is String ? jsonDecode(raw) : raw;
       if (decoded is Map<String, dynamic>) return decoded;
@@ -245,44 +223,6 @@ class ElectricityApi {
         'response_type': raw.runtimeType.toString(),
       },
     );
-  }
-
-  static String _tokenFromLanding(PortalLoginResult login) {
-    final landing = login.landing;
-    final details = <String, Object?>{
-      ...login.diagnosticContext,
-      'authorization_parameter': 'synjones-auth',
-      'inspection_stage': 'before_balance_request',
-    };
-    AppLog.addEvidence('icard.authorization', {
-      for (final entry in details.entries)
-        if (entry.key != 'landing_response') entry.key: entry.value,
-    });
-    final token = Uri.tryParse(landing)?.queryParameters['synjones-auth'];
-    if (token == null || token.isEmpty) {
-      throw PortalLoginError(
-        '一卡通登录未返回授权信息，请稍后重试',
-        code: 'icard_authorization_missing',
-        stage: 'icard.authorization',
-        context: {
-          'service': 'icard',
-          'endpoint': 'icard.landing',
-          'details': {...details, 'balance_request_sent': false},
-        },
-      );
-    }
-    return 'bearer $token';
-  }
-
-  static bool _looksUnauthorized(Map<String, dynamic> result) {
-    if (result['code'] == 200) return false;
-    final code = result['code'];
-    if (code == 401 || code == 403) return true;
-    final msg = (result['msg'] ?? '').toString().toLowerCase();
-    return msg.contains('token') ||
-        msg.contains('登录') ||
-        msg.contains('unauthorized') ||
-        msg.contains('认证');
   }
 
   /// 实测响应：

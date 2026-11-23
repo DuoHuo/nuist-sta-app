@@ -1,7 +1,10 @@
 import 'dart:convert';
 
-import '../../core/auth/portal_exceptions.dart';
-import '../../core/auth/portal_http.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+
+import '../../core/auth/service_auth_spec.dart';
+import '../../core/auth/session_executor.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/logging/diagnostic_error.dart';
@@ -9,9 +12,7 @@ import 'academic_models.dart';
 
 /// 信息门户学业概览接口：GET `/cus/jxmh/czjl?xh=`，学号留空即查自己。
 ///
-/// 实测未登录时不会弹回登录页，而是 HTTP 200 + 空 body，所以
-/// [PortalSession.request] 的过期识别用不上；这里把「拿不到 JSON 对象」视为
-/// 会话失效，强制重登一次再试。
+/// 空响应和登录失效统一由鉴权执行器识别与恢复。
 class AcademicApi {
   AcademicApi._();
 
@@ -19,41 +20,39 @@ class AcademicApi {
     'https://${CampusHosts.iportal}/cus/jxmh/czjl?xh=',
   );
 
+  /// 测试时替换统一鉴权执行器。
+  @visibleForTesting
+  static SessionExecutor? debugExecutor;
+
   static Future<AcademicSummary> fetchSummary() async {
-    var json = await _send(force: false);
-    if (json == null) {
-      portalLog('session.expired', fields: {'service': 'portal'});
-      json = await _send(force: true);
-    }
-    if (json == null) {
-      throw const PortalLoginError(
-        '学业概览接口未返回数据，请稍后再试',
-        code: 'session_unavailable_after_relogin',
-        stage: 'response.validate',
-        context: {'endpoint': 'academic.summary', 'service': 'portal'},
-      );
-    }
-    return AcademicSummary.fromJson(json, fetchedAt: DateTime.now());
+    final response = await (debugExecutor ?? PortalSession.instance.executor)
+        .execute(
+          const IportalSpec(),
+          () => RequestOptions(
+            path: _api.toString(),
+            responseType: ResponseType.plain,
+            headers: {'Accept': 'application/json'},
+          ),
+          idempotent: true,
+        );
+    requireServiceSuccess(
+      response,
+      endpoint: 'academic.summary',
+      service: 'portal',
+    );
+    return AcademicSummary.fromJson(
+      _decode(response.data),
+      fetchedAt: DateTime.now(),
+    );
   }
 
-  /// 返回 null 表示响应不是 JSON 对象（多半是没登录）。
-  static Future<Map<String, dynamic>?> _send({required bool force}) async {
-    final http = await PortalSession.instance.clientFor(
-      PortalServices.iportal,
-      force: force,
-    );
-    final response = await http.followRedirects(
-      await http.get(_api, headers: {'Accept': 'application/json'}),
-    );
-    final raw = response.data;
-    if (raw == null || (raw is String && raw.trim().isEmpty)) return null;
+  static Map<String, dynamic> _decode(Object? raw) {
     try {
       final decoded = raw is String ? jsonDecode(raw) : raw;
       if (decoded is Map<String, dynamic> && decoded.containsKey('XH')) {
         return decoded;
       }
     } on FormatException catch (error, stackTrace) {
-      if (raw is String && raw.contains('authserver/login')) return null;
       throw DiagnosticException(
         '学业概览响应不是有效 JSON',
         code: 'response_invalid_json',

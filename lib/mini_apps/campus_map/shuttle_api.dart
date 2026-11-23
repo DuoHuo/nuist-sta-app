@@ -142,18 +142,31 @@ class ShuttleApi implements ShuttleSource {
         }
         _session = session;
       }
-      final data = await _json(
-        _login!
-            .resolve('StandardApiAction_getDeviceStatus.action')
-            .replace(
-              queryParameters: {
-                'jsession': _session!,
-                'vehiIdno': _vehicleQuery,
-                'toMap': '1',
-              },
-            ),
-        stage: 'shuttle.vehicles',
-      );
+      final Map<String, dynamic> data;
+      try {
+        data = await _json(
+          _login!
+              .resolve('StandardApiAction_getDeviceStatus.action')
+              .replace(
+                queryParameters: {
+                  'jsession': _session!,
+                  'vehiIdno': _vehicleQuery,
+                  'toMap': '1',
+                },
+              ),
+          stage: 'shuttle.vehicles',
+        );
+      } on DioException catch (error) {
+        final status = error.response?.statusCode;
+        if (status != 401 && status != 403) rethrow;
+        _session = null;
+        _log.debug(
+          'session.invalidated',
+          fields: {'attempt': attempt + 1, 'status_code': status},
+        );
+        if (attempt == 0) continue;
+        rethrow;
+      }
       if (data['result'] == 0) {
         final rows = data['status'];
         if (rows is! List) {

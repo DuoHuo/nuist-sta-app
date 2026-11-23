@@ -5,7 +5,13 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/logging/diagnostic_error.dart';
-import 'package:nuist_sta_app/core/auth/portal_http.dart';
+import 'package:cookie_jar/cookie_jar.dart';
+import 'package:nuist_sta_app/core/auth/campus_transport.dart';
+import 'package:nuist_sta_app/core/auth/cas_session.dart';
+import 'package:nuist_sta_app/core/auth/portal_cookie_store.dart';
+import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
+import 'package:nuist_sta_app/core/auth/session_executor.dart';
+import 'package:nuist_sta_app/core/config/campus_config.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
@@ -64,7 +70,7 @@ Response<dynamic> _resp(
 
 void main() {
   late Directory tmp;
-  Dio? fakeDio;
+  _AuthHarness? auth;
   final c = TimetableController.instance;
   final loginHtml = File('test/fixtures/timetable/login_redirect_mock.html')
       .readAsStringSync();
@@ -84,10 +90,10 @@ void main() {
   tearDown(() async {
     TimetableStore.debugDirectory = null;
     TimetableApi.debugPost = null;
-    TimetableApi.debugPostResponse = null;
-    TimetableApi.debugClientFor = null;
-    fakeDio?.close(force: true);
-    fakeDio = null;
+    TimetableApi.debugExecutor = null;
+    TimetableApi.rolePreCallRoleId = null;
+    auth?.dio.close(force: true);
+    auth = null;
     TimetableController.clock = TimetableApi.shanghaiToday;
     TimetableController.fetchSnapshot = (term, {baseSettings}) =>
         TimetableApi.fetchTermSnapshot(term, baseSettings: baseSettings);
@@ -202,379 +208,255 @@ void main() {
     });
   });
 
-  group('classification via raw response (relogin path)', () {
-    test('并发可选段 403 共用一次重登，随后分别取得新会话结果', () async {
-      final freshReady = Completer<void>();
-      final restoring = Completer<void>();
-      final optionalStarted = <String>{};
-      var forced = 0;
-      var recovered = false;
-      TimetableApi.debugPostResponse = (uri, form, {required force}) async {
-        final endpoint = uri.pathSegments.last;
-        if (endpoint == 'cxxszhxqkb.do') {
-          return _resp(
-            uri,
-            data: {
-              'code': '0',
-              'datas': {
-                'cxxszhxqkb': {'rows': <Object?>[]},
-              },
-            },
-          );
-        }
-        optionalStarted.add(endpoint);
-        if (force) {
-          forced++;
-          if (!restoring.isCompleted) restoring.complete();
-          await freshReady.future;
-          recovered = true;
-        } else if (!recovered) {
-          return _resp(uri, status: 403);
-        }
-        return _resp(
-          uri,
-          data: {
-            'code': '0',
-            'datas': <String, dynamic>{
-              if (endpoint == 'xswpkc.do') 'xswpkc': {'rows': <Object?>[]},
-            },
-          },
-        );
-      };
-      final snapshot = TimetableApi.fetchTermSnapshot('2026-2027-1');
-      await restoring.future;
-      await pumpEventQueue();
-      expect(optionalStarted, hasLength(4));
-      expect(forced, 1);
-      freshReady.complete();
-      expect((await snapshot).courses, isEmpty);
-      expect(forced, 1, reason: '四个失效响应只进行一次共享恢复');
-    });
+  _AuthHarness install(
+    FutureOr<Response<dynamic>> Function(RequestOptions options, int logins)
+    route,
+  ) {
+    auth = _AuthHarness(route);
+    TimetableApi.debugExecutor = auth!.executor;
+    return auth!;
+  }
 
-    test('login_redirect_mock.html after relogin → sessionExpired', () async {
-      var calls = 0;
-      TimetableApi.debugPostResponse = (u, f, {required force}) async {
-        calls++;
-        return _resp(u, data: loginHtml, contentType: 'text/html');
-      };
-      await expectFailure(TimetableSyncFailure.sessionExpired);
-      expect(calls, 2, reason: 'one original + one relogin attempt');
-    });
-    test(
-      '200 HTML after redirect to authserver/login → sessionExpired',
-      () async {
-        TimetableApi.debugPostResponse = (u, f, {required force}) async =>
-            _resp(
-              u,
-              data: '<html><body>请登录</body></html>',
-              contentType: 'text/html;charset=UTF-8',
-              realUri: Uri.parse(
-                'https://authserver.example.test/authserver/login?service=x',
-              ),
-            );
-        await expectFailure(TimetableSyncFailure.sessionExpired);
-      },
-    );
-    test('200 JSON code != 0 → unknown', () async {
-      TimetableApi.debugPostResponse = (u, f, {required force}) async =>
-          _resp(u, data: {'code': '1', 'msg': 'err'});
-      await expectFailure(TimetableSyncFailure.unknown);
-    });
-    test('raw 503 → server', () async {
-      TimetableApi.debugPostResponse = (u, f, {required force}) async =>
-          _resp(u, status: 503, data: 'oops', contentType: 'text/plain');
-      await expectFailure(TimetableSyncFailure.server);
-    });
-  });
-
-  group('HTTP 403 与手动同步重登', () {
-    late Future<bool> Function() originalBindingCheck;
+  group('统一鉴权真实请求链路', () {
     final freshJson = {
       'code': '0',
       'datas': {
-        'cxxszhxqkb': {
-          'rows': [
-            {
-              'KCM': '更新后的课程',
-              'KCH': 'mock-course',
-              'SKXQ': 1,
-              'KSJC': 1,
-              'JSJC': 2,
-              'SKZC': '1111111111111111',
-            },
-          ],
-        },
+        'cxxszhxqkb': {'rows': <Object?>[]},
       },
     };
+    Response<dynamic> queryResponse(RequestOptions options) {
+      final endpoint = options.uri.pathSegments.last.replaceFirst('.do', '');
+      return _resp(
+        options.uri,
+        data: {
+          'code': '0',
+          'datas': {
+            endpoint: {'rows': <Object?>[]},
+          },
+        },
+      );
+    }
 
-    setUp(() async {
-      originalBindingCheck = TimetableController.bindingCheck;
-      TimetableController.bindingCheck = () async => true;
-      TimetableController.fetchSnapshot = (term, {baseSettings}) =>
-          TimetableApi.fetchTermSnapshot(term, baseSettings: baseSettings);
-      await c.ensureStarted();
-      await seedCache();
-      await TimetableStore.saveSnapshot(c.snapshot);
+    test('业务403清脏Cookie后重进首页与角色，再重放POST', () async {
+      TimetableApi.rolePreCallRoleId = 'mock-role';
+      final order = <String>[];
+      final h = install((options, logins) {
+        final path = options.uri.path;
+        order.add('$logins:${options.method}:${path.split('/').last}');
+        if (path.endsWith('cxxszhxqkb.do') && logins == 1) {
+          return _resp(options.uri, status: 403);
+        }
+        if (options.method == 'POST') {
+          return queryResponse(options);
+        }
+        return _resp(
+          options.uri,
+          data: '<html>业务首页</html>',
+          contentType: 'text/html',
+        );
+      });
+      await h.cookies.openJar().saveFromResponse(
+        Uri.https(CampusHosts.jwxt, '/'),
+        [Cookie('dirty', 'old')],
+      );
+      expect(await TimetableApi.fetchSemesterCourses('2026-2027-1'), isEmpty);
+      expect(h.logins, 2);
+      expect(order.where((e) => e.endsWith('index.do')), hasLength(2));
+      expect(
+        order.where((e) => e.endsWith('setJwCommonAppRole.do')),
+        hasLength(2),
+      );
+      expect(
+        order.indexOf('2:POST:setJwCommonAppRole.do'),
+        lessThan(order.indexOf('2:POST:cxxszhxqkb.do')),
+      );
+      expect(
+        await h.cookies.openJar().loadForRequest(
+          Uri.https(CampusHosts.jwxt, '/'),
+        ),
+        isEmpty,
+      );
     });
 
-    tearDown(() => TimetableController.bindingCheck = originalBindingCheck);
+    test('角色初始化失败时不发送任何业务查询', () async {
+      TimetableApi.rolePreCallRoleId = 'mock-role';
+      final order = <String>[];
+      final h = install((options, logins) {
+        final endpoint = options.uri.pathSegments.last;
+        order.add(endpoint);
+        return _resp(
+          options.uri,
+          status: endpoint == 'setJwCommonAppRole.do' ? 403 : 200,
+          data: '<html>业务首页</html>',
+          contentType: 'text/html',
+        );
+      });
+      await expectLater(
+        TimetableApi.fetchSemesterCourses('2026-2027-1'),
+        throwsA(isA<PortalLoginError>()),
+      );
+      expect(order, ['mock-landing', 'index.do', 'setJwCommonAppRole.do']);
+      expect(h.logins, 1);
+    });
+
+    test('课表重登后考试403仍有独立恢复机会', () async {
+      var courseRejected = false;
+      var examRejected = false;
+      final h = install((options, logins) {
+        final path = options.uri.path;
+        if (path.endsWith('cxxszhxqkb.do') && !courseRejected) {
+          courseRejected = true;
+          return _resp(options.uri, status: 403);
+        }
+        if (path.endsWith('cxxsksap.do') && !examRejected) {
+          examRejected = true;
+          return _resp(options.uri, status: 403);
+        }
+        if (options.method == 'POST') {
+          return queryResponse(options);
+        }
+        return _resp(
+          options.uri,
+          data: '<html>业务首页</html>',
+          contentType: 'text/html',
+        );
+      });
+      expect(
+        (await TimetableApi.fetchTermSnapshot('2026-2027-1')).courses,
+        isEmpty,
+      );
+      expect(await TimetableApi.fetchExams('2026-2027-1'), isEmpty);
+      expect(h.logins, 4, reason: '两个应用各自初始化，两次失效各自恢复');
+    });
+
+    test('五个错峰403只共享一次重登，较晚响应复用新revision', () async {
+      final delayed = Completer<void>();
+      final started = Completer<void>();
+      var rejected = 0;
+      final h = install((options, logins) async {
+        if (options.method != 'POST') {
+          return _resp(
+            options.uri,
+            data: '<html>首页</html>',
+            contentType: 'text/html',
+          );
+        }
+        if (logins == 1) {
+          rejected++;
+          if (rejected == 5) started.complete();
+          if (rejected >= 3) await delayed.future;
+          return _resp(options.uri, status: 403);
+        }
+        return _resp(options.uri, data: freshJson);
+      });
+      final requests = List.generate(
+        5,
+        (_) => TimetableApi.fetchSemesterCourses('2026-2027-1'),
+      );
+      await started.future;
+      await pumpEventQueue();
+      expect(h.logins, 2);
+      delayed.complete();
+      expect(await Future.wait(requests), everyElement(isEmpty));
+      expect(h.logins, 2);
+    });
+
+    for (final entry in <String, (int, String, TimetableSyncFailure)>{
+      '登录HTML': (200, loginHtml, TimetableSyncFailure.sessionExpired),
+      'casLoginForm': (
+        200,
+        '<html><form id="casLoginForm"></form></html>',
+        TimetableSyncFailure.sessionExpired,
+      ),
+      '普通维护HTML': (200, webvpnMaintenanceHtml, TimetableSyncFailure.unknown),
+      '502网关': (502, gateway502Html, TimetableSyncFailure.server),
+      '503含authserver': (
+        503,
+        '<html>authserver维护</html>',
+        TimetableSyncFailure.server,
+      ),
+      '504网关': (504, gateway502Html, TimetableSyncFailure.server),
+    }.entries) {
+      test('${entry.key}正确分类并保持缓存', () async {
+        final h = install((options, logins) {
+          if (options.method != 'POST') {
+            return _resp(
+              options.uri,
+              data: '<html>首页</html>',
+              contentType: 'text/html',
+            );
+          }
+          return _resp(
+            options.uri,
+            status: entry.value.$1,
+            data: entry.value.$2,
+            contentType: 'text/html',
+          );
+        });
+        await expectFailure(entry.value.$3);
+        expect(
+          h.logins,
+          entry.value.$3 == TimetableSyncFailure.sessionExpired ? 2 : 1,
+        );
+      });
+    }
+
+    test('200业务JSON错误不重登', () async {
+      final h = install(
+        (options, logins) => options.method == 'POST'
+            ? _resp(options.uri, data: {'code': '1', 'msg': '合成错误'})
+            : _resp(
+                options.uri,
+                data: '<html>首页</html>',
+                contentType: 'text/html',
+              ),
+      );
+      await expectFailure(TimetableSyncFailure.unknown);
+      expect(h.logins, 1);
+    });
 
     for (final error in [
-      const JwxtHttpError('cxxszhxqkb.do', 403),
-      DioException(
-        requestOptions: RequestOptions(path: '/mock'),
-        type: DioExceptionType.badResponse,
-        response: _resp(Uri.parse('https://jwxt.test/mock'), status: 403),
+      const PortalLoginError(
+        '教务拒绝',
+        code: 'service_status_rejected',
+        context: {'status_code': 403},
       ),
+      const PortalLoginError('重登耗尽', code: 'reauthentication_exhausted'),
+      const PortalLoginError('账号变化', code: 'session_generation_changed'),
     ]) {
-      test('${error.runtimeType} 的 403 归为会话失效', () async {
+      test('${error.code}归为sessionExpired', () async {
         TimetableApi.debugPost = (url, form) async => throw error;
-        expect(await c.manualSync(), isTrue);
-        expect(c.syncFailure, TimetableSyncFailure.sessionExpired);
-        expect(c.portalSessionExpired, isTrue);
-        expect(c.jwxtCourses.single.id, 'cached');
+        await expectFailure(TimetableSyncFailure.sessionExpired);
       });
     }
-
-    test('主课程重登成功但必需未排课仍 403，只重登一次并保留完整缓存', () async {
-      final attempts = <String, List<bool>>{};
-      TimetableApi.debugPostResponse = (url, form, {required force}) async {
-        final endpoint = url.pathSegments.last;
-        attempts.putIfAbsent(endpoint, () => []).add(force);
-        if (endpoint == 'cxxszhxqkb.do') {
-          return _resp(url, status: force ? 200 : 403, data: freshJson);
-        }
-        if (endpoint == 'xswpkc.do') return _resp(url, status: 403);
-        return _resp(url, data: {'code': '0', 'datas': <String, dynamic>{}});
-      };
-
-      expect(await c.manualSync(), isTrue);
-      expect(attempts['cxxszhxqkb.do'], [false, true]);
-      expect(attempts['xswpkc.do'], [false]);
+    test('PortalLoginError保留5xx服务器分类', () {
       expect(
-        attempts.values.expand((values) => values).where((force) => force),
-        hasLength(1),
-      );
-      expect(c.syncStatus, TimetableSyncStatus.failure);
-      expect(c.portalSessionExpired, isTrue);
-      expect(c.jwxtCourses.single.id, 'cached');
-      expect(
-        (await TimetableStore.readSnapshot())!.courses.single.id,
-        'cached',
+        classifySyncError(
+          const PortalLoginError('服务拒绝', context: {'status_code': 503}),
+        ),
+        TimetableSyncFailure.server,
       );
     });
 
-    for (final malformed in [false, true]) {
-      test(
-        malformed ? '必需未排课缺 rows 保留完整缓存并反馈响应错误' : '必需未排课超时保留完整缓存并反馈网络错误',
-        () async {
-          TimetableApi.debugPost = (uri, form) async {
-            if (uri.pathSegments.last == 'cxxszhxqkb.do') return freshJson;
-            if (uri.pathSegments.last == 'xswpkc.do') {
-              if (malformed) {
-                return {
-                  'code': '0',
-                  'datas': {'xswpkc': {}},
-                };
-              }
-              throw TimeoutException('合成未排课超时');
-            }
-            return {'code': '0', 'datas': <String, dynamic>{}};
-          };
-          expect(await c.manualSync(), isTrue);
-          expect(c.syncStatus, TimetableSyncStatus.failure);
-          expect(
-            c.syncFailure,
-            malformed
-                ? TimetableSyncFailure.unknown
-                : TimetableSyncFailure.network,
-          );
-          expect(c.jwxtCourses.single.id, 'cached');
-          expect(
-            (await TimetableStore.readSnapshot())!.courses.single.id,
-            'cached',
-          );
-        },
-      );
-    }
-
-    test('连续 403 仅重登一次并保留缓存，下次手动同步可重新恢复', () async {
-      final attempts = <bool>[];
-      var recovered = false;
-      TimetableApi.debugPostResponse = (url, form, {required force}) async {
-        if (url.pathSegments.last == 'cxxszhxqkb.do') {
-          attempts.add(force);
+    test('每个请求重登耗尽后保留缓存，下次请求仍能恢复', () async {
+      var recover = false;
+      final h = install((options, logins) {
+        if (options.method != 'POST') {
           return _resp(
-            url,
-            status: recovered && force ? 200 : 403,
-            data: freshJson,
+            options.uri,
+            data: '<html>首页</html>',
+            contentType: 'text/html',
           );
         }
-        return _resp(
-          url,
-          data: {
-            'code': '0',
-            'datas': <String, dynamic>{
-              if (url.pathSegments.last == 'xswpkc.do')
-                'xswpkc': {'rows': <Object?>[]},
-            },
-          },
-        );
-      };
-
-      expect(await c.manualSync(), isTrue);
-      expect(attempts, [false, true]);
-      expect(c.syncStatus, TimetableSyncStatus.failure);
-      expect(c.syncFailure, TimetableSyncFailure.sessionExpired);
-      expect(c.portalSessionExpired, isTrue);
-      expect(c.jwxtCourses.single.id, 'cached');
-      expect(
-        (await TimetableStore.readSnapshot())!.courses.single.id,
-        'cached',
-      );
-
-      recovered = true;
-      expect(await c.manualSync(), isTrue);
-      expect(attempts, [false, true, false, true]);
+        if (!recover) return _resp(options.uri, status: 403);
+        return queryResponse(options);
+      });
+      await expectFailure(TimetableSyncFailure.sessionExpired);
+      expect(h.logins, 2);
+      recover = true;
+      await c.syncFromJwxt();
       expect(c.syncStatus, TimetableSyncStatus.success);
       expect(c.portalSessionExpired, isFalse);
-      expect(c.jwxtCourses.single.name, '更新后的课程');
-    });
-
-    for (final homepageRecovers in [true, false]) {
-      test(
-        homepageRecovers
-            ? '首页 403 重登成功后 POST 仍 403，总共只重登一次并保留缓存'
-            : '首页持续 403 只重登一次，不发送 POST 并保留缓存',
-        () async {
-          // 原始响应钩子将应用首页缓存置为失效，保证测试不依赖其他测试的 ready 状态。
-          TimetableApi.debugPostResponse = (
-            url,
-            form, {
-            required force,
-          }) async => _resp(url, status: 403);
-          await expectLater(
-            TimetableApi.fetchTermSnapshot(c.settings.termCode),
-            throwsA(isA<JwxtSessionExpiredError>()),
-          );
-          TimetableApi.debugPostResponse = null;
-
-          final clients = <bool>[];
-          final methods = <String>[];
-          var reloggedIn = false;
-          fakeDio = Dio()
-            ..interceptors.add(
-              InterceptorsWrapper(
-                onRequest: (options, handler) {
-                  methods.add(options.method);
-                  handler.resolve(
-                    Response<dynamic>(
-                      requestOptions: options,
-                      statusCode:
-                          options.method == 'GET' &&
-                              homepageRecovers &&
-                              reloggedIn
-                          ? 200
-                          : 403,
-                      data: '<html><body>模拟业务响应</body></html>',
-                      headers: Headers.fromMap({
-                        Headers.contentTypeHeader: ['text/html'],
-                      }),
-                    ),
-                  );
-                },
-              ),
-            );
-          TimetableApi.debugClientFor = ({required force}) async {
-            clients.add(force);
-            if (force) reloggedIn = true;
-            return PortalHttp(fakeDio!);
-          };
-
-          expect(await c.manualSync(), isTrue);
-          expect(clients, [false, true]);
-          expect(
-            methods,
-            homepageRecovers ? ['GET', 'GET', 'POST'] : ['GET', 'GET'],
-          );
-          expect(c.syncStatus, TimetableSyncStatus.failure);
-          expect(c.syncFailure, TimetableSyncFailure.sessionExpired);
-          expect(c.portalSessionExpired, isTrue);
-          expect(c.jwxtCourses.single.id, 'cached');
-          expect(
-            (await TimetableStore.readSnapshot())!.courses.single.id,
-            'cached',
-          );
-        },
-      );
-    }
-  });
-
-  group('HTML error pages (classification order)', () {
-    final errorHtml = {
-      502: gateway502Html,
-      // Keep 503 inline: body intentionally contains 'authserver' to ensure
-      // 5xx is classified as server before session-expired HTML checks.
-      503:
-          '<!DOCTYPE html><html><body><h1>503 Service Unavailable</h1>'
-          '<p>请访问 authserver 稍后重试</p></body></html>',
-      504: gateway502Html,
-    };
-    for (final entry in errorHtml.entries) {
-      test('${entry.key} HTML → server, 0 relogins', () async {
-        var calls = 0;
-        var forced = 0;
-        TimetableApi.debugPostResponse = (u, f, {required force}) async {
-          calls++;
-          if (force) forced++;
-          return _resp(
-            u,
-            status: entry.key,
-            data: entry.value,
-            contentType: 'text/html;charset=UTF-8',
-          );
-        };
-        await expectFailure(TimetableSyncFailure.server);
-        expect(forced, 0, reason: 'never relogin on 5xx');
-        expect(calls, 1);
-      });
-    }
-
-    test('200 casLoginForm HTML → relogin once, then sessionExpired', () async {
-      var calls = 0;
-      var forced = 0;
-      TimetableApi.debugPostResponse = (u, f, {required force}) async {
-        calls++;
-        if (force) forced++;
-        return _resp(
-          u,
-          data:
-              '<html><body><form id="casLoginForm" method="post">'
-              '<input name="username"/><input name="password"/>'
-              '</form></body></html>',
-          contentType: 'text/html;charset=UTF-8',
-        );
-      };
-      await expectFailure(TimetableSyncFailure.sessionExpired);
-      expect(forced, 1, reason: 'exactly one relogin');
-      expect(calls, 2);
-    });
-
-    test('200 maintenance HTML → unknown, 0 relogins', () async {
-      var calls = 0;
-      var forced = 0;
-      TimetableApi.debugPostResponse = (u, f, {required force}) async {
-        calls++;
-        if (force) forced++;
-        return _resp(
-          u,
-          data: webvpnMaintenanceHtml,
-          contentType: 'text/html;charset=UTF-8',
-        );
-      };
-      await expectFailure(TimetableSyncFailure.unknown);
-      expect(forced, 0, reason: 'maintenance page must not trigger relogin');
-      expect(calls, 1);
     });
   });
 
@@ -743,4 +625,75 @@ void main() {
       expect(c.syncStatus, TimetableSyncStatus.success);
     },
   );
+}
+
+class _MemoryStorage implements Storage {
+  final values = <String, String>{};
+  @override
+  Future<void> init(bool persistSession, bool ignoreExpires) async {}
+  @override
+  Future<String?> read(String key) async => values[key];
+  @override
+  Future<void> write(String key, String value) async {
+    values[key] = value;
+  }
+
+  @override
+  Future<void> delete(String key) async {
+    values.remove(key);
+  }
+
+  @override
+  Future<void> deleteAll(List<String> keys) async {
+    keys.forEach(values.remove);
+  }
+}
+
+class _AuthHarness {
+  _AuthHarness(this.route) {
+    dio.httpClientAdapter = _RouteAdapter((options) => route(options, logins));
+    final transport = CampusTransport.authenticated(
+      dio: dio,
+      cookieStore: cookies,
+    );
+    executor = SessionExecutor(
+      transport: transport,
+      cookieStore: cookies,
+      authenticate: (service, {bool forceFreshWebAuthn = false}) async {
+        logins++;
+        return CasAuthenticationResult(
+          landingUri: Uri.https(CampusHosts.jwxt, '/mock-landing'),
+        );
+      },
+    );
+  }
+  final FutureOr<Response<dynamic>> Function(RequestOptions options, int logins)
+  route;
+  final cookies = PortalCookieStore(storage: _MemoryStorage());
+  final dio = Dio();
+  late final SessionExecutor executor;
+  int logins = 0;
+}
+
+class _RouteAdapter implements HttpClientAdapter {
+  _RouteAdapter(this.route);
+  final FutureOr<Response<dynamic>> Function(RequestOptions options) route;
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<List<int>>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    final response = await route(options);
+    return ResponseBody.fromString(
+      response.data is String
+          ? response.data as String
+          : jsonEncode(response.data),
+      response.statusCode ?? 200,
+      headers: response.headers.map,
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
 }

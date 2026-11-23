@@ -42,6 +42,21 @@ TimetableSyncFailure classifySyncError(Object e) {
   if (e is JwxtSessionExpiredError) return TimetableSyncFailure.sessionExpired;
   if (e is PortalNetworkError) return TimetableSyncFailure.network;
   if (e is PortalCredentialError) return TimetableSyncFailure.sessionExpired;
+  if (e is PortalLoginError) {
+    final status = e.context['status_code'];
+    if (status is int && status >= 500) return TimetableSyncFailure.server;
+    if (status == 401 ||
+        status == 403 ||
+        const {
+          'returned_to_login',
+          'service_returned_to_login',
+          'reauthentication_exhausted',
+          'session_generation_changed',
+          'service_cookie_revision_changed',
+        }.contains(e.code)) {
+      return TimetableSyncFailure.sessionExpired;
+    }
+  }
   if (e is TimeoutException || e is SocketException || e is HttpException) {
     return TimetableSyncFailure.network;
   }

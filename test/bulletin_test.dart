@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/app_directories.dart';
 import 'package:nuist_sta_app/core/theme.dart';
+import 'package:nuist_sta_app/core/config/campus_config.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_api.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_controller.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_detail_page.dart';
@@ -16,7 +17,80 @@ import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_store.dart';
 import 'package:nuist_sta_app/mini_apps/bulletin/bulletin_tagger.dart';
 
 void main() {
-  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('默认无状态Dio按标准拦截器跟随官网重定向并保留最终地址', () async {
+    final adapter = _RedirectBulletinAdapter((options) {
+      expect(
+        options.headers.keys.map((key) => key.toLowerCase()),
+        isNot(contains('cookie')),
+      );
+      if (options.uri.path.endsWith('/first.htm')) {
+        return ResponseBody.fromString(
+          '',
+          302,
+          headers: {
+            'location': ['/info/1001/final.htm'],
+          },
+        );
+      }
+      return ResponseBody.fromString(
+        '<div class="wp_articlecontent"><p>合成公告正文。</p></div>',
+        200,
+      );
+    });
+    final dio = Dio()..httpClientAdapter = adapter;
+    addTearDown(() => dio.close(force: true));
+    final result = await BulletinApi(dio: dio).fetchDetail(
+      Bulletin(
+        id: 'test',
+        title: '测试公告',
+        officialCategory: '测试',
+        publisher: '测试单位',
+        publishedAt: '2026-11-22',
+        url: 'https://${CampusHosts.bulletin}/info/1001/first.htm',
+      ),
+    );
+    expect(result, isNotNull);
+    expect(adapter.requests.map((options) => options.uri.path), [
+      '/info/1001/first.htm',
+      '/info/1001/final.htm',
+    ]);
+  });
+
+  for (final target in [
+    'https://outside.example.test/article',
+    'http://${CampusHosts.bulletin}/article',
+    'https://${CampusHosts.bulletin}:8443/article',
+  ]) {
+    test('公告跳转离开官网允许原点时返回网页入口', () async {
+      final adapter = _RedirectBulletinAdapter(
+        (options) => ResponseBody.fromString(
+          '',
+          302,
+          headers: {
+            'location': [target],
+          },
+        ),
+      );
+      final dio = Dio()..httpClientAdapter = adapter;
+      addTearDown(() => dio.close(force: true));
+      expect(
+        await BulletinApi(dio: dio).fetchDetail(
+          Bulletin(
+            id: 'test',
+            title: '测试公告',
+            officialCategory: '测试',
+            publisher: '测试单位',
+            publishedAt: '2026-11-22',
+            url: 'https://${CampusHosts.bulletin}/info/1001/first.htm',
+          ),
+        ),
+        isNull,
+      );
+      expect(adapter.requests, hasLength(1));
+    });
+  }
 
   test('订阅主题共 14 个，且默认关闭', () {
     expect(BulletinTopic.values, hasLength(14));
@@ -433,22 +507,14 @@ void main() {
   });
 
   group('公告附件下载文件名', () {
-    const channel = MethodChannel('plugins.flutter.io/path_provider');
     late Directory directory;
 
     setUp(() async {
-      AppDirectories.resetForTesting();
       directory = await Directory.systemTemp.createTemp('bulletin-test-');
-      binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
-        call,
-      ) async {
-        if (call.method == 'getTemporaryDirectory') return directory.path;
-        return null;
-      });
+      AppDirectories.overrideForTesting(temporary: () async => directory);
     });
 
     tearDown(() async {
-      binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
       AppDirectories.resetForTesting();
       await directory.delete(recursive: true);
     });
@@ -763,4 +829,22 @@ class _MemoryStore extends BulletinStore {
 
   @override
   Future<void> save(BulletinLocalData data) async => this.data = data;
+}
+
+class _RedirectBulletinAdapter implements HttpClientAdapter {
+  _RedirectBulletinAdapter(this.respond);
+  final ResponseBody Function(RequestOptions) respond;
+  final requests = <RequestOptions>[];
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    requests.add(options);
+    return respond(options);
+  }
+
+  @override
+  void close({bool force = false}) {}
 }

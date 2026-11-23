@@ -5,6 +5,8 @@ import 'package:dio/dio.dart';
 
 import '../../core/auth/passkey_store.dart';
 import '../../core/auth/portal_session.dart';
+import '../../core/auth/service_auth_spec.dart';
+import '../../core/auth/session_executor.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/logging/http_diagnostics.dart';
@@ -12,10 +14,14 @@ import 'library_models.dart';
 
 /// 公开馆藏使用独立客户端，读者接口复用统一门户会话。
 class LibraryApi {
-  LibraryApi({Dio? catalogue, Dio? coverImages, PortalSession? portal})
-    : _catalogue = catalogue ?? _publicClient,
-      _coverImages = coverImages ?? _coverClient,
-      _portal = portal ?? PortalSession.instance {
+  LibraryApi({
+    Dio? catalogue,
+    Dio? coverImages,
+    this._portal,
+    SessionExecutor? executor,
+  }) : _catalogue = catalogue ?? _publicClient,
+       _coverImages = coverImages ?? _coverClient,
+       _suppliedExecutor = executor {
     installHttpDiagnostics(_catalogue);
   }
 
@@ -48,7 +54,10 @@ class LibraryApi {
 
   final Dio _catalogue;
   final Dio _coverImages;
-  final PortalSession _portal;
+  final PortalSession? _portal;
+  final SessionExecutor? _suppliedExecutor;
+  SessionExecutor get _executor =>
+      _suppliedExecutor ?? (_portal ?? PortalSession.instance).executor;
 
   /// 检查本机是否已绑定统一门户。
   Future<bool> hasPortalBinding() async => await PasskeyStore.read() != null;
@@ -159,9 +168,15 @@ class LibraryApi {
       'page': '$page',
       'pageSize': '$_pageSize',
     });
-    final response = await _portal.request(
-      PortalServices.library,
-      (http) => http.get(uri, headers: _headers, cancelToken: cancelToken),
+    final response = await _executor.execute(
+      const LibrarySpec(),
+      () => RequestOptions(
+        path: uri.toString(),
+        headers: _headers,
+        responseType: ResponseType.plain,
+        cancelToken: cancelToken,
+      ),
+      idempotent: true,
     );
     if (response.statusCode != 200 || response.realUri != uri) {
       throw const FormatException('图书馆借阅接口返回异常响应');

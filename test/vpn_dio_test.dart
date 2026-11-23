@@ -4,13 +4,14 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:cookie_jar/cookie_jar.dart';
 import 'package:asn1lib/asn1lib.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/aia_trust.dart';
 import 'package:nuist_sta_app/core/auth/portal_http.dart';
 import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
+import 'package:nuist_sta_app/core/auth/campus_transport.dart';
 import 'package:nuist_sta_app/core/auth/portal_cookie_manager.dart';
-import 'package:cookie_jar/cookie_jar.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/logging/diagnostic_error.dart';
 import 'package:nuist_sta_app/core/logging/http_diagnostics.dart';
@@ -32,6 +33,20 @@ class LocalConnector implements VpnConnector {
     if (fail) throw const SocketException('模拟 VPN 连接失败');
     return Socket.startConnect(InternetAddress.loopbackIPv4, uri.port);
   }
+}
+
+class _ScriptedAdapter implements HttpClientAdapter {
+  _ScriptedAdapter(this.respond);
+  final Future<ResponseBody> Function(RequestOptions, Stream<Uint8List>?)
+  respond;
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? stream,
+    Future<void>? cancelled,
+  ) => respond(options, stream);
+  @override
+  void close({bool force = false}) {}
 }
 
 class _SyntheticAiaCertificate implements X509Certificate {
@@ -112,13 +127,53 @@ class LocalSessionConnector extends LocalConnector
   int? sessionId = 1;
 }
 
+VpnSession _testSession(int id) => VpnSession(
+  engineId: id,
+  proxyPort: 0,
+  proxyToken: 'synthetic',
+  establishedAt: DateTime(2026),
+  generation: id,
+);
+
+class ChangingPreparedConnector extends LocalSessionConnector
+    implements VpnPreparedConnector {
+  @override
+  Future<VpnSession> prepare() async {
+    final locked = _testSession(sessionId!);
+    scheduleMicrotask(() => sessionId = locked.engineId + 1);
+    return locked;
+  }
+}
+
+class DrainingDuringPreparationGateway extends VpnGateway {
+  DrainingDuringPreparationGateway({
+    required super.native,
+    required super.auth,
+  });
+  bool first = true;
+  @override
+  Future<VpnSession> prepare() async {
+    final locked = await super.prepare();
+    if (first) {
+      first = false;
+      await onNativeEvent({
+        'engineId': locked.engineId,
+        'event': 'draining',
+        'reason': 'receive_terminal',
+      });
+    }
+    return locked;
+  }
+}
+
 class PreparedLocalConnector extends LocalSessionConnector
     implements VpnPreparedConnector {
   int preparations = 0;
   @override
-  Future<void> prepare() async {
+  Future<VpnSession> prepare() async {
     preparations++;
     if (preparations == 2) sessionId = 2;
+    return _testSession(sessionId!);
   }
 }
 
@@ -127,106 +182,50 @@ class WaitingLocalConnector extends LocalSessionConnector
   final entered = Completer<void>();
   final ready = Completer<void>();
   @override
-  Future<void> prepare() {
+  Future<VpnSession> prepare() {
     if (!entered.isCompleted) entered.complete();
-    return ready.future;
+    return ready.future.then((_) => _testSession(sessionId!));
   }
 }
 
 class FakeNative extends VpnNative {
   FakeNative(this.port);
   final int port;
+  final controller = StreamController<Map<String, dynamic>>.broadcast(
+    sync: true,
+  );
+  @override
+  Stream<Map<String, dynamic>> get events => controller.stream;
   int starts = 0;
-  int opens = 0;
-  final stopped = <int>[];
-  final starting = Completer<void>();
-  final startGate = Completer<void>();
-  int _startSequence = 0;
-  bool healthy = true;
-  bool failOpenOnce = false;
-  bool recovering = false;
-  int statusCalls = 0;
   int probes = 0;
-  bool needsProbe = false;
-  final probeGate = Completer<void>();
-  Completer<void>? openGate;
-  int activeOpens = 0;
-  int peakOpens = 0;
-  final openedHosts = <String>[];
-  int openSequence = 0;
-  final openControls = <int, Completer<void>>{};
-  Completer<void>? prepareOpenGate;
-
+  int reservations = 0;
+  final stopped = <int>[];
+  Completer<void>? startGate;
+  bool healthy = true;
   @override
   Future<Map<String, dynamic>> call(Map<String, dynamic> request) async {
     switch (request['method']) {
       case 'version':
-        return {'abi': 1};
+        return {'abi': 2};
       case 'prepareStart':
-        return {'startId': ++_startSequence};
-      case 'prepareOpen':
-        final id = ++openSequence;
-        openControls[id] = Completer<void>();
-        await prepareOpenGate?.future;
-        return {'openId': id};
-      case 'cancelOpen':
-        final control = openControls.remove(request['openId']);
-        if (control != null && !control.isCompleted) control.complete();
-        return {};
-      case 'releaseOpen':
-        openControls.remove(request['openId']);
-        return {};
+        return {'startId': ++reservations};
       case 'cancelStart':
         return {};
-      case 'startStatus':
-        return {'stage': '测试握手'};
       case 'start':
         final id = ++starts;
-        if (!starting.isCompleted) starting.complete();
-        await startGate.future;
-        healthy = true;
-        return {'id': id, 'virtualIp': '10.0.0.2'};
-      case 'status':
-        statusCalls++;
+        await startGate?.future;
         return {
-          'alive': !stopped.contains(request['id']),
-          'healthy': healthy,
-          'recovering': recovering,
-          'needsProbe': needsProbe,
+          'engineId': id,
+          'proxyPort': port,
+          'proxyToken': '00' * 32,
+          'virtualIp': '10.0.0.2',
         };
       case 'probe':
         probes++;
-        await probeGate.future;
-        needsProbe = false;
-        healthy = true;
-        recovering = false;
-        return {'alive': true, 'healthy': true, 'needsProbe': false};
+        return {'alive': true, 'healthy': healthy};
       case 'stop':
         stopped.add(request['id'] as int);
         return {};
-      case 'open':
-        opens++;
-        openedHosts.add(request['host'] as String);
-        activeOpens++;
-        if (activeOpens > peakOpens) peakOpens = activeOpens;
-        try {
-          final control = openControls[request['openId']];
-          await Future.any([
-            if (openGate != null) openGate!.future else Future<void>.value(),
-            if (control != null)
-              control.future.then(
-                (_) => throw const SocketException('synthetic open cancelled'),
-              ),
-          ]);
-        } finally {
-          activeOpens--;
-        }
-        if (failOpenOnce) {
-          failOpenOnce = false;
-          healthy = false;
-          throw const SocketException('模拟隧道在目标建连期间失效');
-        }
-        return {'port': port, 'secret': '00' * 32};
       default:
         throw StateError('未知测试操作');
     }
@@ -235,14 +234,13 @@ class FakeNative extends VpnNative {
 
 class FakeAuth extends VpnAuth {
   int logins = 0;
-  final clearing = Completer<void>();
-  Completer<void>? clearGate;
+  bool fail = false;
   Completer<void>? obtainGate;
-
   @override
   Future<VpnCredentials> obtain() async {
     logins++;
     await obtainGate?.future;
+    if (fail) throw const SocketException('合成认证连接失败');
     return const VpnCredentials(
       host: 'campus.test',
       port: 443,
@@ -253,52 +251,89 @@ class FakeAuth extends VpnAuth {
 
   @override
   Future<void> register(String virtualIp, String gateway) async {}
-
-  @override
-  Future<void> clear() async {
-    if (!clearing.isCompleted) clearing.complete();
-    await clearGate?.future;
-  }
 }
 
-/// stop 后释放在途控制调用，模拟 Rust Runner 退出丢弃 reply 的真实行为。
-class StoppableOpenNative extends FakeNative {
-  StoppableOpenNative(super.port);
-  final _cancelled = <int, Completer<void>>{};
-
-  @override
-  Future<Map<String, dynamic>> call(Map<String, dynamic> request) async {
-    if (request['method'] == 'stop') {
-      final id = request['id'] as int;
-      _cancelled[id]?.complete();
-      return super.call(request);
-    }
-    if (request['method'] != 'open') return super.call(request);
-    final id = request['id'] as int;
-    opens++;
-    activeOpens++;
-    if (activeOpens > peakOpens) peakOpens = activeOpens;
-    try {
-      if (id == 1) {
-        await _cancelled.putIfAbsent(id, Completer<void>.new).future;
-        throw const SocketException('synthetic native worker stopped');
+class ConnectProxy {
+  final sockets = <Socket>[];
+  late HttpServer server;
+  int connects = 0;
+  int proxyRequests = 0;
+  int? rejectOnceStatus;
+  Future<void> start() async {
+    server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      if (request.method != 'CONNECT' ||
+          request.headers.value('proxy-authorization') !=
+              'Basic ${base64Encode(utf8.encode('vpn:${'00' * 32}'))}') {
+        request.response.statusCode = 407;
+        await request.response.close();
+        return;
       }
-      return {'port': port, 'secret': '00' * 32};
-    } finally {
-      activeOpens--;
+      proxyRequests++;
+      final rejection = rejectOnceStatus;
+      rejectOnceStatus = null;
+      if (rejection != null) {
+        final rejected = await request.response.detachSocket(
+          writeHeaders: false,
+        );
+        sockets.add(rejected);
+        rejected.write(
+          'HTTP/1.1 $rejection Proxy Failure\r\nContent-Length: 0\r\n\r\n',
+        );
+        await rejected.flush();
+        rejected.destroy();
+        return;
+      }
+      connects++;
+      final port = int.parse(request.headers.value('host')!.split(':').last);
+      final remote = await Socket.connect(InternetAddress.loopbackIPv4, port);
+      final local = await request.response.detachSocket(writeHeaders: false);
+      sockets.addAll([local, remote]);
+      local.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      await local.flush();
+      local.listen(
+        remote.add,
+        onError: (_) => remote.destroy(),
+        onDone: () => remote.close(),
+      );
+      remote.listen(
+        local.add,
+        onError: (_) => local.destroy(),
+        onDone: () => local.close(),
+      );
+    });
+  }
+
+  Future<void> close() async {
+    for (final socket in sockets) {
+      socket.destroy();
     }
+    await server.close(force: true);
   }
 }
 
-class FailingAuth extends FakeAuth {
-  bool fail = true;
+class RecoverableLocalConnector extends LocalSessionConnector
+    implements VpnRecoverableConnector {
+  final invalidated = <int>[];
+  Completer<void>? replayGate;
+  Completer<void>? replayEntered;
   @override
-  Future<VpnCredentials> obtain() async {
-    if (fail) {
-      logins++;
-      throw const SocketException('synthetic repeated failure');
+  Future<VpnSession> prepare() async {
+    sessionId ??= invalidated.length + 1;
+    if (invalidated.isNotEmpty && replayGate != null) {
+      if (replayEntered?.isCompleted == false) replayEntered!.complete();
+      await replayGate!.future;
     }
-    return super.obtain();
+    return _testSession(sessionId!);
+  }
+
+  @override
+  Future<void> invalidate(
+    int engineId, {
+    String reason = 'transport_failed',
+  }) async {
+    invalidated.add(engineId);
+    if (sessionId == engineId) sessionId = null;
   }
 }
 
@@ -322,6 +357,7 @@ void main() {
                   error: const HandshakeException('合成不完整链仍验证失败'),
                   type: DioExceptionType.connectionError,
                 ),
+                true,
               );
             },
           ),
@@ -628,6 +664,7 @@ void main() {
   });
 
   test('并发请求日志能按编号对应，重用 RequestOptions 也分配新编号', () async {
+    CampusTransport.fromDio(client);
     client.interceptors.add(PortalCookieManager(CookieJar()));
     await Future.wait([
       client.getUri(url),
@@ -905,8 +942,12 @@ void main() {
     }, onError: (_) {});
     final trust = AiaTrust(withTrustedRoots: false);
     trust.context.setTrustedCertificatesBytes(pem('CERTIFICATE', certificate));
+    final proxy = ConnectProxy();
+    await proxy.start();
+    final native = FakeNative(proxy.server.port);
+    final gateway = VpnGateway(native: native, auth: FakeAuth());
     final secureClient = vpnDio(
-      connector: connector,
+      connector: gateway,
       securityContext: trust.context,
       onBadCertificate: trust.onBadCertificate,
     );
@@ -920,8 +961,14 @@ void main() {
             .get(Uri.parse('https://wrong.test:${https.port}/')),
         throwsA(isA<PortalNetworkError>()),
       );
+      expect(gateway.sessionId, 1);
+      expect(native.stopped, isEmpty);
+      expect(native.starts, 1);
     } finally {
       secureClient.close(force: true);
+      await gateway.dispose();
+      await native.controller.close();
+      await proxy.close();
       await https.close(force: true);
     }
   });
@@ -939,568 +986,680 @@ void main() {
     );
   });
 
-  test('重置会话丢弃旧握手，新请求等待 Cookie 清理后重新登录', () async {
-    final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-    final sockets = <Socket>[];
-    listener.listen((socket) {
-      sockets.add(socket);
-      socket.listen((_) {});
-    });
-    final native = FakeNative(listener.port);
-    final auth = FakeAuth()..clearGate = Completer<void>();
-    final gateway = VpnGateway(native: native, auth: auth);
+  test('常驻CONNECT代理HTTP转发可复用连接池，错误口令返回407', () async {
+    final proxy = ConnectProxy();
+    await proxy.start();
+    final native = FakeNative(proxy.server.port);
+    final gateway = VpnGateway(native: native, auth: FakeAuth());
+    final proxied = vpnDio(connector: gateway);
     try {
-      final old = await gateway.connect(Uri.parse('https://campus.test'));
-      final rejected = expectLater(old.socket, throwsA(isA<SocketException>()));
-      await native.starting.future;
-      final reset = gateway.reset();
-      final fresh = await gateway.connect(Uri.parse('https://campus.test'));
-      native.startGate.complete();
-      await rejected;
-      await auth.clearing.future;
-      await Future<void>.delayed(Duration.zero);
-      expect(native.stopped, [1]);
-      expect(native.starts, 1);
-      auth.clearGate!.complete();
-      await reset;
-      final socket = await fresh.socket;
-      expect(native.starts, 2);
-      expect(auth.logins, 2);
-      expect(native.opens, 1);
-      socket.destroy();
-    } finally {
-      await gateway.reset();
-      for (final socket in sockets) {
-        socket.destroy();
-      }
-      await listener.close();
-    }
-  });
-
-  test('并发请求共享登录，取消一个请求不会取消其他请求的隧道', () async {
-    final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-    final sockets = <Socket>[];
-    listener.listen((socket) {
-      sockets.add(socket);
-      socket.listen((_) {});
-    });
-    final native = FakeNative(listener.port);
-    final auth = FakeAuth();
-    final gateway = VpnGateway(native: native, auth: auth);
-    try {
-      final cancelled = await gateway.connect(Uri.parse('https://campus.test'));
-      final rejected = expectLater(
-        cancelled.socket,
-        throwsA(isA<SocketException>()),
+      expect(
+        (await proxied.getUri<Map<String, dynamic>>(
+          url.replace(host: 'campus.test'),
+        )).data!['method'],
+        'GET',
       );
-      final retained = await gateway.connect(Uri.parse('https://campus.test'));
-      await native.starting.future;
-      cancelled.cancel();
-      await rejected;
-      native.startGate.complete();
-      final socket = await retained.socket;
-      expect(auth.logins, 1);
-      expect(native.starts, 1);
-      expect(native.opens, 1);
-      expect(native.stopped, isEmpty);
-      socket.destroy();
+      await proxied.getUri(url.replace(host: 'campus.test'));
+      expect(proxy.connects, 1);
+      final invalid = await connectVpnProxy(
+        VpnSession(
+          engineId: 1,
+          proxyPort: proxy.server.port,
+          proxyToken: 'bad',
+          establishedAt: DateTime.now(),
+          generation: 1,
+        ),
+        url.replace(host: 'campus.test'),
+      );
+      await expectLater(
+        invalid.socket,
+        throwsA(
+          isA<VpnProxyException>().having((e) => e.statusCode, 'status', 407),
+        ),
+      );
     } finally {
-      await gateway.reset();
-      for (final socket in sockets) {
-        socket.destroy();
-      }
-      await listener.close();
+      proxied.close(force: true);
+      await gateway.dispose();
+      await native.controller.close();
+      await proxy.close();
     }
   });
 
-  test('真实 Rust ABI 可加载且拒绝不完整配置', () async {
-    final native = VpnNative();
-    expect((await native.call({'method': 'version'}))['abi'], 1);
-    await expectLater(
-      native.call({'method': 'start'}),
+  test('无状态Dio的默认状态校验允许手动重定向，307保留POST而303清空正文', () async {
+    final redirectServer = await HttpServer.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final seen = <String>[];
+    redirectServer.listen((request) async {
+      final body = await utf8.decoder.bind(request).join();
+      seen.add('${request.method}:${request.uri.path}:$body');
+      if (request.uri.path == '/307' || request.uri.path == '/303') {
+        request.response.statusCode = int.parse(request.uri.path.substring(1));
+        request.response.headers.set('location', '/target');
+      } else {
+        request.response.write('ok');
+      }
+      await request.response.close();
+    });
+    final transport = CampusTransport.stateless(dio: Dio());
+    final origin = 'http://127.0.0.1:${redirectServer.port}';
+    try {
+      final preserved = await transport.dio.post<String>(
+        '$origin/307',
+        data: 'query=one',
+      );
+      expect(preserved.data, 'ok');
+      expect(preserved.redirects, hasLength(1));
+      expect(seen, ['POST:/307:query=one', 'POST:/target:query=one']);
+      seen.clear();
+      await transport.dio.post('$origin/303', data: 'query=two');
+      expect(seen, ['POST:/303:query=two', 'GET:/target:']);
+    } finally {
+      transport.close(force: true);
+      await redirectServer.close(force: true);
+    }
+    final unsafe = Dio()..interceptors.add(PortalCookieManager(CookieJar()));
+    expect(() => CampusTransport.stateless(dio: unsafe), throwsArgumentError);
+    unsafe.close(force: true);
+  });
+
+  test('启动结果前收到原生退出事件时拒绝发布Ready，下一主动请求可恢复', () async {
+    final native = FakeNative(0)..startGate = Completer<void>();
+    final gateway = VpnGateway(native: native, auth: FakeAuth());
+    final rejected = expectLater(
+      gateway.prepare(),
       throwsA(isA<SocketException>()),
     );
-  }, skip: const String.fromEnvironment('VPN_NATIVE_LIBRARY').isEmpty);
+    while (native.starts == 0) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    await gateway.onNativeEvent({
+      'engineId': 1,
+      'event': 'exited',
+      'reason': 'eof',
+    });
+    native.startGate!.complete();
+    await rejected;
+    expect(gateway.state, isA<VpnDisconnected>());
+    await gateway.prepare();
+    expect(gateway.sessionId, 2);
+    expect(native.stopped, contains(1));
+    await gateway.dispose();
+    await native.controller.close();
+  });
 
-  test('共享启动超时释放所有等待者，reset 不等待卡住的认证，迟到结果不启动隧道', () async {
+  test('P1-9 AIA补链重试克隆已finalize的FormData，Stream请求不重放', () async {
+    final bodies = <String>[];
+    final trust = _RepairCounterTrust();
+    final mock = Dio()
+      ..httpClientAdapter = _ScriptedAdapter((options, stream) async {
+        bodies.add(
+          utf8.decode(
+            await stream!.fold<List<int>>([], (all, part) => all..addAll(part)),
+          ),
+        );
+        if (bodies.length == 1) throw const HandshakeException('合成缺链');
+        return ResponseBody.fromString('ok', 200);
+      });
+    final http = PortalHttp(mock, trust: trust);
+    try {
+      expect(
+        (await http.post(
+          Uri.parse('https://synthetic.test/query'),
+          data: FormData.fromMap({'query': 'read-only-value'}),
+        )).data,
+        'ok',
+      );
+      expect(bodies, hasLength(2));
+      expect(bodies[1], bodies[0]);
+      expect(RegExp('name="query"').allMatches(bodies[1]), hasLength(1));
+      expect(bodies[1], contains('read-only-value'));
+      expect(trust.repairs, 1);
+    } finally {
+      mock.close(force: true);
+    }
+    var streamCalls = 0;
+    final noReplayTrust = _RepairCounterTrust();
+    final streamDio = Dio()
+      ..httpClientAdapter = _ScriptedAdapter((options, stream) async {
+        streamCalls++;
+        await stream!.drain<void>();
+        throw const HandshakeException('合成Stream缺链');
+      });
+    try {
+      await expectLater(
+        PortalHttp(streamDio, trust: noReplayTrust).post(
+          Uri.parse('https://synthetic.test/query'),
+          data: Stream<Uint8List>.value(Uint8List.fromList([1, 2, 3])),
+        ),
+        throwsA(isA<PortalNetworkError>()),
+      );
+      expect(streamCalls, 1);
+      expect(noReplayTrust.repairs, 0);
+    } finally {
+      streamDio.close(force: true);
+    }
+  });
+
+  test('P1-13 AIA预探测失败不能缓存，成功后才复用标记', () async {
+    final trust = AiaTrust();
+    var probes = 0;
+    HttpClient failed() {
+      probes++;
+      return HttpClient()
+        ..connectionFactory = (uri, host, port) =>
+            throw const SocketException('合成探测失败');
+    }
+
+    expect(await trust.prepareHost(url, createProbeClient: failed), isFalse);
+    expect(await trust.prepareHost(url, createProbeClient: failed), isFalse);
+    expect(probes, 2);
+    await trust.prepareHost(
+      url,
+      createProbeClient: () {
+        probes++;
+        return HttpClient();
+      },
+    );
+    await trust.prepareHost(url, createProbeClient: failed);
+    expect(probes, 3);
+    expect(requests, 0);
+  });
+
+  for (final code in [301, 302, 303]) {
+    for (final method in ['HEAD', 'PUT', 'POST']) {
+      test('P1-9 redirect$code保持$method的RFC方法语义并清理跨跳重放状态', () async {
+        final seen = <RequestOptions>[];
+        bool guard(int? status) => status == 200;
+        final dio = Dio()
+          ..httpClientAdapter = _ScriptedAdapter((options, stream) async {
+            await stream?.drain<void>();
+            seen.add(options);
+            return options.uri.path == '/start'
+                ? ResponseBody.fromString(
+                    '',
+                    code,
+                    headers: {
+                      'location': ['/next'],
+                    },
+                  )
+                : ResponseBody.fromString('', 200);
+          });
+        final transport = CampusTransport.stateless(dio: dio);
+        try {
+          final result = await transport.dio.request(
+            'http://synthetic.test/start',
+            data: 'body=kept',
+            options: Options(
+              method: method,
+              extra: {
+                '_vpnReplayed': true,
+                '_aiaRepaired': true,
+                '_redirectValidateStatus': guard,
+                'vpnDio.engineId': 77,
+              },
+            ),
+          );
+          expect(result.statusCode, 200);
+          expect(seen, hasLength(2));
+          final expectedGet = code == 303 ? method != 'HEAD' : method == 'POST';
+          expect(seen[1].method, expectedGet ? 'GET' : method);
+          expect(seen[1].data, expectedGet ? null : 'body=kept');
+          for (final key in [
+            '_vpnReplayed',
+            '_aiaRepaired',
+            'vpnDio.engineId',
+          ]) {
+            expect(seen[1].extra.containsKey(key), isFalse);
+          }
+          expect(seen[1].extra['_redirectValidateStatus'], isNot(same(guard)));
+          expect(result.redirects, hasLength(1));
+        } finally {
+          transport.close(force: true);
+        }
+      });
+    }
+  }
+
+  test('P1-9 非法Location保留原因，PortalHttp重定向503不泄露裸DioException', () async {
+    final invalidDio = Dio()
+      ..httpClientAdapter = _ScriptedAdapter(
+        (options, stream) async => ResponseBody.fromString(
+          '',
+          302,
+          headers: {
+            'location': ['http://bad.test:invalid/'],
+          },
+        ),
+      );
+    final invalid = CampusTransport.stateless(dio: invalidDio);
+    try {
+      await expectLater(
+        invalid.get(Uri.parse('http://synthetic.test/start')),
+        throwsA(
+          isA<PortalLoginError>()
+              .having((e) => e.code, 'code', 'redirect_location_invalid')
+              .having((e) => e.cause, 'cause', isA<FormatException>()),
+        ),
+      );
+    } finally {
+      invalid.close(force: true);
+    }
+    var calls = 0;
+    final rejectingDio = Dio()
+      ..httpClientAdapter = _ScriptedAdapter((options, stream) async {
+        calls++;
+        return calls == 1
+            ? ResponseBody.fromString(
+                '',
+                302,
+                headers: {
+                  'location': ['/failed'],
+                },
+              )
+            : ResponseBody.fromString('temporarily unavailable', 503);
+      });
+    final http = PortalHttp(rejectingDio);
+    try {
+      final landed = await http.get(Uri.parse('http://synthetic.test/start'));
+      await expectLater(
+        http.followRedirects(landed),
+        throwsA(
+          isA<DiagnosticException>()
+              .having((e) => e.diagnosticContext['status_code'], 'status', 503)
+              .having((e) => e.cause, 'cause', isA<DioException>()),
+        ),
+      );
+      expect(calls, 2);
+    } finally {
+      rejectingDio.close(force: true);
+    }
+  });
+
+  test('P0-3 prepare返回后全局代次变化仍使用锁定会话，未知失败ID不关闭活跃池', () async {
+    final changing = ChangingPreparedConnector();
+    final atomicClient = vpnDio(connector: changing, forceVpn: true);
+    try {
+      final first = await atomicClient.getUri(url);
+      expect(first.requestOptions.extra['vpnDio.engineId'], 1);
+      expect(changing.sessionId, 2);
+      final second = await atomicClient.getUri(url);
+      expect(second.requestOptions.extra['vpnDio.engineId'], 2);
+      expect(changing.connections, 2);
+    } finally {
+      atomicClient.close(force: true);
+    }
+    final stable = PreparedLocalConnector();
+    final pooled = vpnDio(connector: stable);
+    try {
+      await pooled.getUri(url);
+      final adapter = unwrapHttpDiagnostics(
+        pooled.httpClientAdapter,
+      ) as VpnHttpClientAdapter;
+      adapter.discardVpnPool(null);
+      stable.preparations = 2;
+      await pooled.getUri(url);
+      expect(stable.connections, 1);
+    } finally {
+      pooled.close(force: true);
+    }
+  });
+
+  test('P0-3 prepare之后Draining不能把请求归属转交给新引擎', () async {
+    final proxy = ConnectProxy();
+    await proxy.start();
+    final native = FakeNative(proxy.server.port);
+    final gateway = DrainingDuringPreparationGateway(
+      native: native,
+      auth: FakeAuth(),
+    );
+    final lockedClient = vpnDio(connector: gateway);
+    try {
+      final result = await lockedClient.getUri(
+        url.replace(host: 'campus.test'),
+      );
+      expect(result.requestOptions.extra['vpnDio.engineId'], 1);
+      expect(native.starts, 1);
+      expect(gateway.state, isA<VpnDraining>());
+    } finally {
+      lockedClient.close(force: true);
+      await gateway.dispose();
+      await native.controller.close();
+      await proxy.close();
+    }
+  });
+
+  for (final status in [502, 504, 503]) {
+    test('P1-7 CONNECT$status不误杀健康隧道', () async {
+      final proxy = ConnectProxy()..rejectOnceStatus = status;
+      await proxy.start();
+      final native = FakeNative(proxy.server.port);
+      final gateway = VpnGateway(native: native, auth: FakeAuth());
+      final query = vpnDio(connector: gateway);
+      try {
+        final result = query.getUri(url.replace(host: 'campus.test'));
+        await expectLater(
+          result,
+          throwsA(
+            isA<DioException>().having(
+              (e) => (e.error as VpnProxyException).statusCode,
+              'proxy_status',
+              status,
+            ),
+          ),
+        );
+        expect(proxy.proxyRequests, 1);
+        expect(gateway.sessionId, 1);
+        expect(native.stopped, isEmpty);
+        expect(native.starts, 1);
+      } finally {
+        query.close(force: true);
+        await gateway.dispose();
+        await native.controller.close();
+        await proxy.close();
+      }
+    });
+  }
+
+  test('P1-7 connectionTimeout也触发唯一一次恢复', () async {
+    final proxy = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final sockets = <Socket>[];
+    proxy.listen((socket) {
+      sockets.add(socket);
+      socket.listen((_) {});
+    });
+    final native = FakeNative(proxy.port);
+    final gateway = VpnGateway(native: native, auth: FakeAuth());
+    final timed = vpnDio(
+      connector: gateway,
+      options: BaseOptions(connectTimeout: const Duration(milliseconds: 60)),
+    );
+    try {
+      await expectLater(
+        timed.get('http://campus.test/'),
+        throwsA(isA<DioException>()),
+      );
+      expect(native.starts, 2);
+      expect(native.stopped, [1, 2]);
+    } finally {
+      timed.close(force: true);
+      await gateway.dispose();
+      await native.controller.close();
+      for (final socket in sockets) {
+        socket.destroy();
+      }
+      await proxy.close();
+    }
+  });
+
+  test('P1-7 重放准备中取消一个请求不取消共享准备或其他请求', () async {
+    final failing = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    var attempts = 0;
+    failing.listen((request) async {
+      attempts++;
+      if (attempts == 1) {
+        (await request.response.detachSocket(writeHeaders: false)).destroy();
+      } else {
+        request.response.write('retained');
+        await request.response.close();
+      }
+    });
+    final shared = RecoverableLocalConnector()
+      ..replayGate = Completer<void>()
+      ..replayEntered = Completer<void>();
+    final replay = vpnDio(connector: shared);
+    final token = CancelToken();
+    try {
+      final cancelled = replay.get<String>(
+        'http://127.0.0.1:${failing.port}/',
+        cancelToken: token,
+      );
+      final rejected = expectLater(
+        cancelled,
+        throwsA(
+          isA<DioException>().having(
+            (e) => e.type,
+            'type',
+            DioExceptionType.cancel,
+          ),
+        ),
+      );
+      await shared.replayEntered!.future;
+      final retained = replay.get<String>('http://127.0.0.1:${failing.port}/');
+      token.cancel();
+      await rejected.timeout(const Duration(seconds: 1));
+      expect(shared.replayGate!.isCompleted, isFalse);
+      shared.replayGate!.complete();
+      expect((await retained).data, 'retained');
+      expect(attempts, 2);
+      expect(shared.invalidated, [1]);
+    } finally {
+      replay.close(force: true);
+      await failing.close(force: true);
+    }
+  });
+
+  test('P1-4 scheduler_stall保留原生DNS探活机会而不是立即停止引擎', () async {
+    final native = FakeNative(0);
+    final gateway = VpnGateway(native: native, auth: FakeAuth());
+    await gateway.setForeground(false);
+    await gateway.prepare();
+    await gateway.onNativeEvent({
+      'engineId': 1,
+      'event': 'unhealthy',
+      'reason': 'scheduler_stall',
+    });
+    expect(gateway.sessionId, 1);
+    expect(native.stopped, isEmpty);
+    await gateway.onNativeEvent({
+      'engineId': 1,
+      'event': 'healthy',
+      'reason': 'probe_completed',
+    });
+    expect(gateway.sessionId, 1);
+    await gateway.onNativeEvent({
+      'engineId': 1,
+      'event': 'exited',
+      'reason': 'recovery_timeout',
+    });
+    expect(gateway.state, isA<VpnDisconnected>());
+    expect(native.stopped, [1]);
+    await gateway.dispose();
+    await native.controller.close();
+  });
+
+  test('五个并发请求共享启动，网络变化不取消正在建立的隧道', () async {
+    final native = FakeNative(0)..startGate = Completer<void>();
+    final auth = FakeAuth();
+    final gateway = VpnGateway(native: native, auth: auth);
+    final waiting = List.generate(5, (_) => gateway.ensureReady());
+    while (native.starts == 0) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    final networkChange = gateway.networkChanged();
+    native.startGate!.complete();
+    await networkChange;
+    expect(native.probes, 1);
+    final sessions = await Future.wait(waiting);
+    expect(auth.logins, 1);
+    expect(native.starts, 1);
+    expect(
+      sessions.every((session) => identical(session, sessions.first)),
+      isTrue,
+    );
+    expect(gateway.state, isA<VpnReady>());
+    await gateway.dispose();
+    await native.controller.close();
+  });
+
+  test('启动超时只拒绝本次等待，主动请求立即重建且迟到结果不恢复旧会话', () async {
     final native = FakeNative(0);
     final auth = FakeAuth()..obtainGate = Completer<void>();
     final gateway = VpnGateway(
       native: native,
       auth: auth,
-      startTimeout: const Duration(milliseconds: 100),
+      startTimeout: const Duration(milliseconds: 50),
     );
-    final first = gateway.prepare();
-    final second = gateway.prepare();
     await Future.wait([
-      expectLater(first, throwsA(isA<SocketException>())),
-      expectLater(second, throwsA(isA<SocketException>())),
+      for (var i = 0; i < 3; i++)
+        expectLater(gateway.prepare(), throwsA(isA<SocketException>())),
     ]);
     expect(auth.logins, 1);
-    await gateway.reset().timeout(const Duration(seconds: 1));
     auth.obtainGate!.complete();
-    await Future<void>.delayed(Duration.zero);
-    expect(native.starts, 0);
-    native.startGate.complete();
     await gateway.prepare();
+    expect(auth.logins, 2);
     expect(native.starts, 1);
-    await gateway.reset();
+    await gateway.dispose();
+    await native.controller.close();
   });
 
-  test('reset 在原生握手不返回时仍完成，迟到的隧道被关闭', () async {
-    final native = FakeNative(0);
+  test('reset不等待卡住的握手，迟到引擎关闭且不清空Cookie', () async {
+    final native = FakeNative(0)..startGate = Completer<void>();
     final gateway = VpnGateway(native: native, auth: FakeAuth());
-    final prepared = gateway.prepare();
-    final rejected = expectLater(prepared, throwsA(isA<SocketException>()));
-    await native.starting.future;
-    await gateway.reset().timeout(const Duration(seconds: 1));
-    await rejected;
-    expect(native.stopped, isEmpty);
-    native.startGate.complete();
-    await Future<void>.delayed(Duration.zero);
-    expect(native.stopped, [1]);
-    await gateway.prepare();
-    expect(native.starts, 2);
-    await gateway.reset();
-  });
-
-  test('alive 但无进度的隧道由并发准备请求合流重建', () async {
-    final native = FakeNative(0)..startGate.complete();
-    final gateway = VpnGateway(native: native, auth: FakeAuth());
-    await gateway.prepare();
-    native.healthy = false;
-    await Future.wait([
+    final rejected = expectLater(
       gateway.prepare(),
-      gateway.prepare(),
-      gateway.prepare(),
-    ]);
-    expect(native.starts, 2);
-    expect(native.stopped, [1]);
-    await gateway.reset();
-  });
-
-  test('前台健康检查先发布失效代次，下一请求重建且不复用旧池', () async {
-    final native = FakeNative(0)..startGate.complete();
-    final gateway = VpnGateway(native: native, auth: FakeAuth());
-    try {
-      await gateway.prepare();
-      native.healthy = false;
-      await gateway.checkHealth();
-      expect(gateway.sessionId, isNull);
-      expect(native.stopped, [1]);
-      await gateway.prepare();
-      expect(gateway.sessionId, 2);
-      expect(native.starts, 2);
-    } finally {
-      await gateway.reset();
-    }
-  });
-
-  test('原生恢复探测由并发请求合流等待，恢复成功保留同一隧道', () async {
-    final native = FakeNative(0)..startGate.complete();
-    final auth = FakeAuth();
-    final gateway = VpnGateway(
-      native: native,
-      auth: auth,
-      recoveryTimeout: const Duration(milliseconds: 200),
-      recoveryPollInterval: const Duration(milliseconds: 5),
+      throwsA(isA<SocketException>()),
     );
-    try {
-      await gateway.prepare();
-      native.healthy = false;
-      native.recovering = true;
-      final foregroundCheck = gateway.checkHealth();
-      expect(gateway.sessionId, 1);
-      final queries = native.statusCalls;
-      var completed = false;
-      final preparing = Future.wait([
-        gateway.prepare(),
-        gateway.prepare(),
-        gateway.prepare(),
-      ]).then((_) => completed = true);
-      await Future<void>.delayed(const Duration(milliseconds: 30));
-      expect(completed, isFalse);
-      expect(native.starts, 1);
-      native.healthy = true;
-      native.recovering = false;
-      await preparing;
-      await foregroundCheck;
-      expect(native.stopped, isEmpty);
-      expect(auth.logins, 1);
-      expect(gateway.sessionId, 1);
-      expect(native.statusCalls - queries, lessThan(15));
-    } finally {
-      await gateway.reset();
-    }
-  });
-
-  test('恢复探测超时只重建一次，网络变化取消旧等待而不发布旧会话', () async {
-    final native = FakeNative(0)..startGate.complete();
-    final gateway = VpnGateway(
-      native: native,
-      auth: FakeAuth(),
-      recoveryTimeout: const Duration(milliseconds: 35),
-      recoveryPollInterval: const Duration(milliseconds: 5),
-    );
-    try {
-      await gateway.prepare();
-      native.healthy = false;
-      native.recovering = true;
-      await Future.wait([gateway.prepare(), gateway.prepare()]);
-      expect(native.starts, 2);
-      expect(native.stopped, [1]);
-      native.healthy = false;
-      final waiting = gateway.prepare();
-      final cancelled = expectLater(waiting, throwsA(isA<SocketException>()));
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      await gateway.networkChanged();
-      await cancelled;
-      expect(gateway.sessionId, isNull);
-      expect(native.starts, 2);
-      native.recovering = false;
-      await gateway.prepare();
-      expect(native.starts, 3);
-      expect(gateway.sessionId, 3);
-    } finally {
-      await gateway.reset();
-    }
-  });
-
-  test('连续启动失败扩大退避，网络变化解除退避且成功恢复', () async {
-    final native = FakeNative(0)..startGate.complete();
-    final auth = FailingAuth();
-    final gateway = VpnGateway(
-      native: native,
-      auth: auth,
-      failureBackoffBase: const Duration(milliseconds: 30),
-      failureBackoffMax: const Duration(milliseconds: 100),
-    );
-    try {
-      await expectLater(gateway.prepare(), throwsA(isA<SocketException>()));
-      await Future<void>.delayed(const Duration(milliseconds: 40));
-      await expectLater(gateway.prepare(), throwsA(isA<SocketException>()));
-      expect(auth.logins, 2);
-      await Future<void>.delayed(const Duration(milliseconds: 40));
-      await expectLater(gateway.prepare(), throwsA(isA<SocketException>()));
-      expect(auth.logins, 2);
-      await gateway.networkChanged();
-      auth.fail = false;
-      await gateway.prepare();
-      expect(auth.logins, 3);
-      expect(native.starts, 1);
-    } finally {
-      await gateway.reset();
-    }
-  });
-
-  test('短命隧道反复握手成功也会扩大退避，稳定复用与网络变化才解除', () async {
-    final native = FakeNative(0)..startGate.complete();
-    final gateway = VpnGateway(
-      native: native,
-      auth: FakeAuth(),
-      failureBackoffBase: const Duration(milliseconds: 50),
-      failureBackoffMax: const Duration(milliseconds: 300),
-      stableSessionDuration: const Duration(milliseconds: 250),
-    );
-    try {
-      await gateway.prepare();
-      native.healthy = false;
-      await gateway.prepare();
-      expect(native.starts, 2);
-      native.healthy = false;
-      await expectLater(gateway.prepare(), throwsA(isA<SocketException>()));
-      expect(native.starts, 2);
-      await Future<void>.delayed(const Duration(milliseconds: 70));
-      await gateway.prepare();
-      expect(native.starts, 3);
-      native.healthy = false;
-      await expectLater(gateway.prepare(), throwsA(isA<SocketException>()));
-      await Future<void>.delayed(const Duration(milliseconds: 70));
-      await expectLater(gateway.prepare(), throwsA(isA<SocketException>()));
-      expect(native.starts, 3);
-      await gateway.networkChanged();
-      await gateway.prepare();
-      expect(native.starts, 4);
-      await Future<void>.delayed(const Duration(milliseconds: 270));
-      await gateway.prepare();
-      native.healthy = false;
-      await gateway.prepare();
-      expect(native.starts, 5);
-    } finally {
-      await gateway.reset();
-    }
-  });
-
-  test('后台暂停监测，前台已有隧道恢复探测无需新请求即可结束', () async {
-    final native = FakeNative(0)..startGate.complete();
-    final gateway = VpnGateway(
-      native: native,
-      auth: FakeAuth(),
-      recoveryTimeout: const Duration(milliseconds: 80),
-      recoveryPollInterval: const Duration(milliseconds: 5),
-    );
-    try {
-      await gateway.prepare();
-      await gateway.setForeground(false);
-      native.healthy = false;
-      native.recovering = true;
-      final checks = native.statusCalls;
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(native.statusCalls, checks);
-      final resumed = gateway.setForeground(true);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      native.recovering = false;
-      native.healthy = true;
-      await resumed;
-      expect(gateway.sessionId, 1);
-      expect(native.starts, 1);
-      expect(native.stopped, isEmpty);
-      await gateway.setForeground(false);
-      native.healthy = false;
-      native.recovering = true;
-      await gateway.setForeground(true);
-      expect(gateway.sessionId, isNull);
-      expect(native.stopped, [1]);
-      expect(native.starts, 1);
-    } finally {
-      await gateway.reset();
-    }
-  });
-
-  test('不回复心跳的闲置隧道由前台和请求共享DNS探测，不误判死亡', () async {
-    final native = FakeNative(0)..startGate.complete();
-    final gateway = VpnGateway(native: native, auth: FakeAuth());
-    try {
-      await gateway.prepare();
-      native.needsProbe = true;
-      native.healthy = false;
-      final checking = gateway.setForeground(true);
-      final preparing = gateway.prepare();
+    while (native.starts == 0) {
       await Future<void>.delayed(Duration.zero);
-      expect(native.probes, 1);
-      expect(native.starts, 1);
-      expect(gateway.sessionId, 1);
-      native.probeGate.complete();
-      await Future.wait([checking, preparing]);
-      expect(native.starts, 1);
-      expect(native.stopped, isEmpty);
-      expect(gateway.sessionId, 1);
-    } finally {
-      await gateway.reset();
     }
+    await gateway.reset().timeout(const Duration(seconds: 1));
+    native.startGate!.complete();
+    await rejected;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(native.stopped, contains(1));
+    await gateway.prepare();
+    expect(gateway.sessionId, 2);
+    await gateway.invalidate(1);
+    expect(gateway.sessionId, 2);
+    await gateway.dispose();
+    await native.controller.close();
   });
 
-  test('共享启动后目标建连有界FIFO，排队取消及时退出且不占槽位', () async {
-    final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-    final sockets = <Socket>[];
-    listener.listen((socket) {
-      sockets.add(socket);
-      socket.listen((_) {});
+  test('原生排空和退出事件推动状态，后台退避不阻挡主动重试', () async {
+    final native = FakeNative(0);
+    final auth = FakeAuth();
+    final gateway = VpnGateway(native: native, auth: auth);
+    await gateway.setForeground(false);
+    await gateway.prepare();
+    await gateway.onNativeEvent({
+      'engineId': 1,
+      'event': 'draining',
+      'reason': 'eof',
     });
-    final native = FakeNative(listener.port)..startGate.complete();
-    native.openGate = Completer<void>();
-    final gateway = VpnGateway(native: native, auth: FakeAuth());
-    try {
-      await gateway.prepare();
-      final tasks = <ConnectionTask<Socket>>[];
-      for (var i = 0; i < 40; i++) {
-        tasks.add(await gateway.connect(Uri.parse('http://campus$i.test')));
-      }
-      final cancelled = expectLater(
-        tasks[20].socket,
-        throwsA(isA<SocketException>()),
-      );
-      tasks[20].cancel();
-      await cancelled;
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(native.opens, 8);
-      expect(native.peakOpens, 8);
-      native.openGate!.complete();
-      final connected = await Future.wait([
-        for (var i = 0; i < tasks.length; i++)
-          if (i != 20) tasks[i].socket,
-      ]);
-      expect(native.opens, 39);
-      expect(native.peakOpens, lessThanOrEqualTo(8));
-      expect(native.openedHosts, [
-        for (var i = 0; i < 40; i++)
-          if (i != 20) 'campus$i.test',
-      ]);
-      for (final socket in connected) {
-        socket.destroy();
-      }
-    } finally {
-      await gateway.reset();
-      for (final socket in sockets) {
-        socket.destroy();
-      }
-      await listener.close();
-    }
+    expect(gateway.state, isA<VpnDraining>());
+    await gateway.prepare();
+    expect(gateway.sessionId, 2);
+    expect(native.stopped, isNot(contains(1)));
+    await gateway.onNativeEvent({'engineId': 1, 'event': 'exited'});
+    expect(gateway.sessionId, 2);
+    native.healthy = false;
+    await gateway.checkHealth();
+    expect(gateway.state, isA<VpnDisconnected>());
+    auth.fail = true;
+    await expectLater(gateway.prepare(), throwsA(isA<SocketException>()));
+    auth.fail = false;
+    await gateway.prepare();
+    expect(gateway.state, isA<VpnReady>());
+    await gateway.dispose();
+    await native.controller.close();
   });
 
-  test('重置释放8个真实行为的在途open，下一会话迅速建连且不突破总上界', () async {
-    final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-    final sockets = <Socket>[];
-    listener.listen((socket) {
-      sockets.add(socket);
-      socket.listen((_) {});
+  test('真实 Rust FFI 支持多个实例并发调用与错误回调', () async {
+    const first = VpnNative();
+    const second = VpnNative();
+    final versions = await Future.wait([
+      first.call({'method': 'version'}),
+      second.call({'method': 'version'}),
+    ]);
+    expect(versions.map((response) => response['abi']), everyElement(2));
+    await expectLater(
+      first.call({'method': 'start'}),
+      throwsA(isA<SocketException>()),
+    );
+    expect((await second.call({'method': 'version'}))['abi'], 2);
+  }, skip: const String.fromEnvironment('VPN_NATIVE_LIBRARY').isEmpty);
+
+  test('VPN 原生主动状态事件广播给所有共享网关订阅者', () async {
+    const first = VpnNative();
+    const second = VpnNative();
+    final firstEvent = first.events.first;
+    final secondEvent = second.events.first;
+    const event = <String, dynamic>{
+      'engineId': 42,
+      'event': 'draining',
+      'reason': 'remote_fin',
+    };
+
+    VpnNative.debugPublishEventForTesting(event);
+
+    expect(await firstEvent, event);
+    expect(await secondEvent, event);
+  });
+
+  for (final method in ['GET', 'POST', 'WRITE', 'FAIL']) {
+    test('VPN断连：$method按幂等声明恢复并最多重放一次', () async {
+      final failingServer = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      var attempts = 0;
+      failingServer.listen((request) async {
+        attempts++;
+        if (attempts == 1 || method == 'FAIL') {
+          final socket = await request.response.detachSocket(
+            writeHeaders: false,
+          );
+          if (method == 'GET') {
+            socket.write(
+              'HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial',
+            );
+            await socket.flush();
+          }
+          socket.destroy();
+        } else {
+          request.response.write('recovered');
+          await request.response.close();
+        }
+      });
+      final recovering = RecoverableLocalConnector();
+      final retryClient = vpnDio(connector: recovering);
+      try {
+        final result = retryClient.request<String>(
+          'http://127.0.0.1:${failingServer.port}/',
+          data: method == 'GET' ? null : 'query=data',
+          options: Options(
+            method: method == 'GET' ? 'GET' : 'POST',
+            responseType: ResponseType.plain,
+            // 只有显式声明幂等的方法才重放；GET 本身幂等，不需要额外标记。
+            extra: method == 'POST' || method == 'FAIL'
+                ? {'idempotent': true}
+                : null,
+          ),
+        );
+        if (method == 'WRITE' || method == 'FAIL') {
+          await expectLater(result, throwsA(isA<DioException>()));
+          expect(attempts, method == 'WRITE' ? 1 : 2);
+        } else {
+          expect((await result).data, 'recovered');
+          expect(attempts, 2);
+        }
+        expect(recovering.invalidated, method == 'FAIL' ? [1, 2] : [1]);
+      } finally {
+        retryClient.close(force: true);
+        await failingServer.close(force: true);
+      }
     });
-    final native = StoppableOpenNative(listener.port)..startGate.complete();
-    final gateway = VpnGateway(native: native, auth: FakeAuth());
-    try {
-      await gateway.prepare();
-      final tasks = <ConnectionTask<Socket>>[];
-      final rejected = <Future<void>>[];
-      for (var i = 0; i < 12; i++) {
-        final task = await gateway.connect(Uri.parse('http://campus$i.test'));
-        tasks.add(task);
-        rejected.add(expectLater(task.socket, throwsA(isA<SocketException>())));
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(native.activeOpens, 8);
-      final started = Stopwatch()..start();
-      await gateway.reset();
-      final fresh = await gateway.connect(Uri.parse('http://campus.test'));
-      final socket = await fresh.socket.timeout(const Duration(seconds: 1));
-      await Future.wait(rejected);
-      expect(started.elapsed, lessThan(const Duration(seconds: 1)));
-      expect(native.peakOpens, lessThanOrEqualTo(8));
-      expect(native.starts, 2);
-      socket.destroy();
-    } finally {
-      await gateway.reset();
-      for (final socket in sockets) {
-        socket.destroy();
-      }
-      await listener.close();
-    }
-  });
-
-  test('取消8个活动目标连接后，新的连接不等待原目标超时且总在途有界', () async {
-    final native = FakeNative(0)..startGate.complete();
-    native.openGate = Completer<void>();
-    final gateway = VpnGateway(native: native, auth: FakeAuth());
-    try {
-      await gateway.prepare();
-      final tasks = <ConnectionTask<Socket>>[];
-      final rejected = <Future<void>>[];
-      for (var i = 0; i < 8; i++) {
-        final task = await gateway.connect(Uri.parse('http://blocked$i.test'));
-        tasks.add(task);
-        rejected.add(expectLater(task.socket, throwsA(isA<SocketException>())));
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(native.opens, 8);
-      for (final task in tasks) {
-        task.cancel();
-      }
-      await Future.wait(rejected);
-      final fresh = await gateway.connect(Uri.parse('http://fresh.test'));
-      final freshRejected = expectLater(
-        fresh.socket,
-        throwsA(isA<SocketException>()),
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      fresh.cancel();
-      await freshRejected;
-      expect(native.opens, 9, reason: '已取消的8个目标连接不应占用FIFO槽到20秒超时');
-      expect(native.peakOpens, lessThanOrEqualTo(8));
-    } finally {
-      native.openGate!.complete();
-      await gateway.reset();
-    }
-  });
-
-  test('目标连接登记尚未返回时取消，迟到登记释放且不会发送open', () async {
-    final native = FakeNative(0)..startGate.complete();
-    native.prepareOpenGate = Completer<void>();
-    final gateway = VpnGateway(native: native, auth: FakeAuth());
-    try {
-      await gateway.prepare();
-      final task = await gateway.connect(Uri.parse('http://campus.test'));
-      final rejected = expectLater(
-        task.socket,
-        throwsA(isA<SocketException>()),
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      task.cancel();
-      await rejected;
-      native.prepareOpenGate!.complete();
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(native.opens, 0);
-      expect(native.openControls, isEmpty);
-      expect(native.stopped, isEmpty);
-    } finally {
-      await gateway.reset();
-    }
-  });
-
-  test('健康复用不增加启动编号，健康状态变化立即记录', () async {
-    final native = FakeNative(0)..startGate.complete();
-    final gateway = VpnGateway(native: native, auth: FakeAuth());
-    try {
-      await gateway.prepare();
-      final first = logRecords.singleWhere(
-        (record) => record['event'] == 'start.completed',
-      );
-      expect((first['attrs'] as Map)['attempt'], 1);
-      expect((first['attrs'] as Map)['vpn_session_id'], 1);
-      logRecords.clear();
-      await Future.wait([gateway.prepare(), gateway.prepare()]);
-      await gateway.checkHealth();
-      expect(logRecords, isEmpty);
-      native.healthy = false;
-      await gateway.checkHealth();
-      expect(logRecords.single['event'], 'tunnel.status');
-      expect((logRecords.single['attrs'] as Map)['healthy'], isFalse);
-      logRecords.clear();
-      await gateway.checkHealth();
-      expect(logRecords, isEmpty);
-      await gateway.prepare();
-      final second = logRecords.singleWhere(
-        (record) => record['event'] == 'start.completed',
-      );
-      expect((second['attrs'] as Map)['attempt'], 2);
-      expect(native.starts, 2);
-    } finally {
-      await gateway.reset();
-    }
-  });
-
-  test('目标建连期间隧道失效只重建一次，尚未发送业务数据', () async {
-    final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-    final sockets = <Socket>[];
-    listener.listen((socket) {
-      sockets.add(socket);
-      socket.listen((_) {});
-    });
-    final native = FakeNative(listener.port)..startGate.complete();
-    final gateway = VpnGateway(native: native, auth: FakeAuth());
-    try {
-      await gateway.prepare();
-      native.failOpenOnce = true;
-      final task = await gateway.connect(Uri.parse('https://campus.test'));
-      final socket = await task.socket;
-      expect(native.starts, 2);
-      expect(native.opens, 2);
-      expect(native.stopped, [1]);
-      socket.destroy();
-    } finally {
-      await gateway.reset();
-      for (final socket in sockets) {
-        socket.destroy();
-      }
-      await listener.close();
-    }
-  });
+  }
 
   test('请求准备超时归为网络错误，迟到的准备结果不能发送请求', () async {
     final gate = Completer<void>();
     client.interceptors.add(
-      PortalCookieManager(
-        CookieJar(),
+      VpnPreparationInterceptor(
+        client,
         beforeRequest: () => gate.future,
-        preparationTimeout: const Duration(milliseconds: 50),
+        timeout: const Duration(milliseconds: 50),
       ),
     );
     await expectLater(
@@ -1517,7 +1676,7 @@ void main() {
   test('请求准备期间取消不会发送请求或影响其他客户端', () async {
     final gate = Completer<void>();
     client.interceptors.add(
-      PortalCookieManager(CookieJar(), beforeRequest: () => gate.future),
+      VpnPreparationInterceptor(client, beforeRequest: () => gate.future),
     );
     final token = CancelToken();
     final request = client.getUri(url, cancelToken: token);

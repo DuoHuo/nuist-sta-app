@@ -7,7 +7,8 @@ import '../../core/app_directories.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/logging/diagnostic_error.dart';
-import '../../core/network/vpn_dio.dart';
+import '../../core/auth/campus_transport.dart';
+import '../../core/auth/portal_exceptions.dart';
 import 'bulletin_detail_parser.dart';
 import 'bulletin_models.dart';
 import 'bulletin_tagger.dart';
@@ -72,21 +73,20 @@ bool isOfficialBulletinUri(Uri uri) =>
 /// 从学校官网读取公告列表。
 class BulletinApi {
   static final _log = AppLog.logger('bulletin.api');
-  static const _redirectCodes = {301, 302, 303, 307, 308};
 
   /// 创建公告接口客户端，可注入 Dio 实例。
   BulletinApi({Dio? dio})
-    : _dio =
-          dio ??
-          vpnDio(
-            options: BaseOptions(
-              connectTimeout: const Duration(seconds: 12),
-              receiveTimeout: const Duration(seconds: 18),
-              headers: const {'Accept-Language': 'zh-CN,zh;q=0.9'},
-            ),
-          );
+    : _transport = CampusTransport.stateless(
+        dio: dio,
+        options: BaseOptions(
+          connectTimeout: const Duration(seconds: 12),
+          receiveTimeout: const Duration(seconds: 18),
+          headers: const {'Accept-Language': 'zh-CN,zh;q=0.9'},
+        ),
+      );
 
-  final Dio _dio;
+  final CampusTransport _transport;
+  Dio get _dio => _transport.dio;
 
   /// 请求并解析指定分类或分页的公告列表。
   Future<BulletinListPage> fetchPage(Uri uri, {required int pageNumber}) async {
@@ -124,36 +124,47 @@ class BulletinApi {
 
   /// 请求并解析单条公告正文；无法识别正文时返回 null 交给 WebView 兜底。
   Future<BulletinDetailDocument?> fetchDetail(Bulletin bulletin) async {
-    var uri = Uri.parse(bulletin.url);
+    final uri = Uri.parse(bulletin.url);
     final official = isOfficialBulletinUri(uri);
-    Response<String> response;
-    for (var redirects = 0; ; redirects++) {
+    final Response<String> response;
+    try {
       response = await _dio.getUri<String>(
         uri,
         options: Options(
           responseType: ResponseType.plain,
-          followRedirects: !official,
-          validateStatus: official
-              ? (status) =>
-                    status != null &&
-                    (status >= 200 && status < 300 ||
-                        _redirectCodes.contains(status))
-              : null,
+          extra: {'maxRedirects': official ? 5 : 10, 'sameHostOnly': official},
         ),
       );
-      if (!official || !_redirectCodes.contains(response.statusCode)) break;
-      final location = response.headers.value(HttpHeaders.locationHeader);
-      if (redirects >= 5 || location == null || location.isEmpty) return null;
-      final next = uri.resolve(location);
-      // 后台读取正文只跟随官网内的跳转，其他页面仍由主动打开时的网页兜底处理。
-      if (!isOfficialBulletinUri(next)) return null;
-      uri = next;
+    } on PortalLoginError catch (error) {
+      if (official &&
+          const {
+            'redirect_host_rejected',
+            'redirect_limit_exceeded',
+            'redirect_location_missing',
+            'redirect_location_invalid',
+          }.contains(error.code)) {
+        return null;
+      }
+      rethrow;
+    } on DioException catch (error) {
+      final cause = error.error;
+      if (official &&
+          cause is PortalLoginError &&
+          const {
+            'redirect_host_rejected',
+            'redirect_limit_exceeded',
+            'redirect_location_missing',
+            'redirect_location_invalid',
+          }.contains(cause.code)) {
+        return null;
+      }
+      rethrow;
     }
     final html = response.data;
     if (html == null || html.isEmpty) return null;
     return compute(_parseDetail, (
       html: html,
-      uri: uri,
+      uri: response.realUri,
     ), debugLabel: 'bulletin.parse_detail');
   }
 

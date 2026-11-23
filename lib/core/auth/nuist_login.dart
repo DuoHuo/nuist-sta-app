@@ -18,10 +18,16 @@ import 'webauthn_signer.dart';
 /// 服务。会话状态全在调用方传进来的 [PortalHttp] 所持的 dio 上（Cookie 由其
 /// CookieManager 拦截器保管），本类自身无状态，可以反复调用。
 class NuistLogin {
-  NuistLogin({required this.http, required this.bundle, this.onStage});
+  NuistLogin({
+    required this.http,
+    required this.bundle,
+    this.onStage,
+    this.cancelToken,
+  });
 
   final PortalHttp http;
   final PasskeyBundle bundle;
+  final CancelToken? cancelToken;
 
   /// 阶段回调，用于给「测试登录」这类界面显示进度；不含任何凭据信息。
   final void Function(String stage)? onStage;
@@ -192,6 +198,7 @@ class NuistLogin {
     final (response, landed) = await _followLoginRedirects(
       await http.get(
         Uri.parse(loginUrl),
+        cancelToken: cancelToken,
         headers: {'Accept': 'text/html,application/xhtml+xml'},
       ),
       loginUrl,
@@ -250,7 +257,7 @@ class NuistLogin {
               !target.path.startsWith('/authserver/'))) {
         return (current, target.toString());
       }
-      current = await http.get(target);
+      current = await http.get(target, cancelToken: cancelToken);
     }
     throw const PortalLoginError(
       '登录重定向次数过多，请稍后再试',
@@ -269,6 +276,7 @@ class NuistLogin {
   ) async {
     final response = await http.post(
       Uri.parse('$base$startAssertionPath'),
+      cancelToken: cancelToken,
       data: {'userId': bundle.userId, 'id': bundle.anonbiometricsd},
       headers: {
         'Accept': 'application/json, text/javascript, */*; q=0.01',
@@ -467,6 +475,7 @@ class NuistLogin {
   ) {
     return http.post(
       Uri.parse(loginUrl),
+      cancelToken: cancelToken,
       data: {
         '_eventId': 'submit',
         // 这里发的是 Base64URL 形式的 userId，不是明文学号；

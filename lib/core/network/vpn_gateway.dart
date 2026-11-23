@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:io';
-import 'dart:typed_data';
 
 import '../logging/app_log.dart';
 import 'vpn_auth.dart';
@@ -9,847 +7,479 @@ import 'vpn_http_adapter.dart';
 import 'vpn_log.dart';
 import 'vpn_native.dart';
 
-/// 所有 vpnDio 共享的校园 VPN 会话；首次请求才加载原生库和登录。
-class VpnGateway implements VpnPreparedConnector {
-  static final _log = AppLog.logger('core.network.vpn');
+/// 一次已建立的隧道及其本地代理凭据；凭据只保存在内存中。
+class VpnSession {
+  const VpnSession({
+    required this.engineId,
+    required this.proxyPort,
+    required this.proxyToken,
+    required this.establishedAt,
+    required this.generation,
+  });
+  final int engineId;
+  final int proxyPort;
+  final String proxyToken;
+  final DateTime establishedAt;
+  final int generation;
+}
+
+/// 网关唯一状态源，所有迁移均由协调队列发布。
+sealed class VpnState {
+  const VpnState();
+}
+
+/// 尚未建立可用隧道。
+class VpnDisconnected extends VpnState {
+  const VpnDisconnected();
+}
+
+/// 共享同一次启动的等待任务。
+class VpnConnecting extends VpnState {
+  const VpnConnecting(this.pending, this.epoch);
+  final Future<VpnSession> pending;
+  final int epoch;
+}
+
+/// 可接受新连接的隧道。
+class VpnReady extends VpnState {
+  const VpnReady(this.session);
+  final VpnSession session;
+}
+
+/// 仅排空已有流量，不再接收新连接。
+class VpnDraining extends VpnState {
+  const VpnDraining(this.session);
+  final VpnSession session;
+}
+
+/// 所有校园客户端共享的 VPN 有限状态机；业务请求始终可立即单飞重建。
+class VpnGateway implements VpnRecoverableConnector {
   VpnGateway({
     VpnNative? native,
     VpnAuth? auth,
     this.startTimeout = const Duration(seconds: 60),
     this.controlTimeout = const Duration(seconds: 3),
-    this.recoveryTimeout = const Duration(seconds: 12),
-    this.recoveryPollInterval = const Duration(milliseconds: 200),
     this.failureBackoffBase = const Duration(seconds: 2),
     this.failureBackoffMax = const Duration(seconds: 30),
-    this.stableSessionDuration = const Duration(seconds: 30),
   }) : _native = native ?? const VpnNative(),
-       _auth = auth ?? VpnAuth();
-
+       _auth = auth ?? VpnAuth() {
+    _events = _native.events.listen(
+      (event) => unawaited(onNativeEvent(event)),
+      onError: (Object error, StackTrace stack) =>
+          vpnLog('native.events_failed', error: error, stackTrace: stack),
+    );
+  }
   static final instance = VpnGateway();
-
-  /// 后续接入校园网检测；未配置时 unknown 按 VPN 处理。
   static CampusNetworkDetector? campusNetworkDetector;
-
   final VpnNative _native;
   final VpnAuth _auth;
-
-  /// 包含凭据、认证与原生握手的整体期限。
   final Duration startTimeout;
-
-  /// 状态查询和清理不能阻塞恢复流程。
   final Duration controlTimeout;
-
-  /// 原生线程恢复探测期间复用同一等待任务，避免每位请求立即重建隧道。
-  final Duration recoveryTimeout;
-  final Duration recoveryPollInterval;
-
-  /// 连续失败采用有上限的退避，网络变化、解绑与成功后重新计数。
   final Duration failureBackoffBase;
   final Duration failureBackoffMax;
+  VpnState _state = const VpnDisconnected();
 
-  /// 连续正常存活达到此期限后，清除不稳定连接的退避计数。
-  final Duration stableSessionDuration;
-  int? _id;
+  /// 当前状态只读，调用方可据此决定是否需要前台探活。
+  VpnState get state => _state;
+
   @override
-  int? get sessionId => _id;
+  int? get sessionId => switch (_state) {
+    VpnReady(:final session) || VpnDraining(:final session) => session.engineId,
+    _ => null,
+  };
+  Future<void> _coordinator = Future.value();
+  late final StreamSubscription<Map<String, dynamic>> _events;
+  int _epoch = 0;
   int _generation = 0;
-  int _attemptSequence = 0;
-  _VpnAttempt? _pending;
-  Future<void>? _resetting;
-  Timer? _monitor;
+  final Map<int, Map<String, dynamic>> _earlyTerminalEvents = {};
+  _StartAttempt? _attempt;
+  int _failures = 0;
+  DateTime? _backgroundAfter;
+  Timer? _backgroundRetry;
   bool _foreground = true;
-  bool _observing = false;
-  Future<Map<String, dynamic>>? _probing;
-  int? _probingId;
-  Object? _lastFailure;
-  StackTrace? _lastFailureStack;
-  DateTime? _retryAfter;
-  DateTime? _preparedAt;
-  int _consecutiveFailures = 0;
-  int _unstableSessions = 0;
-  DateTime? _sessionStartedAt;
-  final Queue<_OpenWaiter> _openQueue = Queue<_OpenWaiter>();
-  int _openingConnections = 0;
-  String? _statusSignature;
-  DateTime? _statusLoggedAt;
+  Future<void>? _probePending;
+  int? _probeEngine;
 
-  /// 在装入业务 Cookie 前准备隧道，避免首次请求带着 VPN 登录前的旧状态。
+  Future<T> _enqueue<T>(FutureOr<T> Function() operation) {
+    final result = _coordinator.then((_) => operation());
+    _coordinator = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
   @override
-  Future<void> prepare() async {
-    await _ensureConnected();
-  }
+  Future<VpnSession> prepare() => ensureReady();
 
-  Future<int> _ensureConnected({bool useRecentPreparation = false}) async {
-    if (_resetting case final resetting?) await resetting;
-    if (_pending case final pending?) {
-      pending.waiters++;
-      return pending.result.future;
-    }
-    // 适配器已在取连接池前 prepare；随后新连接工厂可复用刚完成的检查，
-    // 独立的 prepare 调用仍检查当前状态，不让缓存隐藏恢复或失败。
-    if (useRecentPreparation &&
-        _id != null &&
-        _preparedAt != null &&
-        DateTime.now().difference(_preparedAt!) <
-            const Duration(milliseconds: 250)) {
-      return _id!;
-    }
-    if (_retryAfter case final retryAfter?) {
-      if (DateTime.now().isBefore(retryAfter)) {
-        Error.throwWithStackTrace(
-          _lastFailure!,
-          _lastFailureStack ?? StackTrace.current,
-        );
+  /// 同一启动共享结果，后台退避不会阻挡用户或业务主动请求。
+  Future<VpnSession> ensureReady({bool userInitiated = true}) async {
+    final wait = await _enqueue(() async {
+      if (_state case VpnReady(:final session)) {
+        return _SessionWait(Future.value(session));
       }
-    }
-    final attempt = _VpnAttempt(_generation);
-    _pending = attempt;
-    attempt.timer = Timer(startTimeout, () {
-      _failAttempt(
-        attempt,
-        const SocketException('校园 VPN 启动超时，请检查网络后重试'),
-        StackTrace.current,
+      if (_state case VpnConnecting(:final pending)) {
+        return _SessionWait(pending);
+      }
+      if (!userInitiated &&
+          _backgroundAfter != null &&
+          DateTime.now().isBefore(_backgroundAfter!)) {
+        throw const SocketException('校园 VPN 后台重连正在退避');
+      }
+      if (_state is VpnDraining) {
+        _state = const VpnDisconnected();
+        // 旧引擎自行在一秒内排空，不能截断已经交付的响应尾字节。
+      }
+      _backgroundRetry?.cancel();
+      final attempt = _StartAttempt(++_epoch, userInitiated);
+      _attempt = attempt;
+      _state = VpnConnecting(attempt.result.future, attempt.epoch);
+      attempt.timer = Timer(
+        startTimeout,
+        () => unawaited(
+          _enqueue(
+            () => _fail(
+              attempt,
+              const SocketException('校园 VPN 启动超时，请检查网络后重试'),
+              StackTrace.current,
+            ),
+          ),
+        ),
       );
+      unawaited(_start(attempt));
+      return _SessionWait(attempt.result.future);
     });
-    unawaited(_runAttempt(attempt));
-    return attempt.result.future;
+    return wait.pending;
   }
 
-  bool _isCurrent(_VpnAttempt attempt) =>
-      !attempt.result.isCompleted && attempt.generation == _generation;
-
-  void _checkAttempt(_VpnAttempt attempt) {
-    if (!_isCurrent(attempt)) throw const SocketException('VPN 会话已取消');
+  bool _current(_StartAttempt attempt) =>
+      identical(_attempt, attempt) &&
+      !attempt.result.isCompleted &&
+      _epoch == attempt.epoch;
+  void _check(_StartAttempt attempt) {
+    if (!_current(attempt)) throw const SocketException('VPN 会话已取消');
   }
 
-  Future<void> _runAttempt(_VpnAttempt attempt) => attempt.span.run(() async {
+  Future<Map<String, dynamic>> _control(Map<String, dynamic> command) =>
+      _native.call(command).timeout(controlTimeout);
+
+  Future<void> _start(_StartAttempt attempt) => attempt.span.run(() async {
+    int? engineId;
+    var published = false;
     try {
-      final id = await _connect(attempt);
-      _checkAttempt(attempt);
-      attempt.timer?.cancel();
-      _lastFailure = null;
-      _lastFailureStack = null;
-      _retryAfter = null;
-      // 刚握手成功不等于稳定；短命隧道不能每次启动都清空重建退避。
-      if (_sessionStartedAt != null &&
-          DateTime.now().difference(_sessionStartedAt!) >=
-              stableSessionDuration) {
-        _consecutiveFailures = 0;
-        _unstableSessions = 0;
-      }
-      _preparedAt = DateTime.now();
-      if (identical(_pending, attempt)) _pending = null;
-      attempt.result.complete(id);
-      if (attempt.number case final number?) {
+      vpnLog('start.started', fields: {'attempt': attempt.epoch});
+      await _control({'method': 'version'});
+      _check(attempt);
+      final credentials = await _auth.obtain();
+      _check(attempt);
+      final reserved = await _control({'method': 'prepareStart'});
+      attempt.startId = reserved['startId'] as int;
+      _check(attempt);
+      final result = await _native.call({
+        'method': 'start',
+        'startId': attempt.startId,
+        'host': credentials.host,
+        'port': credentials.port,
+        'user': credentials.user,
+        'token': credentials.token,
+        'probeHost': Uri.parse(VpnAuth.controller).host,
+      });
+      engineId = result['engineId'] as int;
+      final session = VpnSession(
+        engineId: engineId,
+        proxyPort: result['proxyPort'] as int,
+        proxyToken: result['proxyToken'] as String,
+        establishedAt: DateTime.now(),
+        generation: _generation + 1,
+      );
+      final accepted = await _enqueue(() {
+        if (!_current(attempt)) return false;
+        final terminal = _earlyTerminalEvents.remove(engineId);
+        if (terminal != null) {
+          final failure = VpnNativeException.fromResponse({
+            'error': 'VPN 引擎在启动完成前退出',
+            'diagnostic': terminal['diagnostic'],
+          }, method: 'start');
+          _fail(attempt, failure, StackTrace.current);
+          return false;
+        }
+        _earlyTerminalEvents.clear();
+        _generation = session.generation;
+        attempt.timer?.cancel();
+        _state = VpnReady(session);
+        _attempt = null;
+        // TLS 握手及虚拟地址首帧已经完成，不惩罚短命会话自身的重建。
+        _failures = 0;
+        _backgroundAfter = null;
+        attempt.result.complete(session);
         vpnLog(
           'start.completed',
-          fields: {
-            'attempt': number,
-            'vpn_session_id': id,
-            'duration_ms': attempt.watch.elapsedMilliseconds,
-            'waiters': attempt.waiters,
-          },
+          fields: {'attempt': attempt.epoch, 'vpn_session_id': engineId},
         );
+        return true;
+      });
+      if (!accepted) {
+        await _stop(engineId);
+        return;
+      }
+      published = true;
+      if (result['virtualIp'] case final String virtualIp) {
+        unawaited(_auth.register(virtualIp, credentials.host));
       }
     } catch (error, stack) {
-      _failAttempt(attempt, error, stack);
+      if (engineId != null) await _stop(engineId);
+      await _enqueue(() => _fail(attempt, error, stack));
+    } finally {
+      if (!published && !_current(attempt) && attempt.startId != null) {
+        try {
+          await _control({'method': 'cancelStart', 'startId': attempt.startId});
+        } catch (error, stack) {
+          vpnLog('start.cleanup_failed', error: error, stackTrace: stack);
+        }
+      }
     }
   });
 
-  void _failAttempt(_VpnAttempt attempt, Object error, StackTrace stack) =>
-      attempt.span.run(() {
-        if (attempt.result.isCompleted) return;
-        attempt.timer?.cancel();
-        if (identical(_pending, attempt)) {
-          _pending = null;
-          _preparedAt = null;
-          _lastFailure = error;
-          _lastFailureStack = stack;
-          _consecutiveFailures = (_consecutiveFailures + 1).clamp(1, 6);
-          final delay = failureBackoffBase * (1 << (_consecutiveFailures - 1));
-          final nextRetry = DateTime.now().add(
-            delay > failureBackoffMax ? failureBackoffMax : delay,
-          );
-          if (_retryAfter == null || nextRetry.isAfter(_retryAfter!)) {
-            _retryAfter = nextRetry;
-          }
-          _auth.cancel();
-        }
-        attempt.result.completeError(error, stack);
-        vpnLog(
-          'start.failed',
-          fields: {
-            'attempt': attempt.number,
-            'duration_ms': attempt.watch.elapsedMilliseconds,
-            'waiters': attempt.waiters,
-            'cancelled': attempt.generation != _generation,
-          },
-          error: error,
-          stackTrace: stack,
-        );
-        if (attempt.nativeStartId case final startId?) {
-          unawaited(_discardStart(startId));
-        }
-      });
+  void _fail(_StartAttempt attempt, Object error, StackTrace stack) {
+    if (!_current(attempt)) return;
+    attempt.timer?.cancel();
+    _attempt = null;
+    _state = const VpnDisconnected();
+    _auth.cancel();
+    _failures = (_failures + 1).clamp(1, 6);
+    final delay = failureBackoffBase * (1 << (_failures - 1));
+    _backgroundAfter = DateTime.now().add(
+      delay > failureBackoffMax ? failureBackoffMax : delay,
+    );
+    attempt.result.completeError(error, stack);
+    vpnLog(
+      'start.failed',
+      error: error,
+      stackTrace: stack,
+      fields: {'attempt': attempt.epoch},
+    );
+    if (attempt.startId != null) unawaited(_cancelStart(attempt.startId!));
+    if (!attempt.userInitiated) _scheduleBackground();
+  }
 
-  Future<Map<String, dynamic>> _control(Map<String, dynamic> request) =>
-      _native.call(request).timeout(controlTimeout);
-
-  Future<void> _discardStart(int startId) async {
+  Future<void> _cancelStart(int startId) async {
     try {
       await _control({'method': 'cancelStart', 'startId': startId});
-    } catch (error) {
-      vpnLog(
-        'start.cancel_failed',
-        fields: {'native_start_id': startId},
-        error: error,
-      );
+    } catch (error, stack) {
+      vpnLog('start.cancel_failed', error: error, stackTrace: stack);
     }
   }
 
   Future<void> _stop(int id) async {
     try {
       await _control({'method': 'stop', 'id': id});
-    } catch (error) {
+    } catch (error, stack) {
       vpnLog(
         'tunnel.stop_failed',
         fields: {'vpn_session_id': id},
         error: error,
+        stackTrace: stack,
       );
     }
   }
 
-  void _logStatus(int id, Map<String, dynamic> status, {bool force = false}) {
-    if (_id == id && !_usable(status)) _preparedAt = null;
-    final signature = [
-      id,
-      for (final field in [
-        'alive',
-        'healthy',
-        'exitReason',
-        'recovering',
-        'dnsTimeouts',
-        'tcpTimeouts',
-      ])
-        status[field],
-    ].join('/');
-    final changed = _statusSignature != null && _statusSignature != signature;
-    final now = DateTime.now();
-    final elapsed =
-        _statusLoggedAt == null ||
-        now.difference(_statusLoggedAt!) >= const Duration(minutes: 1);
-    final firstAbnormal =
-        _statusSignature == null &&
-        (!_usable(status) || status['recovering'] == true);
-    _statusSignature = signature;
-    if (!force && !changed && !elapsed && !firstAbnormal) return;
-    _statusLoggedAt = now;
-    // 字段由原生层生成，仅包含状态、计数、耗时和错误类别。
+  /// 仅作废失败请求实际使用的引擎，迟到异常不能掐断新隧道。
+  @override
+  Future<void> invalidate(int engineId, {String reason = 'transport_failed'}) =>
+      _enqueue(() async {
+        if (sessionId != engineId) return;
+        _state = const VpnDisconnected();
+        vpnLog(
+          'tunnel.invalidated',
+          fields: {'vpn_session_id': engineId, 'reason': reason},
+        );
+        await _stop(engineId);
+      });
+
+  /// 原生状态主动推送，排空与恢复健康分别处理，不进行 Dart 轮询。
+  Future<void> onNativeEvent(Map<String, dynamic> event) => _enqueue(() async {
+    final id = event['engineId'];
+    if (id is! int) return;
+    final probingAfterStall =
+        event['event'] == 'unhealthy' && event['reason'] == 'scheduler_stall';
+    if (_state is VpnConnecting &&
+        !probingAfterStall &&
+        const {'exited', 'unhealthy', 'draining'}.contains(event['event'])) {
+      _earlyTerminalEvents[id] = event;
+      return;
+    }
+    if (id != sessionId) return;
     vpnLog(
       'tunnel.status',
       fields: {
         'vpn_session_id': id,
-        'alive': status['alive'],
-        'healthy': status['healthy'],
-        'reason': status['exitReason'],
-        'loop_idle_ms': status['loopIdleMs'],
-        'rx_idle_ms': status['rxIdleMs'],
-        'heartbeats': status['heartbeats'],
-        'received_bytes': status['receivedBytes'],
-        'recovering': status['recovering'],
-        'dns_timeouts': status['dnsTimeouts'],
-        'tcp_timeouts': status['tcpTimeouts'],
+        'reason': event['reason'],
+        'event': event['event'],
+        if (event['diagnostic'] case final Map diagnostic)
+          'details': {'native_diagnostic': diagnostic},
       },
     );
-  }
-
-  bool _usable(Map<String, dynamic> status) =>
-      status['alive'] == true && status['healthy'] != false;
-
-  bool _recovering(Map<String, dynamic> status) =>
-      status['alive'] == true &&
-      (status['recovering'] == true ||
-          status['loopIdleMs'] is num && status['loopIdleMs'] >= 5000);
-
-  Future<Map<String, dynamic>> _probe(int id) {
-    if (_probingId == id && _probing != null) return _probing!;
-    late final Future<Map<String, dynamic>> probing;
-    probing = _native
-        .call({
-          'method': 'probe',
-          'id': id,
-          // 配置中已有且必需可达的校园主机，用 DNS 请求验证数据通路。
-          'host': Uri.parse(VpnAuth.controller).host,
-        })
-        .timeout(const Duration(seconds: 5))
-        .whenComplete(() {
-          if (identical(_probing, probing)) _probing = null;
-        });
-    _probingId = id;
-    return _probing = probing;
-  }
-
-  void _invalidate(int id) {
-    if (_id != id) return;
-    _id = null;
-    _preparedAt = null;
-    _monitor?.cancel();
-    _statusSignature = null;
-    final started = _sessionStartedAt;
-    _sessionStartedAt = null;
-    if (started != null &&
-        DateTime.now().difference(started) < stableSessionDuration) {
-      _unstableSessions = (_unstableSessions + 1).clamp(1, 6);
-      if (_unstableSessions >= 2) {
-        final delay = failureBackoffBase * (1 << (_unstableSessions - 2));
-        _lastFailure = const SocketException('校园 VPN 连接反复中断，请稍后重试');
-        _lastFailureStack = StackTrace.current;
-        _retryAfter = DateTime.now().add(
-          delay > failureBackoffMax ? failureBackoffMax : delay,
-        );
-      }
-    } else if (started != null) {
-      _unstableSessions = 0;
-      _consecutiveFailures = 0;
-    }
-  }
-
-  void _startMonitor() {
-    _monitor?.cancel();
-    if (!_foreground || _id == null) return;
-    _monitor = Timer.periodic(const Duration(seconds: 10), (_) {
-      unawaited(checkHealth());
-    });
-  }
-
-  /// 后台暂停 Dart 周期查询，回前台只恢复已有隧道，不主动登录。
-  Future<void> setForeground(bool foreground) async {
-    _foreground = foreground;
-    _startMonitor();
-    if (foreground) await checkHealth();
-  }
-
-  /// 回前台及定期检查已有隧道；不主动登录，也不让诊断失败冒泡到 UI。
-  Future<void> checkHealth() => _log.startSpan().run(() async {
-    final id = _id;
-    if (id == null || _observing) return;
-    final generation = _generation;
-    _observing = true;
-    try {
-      var status = await _control({'method': 'status', 'id': id});
-      if (status['needsProbe'] == true) {
-        try {
-          status = await _probe(id);
-        } catch (error) {
-          if (_id == id && generation == _generation) {
-            _invalidate(id);
-            await _stop(id);
-          }
-          rethrow;
-        }
-      }
-      final recovering = Stopwatch()..start();
-      while (_foreground &&
-          _id == id &&
-          generation == _generation &&
-          _recovering(status) &&
-          recovering.elapsed < recoveryTimeout) {
-        _logStatus(id, status);
-        await Future<void>.delayed(recoveryPollInterval);
-        if (!_foreground || _id != id || generation != _generation) return;
-        status = await _control({'method': 'status', 'id': id});
-      }
-      if (_id == id && generation == _generation) {
-        _logStatus(id, status);
-        // 先同步发布失效标识，下一请求才能在取连接池之前丢弃旧隧道。
-        // 原生恢复探测超时才释放旧隧道，下一实际请求负责合流重建。
-        if (!_usable(status) &&
-            (!_recovering(status) || recovering.elapsed >= recoveryTimeout)) {
-          _invalidate(id);
-          await _stop(id);
-        }
-      }
-    } catch (error) {
-      vpnLog(
-        'tunnel.health_failed',
-        fields: {'vpn_session_id': id},
-        error: error,
-      );
-    } finally {
-      _observing = false;
+    switch (event['event']) {
+      case 'draining':
+        if (_state case VpnReady(:final session)) _state = VpnDraining(session);
+      case 'healthy':
+        _failures = 0;
+        _backgroundAfter = null;
+      case 'unhealthy':
+        // 原生已启动受控 DNS 探活，由 healthy/exited 决定恢复或退出。
+        if (probingAfterStall) return;
+        _state = const VpnDisconnected();
+        await _stop(id);
+        _scheduleBackground();
+      case 'exited':
+        _state = const VpnDisconnected();
+        await _stop(id);
+        _scheduleBackground();
     }
   });
 
-  /// 网络出口变化时作废隧道，保留门户 Cookie，下一请求重新建连。
-  Future<void> networkChanged() async {
-    vpnLog('tunnel.network_changed', fields: {'reason': 'network_changed'});
-    _generation++;
-    _cancelQueuedOpens();
-    _lastFailure = null;
-    _lastFailureStack = null;
-    _retryAfter = null;
-    _consecutiveFailures = 0;
-    _unstableSessions = 0;
-    _sessionStartedAt = null;
-    _preparedAt = null;
-    final pending = _pending;
-    if (pending != null) {
-      _failAttempt(
-        pending,
-        const SocketException('网络已变化，请重试'),
-        StackTrace.current,
-      );
-      _lastFailure = null;
-      _lastFailureStack = null;
-      _retryAfter = null;
-      _consecutiveFailures = 0;
-      _unstableSessions = 0;
-    }
-    final id = _id;
-    _id = null;
-    _monitor?.cancel();
-    if (id != null) await _stop(id);
-  }
-
-  Future<int> _connect(_VpnAttempt attempt) async {
-    _checkAttempt(attempt);
-    if (_id case final id?) {
-      Map<String, dynamic>? status;
-      try {
-        status = await _control({'method': 'status', 'id': id});
-        _logStatus(id, status);
-      } catch (error) {
-        vpnLog(
-          'tunnel.status_failed',
-          fields: {'vpn_session_id': id},
-          error: error,
+  void _scheduleBackground() {
+    _backgroundRetry?.cancel();
+    if (!_foreground) return;
+    final remaining =
+        _backgroundAfter?.difference(DateTime.now()) ?? failureBackoffBase;
+    _backgroundRetry = Timer(
+      remaining.isNegative ? Duration.zero : remaining,
+      () {
+        unawaited(
+          ensureReady(userInitiated: false).then<void>(
+            (_) {},
+            onError: (Object error, StackTrace stack) {
+              vpnLog(
+                'background.reconnect_failed',
+                error: error,
+                stackTrace: stack,
+              );
+            },
+          ),
         );
-      }
-      _checkAttempt(attempt);
-      if (status?['needsProbe'] == true) {
-        try {
-          status = await _probe(id);
-        } catch (error) {
-          vpnLog(
-            'tunnel.probe_failed',
-            fields: {'vpn_session_id': id},
-            error: error,
-          );
-          status = null;
-        }
-        _checkAttempt(attempt);
-      }
-      final recovery = Stopwatch()..start();
-      while (_id == id && status != null && _recovering(status)) {
-        if (recovery.elapsed >= recoveryTimeout) break;
-        await Future<void>.delayed(recoveryPollInterval);
-        _checkAttempt(attempt);
-        if (_id != id) break;
-        try {
-          status = await _control({'method': 'status', 'id': id});
-          _logStatus(id, status);
-        } catch (error) {
-          vpnLog(
-            'tunnel.status_failed',
-            fields: {'vpn_session_id': id},
-            error: error,
-          );
-          status = null;
-          break;
-        }
-        _checkAttempt(attempt);
-      }
-      if (_id == id && status != null && _usable(status)) {
-        return id;
-      }
-      // exitReason 由原生层生成，仅包含 io::ErrorKind，不含服务端数据。
-      vpnLog(
-        'tunnel.invalidated',
-        fields: {
-          'vpn_session_id': id,
-          'reason': status?['exitReason'] ?? 'worker_stopped',
-        },
-      );
-      _invalidate(id);
-      await _stop(id);
-      _checkAttempt(attempt);
-      if (_retryAfter != null && DateTime.now().isBefore(_retryAfter!)) {
-        Error.throwWithStackTrace(_lastFailure!, _lastFailureStack!);
-      }
-    }
-    attempt.number = ++_attemptSequence;
-    vpnLog(
-      'start.started',
-      fields: {
-        'attempt': attempt.number,
-        'timeout_ms': startTimeout.inMilliseconds,
       },
     );
-    await _control({'method': 'version'});
-    _checkAttempt(attempt);
-    vpnLog('start.native_ready', fields: {'attempt': attempt.number});
-    final credentials = await vpnStage(
-      'vpn.authenticate',
-      _auth.obtain,
-      timeout: startTimeout,
-      fields: {'attempt': attempt.number, 'service': 'vpn'},
-    );
-    _checkAttempt(attempt);
-    vpnLog('start.authenticated', fields: {'attempt': attempt.number});
-    final reservation = await _control({'method': 'prepareStart'});
-    final startId = reservation['startId'] as int;
-    attempt.nativeStartId = startId;
-    if (!_isCurrent(attempt)) {
-      await _discardStart(startId);
-      _checkAttempt(attempt);
-    }
-    var polling = false;
-    final progress = Timer.periodic(const Duration(seconds: 3), (_) async {
-      if (polling || !_isCurrent(attempt)) return;
-      polling = true;
-      try {
-        final status = await _control({
-          'method': 'startStatus',
-          'startId': startId,
-        });
-        vpnLog(
-          'start.progress',
-          fields: {
-            'attempt': attempt.number,
-            'native_start_id': startId,
-            'native_stage': vpnNativeStage(status['stage']),
-            'stage_elapsed_ms': status['stageElapsedMs'],
-            'duration_ms': status['elapsedMs'],
-          },
-        );
-      } catch (_) {
-        // 启动刚完成时，登记项可能已经释放。
-      } finally {
-        polling = false;
-      }
-    });
-    final Map<String, dynamic> result;
-    try {
-      result = await _native.call({
-        'method': 'start',
-        'startId': startId,
-        'host': credentials.host,
-        'port': credentials.port,
-        'user': credentials.user,
-        'token': credentials.token,
-      });
-    } finally {
-      progress.cancel();
-    }
-    final id = result['id'] as int;
-    if (!_isCurrent(attempt)) {
-      await _stop(id);
-      throw const SocketException('VPN 会话已取消');
-    }
-    _id = id;
-    _sessionStartedAt = DateTime.now();
-    _statusSignature = null;
-    _statusLoggedAt = DateTime.now();
-    if (result['startup'] case final Map startup) {
-      vpnLog(
-        'start.native_completed',
-        fields: {
-          'attempt': attempt.number,
-          'duration_ms': startup['elapsedMs'],
-          ...vpnNativeTimings(startup['timings']),
-        },
-      );
-    }
-    _startMonitor();
-    unawaited(_auth.register(result['virtualIp'] as String, credentials.host));
-    return id;
   }
 
-  @override
-  Future<ConnectionTask<Socket>> connect(Uri uri) async {
-    final log = VpnConnectionLog.current ?? VpnConnectionLog(uri);
-    var cancelled = false;
-    Socket? local;
-    int? targetOpenId;
-    int? targetSessionId;
-    final cancellation = Completer<Socket>();
-    final generation = _generation;
-    final opening =
+  /// 网络切换时探测已有会话，正在建立的会话由其自身超时管理，避免重复取消。
+  Future<void> networkChanged() async {
+    final selected = await _enqueue(() {
+      _backgroundAfter = null;
+      return _state;
+    });
+    if (selected is VpnReady) {
+      await checkHealth();
+    } else if (selected is VpnConnecting) {
+      try {
+        final connected = await selected.pending;
+        if (_state case VpnReady(:final session)
+            when session.engineId == connected.engineId) {
+          await checkHealth();
+        }
+      } catch (error, stack) {
+        vpnLog('network.prepare_failed', error: error, stackTrace: stack);
+      }
+    }
+  }
+
+  /// 回前台仅探活已有隧道；inactive 不应调用本方法暂停后台行为。
+  Future<void> setForeground(bool foreground) =>
+      _enqueue(() {
+        _foreground = foreground;
+        if (!foreground) _backgroundRetry?.cancel();
+      }).then((_) async {
+        if (foreground && _state is VpnReady) await checkHealth();
+      });
+
+  /// 轻量 DNS 探活最多两秒，同一引擎的并发检查共享任务。
+  Future<void> checkHealth() async {
+    final selected = await _enqueue(() => _state);
+    if (selected is! VpnReady) return;
+    final id = selected.session.engineId;
+    if (_probeEngine == id && _probePending != null) return _probePending;
+    _probeEngine = id;
+    late final Future<void> pending;
+    pending =
         () async {
-          var id = await _ensureConnected(useRecentPreparation: true);
-          if (cancelled || generation != _generation) {
-            throw const SocketException('VPN 连接已取消');
-          }
-          Map<String, dynamic> result;
           try {
-            result = await _open(id, uri, log, cancellation.future, generation);
-          } catch (_) {
-            _preparedAt = null;
-            if (cancelled || generation != _generation) rethrow;
-            Map<String, dynamic>? status;
-            try {
-              status = await _control({'method': 'status', 'id': id});
-              _logStatus(id, status, force: true);
-            } catch (error) {
-              log.write(
-                'connection.status_failed',
-                fields: {'vpn_session_id': id},
-                error: error,
-              );
+            final status = await _native
+                .call({
+                  'method': 'probe',
+                  'id': id,
+                  'host': Uri.parse(VpnAuth.controller).host,
+                  'timeoutMs': 2000,
+                })
+                .timeout(const Duration(milliseconds: 2500));
+            if (status['healthy'] == false ||
+                status['alive'] == false ||
+                status['draining'] == true) {
+              await invalidate(id, reason: 'probe_failed');
             }
-            if (status != null && _usable(status)) rethrow;
-            // 尚未交付 Socket、没有发送业务请求体，允许合流重建后重试一次。
-            log.write('connection.retry', fields: {'vpn_session_id': id});
-            id = await _ensureConnected();
-            if (cancelled || generation != _generation) {
-              throw const SocketException('VPN 连接已取消');
-            }
-            result = await _open(id, uri, log, cancellation.future, generation);
-          }
-          targetOpenId = result['openId'] as int?;
-          targetSessionId = id;
-          if (cancelled || generation != _generation) {
-            throw const SocketException('VPN 连接已取消');
-          }
-          final socket = await Socket.connect(
-            InternetAddress.loopbackIPv4,
-            result['port'] as int,
-            timeout: const Duration(seconds: 3),
-          );
-          local = socket;
-          if (cancelled || generation != _generation) {
-            socket.destroy();
-            throw const SocketException('VPN 连接已取消');
-          }
-          final secret = result['secret'] as String;
-          final bytes = Uint8List.fromList([
-            for (var i = 0; i < secret.length; i += 2)
-              int.parse(secret.substring(i, i + 2), radix: 16),
-          ]);
-          try {
-            socket.add(bytes);
-            await socket.flush();
-          } catch (_) {
-            socket.destroy();
-            rethrow;
-          } finally {
-            bytes.fillRange(0, bytes.length, 0);
-          }
-          if (cancelled || generation != _generation) {
-            socket.destroy();
-            throw const SocketException('VPN 连接已取消');
-          }
-          log.write('tcp.ready', fields: {'vpn_session_id': id});
-          if (targetOpenId != null) {
-            unawaited(_releaseTarget(id, targetOpenId!, cancel: false));
-            targetOpenId = null;
-          }
-          return socket;
-        }().catchError((Object error, StackTrace stack) {
-          if (targetOpenId != null && targetSessionId != null) {
-            unawaited(
-              _releaseTarget(targetSessionId!, targetOpenId!, cancel: true),
+          } catch (error, stack) {
+            await invalidate(id, reason: 'probe_failed');
+            vpnLog(
+              'tunnel.probe_failed',
+              fields: {'vpn_session_id': id},
+              error: error,
+              stackTrace: stack,
             );
           }
-          log.write('connection.failed', error: error);
-          Error.throwWithStackTrace(error, stack);
-        });
-    return ConnectionTask.fromSocket(
-      Future.any([opening, cancellation.future]),
-      () {
-        log.write('connection.cancelled', fields: {'cancelled': true});
-        cancelled = true;
-        local?.destroy();
-        if (targetOpenId != null && targetSessionId != null) {
-          unawaited(
-            _releaseTarget(targetSessionId!, targetOpenId!, cancel: true),
-          );
-        }
-        if (!cancellation.isCompleted) {
-          cancellation.completeError(const SocketException('VPN 连接已取消'));
-        }
-      },
-    );
-  }
-
-  void _releaseOpen() {
-    if (_openingConnections > 0) _openingConnections--;
-    while (_openQueue.isNotEmpty && _openingConnections < 8) {
-      final waiter = _openQueue.removeFirst();
-      if (waiter.generation != _generation) {
-        waiter.ready.completeError(const SocketException('VPN 连接已取消'));
-        continue;
-      }
-      _openingConnections++;
-      waiter.granted = true;
-      waiter.ready.complete();
-    }
-  }
-
-  Future<void> _acquireOpen(Future<Socket> cancellation, int generation) async {
-    if (generation != _generation) throw const SocketException('VPN 连接已取消');
-    if (_openingConnections < 8 && _openQueue.isEmpty) {
-      _openingConnections++;
-      return;
-    }
-    final waiter = _OpenWaiter(generation);
-    _openQueue.addLast(waiter);
-    try {
-      await Future.any([waiter.ready.future, cancellation.then<void>((_) {})]);
-    } catch (_) {
-      if (!_openQueue.remove(waiter) && waiter.granted) {
-        _releaseOpen();
-      }
-      rethrow;
-    }
-  }
-
-  void _cancelQueuedOpens() {
-    while (_openQueue.isNotEmpty) {
-      _openQueue.removeFirst().ready.completeError(
-        const SocketException('VPN 连接已取消'),
-      );
-    }
-  }
-
-  Future<Map<String, dynamic>> _open(
-    int id,
-    Uri uri,
-    VpnConnectionLog log,
-    Future<Socket> cancellation,
-    int generation,
-  ) async {
-    await _acquireOpen(cancellation, generation);
-    int? openId;
-    var cancelled = false;
-    var completed = false;
-    unawaited(
-      cancellation.then<void>(
-        (_) {},
-        onError: (Object _) {
-          cancelled = true;
-          if (!completed && openId != null) {
-            unawaited(_releaseTarget(id, openId, cancel: true));
-          }
-        },
-      ),
-    );
-    try {
-      if (generation != _generation) throw const SocketException('VPN 连接已取消');
-      final reservation = await _control({'method': 'prepareOpen', 'id': id});
-      openId = reservation['openId'] as int;
-      if (cancelled || generation != _generation) {
-        throw const SocketException('VPN 连接已取消');
-      }
-      final result = await log.run(
-        () => _native
-            .call({
-              'method': 'open',
-              'id': id,
-              'openId': openId,
-              'host': uri.host,
-              'port': uri.port,
-            })
-            .timeout(
-              const Duration(seconds: 24),
-              onTimeout: () {
-                throw const SocketException('VPN 目标连接超时，请重试');
-              },
-            ),
-      );
-      if (cancelled || generation != _generation) {
-        throw const SocketException('VPN 连接已取消');
-      }
-      completed = true;
-      return {...result, 'openId': openId};
-    } finally {
-      if (!completed && openId != null) {
-        await _releaseTarget(id, openId, cancel: true);
-      }
-      _releaseOpen();
-    }
-  }
-
-  Future<void> _releaseTarget(
-    int id,
-    int openId, {
-    required bool cancel,
-  }) async {
-    try {
-      await _control({
-        'method': cancel ? 'cancelOpen' : 'releaseOpen',
-        'id': id,
-        'openId': openId,
-      });
-    } catch (error) {
-      vpnLog(
-        'connection.cleanup_failed',
-        fields: {'vpn_session_id': id},
-        error: error,
-      );
-    }
-  }
-
-  /// 解绑或换号时关闭隧道；代次检查防止旧登录结果恢复到新会话。
-  Future<void> reset() {
-    if (_resetting case final resetting?) return resetting;
-    _generation++;
-    _cancelQueuedOpens();
-    vpnLog('session.reset');
-    final pending = _pending;
-    final id = _id;
-    _id = null;
-    _monitor?.cancel();
-    _lastFailure = null;
-    _lastFailureStack = null;
-    _retryAfter = null;
-    _consecutiveFailures = 0;
-    _unstableSessions = 0;
-    _sessionStartedAt = null;
-    _preparedAt = null;
-    if (pending != null) {
-      _failAttempt(
-        pending,
-        const SocketException('VPN 会话已取消'),
-        StackTrace.current,
-      );
-      _lastFailure = null;
-      _lastFailureStack = null;
-      _retryAfter = null;
-      _consecutiveFailures = 0;
-      _unstableSessions = 0;
-    }
-    late final Future<void> resetting;
-    resetting =
-        () async {
-          try {
-            if (id != null) await _stop(id);
-          } finally {
-            await vpnStage('vpn.clear', _auth.clear, timeout: controlTimeout);
-            vpnLog('session.cleared');
-          }
         }().whenComplete(() {
-          if (identical(_resetting, resetting)) _resetting = null;
+          if (identical(_probePending, pending)) _probePending = null;
         });
-    return _resetting = resetting;
+    return _probePending = pending;
+  }
+
+  /// CONNECT 完成后返回原始字节流，HTTPS 校验由适配器完成。
+  @override
+  Future<ConnectionTask<Socket>> connect(Uri uri) async =>
+      connectVpnProxy(await ensureReady(), uri);
+
+  /// 断网立即取消共享启动并停旧引擎，保留账号和 Cookie。
+  Future<void> disconnected() => _reset(clearBackoff: false);
+
+  /// 解绑或换号停止隧道，不写回控制器空 Cookie 域。
+  Future<void> reset() => _reset(clearBackoff: true);
+  Future<void> _reset({required bool clearBackoff}) => _enqueue(() async {
+    _epoch++;
+    _backgroundRetry?.cancel();
+    final id = sessionId;
+    final attempt = _attempt;
+    _attempt = null;
+    _earlyTerminalEvents.clear();
+    _state = const VpnDisconnected();
+    _auth.cancel();
+    if (attempt != null && !attempt.result.isCompleted) {
+      attempt.timer?.cancel();
+      attempt.result.completeError(const SocketException('VPN 会话已取消'));
+      if (attempt.startId != null) unawaited(_cancelStart(attempt.startId!));
+    }
+    if (clearBackoff) {
+      _failures = 0;
+      _backgroundAfter = null;
+    }
+    if (id != null) await _stop(id);
+  });
+
+  /// 测试及独立网关销毁时释放事件订阅和后台任务。
+  Future<void> dispose() async {
+    await reset();
+    await _events.cancel();
   }
 }
 
-class _OpenWaiter {
-  _OpenWaiter(this.generation);
-  final int generation;
-  final ready = Completer<void>();
-  bool granted = false;
+class _SessionWait {
+  const _SessionWait(this.pending);
+  final Future<VpnSession> pending;
 }
 
-class _VpnAttempt {
-  _VpnAttempt(this.generation);
-  final AppLogSpan span = VpnGateway._log.startSpan();
-  int? number;
-  int waiters = 1;
-  final int generation;
-  final watch = Stopwatch()..start();
-  final result = Completer<int>();
+class _StartAttempt {
+  _StartAttempt(this.epoch, this.userInitiated);
+  final int epoch;
+  final bool userInitiated;
+  final result = Completer<VpnSession>();
+  final span = AppLog.logger('core.network.vpn').startSpan();
   Timer? timer;
-  int? nativeStartId;
+  int? startId;
 }

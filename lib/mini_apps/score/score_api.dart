@@ -2,8 +2,12 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
-import '../../core/auth/portal_exceptions.dart';
-import '../../core/auth/portal_http.dart';
+import '../../core/auth/service_auth_spec.dart';
+import '../../core/auth/portal_http.dart' show portalLog;
+import '../../core/auth/session_executor.dart';
+
+import 'package:flutter/foundation.dart';
+
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/logging/diagnostic_error.dart';
@@ -12,9 +16,7 @@ import '../../core/auth/safe_message.dart';
 
 /// 教务 EMAP「学生成绩」应用（cjcx）的接口。
 ///
-/// 教务模块接口要求先访问应用首页建立应用级会话，然后再 POST
-/// `modules/cjcx/xscjcx.do`。响应不是 JSON 时按会话失效处理，强制走一次
-/// 统一门户登录后重放。
+/// 应用会话及失效后的单次重登由统一鉴权执行器维护。
 class ScoreApi {
   ScoreApi._();
 
@@ -26,27 +28,22 @@ class ScoreApi {
     '$_base/jwapp/sys/cjcx/modules/cjcx/xscjcx.do',
   );
 
-  static bool _appReady = false;
+  static final _spec = JwxtAppSpec(
+    appId: 'cjcx',
+    indexUrl: _indexUrl.toString(),
+    refererUrl: _indexUrl.toString(),
+  );
+
+  /// 测试时替换统一鉴权执行器。
+  @visibleForTesting
+  static SessionExecutor? debugExecutor;
 
   static Future<ScoreReport> fetch() async {
-    var rows = await _send(force: false);
-    if (rows == null) {
-      portalLog('session.expired', fields: {'service': 'jwxt'});
-      rows = await _send(force: true);
-    }
-    if (rows == null) {
-      throw const PortalLoginError(
-        '重新登录后教务仍未返回成绩，请稍后再试',
-        code: 'session_unavailable_after_relogin',
-        stage: 'response.validate',
-        context: {'endpoint': 'score.query', 'service': 'jwxt'},
-      );
-    }
+    final rows = await _send();
     return ScoreReport(records: rows, fetchedAt: DateTime.now());
   }
 
-  static Future<List<ScoreRecord>?> _send({required bool force}) async {
-    final http = await _client(force: force);
+  static Future<List<ScoreRecord>> _send() async {
     final body = {
       'querySetting': jsonEncode([
         {
@@ -65,21 +62,26 @@ class ScoreApi {
     final encoded = body.entries
         .map((entry) => '${entry.key}=${Uri.encodeComponent(entry.value)}')
         .join('&');
-    final response = await http.followRedirects(
-      await http.post(
-        _queryUrl,
-        data: encoded,
-        contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
-        headers: {
-          'Accept': 'application/json, text/javascript, */*; q=0.01',
-          'X-Requested-With': 'XMLHttpRequest',
-          'Origin': _base,
-          'Referer': _indexUrl.toString(),
-        },
-      ),
-    );
+    final response = await (debugExecutor ?? PortalSession.instance.executor)
+        .execute(
+          _spec,
+          () => RequestOptions(
+            path: _queryUrl.toString(),
+            method: 'POST',
+            data: encoded,
+            contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
+            responseType: ResponseType.plain,
+            headers: {
+              'Accept': 'application/json, text/javascript, */*; q=0.01',
+              'X-Requested-With': 'XMLHttpRequest',
+              'Origin': _base,
+            },
+          ),
+          idempotent: true,
+        );
+    requireServiceSuccess(response, endpoint: 'score.query', service: 'jwxt');
     final raw = response.data;
-    if (raw == null) return null;
+
     try {
       final decoded = raw is String ? jsonDecode(raw) : raw;
       if (decoded is! Map<String, dynamic>) {
@@ -129,10 +131,6 @@ class ScoreApi {
           if (row is Map<String, dynamic>) ScoreRecord.fromRow(row),
       ];
     } on FormatException catch (error, stackTrace) {
-      if (_looksLikeLoginPage(response)) {
-        _appReady = false;
-        return null;
-      }
       throw DiagnosticException(
         '教务成绩响应不是有效 JSON',
         code: 'response_invalid_json',
@@ -153,45 +151,5 @@ class ScoreApi {
       }
     }
     return null;
-  }
-
-  static Future<PortalHttp> _client({required bool force}) async {
-    final session = PortalSession.instance;
-    final http = await session.clientFor(PortalServices.jwxt, force: force);
-    if (_appReady && !force) return http;
-    final response = await http.followRedirects(
-      await http.get(
-        _indexUrl,
-        headers: {'Accept': 'text/html,application/xhtml+xml'},
-      ),
-    );
-    if (_looksLikeLoginPage(response)) {
-      _appReady = false;
-      if (!force) {
-        final fresh = await session.clientFor(PortalServices.jwxt, force: true);
-        final retry = await fresh.followRedirects(
-          await fresh.get(
-            _indexUrl,
-            headers: {'Accept': 'text/html,application/xhtml+xml'},
-          ),
-        );
-        if (_looksLikeLoginPage(retry)) {
-          throw const PortalLoginError('重新登录后仍被教务拦回登录页，请稍后再试');
-        }
-        _appReady = true;
-        return fresh;
-      }
-      throw const PortalLoginError('重新登录后仍被教务拦回登录页，请稍后再试');
-    }
-    _appReady = true;
-    return http;
-  }
-
-  static bool _looksLikeLoginPage(Response<dynamic> response) {
-    if (response.realUri.host.contains('authserver')) return true;
-    final body = response.data;
-    return body is String &&
-        body.contains('authserver/login') &&
-        body.contains('name="execution"');
   }
 }

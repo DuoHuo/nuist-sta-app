@@ -2,8 +2,12 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
-import '../../core/auth/portal_exceptions.dart';
-import '../../core/auth/portal_http.dart';
+import '../../core/auth/service_auth_spec.dart';
+import '../../core/auth/portal_http.dart' show portalLog;
+import '../../core/auth/session_executor.dart';
+
+import 'package:flutter/foundation.dart';
+
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/logging/diagnostic_error.dart';
@@ -12,13 +16,7 @@ import '../../core/auth/safe_message.dart';
 
 /// 教务系统 EMAP「空闲教室」应用（kxjas）的接口，移植自 qqbot/jwxt/jscx.py。
 ///
-/// 全是 `POST modules/kxjas/<name>.do` 的表单请求，响应
-/// `{"code":"0","datas":{"<name>":{"rows":[...]}}}`。用 [PortalServices.jwxt]
-/// 的会话，但 EMAP 要求先访问过应用首页（`*default/index.do`）才放行模块接口，
-/// 所以每个进程首次调用、以及每次强制重登后，都先 GET 一次首页。
-///
-/// 会话失效时模块接口会被 302 到 CAS 或吐回登录页 HTML，这里把「响应不是
-/// JSON」视为失效，强制重登一次再重放。
+/// 查询型表单统一经鉴权执行器发送，先进入应用首页，失效时重登并重放一次。
 class FreeClassroomApi {
   FreeClassroomApi._();
 
@@ -34,8 +32,15 @@ class FreeClassroomApi {
   static Uri _module(String name) =>
       Uri.parse('$_base/jwapp/sys/kxjas/modules/kxjas/$name.do');
 
-  /// 应用首页是否已经访问过（EMAP 应用级会话已建立）。
-  static bool _appReady = false;
+  static final _spec = JwxtAppSpec(
+    appId: 'kxjas',
+    indexUrl: _indexUrl.toString(),
+    refererUrl: _indexUrl.toString(),
+  );
+
+  /// 测试时替换统一鉴权执行器。
+  @visibleForTesting
+  static SessionExecutor? debugExecutor;
 
   /// 教学楼列表，按教务给的排序。
   static Future<List<Building>> listBuildings() async {
@@ -174,14 +179,7 @@ class FreeClassroomApi {
     String name,
     Map<String, String> fields,
   ) async {
-    var body = await _send(name, fields, force: false);
-    if (body == null) {
-      portalLog('session.expired', fields: {'service': 'jwxt'});
-      body = await _send(name, fields, force: true);
-    }
-    if (body == null) {
-      throw const PortalLoginError('重新登录后教务仍未返回数据，请稍后再试');
-    }
+    final body = await _send(name, fields);
     final code = '${body['code']}';
     if (code != '0') {
       portalLog(
@@ -222,40 +220,41 @@ class FreeClassroomApi {
     return datas;
   }
 
-  /// 返回 null 表示响应不是 JSON（被拦回登录页）。
-  static Future<Map<String, dynamic>?> _send(
+  static Future<Map<String, dynamic>> _send(
     String name,
-    Map<String, String> fields, {
-    required bool force,
-  }) async {
-    final http = await _client(force: force);
-    if (http == null) return null;
+    Map<String, String> fields,
+  ) async {
     final body = fields.entries
         .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
         .join('&');
-    final response = await http.followRedirects(
-      await http.post(
-        _module(name),
-        data: body,
-        contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
-        headers: {
-          'Accept': 'application/json, text/javascript, */*; q=0.01',
-          'X-Requested-With': 'XMLHttpRequest',
-          'Origin': _base,
-          'Referer': _indexUrl.toString(),
-        },
-      ),
+    final response = await (debugExecutor ?? PortalSession.instance.executor)
+        .execute(
+          _spec,
+          () => RequestOptions(
+            path: _module(name).toString(),
+            method: 'POST',
+            data: body,
+            contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
+            responseType: ResponseType.plain,
+            headers: {
+              'Accept': 'application/json, text/javascript, */*; q=0.01',
+              'X-Requested-With': 'XMLHttpRequest',
+              'Origin': _base,
+            },
+          ),
+          idempotent: true,
+        );
+    requireServiceSuccess(
+      response,
+      endpoint: 'free_classroom.$name',
+      service: 'jwxt',
     );
     final raw = response.data;
-    if (raw == null) return null;
+
     try {
       final decoded = raw is String ? jsonDecode(raw) : raw;
       if (decoded is Map<String, dynamic>) return decoded;
     } on FormatException catch (error, stackTrace) {
-      if (_looksLikeLoginPage(response)) {
-        _appReady = false;
-        return null;
-      }
       throw DiagnosticException(
         '教务响应不是有效 JSON',
         code: 'response_invalid_json',
@@ -271,30 +270,5 @@ class FreeClassroomApi {
       stage: 'response.validate',
       context: {'endpoint': 'free_classroom.$name', 'service': 'jwxt'},
     );
-  }
-
-  /// 拿到已登录教务、且 kxjas 应用首页已访问过的客户端。
-  ///
-  /// 首页 GET 落到登录页说明落盘会话已过期：非强制模式下返回 null 让调用方
-  /// 走强制重登；强制模式下仍失败就直接报错。
-  static Future<PortalHttp?> _client({required bool force}) async {
-    final session = PortalSession.instance;
-    final http = await session.clientFor(PortalServices.jwxt, force: force);
-    if (_appReady && !force) return http;
-    final response = await http.followRedirects(await http.get(_indexUrl));
-    if (_looksLikeLoginPage(response)) {
-      if (!force) return null;
-      throw const PortalLoginError('重新登录后仍被教务拦回登录页，请稍后再试');
-    }
-    _appReady = true;
-    return http;
-  }
-
-  static bool _looksLikeLoginPage(Response<dynamic> response) {
-    if (response.realUri.host.contains('authserver')) return true;
-    final body = response.data;
-    return body is String &&
-        body.contains('authserver/login') &&
-        body.contains('name="execution"');
   }
 }

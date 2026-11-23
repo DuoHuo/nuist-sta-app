@@ -1,11 +1,11 @@
-import 'dart:io';
+import 'dart:async';
 
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 
-import '../app_directories.dart';
+import '../config/campus_config.dart';
 import '../network/vpn_log.dart';
 import 'aia_trust.dart';
 import 'nuist_login.dart';
@@ -16,11 +16,17 @@ import 'portal_cookie_store.dart';
 import 'portal_exceptions.dart';
 import 'portal_http.dart';
 
-/// 门户与 VPN 共用的 CAS 认证协调器。
-///
-/// 认证串行执行，后来者复用前一次建立的 CAS 票根。这里只访问认证服务器，
-/// 拿到业务跳转地址就释放队列；业务落地由调用方按自己的网络出口完成，
-/// 避免「门户等 VPN 建连，VPN 又等门户认证」的循环。
+/// CAS 返回的业务票据地址，以及是否复用了旧 CASTGC。
+class CasAuthenticationResult {
+  const CasAuthenticationResult({
+    required this.landingUri,
+    this.ssoReused = false,
+  });
+  final Uri landingUri;
+  final bool ssoReused;
+}
+
+/// 串行访问认证服务器，取得 ST 后释放锁，业务落地由调用方完成。
 class CasSession {
   CasSession({
     PortalCookieStore? cookies,
@@ -31,39 +37,37 @@ class CasSession {
        _readCredential = readCredential ?? PasskeyStore.read;
 
   static final instance = CasSession();
-
-  /// 与业务和 VPN 共用的 Cookie 存储。
   final PortalCookieStore cookies;
   final Future<PasskeyBundle?> Function() _readCredential;
-
-  /// 包含排队与平台存储的认证期限，超时后释放队列。
   final Duration authenticationTimeout;
-  int _authenticationGeneration = 0;
-
-  /// 测试用的引导客户端工厂；默认创建直连 CAS 的客户端。
   final PortalHttp Function(CookieJar jar)? createHttp;
+  final credentialError = ValueNotifier<PortalCredentialError?>(null);
+  final Set<CancelToken> _active = {};
+  int _accountGeneration = 0;
   PortalHttp? _client;
-  AiaTrust? _trust;
   int? _clientGeneration;
   Future<void> _queue = Future.value();
-
-  /// 最近一次确定的凭据失效，供绑定状态界面监听。
-  final credentialError = ValueNotifier<PortalCredentialError?>(null);
 
   PortalHttp _http(int generation) {
     if (_clientGeneration == generation && _client != null) return _client!;
     closeClient();
     _clientGeneration = generation;
     final jar = cookies.openJar();
-    final epoch = _authenticationGeneration;
-    if (createHttp case final factory?) return _client = factory(jar);
-    final trust = AiaTrust(
-      resolveCacheDir: () async {
-        final base = await AppDirectories.applicationSupport();
-        return Directory('${base.path}${Platform.pathSeparator}aia_certs');
-      },
-    );
-    _trust = trust;
+    if (createHttp case final factory?) {
+      final http = factory(jar);
+      final index = http.dio.interceptors.indexWhere(
+        (interceptor) => interceptor is PortalCookieManager,
+      );
+      if (index >= 0) {
+        http.dio.interceptors[index] = PortalCookieManager(
+          jar,
+          store: cookies,
+          checkSession: () => cookies.checkGeneration(generation),
+        );
+      }
+      return _client = http;
+    }
+    final trust = AiaTrust.shared;
     final dio =
         Dio(
             BaseOptions(
@@ -80,34 +84,39 @@ class CasSession {
           ..interceptors.add(
             PortalCookieManager(
               jar,
-              checkSession: () {
-                cookies.checkGeneration(generation);
-                if (epoch != _authenticationGeneration) {
-                  throw const PortalNetworkError(
-                    '门户认证已取消，请重试',
-                    code: 'authentication_superseded',
-                    stage: 'cas.request',
-                  );
-                }
-              },
+              store: cookies,
+              checkSession: () => cookies.checkGeneration(generation),
             ),
           );
     return _client = PortalHttp(dio, trust: trust);
   }
 
-  /// 复用 CAS 或执行一次 WebAuthn，返回带业务票据的跳转地址。
+  /// 兼容入口：返回业务票据 URL。
   Future<String> authenticate(
     String service, {
     void Function(String stage)? onStage,
+    bool forceFreshWebAuthn = false,
+  }) async => (await authenticateResult(
+    service,
+    onStage: onStage,
+    forceFreshWebAuthn: forceFreshWebAuthn,
+  )).landingUri.toString();
+
+  /// 坏 CASTGC 落地失败后，可强制清认证域并重新签名 WebAuthn 断言。
+  Future<CasAuthenticationResult> authenticateResult(
+    String service, {
+    void Function(String stage)? onStage,
+    bool forceFreshWebAuthn = false,
   }) {
     final generation = cookies.generation;
-    final epoch = _authenticationGeneration;
+    final epoch = _accountGeneration;
     final queued = Stopwatch()..start();
+    final cancel = CancelToken();
+    Future<void> timeoutCleanup = Future.value();
     var stage = 'cas.queue';
-    portalLog('authentication.queued', fields: {'stage': stage});
     void check() {
       cookies.checkGeneration(generation);
-      if (epoch != _authenticationGeneration) {
+      if (epoch != _accountGeneration || cancel.isCancelled) {
         throw PortalNetworkError(
           '门户认证已取消，请重试',
           code: 'authentication_superseded',
@@ -116,89 +125,115 @@ class CasSession {
       }
     }
 
-    final result = _queue
-        .then((_) async {
-          check();
-          stage = 'cas.preload';
-          portalLog(
-            'authentication.dequeued',
-            fields: {'queued_ms': queued.elapsedMilliseconds},
-          );
-          if (credentialError.value case final error?) throw error;
-          final http = _http(generation);
-          await vpnStage('cas.preload', () async {
-            await _trust?.preload();
-          }, timeout: authenticationTimeout);
-          check();
-          stage = 'cas.credential';
-          final bundle = await vpnStage(
-            'cas.credential',
-            _readCredential,
-            timeout: authenticationTimeout,
-          );
-          check();
-          if (bundle == null) {
-            throw const PortalCredentialError(
-              '尚未绑定统一门户，请先完成绑定',
-              code: 'credential_unavailable',
-              stage: 'cas.credential',
-            );
-          }
-          try {
-            stage = 'cas.login';
-            final target = await vpnStage(
-              'cas.login',
-              () => NuistLogin(
-                http: http,
-                bundle: bundle,
-                onStage: (value) {
-                  stage = 'cas.$value';
-                  onStage?.call(value);
-                },
-              ).login(service, followServiceRedirects: false),
-              timeout: authenticationTimeout,
-            );
-            check();
-            credentialError.value = null;
-            return target;
-          } on PortalCredentialError catch (error) {
-            check();
-            credentialError.value = error;
-            rethrow;
-          }
-        })
-        .timeout(
-          authenticationTimeout,
-          onTimeout: () {
-            // 关闭旧客户端并作废其后续响应，不等待不可取消的平台通道。
-            if (epoch == _authenticationGeneration) {
-              closeClient(resetQueue: true);
-            }
-            vpnLog(
-              'cas.authentication_timeout',
-              fields: {'timeout_ms': authenticationTimeout.inMilliseconds},
-            );
-            throw PortalNetworkError(
-              '门户认证超时，请检查网络后重试',
-              code: 'authentication_timeout',
-              stage: stage,
-              context: {'timeout_ms': authenticationTimeout.inMilliseconds},
-            );
-          },
+    portalLog('authentication.queued', fields: {'stage': stage});
+    final result = _queue.then((_) {
+      check();
+      _active.add(cancel);
+      final work = () async {
+        portalLog(
+          'authentication.dequeued',
+          fields: {'queued_ms': queued.elapsedMilliseconds},
         );
-    _queue = result.then((_) {}, onError: (_) {});
+        if (!forceFreshWebAuthn) {
+          if (credentialError.value case final error?) {
+            throw error;
+          }
+        }
+        if (forceFreshWebAuthn) {
+          await cookies.clearHost(
+            Uri(scheme: 'https', host: CampusHosts.authserver),
+            names: {'CASTGC'},
+          );
+          check();
+        }
+        final http = _http(generation);
+        stage = 'cas.preload';
+        if (createHttp == null) await AiaTrust.shared.preload();
+        check();
+        stage = 'cas.credential';
+        final bundle = await _readCredential();
+        check();
+        if (bundle == null) {
+          throw const PortalCredentialError(
+            '尚未绑定统一门户，请先完成绑定',
+            code: 'credential_unavailable',
+            stage: 'cas.credential',
+          );
+        }
+        var ssoReused = false;
+        try {
+          stage = 'cas.login';
+          final target = await NuistLogin(
+            http: http,
+            bundle: bundle,
+            cancelToken: cancel,
+            onStage: (value) {
+              stage = 'cas.$value';
+              ssoReused |= value == 'sso_reused';
+              onStage?.call(value);
+            },
+          ).login(service, followServiceRedirects: false);
+          check();
+          credentialError.value = null;
+          return CasAuthenticationResult(
+            landingUri: Uri.parse(target),
+            ssoReused: ssoReused,
+          );
+        } on PortalCredentialError catch (error) {
+          check();
+          credentialError.value = error;
+          rethrow;
+        }
+      }();
+      // 超时只影响已经出队的认证；排队者各自从出队时开始计时。
+      return work
+          .timeout(
+            authenticationTimeout,
+            onTimeout: () {
+              cancel.cancel('本次 CAS 认证超时');
+              cookies.invalidateHostRevision(CampusHosts.authserver);
+              timeoutCleanup = cookies.clearHost(
+                Uri(scheme: 'https', host: CampusHosts.authserver),
+                names: {'CASTGC'},
+              );
+              vpnLog(
+                'cas.authentication_timeout',
+                fields: {'timeout_ms': authenticationTimeout.inMilliseconds},
+              );
+              throw PortalNetworkError(
+                '门户认证超时，请检查网络后重试',
+                code: 'authentication_timeout',
+                stage: stage,
+                context: {'timeout_ms': authenticationTimeout.inMilliseconds},
+              );
+            },
+          )
+          .whenComplete(() => _active.remove(cancel));
+    });
+    // 已开始的 Cookie 存储先排空并清理，迟到网络响应则被 CancelToken 阻断写回。
+    // 不等待可能无法取消的凭据平台读取，避免阻塞排在后面的正常认证。
+    _queue = result.then<void>(
+      (_) => timeoutCleanup.then<void>((_) {}, onError: (_) {}),
+      onError: (_) => timeoutCleanup.then<void>((_) {}, onError: (_) {}),
+    );
     return result;
   }
 
-  /// 关闭引导客户端；[resetQueue] 供清空账号时作废旧认证队列。
+  /// 账号解绑或切换时才取消全队列；单次认证超时绝不调用此路径。
   void closeClient({bool resetQueue = false}) {
     _client?.dio.close(force: true);
     _client = null;
     _clientGeneration = null;
-    _trust = null;
     if (resetQueue) {
-      _authenticationGeneration++;
+      _accountGeneration++;
+      for (final cancel in _active) {
+        cancel.cancel('账号会话已清除');
+      }
+      _active.clear();
       _queue = Future.value();
     }
   }
 }
+
+/// 声明式会话层使用的认证器名称；保留旧名称供绑定和 VPN 兼容。
+typedef CasAuthenticator = CasSession;

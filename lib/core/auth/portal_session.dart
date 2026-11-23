@@ -6,21 +6,21 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show ValueNotifier, visibleForTesting;
 import 'package:webview_flutter/webview_flutter.dart';
 
-import '../app_directories.dart';
 import '../config/campus_config.dart';
 import '../logging/app_log.dart';
 import '../logging/diagnostic_redactor.dart';
 import '../logging/http_diagnostics.dart';
-import '../network/vpn_dio.dart';
 import '../network/vpn_gateway.dart';
 import '../network/vpn_log.dart';
-import 'aia_trust.dart';
+import 'campus_transport.dart';
 import 'cas_session.dart';
 import 'established_store.dart';
 import 'nuist_login.dart';
 import 'portal_cookie_manager.dart';
 import 'portal_exceptions.dart';
 import 'portal_http.dart';
+import 'service_auth_spec.dart';
+import 'session_executor.dart';
 
 /// 常用服务的 service 参数。
 ///
@@ -123,6 +123,10 @@ class PortalSession {
 
   static final PortalSession instance = PortalSession._();
 
+  /// 仅供清理顺序回归检查，不暴露落地地址或凭据。
+  @visibleForTesting
+  int get debugEstablishedCount => _established.length;
+
   /// 业务落地缓存保留原来的 12 小时信任期。
   static const establishedTtl = Duration(hours: 12);
   static const _loginTimeout = Duration(seconds: 90);
@@ -142,6 +146,15 @@ class PortalSession {
 
   late CookieJar _jar;
   late PortalHttp _http;
+  late CampusTransport _transport;
+  SessionExecutor? _executor;
+
+  /// 门户小程序的声明式鉴权与请求执行入口。
+  SessionExecutor get executor {
+    _ensureReady();
+    return _executor!;
+  }
+
   int? _clientGeneration;
   bool _ready = false;
   Future<void>? _clearing;
@@ -157,11 +170,9 @@ class PortalSession {
 
   /// 同一个 service 的并发请求合并成一次登录。
   final Map<String, Future<PortalLoginResult>> _pending = {};
+  final Map<String, bool> _pendingFreshWebAuthn = {};
   final Map<String, int> _pendingIds = {};
   static int _loginSequence = 0;
-
-  /// 业务登录串行化队列；CAS 认证由 [_cas] 与 VPN 共同协调。
-  Future<void> _queue = Future.value();
 
   // ==================== 对外接口 ====================
 
@@ -205,6 +216,7 @@ class PortalSession {
     required bool force,
     required bool trustRestored,
     required bool loadCachedResponse,
+    bool forceFreshWebAuthn = false,
     void Function(String stage)? onStage,
   }) async {
     _ensureReady();
@@ -215,6 +227,22 @@ class PortalSession {
     _cas.cookies.checkGeneration(generation);
     final pending = _pending[service];
     if (pending != null) {
+      if (forceFreshWebAuthn && _pendingFreshWebAuthn[service] != true) {
+        try {
+          await pending;
+        } catch (_) {
+          // 显式验证仍须开始新的完整认证，旧普通登录的失败不能替代它。
+        }
+        _cas.cookies.checkGeneration(generation);
+        return _ensureLoggedIn(
+          service,
+          force: true,
+          trustRestored: trustRestored,
+          loadCachedResponse: loadCachedResponse,
+          forceFreshWebAuthn: true,
+          onStage: onStage,
+        );
+      }
       _log.debug(
         'service.login_joined',
         fields: {
@@ -245,6 +273,15 @@ class PortalSession {
         );
         // 读取诊断文件期间可能解绑；新增的 await 不能让旧凭据继续出网。
         _cas.cookies.checkGeneration(generation);
+        if (!cached.restored) {
+          executor.restoreSession(
+            _PortalLandingSpec(service),
+            Response<dynamic>(
+              requestOptions: RequestOptions(path: cached.landing),
+              statusCode: 200,
+            ),
+          );
+        }
         return result;
       }
     }
@@ -265,14 +302,20 @@ class PortalSession {
     future = _log
         .operation(
           'service.login',
-          () => _serialize(
+          () => _withLoginTimeout(
             () {
               phase = 'service.login';
               _log.debug(
                 'service.login_dequeued',
                 fields: {...fields, 'queued_ms': queued.elapsedMilliseconds},
               );
-              return _performLogin(service, generation, onStage, cancelToken);
+              return _performLogin(
+                service,
+                generation,
+                onStage,
+                cancelToken,
+                forceFreshWebAuthn: forceFreshWebAuthn,
+              );
             },
             onTimeout: () => cancelToken.cancel('业务登录整体超时'),
             stage: () => phase,
@@ -285,11 +328,13 @@ class PortalSession {
         .whenComplete(() {
           if (identical(_pending[service], future)) {
             _pending.remove(service);
+            _pendingFreshWebAuthn.remove(service);
             _pendingIds.remove(service);
           }
         });
     _pendingIds[service] = loginId;
     _pending[service] = future;
+    _pendingFreshWebAuthn[service] = forceFreshWebAuthn;
     final result = await future;
     AppLog.addEvidence('portal.landing', result.diagnosticContext);
     return result;
@@ -322,42 +367,11 @@ class PortalSession {
     () async {
       _ensureReady();
       if (_clearing case final clearing?) await clearing;
-      final generation = _cas.cookies.generation;
-      var http = await clientFor(service);
-      _cas.cookies.checkGeneration(generation);
-      var response = await http.followRedirects(await send(http));
-      _cas.cookies.checkGeneration(generation);
-      bool sessionExpired(Response<dynamic> response) =>
-          _looksLikeLoginPage(response) ||
-          (service == PortalServices.library &&
-              PortalHttp.isLoginResponse(response));
-      if (!sessionExpired(response)) return response;
-
-      // 被门户弹回了登录页，说明落盘的会话已经过期，重登一次再放行。
-      _log.info(
-        'session.reauth_required',
-        fields: {
-          'host': Uri.parse(service).host,
-          'attempt': 1,
-          'reason_code': 'response_returned_to_login',
-        },
+      await ensureLoggedIn(service);
+      return executor.executeCallback(
+        _PortalLandingSpec(service),
+        () async => _http.followRedirects(await send(_http)),
       );
-      http = await clientFor(service, force: true);
-      response = await http.followRedirects(await send(http));
-      _cas.cookies.checkGeneration(generation);
-      if (sessionExpired(response)) {
-        throw PortalLoginError(
-          '重新登录后仍被门户拦回登录页，请稍后再试',
-          code: 'reauthentication_exhausted',
-          stage: 'service.request',
-          context: {
-            'attempt': 2,
-            'status_code': response.statusCode,
-            'service': AppLog.serviceForHost(Uri.parse(service).host),
-          },
-        );
-      }
-      return response;
     },
     fields: {
       'service': AppLog.serviceForHost(Uri.tryParse(service)?.host ?? ''),
@@ -374,6 +388,7 @@ class PortalSession {
   /// 共享的，灌一次全局生效。
   Future<void> syncToWebView(Iterable<String> urls) async {
     _ensureReady();
+    await _restored;
     if (_clearing case final clearing?) await clearing;
     _ensureReady();
     final generation = _cas.cookies.generation;
@@ -411,15 +426,10 @@ class PortalSession {
     _clearWebView |= includeWebView;
     if (_clearing case final clearing?) return clearing;
     _ensureReady();
-    final cookiesCleared = _cas.cookies.clearAll();
-    _http.dio.close(force: true);
+    _cas.cookies.invalidateAccount();
     _cas.closeClient(resetQueue: true);
-    _clientGeneration = null;
-    _established.clear();
-    _pending.clear();
-    _pendingIds.clear();
-    _queue = Future.value();
-    credentialError.value = null;
+    _executor?.cancelPending();
+    _http.dio.close(force: true);
     late final Future<void> clearing;
     clearing =
         () async {
@@ -427,7 +437,14 @@ class PortalSession {
             await _resetNetwork();
           } finally {
             await _restored;
-            await cookiesCleared;
+            await _cas.cookies.deleteAll();
+            _established.clear();
+            _executor?.clear();
+            _clientGeneration = null;
+            _pending.clear();
+            _pendingFreshWebAuthn.clear();
+            _pendingIds.clear();
+            credentialError.value = null;
             await _persist();
             if (_clearWebView) {
               try {
@@ -454,18 +471,24 @@ class PortalSession {
     return _clearing = clearing;
   }
 
-  /// 作废当前会话后完整登录一次，用来验证本机凭据是否还被门户承认。
+  /// 强制完整 WebAuthn 并重新落地目标服务，验证本机凭据是否仍被门户承认。
   ///
   /// 普通的 [ensureLoggedIn] 在 CAS 票根还有效时会走 SSO 快路径、压根不碰
-  /// Passkey，那样验不出凭据有没有被吊销，所以这里先把会话清掉，逼它走一遍
-  /// 完整的 WebAuthn 断言。
+  /// Passkey，那样验不出凭据有没有被吊销。这里只清认证域和目标服务的 Cookie，
+  /// 保留账号代次、其他服务请求和现有 VPN 隧道。
   Future<String> verifyCredential({
     String? service,
     void Function(String stage)? onStage,
   }) async {
     final target = service ?? PortalServices.jwxt;
-    await clear();
-    return ensureLoggedIn(target, force: true, onStage: onStage);
+    return (await _ensureLoggedIn(
+      target,
+      force: true,
+      trustRestored: false,
+      loadCachedResponse: false,
+      forceFreshWebAuthn: true,
+      onStage: onStage,
+    )).landing;
   }
 
   /// 仅供调试界面使用：列出访问 [url] 时会带上的 Cookie 名称与域。
@@ -515,40 +538,49 @@ class PortalSession {
     _jar = _cas.cookies.openJar();
     if (_createHttp case final factory?) {
       _http = factory(_jar);
+      final index = _http.dio.interceptors.indexWhere(
+        (item) => item is PortalCookieManager,
+      );
+      if (index >= 0) {
+        _http.dio.interceptors[index] = PortalCookieManager(
+          _jar,
+          store: _cas.cookies,
+          checkSession: () => _cas.cookies.checkGeneration(generation),
+        );
+      }
+      _transport = CampusTransport.fromDio(
+        _http.dio,
+        cookieStore: _cas.cookies,
+      );
+      _executor = SessionExecutor(
+        transport: _transport,
+        authenticator: _cas,
+        cookieStore: _cas.cookies,
+      );
       return;
     }
-    final trust = AiaTrust(
-      resolveCacheDir: () async {
-        final base = await AppDirectories.applicationSupport();
-        return Directory('${base.path}${Platform.pathSeparator}aia_certs');
+    _transport = CampusTransport.authenticated(
+      cookieStore: _cas.cookies,
+      options: BaseOptions(
+        headers: {
+          'User-Agent': NuistLogin.userAgent,
+          'Accept-Language': 'zh-CN,en;q=0.9,en-US;q=0.8',
+        },
+      ),
+      beforeRequest: () async {
+        if (_clearing case final clearing?) await clearing;
+        _cas.cookies.checkGeneration(generation);
+        await _prepareNetwork();
+        _cas.cookies.checkGeneration(generation);
       },
+      checkSession: () => _cas.cookies.checkGeneration(generation),
     );
-    final dio =
-        vpnDio(
-            options: BaseOptions(
-              headers: {
-                'User-Agent': NuistLogin.userAgent,
-                'Accept-Language': 'zh-CN,en;q=0.9,en-US;q=0.8',
-              },
-            ),
-            securityContext: trust.context,
-            securityContextProvider: () => trust.context,
-            onBadCertificate: trust.onBadCertificate,
-          )
-          ..interceptors.add(
-            PortalCookieManager(
-              _jar,
-              beforeRequest: () async {
-                if (_clearing case final clearing?) await clearing;
-                _cas.cookies.checkGeneration(generation);
-                await vpnStage('service.preload', trust.preload);
-                await _prepareNetwork();
-                _cas.cookies.checkGeneration(generation);
-              },
-              checkSession: () => _cas.cookies.checkGeneration(generation),
-            ),
-          );
-    _http = PortalHttp(dio, trust: trust);
+    _http = PortalHttp(_transport.dio, trust: _transport.trust);
+    _executor = SessionExecutor(
+      transport: _transport,
+      authenticator: _cas,
+      cookieStore: _cas.cookies,
+    );
   }
 
   /// 取 [service] 的缓存落地 URL；过期或不采信时返回 null。
@@ -716,8 +748,9 @@ class PortalSession {
     String service,
     int generation,
     void Function(String stage)? onStage,
-    CancelToken cancelToken,
-  ) async {
+    CancelToken cancelToken, {
+    required bool forceFreshWebAuthn,
+  }) async {
     void check() {
       _cas.cookies.checkGeneration(generation);
       if (cancelToken.isCancelled) {
@@ -731,27 +764,18 @@ class PortalSession {
 
     check();
     _ensureReady();
-    final http = _http;
     final host = Uri.parse(service).host;
     try {
       await _prepareNetwork();
       check();
       portalLog('session.restore_started', fields: {'host': host});
-      final target = await _cas.authenticate(
-        service,
-        onStage: (stage) {
-          portalLog(
-            'session.authentication_stage',
-            fields: {'host': host, 'stage': stage},
-          );
-          onStage?.call(stage);
-        },
+      final sessionEntry = await executor.ensureSession(
+        _PortalLandingSpec(service, cancelToken: cancelToken),
+        force: true,
+        forceFreshWebAuthn: forceFreshWebAuthn,
+        onStage: onStage,
       );
-      check();
-      final response = await http.followRedirects(
-        await http.get(Uri.parse(target), cancelToken: cancelToken),
-        cancelToken: cancelToken,
-      );
+      final response = sessionEntry.session;
       check();
       final responseEvidence =
           httpDiagnosticEvidence(response.requestOptions) ??
@@ -852,38 +876,63 @@ class PortalSession {
     return result;
   }
 
-  /// 串行化登录，并保证一次失败不会把队列卡死。
-  Future<T> _serialize<T>(
+  /// 仅限制本次兼容门面的等待时间；登录合流和域协调由执行器负责。
+  Future<T> _withLoginTimeout<T>(
     Future<T> Function() task, {
     void Function()? onTimeout,
     String Function()? stage,
     Map<String, Object?> context = const {},
   }) {
-    final result = _queue
-        .then((_) => task())
-        .timeout(
-          _loginTimeout,
-          onTimeout: () {
-            onTimeout?.call();
-            vpnLog('session.login_timeout');
-            throw PortalNetworkError(
-              '业务登录超时，请检查网络后重试',
-              code: 'service_login_timeout',
-              stage: stage?.call() ?? 'service.login',
-              context: {...context, 'timeout_ms': _loginTimeout.inMilliseconds},
-            );
-          },
+    return Future<T>.sync(task).timeout(
+      _loginTimeout,
+      onTimeout: () {
+        onTimeout?.call();
+        vpnLog('session.login_timeout');
+        throw PortalNetworkError(
+          '业务登录超时，请检查网络后重试',
+          code: 'service_login_timeout',
+          stage: stage?.call() ?? 'service.login',
+          context: {...context, 'timeout_ms': _loginTimeout.inMilliseconds},
         );
-    _queue = result.then((_) {}, onError: (_) {});
-    return result;
+      },
+    );
   }
 
   /// 响应是不是被门户弹回了登录页。
   static bool _looksLikeLoginPage(Response<dynamic> response) {
-    if (response.realUri.path.contains(NuistLogin.loginPath)) return true;
-    final body = response.data;
-    return body is String &&
-        body.contains('authserver/login') &&
-        body.contains('name="execution"');
+    return isGlobalAuthExpired(response);
+  }
+}
+
+/// 仅保留给 H5 与绑定界面的通用 CAS 落地兼容契约。
+class _PortalLandingSpec extends ServiceAuthSpec<Response<dynamic>> {
+  const _PortalLandingSpec(this.casServiceUrl, {this.cancelToken});
+  final CancelToken? cancelToken;
+  @override
+  final String casServiceUrl;
+  @override
+  String get id => 'landing.$casServiceUrl';
+  @override
+  List<String> get cookieHosts => [Uri.parse(casServiceUrl).host];
+  @override
+  Future<Response<dynamic>> establish(
+    CampusTransport transport,
+    Uri casLandingUri,
+  ) async {
+    final response = await transport.get(
+      casLandingUri,
+      cancelToken: cancelToken,
+    );
+    if (isGlobalAuthExpired(response) || (response.statusCode ?? 0) >= 400) {
+      throw PortalLoginError(
+        '业务登录未完成，请稍后再试',
+        code: isGlobalAuthExpired(response)
+            ? 'service_returned_to_login'
+            : 'service_status_rejected',
+        stage: 'service.landing',
+        context: {'status_code': response.statusCode},
+      );
+    }
+    return response;
   }
 }

@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:math';
 
-import '../../core/auth/portal_exceptions.dart';
-import '../../core/auth/portal_http.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+
+import '../../core/auth/service_auth_spec.dart';
+import '../../core/auth/session_executor.dart';
 import '../../core/auth/portal_session.dart';
 import '../../core/config/campus_config.dart';
 import '../../core/logging/diagnostic_error.dart';
@@ -14,75 +17,51 @@ import 'student_info_models.dart';
 /// - `POST /execTemplateMethod`（method=getXLInfo）：某个日期所在学期的校历。
 ///   未登录时 errcode 为 999。
 ///
-/// 与 AcademicApi 同一套会话；两个请求并发，任一判定未登录就强制重登一次。
+/// 两个查询共用信息门户会话，由统一鉴权执行器处理并发重登。
 class StudentInfoApi {
   StudentInfoApi._();
 
   static final _base = 'https://${CampusHosts.iportal}';
   static final Uri _templateApi = Uri.parse('$_base/execTemplateMethod');
 
+  /// 测试时替换统一鉴权执行器。
+  @visibleForTesting
+  static SessionExecutor? debugExecutor;
+
+  static SessionExecutor get _executor =>
+      debugExecutor ?? PortalSession.instance.executor;
+
   static Future<StudentInfo> fetch() async {
-    var info = await _send(force: false);
-    if (info == null) {
-      portalLog('session.expired', fields: {'service': 'portal'});
-      info = await _send(force: true);
-    }
-    if (info == null) {
-      throw const PortalLoginError('信息门户未返回登录人信息，请稍后再试');
-    }
-    return info;
-  }
-
-  /// 返回 null 表示未登录。
-  static Future<StudentInfo?> _send({required bool force}) async {
-    final http = await PortalSession.instance.clientFor(
-      PortalServices.iportal,
-      force: force,
-    );
     final now = DateTime.now();
-    try {
-      final results = await Future.wait<Object?>([
-        _fetchUser(http),
-        _fetchSemester(http, now),
-      ]);
-      return StudentInfo(
-        user: results[0] as PortalUser,
-        semester: results[1] as SemesterInfo?,
-        fetchedAt: now,
-      );
-    } on _NotLoggedIn catch (error, stackTrace) {
-      if (force) {
-        throw PortalLoginError(
-          '重新登录后信息门户仍未返回登录状态',
-          code: error.code,
-          stage: 'response.validate',
-          cause: error,
-          causeStackTrace: stackTrace,
-          context: {'endpoint': error.endpoint, 'service': 'portal'},
-        );
-      }
-      portalLog(
-        'session.expired',
-        fields: {
-          'service': 'portal',
-          'endpoint': error.endpoint,
-          'reason_code': error.code,
-        },
-      );
-      return null;
-    }
+    final results = await Future.wait<Object?>([
+      _fetchUser(),
+      _fetchSemester(now),
+    ]);
+    return StudentInfo(
+      user: results[0] as PortalUser,
+      semester: results[1] as SemesterInfo?,
+      fetchedAt: now,
+    );
   }
 
-  static Future<PortalUser> _fetchUser(PortalHttp http) async {
-    final response = await http.followRedirects(
-      await http.get(
-        Uri.parse('$_base/getLoginUserAndGuest?_t=${Random().nextDouble()}'),
+  static Future<PortalUser> _fetchUser() async {
+    final response = await _executor.execute(
+      const IportalSpec(),
+      () => RequestOptions(
+        path: '$_base/getLoginUserAndGuest?_t=${Random().nextDouble()}',
+        responseType: ResponseType.plain,
         headers: {'Accept': 'application/json'},
       ),
+      idempotent: true,
+    );
+    requireServiceSuccess(
+      response,
+      endpoint: 'student_info.user',
+      service: 'portal',
     );
     final body = _decode(response.data, 'student_info.user');
-    final data = body?['data'];
-    if (body == null || data is! Map<String, dynamic>) {
+    final data = body['data'];
+    if (data is! Map<String, dynamic>) {
       throw const DiagnosticException(
         '信息门户未返回用户信息对象',
         code: 'response_schema_mismatch',
@@ -91,39 +70,40 @@ class StudentInfoApi {
       );
     }
     final user = PortalUser.fromJson(data);
-    if (user.studentId.isEmpty) {
-      throw const _NotLoggedIn('student_info.user', 'guest_session');
-    }
     return user;
   }
 
   /// 拿 [date] 所在学期；接口正常但没有学期数据时返回 null。
-  static Future<SemesterInfo?> _fetchSemester(
-    PortalHttp http,
-    DateTime date,
-  ) async {
+  static Future<SemesterInfo?> _fetchSemester(DateTime date) async {
     String two(int n) => n.toString().padLeft(2, '0');
-    final response = await http.post(
-      _templateApi,
-      data: jsonEncode({
-        'method': 'getXLInfo',
-        'param': {
-          'date': '${date.year}-${two(date.month)}-${two(date.day)}',
-          '_t': date.millisecondsSinceEpoch,
+    final response = await _executor.execute(
+      const IportalSpec(),
+      () => RequestOptions(
+        path: _templateApi.toString(),
+        method: 'POST',
+        data: jsonEncode({
+          'method': 'getXLInfo',
+          'param': {
+            'date': '${date.year}-${two(date.month)}-${two(date.day)}',
+            '_t': date.millisecondsSinceEpoch,
+          },
+          'n': '${Random().nextDouble()}',
+        }),
+        contentType: 'application/json;charset=UTF-8',
+        responseType: ResponseType.plain,
+        headers: {
+          'Accept': 'application/json, text/plain, */*',
+          'X-Requested-With': 'XMLHttpRequest',
         },
-        // 门户前端带的随机数，只是防缓存。
-        'n': '${Random().nextDouble()}',
-      }),
-      contentType: 'application/json;charset=UTF-8',
-      headers: {
-        'Accept': 'application/json, text/plain, */*',
-        'X-Requested-With': 'XMLHttpRequest',
-      },
+      ),
+      idempotent: true,
+    );
+    requireServiceSuccess(
+      response,
+      endpoint: 'student_info.calendar',
+      service: 'portal',
     );
     final body = _decode(response.data, 'student_info.calendar');
-    if (body == null || '${body['errcode']}' == '999') {
-      throw const _NotLoggedIn('student_info.calendar', 'session_rejected');
-    }
     if ('${body['errcode']}' != '0') {
       throw DiagnosticException(
         '信息门户校历接口返回错误',
@@ -140,15 +120,11 @@ class StudentInfoApi {
     return SemesterInfo.tryFromJson(data is Map<String, dynamic> ? data : null);
   }
 
-  static Map<String, dynamic>? _decode(Object? raw, String endpoint) {
-    if (raw == null || (raw is String && raw.trim().isEmpty)) return null;
+  static Map<String, dynamic> _decode(Object? raw, String endpoint) {
     try {
       final decoded = raw is String ? jsonDecode(raw) : raw;
       if (decoded is Map<String, dynamic>) return decoded;
     } on FormatException catch (error, stackTrace) {
-      if (raw is String && raw.contains('authserver/login')) {
-        throw _NotLoggedIn(endpoint, 'login_page_returned');
-      }
       throw DiagnosticException(
         '信息门户响应不是有效 JSON',
         code: 'response_invalid_json',
@@ -165,11 +141,4 @@ class StudentInfoApi {
       context: {'endpoint': endpoint, 'service': 'portal'},
     );
   }
-}
-
-/// 内部信号：响应表明当前没有登录态。
-class _NotLoggedIn implements Exception {
-  const _NotLoggedIn(this.endpoint, this.code);
-  final String endpoint;
-  final String code;
 }
