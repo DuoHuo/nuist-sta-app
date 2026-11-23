@@ -140,6 +140,8 @@ class BulletinApi {
           const {
             'redirect_host_rejected',
             'redirect_limit_exceeded',
+            'redirect_location_missing',
+            'redirect_location_invalid',
           }.contains(error.code)) {
         return null;
       }
@@ -151,6 +153,8 @@ class BulletinApi {
           const {
             'redirect_host_rejected',
             'redirect_limit_exceeded',
+            'redirect_location_missing',
+            'redirect_location_invalid',
           }.contains(cause.code)) {
         return null;
       }

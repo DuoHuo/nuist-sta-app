@@ -213,8 +213,8 @@ class CasSession {
     // 已开始的 Cookie 存储先排空并清理，迟到网络响应则被 CancelToken 阻断写回。
     // 不等待可能无法取消的凭据平台读取，避免阻塞排在后面的正常认证。
     _queue = result.then<void>(
-      (_) => timeoutCleanup,
-      onError: (_) => timeoutCleanup,
+      (_) => timeoutCleanup.then<void>((_) {}, onError: (_) {}),
+      onError: (_) => timeoutCleanup.then<void>((_) {}, onError: (_) {}),
     );
     return result;
   }

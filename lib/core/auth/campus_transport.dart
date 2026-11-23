@@ -613,6 +613,7 @@ class CampusTransport {
       );
       if (toGet) {
         next.data = null;
+        next.contentType = null;
       } else if (next.data is FormData) {
         next.data = (next.data as FormData).clone();
       }

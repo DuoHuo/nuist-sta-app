@@ -567,7 +567,7 @@ struct Flow {
 struct Probe {
     query: dns::QueryHandle,
     deadline: Instant,
-    reply: Option<SyncSender<io::Result<()>>>,
+    replies: Vec<SyncSender<io::Result<()>>>,
     blackhole: bool,
     recovery: bool,
     observed_frames: u64,
@@ -912,7 +912,7 @@ impl Runner {
             probe.blackhole |= blackhole;
             probe.recovery |= recovery;
             if let Some(reply) = reply {
-                let _ = reply.send(Err(error(io::ErrorKind::WouldBlock, "VPN 探活已在进行")));
+                probe.replies.push(reply);
             }
             return Ok(());
         }
@@ -925,7 +925,7 @@ impl Runner {
                 self.probe = Some(Probe {
                     query,
                     deadline: Instant::now() + timeout,
-                    reply,
+                    replies: reply.into_iter().collect(),
                     blackhole,
                     recovery,
                     observed_frames: self.decoder.completed_frames(),
@@ -1090,7 +1090,10 @@ impl Runner {
             }
             if let Some(tcp) = flow.tcp {
                 let socket = self.sockets.get_mut::<tcp::Socket>(tcp);
-                if socket.state() == tcp::State::Closed && self.terminal.is_none() {
+                if socket.state() == tcp::State::Closed
+                    && self.terminal.is_none()
+                    && (!flow.established || !socket.can_recv())
+                {
                     if flow.established {
                         // 已切换为原始字节流，远端 RST 只能关闭连接，不能把 HTTP 错误混进正文。
                         return Err(error(io::ErrorKind::ConnectionAborted, "隧道内 TCP 已关闭"));
@@ -1201,7 +1204,7 @@ impl Runner {
                 }
                 self.budget_exhausted = true;
             }
-            if socket.state() == tcp::State::Closed {
+            if socket.state() == tcp::State::Closed && !socket.can_recv() {
                 return Ok(false);
             }
         }
@@ -1486,7 +1489,7 @@ impl Runner {
                 self.sockets
                     .get_mut::<dns::Socket>(self.dns)
                     .cancel_query(probe.query);
-                if let Some(reply) = probe.reply {
+                for reply in probe.replies {
                     let _ = reply.send(Err(error(
                         io::ErrorKind::ConnectionAborted,
                         "VPN 已进入排空",
@@ -1510,7 +1513,7 @@ impl Runner {
                         .get_mut::<dns::Socket>(self.dns)
                         .cancel_query(probe.query);
                 }
-                if let Some(reply) = probe.reply {
+                for reply in probe.replies {
                     let _ = reply.send(if answered {
                         Ok(())
                     } else {

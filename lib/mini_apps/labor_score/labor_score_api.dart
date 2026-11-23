@@ -103,6 +103,7 @@ class LaborScoreApi {
     try {
       return await _table(page, tableId);
     } on PortalLoginError catch (error, stackTrace) {
+      if (error.code == 'session_generation_changed') rethrow;
       _degradeSection(page, error, stackTrace);
       return null;
     } on DiagnosticException catch (error, stackTrace) {

@@ -1331,7 +1331,7 @@ void main() {
   });
 
   for (final status in [502, 504, 503]) {
-    test('P1-7 CONNECT$status区分目标失败与本地隧道不可用', () async {
+    test('P1-7 CONNECT$status不误杀健康隧道', () async {
       final proxy = ConnectProxy()..rejectOnceStatus = status;
       await proxy.start();
       final native = FakeNative(proxy.server.port);
@@ -1339,27 +1339,20 @@ void main() {
       final query = vpnDio(connector: gateway);
       try {
         final result = query.getUri(url.replace(host: 'campus.test'));
-        if (status == 503) {
-          expect((await result).statusCode, 200);
-          expect(proxy.proxyRequests, 2);
-          expect(native.stopped, [1]);
-          expect(native.starts, 2);
-        } else {
-          await expectLater(
-            result,
-            throwsA(
-              isA<DioException>().having(
-                (e) => (e.error as VpnProxyException).statusCode,
-                'proxy_status',
-                status,
-              ),
+        await expectLater(
+          result,
+          throwsA(
+            isA<DioException>().having(
+              (e) => (e.error as VpnProxyException).statusCode,
+              'proxy_status',
+              status,
             ),
-          );
-          expect(proxy.proxyRequests, 1);
-          expect(gateway.sessionId, 1);
-          expect(native.stopped, isEmpty);
-          expect(native.starts, 1);
-        }
+          ),
+        );
+        expect(proxy.proxyRequests, 1);
+        expect(gateway.sessionId, 1);
+        expect(native.stopped, isEmpty);
+        expect(native.starts, 1);
       } finally {
         query.close(force: true);
         await gateway.dispose();
@@ -1639,7 +1632,10 @@ void main() {
           options: Options(
             method: method == 'GET' ? 'GET' : 'POST',
             responseType: ResponseType.plain,
-            extra: {'idempotent': method == 'POST' || method == 'FAIL'},
+            // 只有显式声明幂等的方法才重放；GET 本身幂等，不需要额外标记。
+            extra: method == 'POST' || method == 'FAIL'
+                ? {'idempotent': true}
+                : null,
           ),
         );
         if (method == 'WRITE' || method == 'FAIL') {

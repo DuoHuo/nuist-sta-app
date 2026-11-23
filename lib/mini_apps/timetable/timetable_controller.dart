@@ -48,9 +48,11 @@ TimetableSyncFailure classifySyncError(Object e) {
     if (status == 401 ||
         status == 403 ||
         const {
+          'returned_to_login',
           'service_returned_to_login',
           'reauthentication_exhausted',
           'session_generation_changed',
+          'service_cookie_revision_changed',
         }.contains(e.code)) {
       return TimetableSyncFailure.sessionExpired;
     }

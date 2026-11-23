@@ -149,12 +149,12 @@ class VpnNative {
         final pending = Completer<Map<String, dynamic>>();
         _pending[id] = pending;
         final bytes = utf8.encode(jsonEncode(request));
-        final input = _bindings.allocate(bytes.length);
-        if (input == nullptr) {
-          _pending.remove(id);
-          throw const SocketException('VPN 控制消息过大');
-        }
+        Pointer<Uint8>? input;
         try {
+          input = _bindings.allocate(bytes.length);
+          if (input == nullptr) {
+            throw const SocketException('VPN 控制消息过大');
+          }
           input.asTypedList(bytes.length).setAll(0, bytes);
           _bindings.callAsync(
             input,
@@ -167,7 +167,9 @@ class VpnNative {
           rethrow;
         } finally {
           bytes.fillRange(0, bytes.length, 0);
-          _bindings.free(input, bytes.length);
+          if (input != null && input != nullptr) {
+            _bindings.free(input, bytes.length);
+          }
         }
         var expired = false;
         final work = pending.future.then((response) {

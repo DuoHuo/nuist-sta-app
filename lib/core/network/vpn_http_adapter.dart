@@ -233,14 +233,20 @@ class VpnIdempotentRetryInterceptor extends Interceptor {
   VpnIdempotentRetryInterceptor(this.dio, this.adapter);
   final Dio dio;
   final VpnHttpClientAdapter adapter;
-  static bool isIdempotent(RequestOptions options) =>
-      const {'GET', 'HEAD', 'OPTIONS'}.contains(options.method.toUpperCase()) ||
-      options.extra['idempotent'] == true;
+  static bool isIdempotent(RequestOptions options) {
+    if (options.extra['idempotent'] == false) return false;
+    return const {
+          'GET',
+          'HEAD',
+          'OPTIONS',
+        }.contains(options.method.toUpperCase()) ||
+        options.extra['idempotent'] == true;
+  }
+
   static bool retryable(DioException error) =>
       error.type != DioExceptionType.cancel &&
       error.error is! HandshakeException &&
-      (error.error is! VpnProxyException ||
-          (error.error as VpnProxyException).statusCode == 503) &&
+      error.error is! VpnProxyException &&
       (error.error is SocketException ||
           error.error is HttpException ||
           error.type == DioExceptionType.connectionError ||
@@ -339,6 +345,7 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
   IOHttpClientAdapter? _vpn;
   bool _closed = false;
   int? _vpnSessionId;
+  int? _vpnGeneration;
   bool _sessionKnown = false;
 
   /// 仅关闭仍引用失败引擎的连接池，迟到请求不得关闭新池。
@@ -385,6 +392,15 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
             : connector is VpnSessionConnector
             ? (connector as VpnSessionConnector).sessionId
             : null);
+    final boundSession = connector is VpnGateway ? session : null;
+    if (session != null &&
+        _vpnGeneration != null &&
+        session.generation < _vpnGeneration!) {
+      return IOHttpClientAdapter(
+        createHttpClient: () =>
+            createRoutedClient(useVpn: true, session: boundSession),
+      );
+    }
     if (engineId != null) {
       if (_sessionKnown && _vpnSessionId != engineId) {
         vpnLog('clients.session_changed');
@@ -393,8 +409,8 @@ class VpnHttpClientAdapter implements HttpClientAdapter {
       }
       _sessionKnown = true;
       _vpnSessionId = engineId;
+      if (session != null) _vpnGeneration = session.generation;
     }
-    final boundSession = connector is VpnGateway ? session : null;
     return _vpn ??= IOHttpClientAdapter(
       createHttpClient: () =>
           createRoutedClient(useVpn: true, session: boundSession),

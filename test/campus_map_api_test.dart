@@ -895,6 +895,8 @@ void main() {
       'reason': 'no_candidates',
     });
     expect(adapter.requests.last.data, {'observations': observations});
+    expect(adapter.requests.last.extra['idempotent'], isTrue);
+    expect(adapter.requests.last.headers.containsKey('cookie'), isFalse);
     expect(await api.loadFingerprints(buildingId: 'b1', floorId: '41'), {
       'fingerprints': [],
       'count': 0,
@@ -915,6 +917,8 @@ void main() {
       'obs_count': 1,
     });
     expect(adapter.requests.last.data, sample);
+    expect(adapter.requests.last.extra['idempotent'], isFalse);
+    expect(adapter.requests.last.headers.containsKey('cookie'), isFalse);
     expect(adapter.requests.last.headers['X-Collect-Token'], 'test-token');
     await api.submitFingerprint(sample);
     expect(

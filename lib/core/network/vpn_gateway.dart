@@ -410,7 +410,7 @@ class VpnGateway implements VpnRecoverableConnector {
                   'host': Uri.parse(VpnAuth.controller).host,
                   'timeoutMs': 2000,
                 })
-                .timeout(const Duration(seconds: 2));
+                .timeout(const Duration(milliseconds: 2500));
             if (status['healthy'] == false ||
                 status['alive'] == false ||
                 status['draining'] == true) {
