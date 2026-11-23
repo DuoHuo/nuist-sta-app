@@ -14,6 +14,10 @@ const _pdfChannel = MethodChannel('dev.duohuo.nuist_sta_app/attachment_pdf');
 final _png = base64Decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMwnvn/PwAFmQLLFOU//QAAAABJRU5ErkJggg==',
 );
+// 200x100 横向 PNG（宽高比 2.0），用于验证未探测页渲染后修正布局高度。
+final _landscapePng = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAMgAAABkCAIAAABM5OhcAAABFklEQVR4nO3SQQkAMAzAwPo3vaoIg3KnII/Mg8D8DuAmY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFgljkTAWCWORMBYJY5EwFokFJhyDSNve8swAAAAASUVORK5CYII=',
+);
 
 class _FakeBulletinApi extends BulletinApi {
   _FakeBulletinApi(this.file);
@@ -266,10 +270,123 @@ void main() {
 
     expect(source, contains('INITIAL_PROBED_PAGES = 8'));
     expect(source, contains('min(renderer.pageCount, INITIAL_PROBED_PAGES)'));
+    expect(source, contains('"probedPageCount" to probedCount'));
     expect(source, contains('coerceIn(320, 1600)'));
     expect(source, contains('Bitmap.CompressFormat.WEBP_LOSSY'));
     expect(source, contains('Bitmap.CompressFormat.WEBP'));
     expect(source, contains('bitmap.compress(format, 90, output)'));
     expect(source, isNot(contains('Bitmap.CompressFormat.PNG')));
+  });
+
+  test('BulletinPdfDocument.open 解析可选 probedPageCount 并兼容省略场景', () async {
+    final pdfFile = File('${tempDir.path}/probed.pdf')
+      ..writeAsBytesSync(ascii.encode('%PDF-1.4'));
+    int? responseProbedCount = 2;
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(_pdfChannel, (
+      call,
+    ) async {
+      if (call.method == 'open') {
+        return {
+          'id': 31,
+          'pageAspectRatios': [0.7, 0.8, 0.7, 0.7],
+          'probedPageCount': ?responseProbedCount,
+        };
+      }
+      return null;
+    });
+
+    final docWithProbed = await BulletinPdfDocument.open(pdfFile);
+    expect(docWithProbed.probedPageCount, 2);
+    await docWithProbed.close();
+
+    responseProbedCount = null;
+    final docLegacy = await BulletinPdfDocument.open(pdfFile);
+    expect(docLegacy.probedPageCount, 4);
+    await docLegacy.close();
+  });
+
+  testWidgets('BulletinPdfView 在未探测页渲染横向图片后更新宽高比与布局高度，已探测页保持不变', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(400, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final pdfFile = File('${tempDir.path}/mixed.pdf')
+      ..writeAsBytesSync(ascii.encode('%PDF-1.4'));
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(_pdfChannel, (
+      call,
+    ) async {
+      return switch (call.method) {
+        'open' => {
+          'id': 42,
+          'pageAspectRatios': [1.0, 0.8, 0.5, 0.5],
+          'probedPageCount': 2,
+        },
+        'render' => () {
+          final page = (call.arguments as Map<Object?, Object?>)['page'] as int;
+          // 模拟第 1 页（已探测）与第 2、3 页（未探测）都返回 200x100 横向图，
+          // 检验只有未探测页会更新布局比例。
+          return page >= 1 ? _landscapePng : _png;
+        }(),
+        _ => null,
+      };
+    });
+
+    final doc = await BulletinPdfDocument.open(pdfFile);
+    expect(doc.probedPageCount, 2);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BulletinPdfView(document: doc, firstPage: _png),
+        ),
+      ),
+    );
+
+    Finder pageImage(String label) => find.byWidgetPredicate(
+      (widget) => widget is Image && widget.semanticLabel == label,
+    );
+    await _pumpUntil(tester, pageImage('第 4 页'));
+
+    // 视图宽 400、左右边距各 8 -> 页宽 384：
+    // - 第 2 页（index=1 < probedPageCount=2）保持已探测比例 0.8 -> 高度 384 / 0.8 = 480。
+    // - 第 3 页（index=2 >= probedPageCount=2）更新为 200x100 比例 2.0 -> 高度 384 / 2.0 = 192。
+    // - 第 4 页（index=3）受前页收窄影响，纵向偏移从 1664 上移到 8 + 384 + 8 + 480 + 8 + 192 + 8 = 1088。
+    expect(tester.getSize(find.byKey(const ValueKey(1))).width, closeTo(384.0, 0.01));
+    expect(tester.getSize(find.byKey(const ValueKey(1))).height, closeTo(480.0, 0.01));
+    expect(tester.getSize(find.byKey(const ValueKey(2))).width, closeTo(384.0, 0.01));
+    expect(tester.getSize(find.byKey(const ValueKey(2))).height, closeTo(192.0, 0.01));
+    expect(tester.getTopLeft(find.byKey(const ValueKey(3))).dy, closeTo(1088.0, 0.01));
+    expect(tester.getSize(find.byKey(const ValueKey(3))).height, closeTo(192.0, 0.01));
+
+    // 无效/占位字节在未探测页渲染时不会抛出异常，且保留初始宽高比。
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(_pdfChannel, (
+      call,
+    ) async {
+      return switch (call.method) {
+        'open' => {
+          'id': 43,
+          'pageAspectRatios': [1.0, 0.5],
+          'probedPageCount': 1,
+        },
+        'render' => Uint8List.fromList([1, 2, 3, 4]),
+        _ => null,
+      };
+    });
+    final invalidDoc = await BulletinPdfDocument.open(pdfFile);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BulletinPdfView(document: invalidDoc, firstPage: _png),
+        ),
+      ),
+    );
+    await _pumpUntil(tester, find.text('此页无法预览'));
+    expect(tester.getSize(find.byKey(const ValueKey(1))).height, closeTo(768.0, 0.01));
+    expect(tester.takeException(), isNull);
+
+    await doc.close();
+    await invalidDoc.close();
   });
 }

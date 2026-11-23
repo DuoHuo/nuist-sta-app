@@ -150,13 +150,20 @@ Future<String> readBulletinPreviewText(File file) async {
 
 /// Android 自带 PDF 渲染器的文档句柄，支持按页渲染。
 class BulletinPdfDocument {
-  BulletinPdfDocument._(this._id, this.pageAspectRatios);
+  BulletinPdfDocument._(
+    this._id,
+    this.pageAspectRatios,
+    this.probedPageCount,
+  );
 
   final int _id;
   bool _closed = false;
 
   /// 按文档顺序保存每页宽高比，用于在渲染前计算滚动布局。
   final List<double> pageAspectRatios;
+
+  /// 打开时已预先探测宽高比的页数；后续页在渲染后按实际图像尺寸修正。
+  final int probedPageCount;
 
   /// 打开已通过校园网络下载到本机的 PDF，不需要外部预览服务。
   static Future<BulletinPdfDocument> open(File file) async {
@@ -169,10 +176,12 @@ class BulletinPdfDocument {
     if (id is! int || ratios is! List || ratios.isEmpty) {
       throw const FormatException('PDF 无法预览');
     }
-    return BulletinPdfDocument._(
-      id,
-      List<double>.unmodifiable(ratios.cast<double>()),
-    );
+    final pageAspectRatios = List<double>.unmodifiable(ratios.cast<double>());
+    final rawProbed = result?['probedPageCount'];
+    final probedPageCount = rawProbed is int
+        ? rawProbed.clamp(0, pageAspectRatios.length)
+        : pageAspectRatios.length;
+    return BulletinPdfDocument._(id, pageAspectRatios, probedPageCount);
   }
 
   /// 将指定页按目标像素宽度渲染为位图字节，页码从零开始。

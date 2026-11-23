@@ -415,6 +415,17 @@ class _CampusMapNativeState extends State<CampusMapNative>
     });
   }
 
+  void _resetAppliedFloorState() {
+    _appliedFloorGeoJson = null;
+    _appliedFloorId = null;
+    _appliedFloorBuildingId = null;
+    _appliedFloorSlabRoomId = null;
+    _appliedFloorSlabBase = null;
+    _appliedFloorWallsBase = null;
+    _appliedLabelOffsetEm = null;
+    _appliedRoomLabelSelectedId = null;
+  }
+
   void _resetStyleState() {
     _sources.clear();
     _layers.clear();
@@ -425,14 +436,7 @@ class _CampusMapNativeState extends State<CampusMapNative>
     _appliedCity3dSelectedId = null;
     _appliedTransitPlaces = null;
     _appliedStackFloors.clear();
-    _appliedFloorGeoJson = null;
-    _appliedFloorId = null;
-    _appliedFloorBuildingId = null;
-    _appliedFloorSlabRoomId = null;
-    _appliedFloorSlabBase = null;
-    _appliedFloorWallsBase = null;
-    _appliedLabelOffsetEm = null;
-    _appliedRoomLabelSelectedId = null;
+    _resetAppliedFloorState();
     _appliedBuildingHighlightVisible = false;
     _appliedBuildingHighlightId = null;
     _appliedFeatureHighlightVisible = false;
@@ -1333,6 +1337,8 @@ class _CampusMapNativeState extends State<CampusMapNative>
     final hasUser = _hasValidUser(user);
     if (!_hasLayer('campus-user-dot')) {
       final epoch = _styleEpoch;
+      final imageReady = await _ensureHeadingImage(b);
+      if (!imageReady) return;
       final initialGeoJson = hasUser
           ? _pointGeoJson(user!, properties: const {'kind': 'user'})
           : _emptyCollection;
@@ -1341,8 +1347,6 @@ class _CampusMapNativeState extends State<CampusMapNative>
       final initialAngle = heading ?? _appliedHeading ?? 0.0;
       await _addSource(b, 'campus-user', initialGeoJson, group: 10);
       if (!mounted || epoch != _styleEpoch) return;
-      final imageReady = await _ensureHeadingImage(b);
-      if (!imageReady) return;
       final below = _belowAfterGroup(10);
       // 朝向光束：画在蓝点下面，随手机朝向转动（相对正北，地图旋转时自动跟着转）。
       await b.addSymbolLayer(
@@ -1618,14 +1622,7 @@ class _CampusMapNativeState extends State<CampusMapNative>
     final buildingId = _selectedBuildingId(value);
     if (value.floor == null || value.floorGeoJson == null) {
       await _clearGroup(b, 5);
-      _appliedFloorGeoJson = null;
-      _appliedFloorId = null;
-      _appliedFloorBuildingId = null;
-      _appliedFloorSlabRoomId = null;
-      _appliedFloorSlabBase = null;
-      _appliedFloorWallsBase = null;
-      _appliedLabelOffsetEm = null;
-      _appliedRoomLabelSelectedId = null;
+      _resetAppliedFloorState();
       return;
     }
     final sourceChanged =
@@ -1641,7 +1638,7 @@ class _CampusMapNativeState extends State<CampusMapNative>
         value.floorGeoJson,
         (p) => p['building_id'] == buildingId && p['floor_id'] == floorId,
       );
-      if (floor == null) return;
+      if (floor == null || (floor['features'] as List).isEmpty) return;
       final below = _belowAfterGroup(5);
       await _addSource(b, 'campus-floor', floor, group: 5);
       // 当前楼层做成有厚度的楼板并抬到该层高度，房间/走廊按类型着色；
@@ -1715,12 +1712,15 @@ class _CampusMapNativeState extends State<CampusMapNative>
         value.floorGeoJson,
         (p) => p['building_id'] == buildingId && p['floor_id'] == floorId,
       );
-      if (floor != null) {
-        await b.setGeoJsonSource('campus-floor', floor);
-        _appliedFloorGeoJson = value.floorGeoJson;
-        _appliedFloorId = floorId;
-        _appliedFloorBuildingId = buildingId;
+      if (floor == null || (floor['features'] as List).isEmpty) {
+        await _clearGroup(b, 5);
+        _resetAppliedFloorState();
+        return;
       }
+      await b.setGeoJsonSource('campus-floor', floor);
+      _appliedFloorGeoJson = value.floorGeoJson;
+      _appliedFloorId = floorId;
+      _appliedFloorBuildingId = buildingId;
     }
     if (_appliedFloorSlabBase != base ||
         _appliedFloorSlabRoomId != selectedRoomId) {

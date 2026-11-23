@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
@@ -35,6 +36,9 @@ class _BulletinPdfViewState extends State<BulletinPdfView> {
   static const _gap = 8.0;
 
   late final _pages = <int, MemoryImage?>{0: MemoryImage(widget.firstPage)};
+  late List<double> _pageAspectRatios = List<double>.of(
+    widget.document.pageAspectRatios,
+  );
   double? _pageWidth;
   double _devicePixelRatio = 1.0;
   List<double> _pageOffsets = [];
@@ -62,6 +66,19 @@ class _BulletinPdfViewState extends State<BulletinPdfView> {
   @override
   void didUpdateWidget(covariant BulletinPdfView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.document != widget.document) {
+      _pageAspectRatios = List<double>.of(widget.document.pageAspectRatios);
+      _rendering = false;
+      for (final image in _pages.values.nonNulls) {
+        PaintingBinding.instance.imageCache.evict(image);
+      }
+      _pages
+        ..clear()
+        ..[0] = MemoryImage(widget.firstPage);
+      if (_pageWidth != null) {
+        _layoutPages(_pageWidth!, force: true);
+      }
+    }
     if (oldWidget.searchExpanded && !widget.searchExpanded) {
       _search?.updateText('');
     }
@@ -160,13 +177,13 @@ class _BulletinPdfViewState extends State<BulletinPdfView> {
     }
   }
 
-  int get _pageCount => widget.document.pageAspectRatios.length;
+  int get _pageCount => _pageAspectRatios.length;
 
-  void _layoutPages(double width) {
-    if (_pageWidth == width) return;
+  void _layoutPages(double width, {bool force = false}) {
+    if (!force && _pageWidth == width) return;
     _pageWidth = width;
     final offsets = [_gap];
-    for (final ratio in widget.document.pageAspectRatios) {
+    for (final ratio in _pageAspectRatios) {
       offsets.add(offsets.last + width / ratio + _gap);
     }
     _pageOffsets = offsets;
@@ -216,13 +233,27 @@ class _BulletinPdfViewState extends State<BulletinPdfView> {
       if (_pages.containsKey(index)) continue;
       _rendering = true;
       MemoryImage? image;
+      double? updatedRatio;
+      final document = widget.document;
       final targetWidth = ((_pageWidth ?? 800) * _devicePixelRatio)
           .round()
           .clamp(320, 1600);
       try {
-        image = MemoryImage(
-          await widget.document.renderPage(index, targetWidth: targetWidth),
+        final bytes = await document.renderPage(
+          index,
+          targetWidth: targetWidth,
         );
+        if (!mounted || !identical(widget.document, document)) return;
+        image = MemoryImage(bytes);
+        if (index >= document.probedPageCount &&
+            index < _pageAspectRatios.length) {
+          final actualRatio = await _decodeImageAspectRatio(bytes);
+          if (!mounted || !identical(widget.document, document)) return;
+          if (actualRatio != null &&
+              (actualRatio - _pageAspectRatios[index]).abs() > 0.01) {
+            updatedRatio = actualRatio;
+          }
+        }
       } catch (error, stackTrace) {
         // 单页失败仍可继续浏览其他页面。
         _log.warning(
@@ -232,13 +263,38 @@ class _BulletinPdfViewState extends State<BulletinPdfView> {
           stackTrace: stackTrace,
         );
       }
-      if (!mounted) return;
+      if (!mounted || !identical(widget.document, document)) return;
       setState(() {
+        if (updatedRatio != null && index < _pageAspectRatios.length) {
+          _pageAspectRatios[index] = updatedRatio;
+          if (_pageWidth != null) {
+            _layoutPages(_pageWidth!, force: true);
+          }
+        }
         _pages[index] = image;
         _rendering = false;
       });
       return;
     }
+  }
+
+  /// 仅解析渲染位图头部尺寸，修正打开时未探测页的宽高比。
+  Future<double?> _decodeImageAspectRatio(Uint8List bytes) async {
+    ui.ImmutableBuffer? buffer;
+    ui.ImageDescriptor? descriptor;
+    try {
+      buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+      descriptor = await ui.ImageDescriptor.encoded(buffer);
+      if (descriptor.width > 0 && descriptor.height > 0) {
+        return descriptor.width / descriptor.height;
+      }
+    } catch (_) {
+      // 损坏或测试占位字节不影响页面继续展示。
+    } finally {
+      descriptor?.dispose();
+      buffer?.dispose();
+    }
+    return null;
   }
 
   @override

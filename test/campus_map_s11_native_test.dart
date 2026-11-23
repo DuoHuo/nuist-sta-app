@@ -216,6 +216,37 @@ class _SpyBridge implements CampusMapBridge {
       _inner.animateCamera(update, duration: duration);
 }
 
+class _FaultyImageBridge extends _SpyBridge {
+  _FaultyImageBridge(super.inner, {this.failAddImageCount = 0});
+
+  final int failAddImageCount;
+  final Set<String> mountedSources = {};
+  int addImageAttempts = 0;
+
+  @override
+  Future<void> addImage(String name, Uint8List bytes) async {
+    addImageAttempts++;
+    if (addImageAttempts <= failAddImageCount) {
+      throw StateError('Simulated addImage failure');
+    }
+    return super.addImage(name, bytes);
+  }
+
+  @override
+  Future<void> addGeoJsonSource(String sourceId, Map<String, dynamic> geojson) {
+    if (!mountedSources.add(sourceId)) {
+      throw StateError('Duplicate source $sourceId');
+    }
+    return super.addGeoJsonSource(sourceId, geojson);
+  }
+
+  @override
+  Future<void> removeSource(String sourceId) {
+    mountedSources.remove(sourceId);
+    return super.removeSource(sourceId);
+  }
+}
+
 Map<String, dynamic> _polygonFeature(
   String idKey,
   Object idValue, {
@@ -1372,6 +1403,298 @@ void main() {
         platform
             .where('removeLayer')
             .where((c) => c.arg(0) == 'shuttle-vehicle-icons'),
+        hasLength(1),
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await _drain(tester);
+      controller.dispose();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'switching from mounted floor to floor with no matching features clears group 5 instead of leaving stale geometry',
+    (tester) async {
+      const floor2 = CampusFloor(
+        id: 'f2',
+        label: '2F',
+        number: 2,
+        levelIndex: 1,
+      );
+      const multiFloorPlace = CampusPlace(
+        id: 'b1',
+        name: '明德楼',
+        category: PlaceCategory.study,
+        center: GeoPoint(longitude: 118.7005, latitude: 32.2005),
+        hasIndoor: true,
+        floors: [_floor1, floor2],
+      );
+      final buildings = _buildingsGeoJson();
+      final floor1Data = _floorGeoJson('b1', 'f1');
+      final floor2Data = _floorGeoJson('b1', 'f2');
+
+      final controller = await _mountMap(
+        tester,
+        platform,
+        _canvas(
+          buildingGeoJson: buildings,
+          places: const [multiFloorPlace],
+          selectedPlace: multiFloorPlace,
+          floor: _floor1,
+          floorGeoJson: floor1Data,
+        ),
+      );
+
+      expect(
+        platform
+            .where('addGeoJsonSource')
+            .where((c) => c.arg(0) == 'campus-floor'),
+        hasLength(1),
+      );
+      expect(
+        platform
+            .where('addFillExtrusionLayer')
+            .where((c) => c.arg(1) == 'campus-floor-slab'),
+        hasLength(1),
+      );
+      expect(
+        platform
+            .where('addFillExtrusionLayer')
+            .where((c) => c.arg(1) == 'campus-floor-walls'),
+        hasLength(1),
+      );
+      expect(
+        platform
+            .where('addSymbolLayer')
+            .where((c) => c.arg(1) == 'campus-floor-room-labels'),
+        hasLength(1),
+      );
+
+      Future<void> push(CampusMapCanvas next) async {
+        await tester.pumpWidget(
+          MaterialApp(home: CampusMapNative(configuration: next)),
+        );
+        await _drain(tester);
+      }
+
+      // Switch directly to f2 while floorGeoJson still only contains f1 features
+      // (no matching features for b1/f2): group 5 must be cleared cleanly.
+      platform.clearCalls();
+      await push(
+        _canvas(
+          buildingGeoJson: buildings,
+          places: const [multiFloorPlace],
+          selectedPlace: multiFloorPlace,
+          floor: floor2,
+          floorGeoJson: floor1Data,
+        ),
+      );
+
+      expect(
+        platform.where('removeLayer').map((c) => c.arg(0)),
+        unorderedEquals([
+          'campus-floor-slab',
+          'campus-floor-walls',
+          'campus-floor-room-labels',
+        ]),
+      );
+      expect(platform.where('removeSource').map((c) => c.arg(0)), [
+        'campus-floor',
+      ]);
+      expect(
+        platform
+            .where('setGeoJsonSource')
+            .where((c) => c.arg(0) == 'campus-floor'),
+        isEmpty,
+      );
+      expect(
+        platform
+            .where('setLayerProperties')
+            .where((c) => (c.arg(0) as String).startsWith('campus-floor')),
+        isEmpty,
+      );
+
+      // Subsequent update while f2 still has empty features must not re-mount
+      // empty group 5 layers/source.
+      platform.clearCalls();
+      await push(
+        _canvas(
+          buildingGeoJson: buildings,
+          places: const [multiFloorPlace],
+          selectedPlace: multiFloorPlace,
+          floor: floor2,
+          floorGeoJson: const {
+            'type': 'FeatureCollection',
+            'features': <Object>[],
+          },
+        ),
+      );
+      expect(
+        platform
+            .where('addGeoJsonSource')
+            .where((c) => c.arg(0) == 'campus-floor'),
+        isEmpty,
+      );
+      expect(
+        platform
+            .where('addFillExtrusionLayer')
+            .where((c) => c.arg(1) == 'campus-floor-slab'),
+        isEmpty,
+      );
+
+      // Once matching GeoJSON for f2 arrives, group 5 mounts cleanly at f2's elevation.
+      platform.clearCalls();
+      await push(
+        _canvas(
+          buildingGeoJson: buildings,
+          places: const [multiFloorPlace],
+          selectedPlace: multiFloorPlace,
+          floor: floor2,
+          floorGeoJson: floor2Data,
+        ),
+      );
+      expect(
+        platform
+            .where('addGeoJsonSource')
+            .where((c) => c.arg(0) == 'campus-floor'),
+        hasLength(1),
+      );
+      final remountedSlab = platform
+          .where('addFillExtrusionLayer')
+          .singleWhere((c) => c.arg(1) == 'campus-floor-slab');
+      final props = remountedSlab.arg(2) as Map<String, dynamic>;
+      expect(props['fill-extrusion-base'], floorBaseElevation(floor2));
+      expect(
+        platform
+            .where('addFillExtrusionLayer')
+            .where((c) => c.arg(1) == 'campus-floor-walls'),
+        hasLength(1),
+      );
+      expect(
+        platform
+            .where('addSymbolLayer')
+            .where((c) => c.arg(1) == 'campus-floor-room-labels'),
+        hasLength(1),
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await _drain(tester);
+      controller.dispose();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'addImage failure in _ensureHeadingImage does not leave a dangling campus-user source on retry',
+    (tester) async {
+      final bridges = <_FaultyImageBridge>[];
+      CampusMapNative.debugBridgeOverride = (c) {
+        final bridge = _FaultyImageBridge(c, failAddImageCount: 1);
+        bridges.add(bridge);
+        return bridge;
+      };
+
+      final controller = await _mountMap(
+        tester,
+        platform,
+        _canvas(
+          userPoint: const GeoPoint(longitude: 118.701, latitude: 32.201),
+          userHeading: 45,
+        ),
+      );
+
+      final bridge = bridges.single;
+      expect(bridge.addImageAttempts, 1);
+      expect(bridge.mountedSources, isNot(contains('campus-user')));
+      expect(
+        platform
+            .where('addGeoJsonSource')
+            .where((c) => c.arg(0) == 'campus-user'),
+        isEmpty,
+      );
+      expect(
+        platform
+            .where('addSymbolLayer')
+            .where((c) => c.arg(1) == 'campus-user-heading'),
+        isEmpty,
+      );
+      expect(
+        platform
+            .where('addCircleLayer')
+            .where((c) => c.arg(1) == 'campus-user-dot'),
+        isEmpty,
+      );
+      expect(find.text('地图图层加载失败，请重试'), findsOneWidget);
+
+      // Retry via next state sync: addImage succeeds and campus-user mounts
+      // cleanly once without duplicate-source collision.
+      platform.clearCalls();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CampusMapNative(
+            configuration: _canvas(
+              userPoint: const GeoPoint(longitude: 118.702, latitude: 32.202),
+              userHeading: 90,
+            ),
+          ),
+        ),
+      );
+      await _drain(tester);
+
+      expect(bridge.addImageAttempts, 2);
+      expect(bridge.mountedSources, contains('campus-user'));
+      expect(
+        platform
+            .where('addGeoJsonSource')
+            .where((c) => c.arg(0) == 'campus-user'),
+        hasLength(1),
+      );
+      expect(
+        platform
+            .where('addSymbolLayer')
+            .where((c) => c.arg(1) == 'campus-user-heading'),
+        hasLength(1),
+      );
+      expect(
+        platform
+            .where('addCircleLayer')
+            .where((c) => c.arg(1) == 'campus-user-halo'),
+        hasLength(1),
+      );
+      expect(
+        platform
+            .where('addCircleLayer')
+            .where((c) => c.arg(1) == 'campus-user-dot'),
+        hasLength(1),
+      );
+      expect(find.text('地图图层加载失败，请重试'), findsNothing);
+
+      // Subsequent GPS update works in-place without re-adding source or image.
+      platform.clearCalls();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CampusMapNative(
+            configuration: _canvas(
+              userPoint: const GeoPoint(longitude: 118.703, latitude: 32.203),
+              userHeading: 90,
+            ),
+          ),
+        ),
+      );
+      await _drain(tester);
+
+      expect(bridge.addImageAttempts, 2);
+      expect(
+        platform
+            .where('addGeoJsonSource')
+            .where((c) => c.arg(0) == 'campus-user'),
+        isEmpty,
+      );
+      expect(
+        platform
+            .where('setGeoJsonSource')
+            .where((c) => c.arg(0) == 'campus-user'),
         hasLength(1),
       );
 

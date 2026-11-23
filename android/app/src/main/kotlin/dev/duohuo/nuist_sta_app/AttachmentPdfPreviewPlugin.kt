@@ -130,7 +130,7 @@ class AttachmentPdfPreviewPlugin : FlutterPlugin, MethodChannel.MethodCallHandle
             descriptor.close()
             throw error
         }
-        val pageAspectRatios = try {
+        val (probedCount, pageAspectRatios) = try {
             require(renderer.pageCount > 0)
             val probedCount = min(renderer.pageCount, INITIAL_PROBED_PAGES)
             val probed = List(probedCount) { index ->
@@ -140,7 +140,7 @@ class AttachmentPdfPreviewPlugin : FlutterPlugin, MethodChannel.MethodCallHandle
                 }
             }
             val defaultRatio = probed.first()
-            List(renderer.pageCount) { index ->
+            probedCount to List(renderer.pageCount) { index ->
                 if (index < probed.size) probed[index] else defaultRatio
             }
         } catch (error: Exception) {
@@ -149,7 +149,11 @@ class AttachmentPdfPreviewPlugin : FlutterPlugin, MethodChannel.MethodCallHandle
         }
         val id = ++nextId
         documents[id] = renderer
-        return mapOf("id" to id, "pageAspectRatios" to pageAspectRatios)
+        return mapOf(
+            "id" to id,
+            "pageAspectRatios" to pageAspectRatios,
+            "probedPageCount" to probedCount,
+        )
     }
 
     private fun render(call: MethodCall): ByteArray {
