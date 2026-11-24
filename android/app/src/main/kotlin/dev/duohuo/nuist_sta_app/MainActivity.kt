@@ -22,17 +22,24 @@ class MainActivity : FlutterActivity() {
     override fun getInitialRoute(): String? {
         if (initialRouteRead) return initialRoute
         initialRouteRead = true
-        val route = intent?.getStringExtra(NotifyStore.EXTRA_ROUTE)
+        val route = NotifyStore.timetableLaunchRoute(this, intent)
             ?: if (intent?.dataString == NextDayReminder.OPEN_URI) "/apps/timetable?focus=tomorrow" else null
         // 可信系统入口在 Flutter 第一帧前决定目标；其余 Intent 沿用普通启动。
-        initialRoute = if (route == NotifyStore.ROUTE_TIMETABLE || route == "/apps/timetable?focus=tomorrow") route
-        else super.getInitialRoute()
+        initialRoute = when (route) {
+            NotifyStore.ROUTE_TIMETABLE,
+            NotifyStore.ROUTE_TIMETABLE_NEXT_WEEK,
+            NotifyStore.ROUTE_TIMETABLE_WIDGET_SETTINGS,
+            "/apps/timetable?focus=tomorrow" -> route
+            else -> super.getInitialRoute()
+        }
         return initialRoute
     }
 
     override fun onNewIntent(intent: Intent) {
         // Flutter 插件在 super 内分发 Intent；由同一 openRoute 通道处理所有点击，避免双重压栈。
-        if (intent.dataString == NextDayReminder.OPEN_URI) {
+        if (intent.action == NotifyStore.widgetSettingsAction(this)) {
+            intent.putExtra(NotifyStore.EXTRA_ROUTE, NotifyStore.ROUTE_TIMETABLE_WIDGET_SETTINGS)
+        } else if (intent.dataString == NextDayReminder.OPEN_URI) {
             intent.putExtra(NotifyStore.EXTRA_ROUTE, "/apps/timetable?focus=tomorrow")
             intent.data = null
         }

@@ -6,6 +6,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_layout.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_widget_layout.dart';
 
 void main() {
   group('v0.4 设置默认值与宽松读取', () {
@@ -23,6 +24,74 @@ void main() {
       expect(s.reminderLeadMinutes, 15);
       final r = TimetableSettings.fromJson(const {});
       expect(r.toJson(), s.toJson());
+    });
+
+    test('4×5 设置保留 v1 值，v2 只应用有效偏好', () {
+      const s = TimetableSettings();
+      expect(s.widgetWeekCellHeight, 34);
+      expect(s.widgetWeekFontSize, 10);
+      expect(s.widgetWeekOpacity, 100);
+      expect(s.widgetWeekWidgetOpacity, 100);
+      expect(s.widgetWeekCompactRows, isTrue);
+      expect(s.widgetWeekShowWeekend, isFalse);
+      expect(TimetableSettings.sanitizeWeekCellHeight(20), 24);
+      expect(TimetableSettings.sanitizeWeekCellHeight(80), 64);
+      expect(TimetableSettings.sanitizeWeekCellHeight(34.6), 35);
+      expect(TimetableSettings.sanitizeWeekCellHeight('40'), 34);
+      expect(TimetableSettings.sanitizeWeekFontSize(8), 9);
+      expect(TimetableSettings.sanitizeWeekFontSize(16), 14);
+      expect(TimetableSettings.sanitizeWeekFontSize(12.4), 12);
+      expect(TimetableSettings.sanitizeWeekFontSize(null), 10);
+      final saved = s.copyWith(
+        widgetWeekCellHeight: 40,
+        widgetWeekFontSize: 12,
+        widgetWeekOpacity: 60,
+        widgetWeekWidgetOpacity: 80,
+        widgetWeekCompactRows: false,
+        widgetWeekShowWeekend: true,
+      );
+      final round = TimetableSettings.fromJson(saved.toJson());
+      expect(round.widgetWeekCellHeight, 40);
+      expect(round.widgetWeekFontSize, 12);
+      expect(round.widgetWeekOpacity, 60);
+      expect(round.widgetWeekWidgetOpacity, 80);
+      expect(round.widgetWeekCompactRows, isFalse);
+      expect(round.widgetWeekShowWeekend, isTrue);
+      final merged = const TimetableSettings(termCode: '2026-2027-1')
+          .withDisplayPrefsFrom(saved);
+      expect(merged.termCode, '2026-2027-1');
+      expect(merged.widgetWeekCellHeight, 40);
+      expect(merged.widgetWeekShowWeekend, isTrue);
+      expect(WeekWidgetPrefs.fromSettings(merged).toJson(), {
+        'opacity': 60,
+        'widgetOpacity': 80,
+        'showWeekend': true,
+        'showLocation': true,
+        'showTeacher': true,
+        'showPeriod': true,
+        'nodesPerDay': 11,
+        'weekStartsSunday': false,
+        'showGridLines': true,
+        'headerTextSize': 11,
+        'fontScale': 1,
+      });
+      expect(
+        TimetableSettings.fromJson({
+          'widgetWeekCellHeight': 999,
+          'widgetWeekFontSize': -1,
+          'widgetWeekOpacity': 5,
+        }).widgetWeekCellHeight,
+        64,
+      );
+      expect(
+        TimetableSettings.fromJson({'widgetWeekFontSize': -1})
+            .widgetWeekFontSize,
+        9,
+      );
+      expect(
+        TimetableSettings.fromJson({'widgetWeekOpacity': 5}).widgetWeekOpacity,
+        30,
+      );
     });
 
     test('不透明度钳到 30–100 并取整；类型不对 → 100', () {

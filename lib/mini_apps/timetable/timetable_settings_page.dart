@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
@@ -8,6 +10,7 @@ import '../../core/colors.dart';
 import '../../core/ui/miuix_dialog.dart';
 import 'timetable_appearance_page.dart';
 import 'timetable_change_log_page.dart';
+import 'timetable_course_cell.dart';
 import 'timetable_copy.dart';
 import 'timetable_day_swap_ui.dart';
 import 'timetable_controller.dart';
@@ -16,11 +19,13 @@ import 'timetable_notify_bridge.dart';
 import 'timetable_notify_plan.dart';
 import 'timetable_persistence_feedback.dart';
 import 'timetable_reminder_guide.dart';
+import 'timetable_schedule_event_layout.dart' show SchedulePill;
 import 'timetable_settings_text.dart';
 import 'timetable_settings_widgets.dart';
 import 'timetable_next_day_reminder_channel.dart';
 import 'timetable_store.dart';
 import 'timetable_theme.dart';
+import 'timetable_week_widget_layout.dart';
 
 export 'timetable_appearance_page.dart'
     show TimetableAppearancePage, TimetablePalettePage;
@@ -430,10 +435,18 @@ class _RestoreJwxtContentState extends State<_RestoreJwxtContent> {
 
 /// 桌面小组件设置：预览显示内容，所有选项沿用原有设置与原生刷新入口。
 class TimetableWidgetSettingsPage extends StatefulWidget {
-  const TimetableWidgetSettingsPage({super.key, this.controller, this.actions});
+  const TimetableWidgetSettingsPage({
+    super.key,
+    this.controller,
+    this.actions,
+    this.initialSize = WidgetPinSize.wide,
+  });
 
   final TimetableController? controller;
   final ReminderActions? actions;
+
+  /// 从桌面齿轮进入时，直接选中对应的小组件。
+  final WidgetPinSize initialSize;
 
   @override
   State<TimetableWidgetSettingsPage> createState() =>
@@ -443,10 +456,14 @@ class TimetableWidgetSettingsPage extends StatefulWidget {
 class _TimetableWidgetSettingsPageState
     extends State<TimetableWidgetSettingsPage>
     with WidgetsBindingObserver {
-  bool _square = false;
+  late WidgetPinSize _size = widget.initialSize;
   bool _previewLast = false;
   bool _pinning = false;
   bool _permissionSettingsPending = false;
+
+  // 滑杆拖动期间只改预览；松手后保存一次，避免每个中间值都写盘。
+  int? _draftWeekOpacity;
+  int? _draftWeekSurfaceOpacity;
 
   @override
   void initState() {
@@ -482,14 +499,14 @@ class _TimetableWidgetSettingsPageState
     if (_pinning) return;
     setState(() => _pinning = true);
     try {
-      final square = _square;
-      final result = await a.pinWidget(square: square);
+      final size = _size;
+      final result = await a.pinWidget(size: size);
       if (!mounted) return;
       switch (result) {
         case WidgetPinResult.requested:
           break;
         case WidgetPinResult.permissionRequired:
-          final confirmed = await _showGuide(result, square: square);
+          final confirmed = await _showGuide(result, size: size);
           if (!confirmed || !mounted) return;
           final opened = await a.openWidgetShortcutSettings();
           if (!mounted) return;
@@ -497,12 +514,12 @@ class _TimetableWidgetSettingsPageState
             // 返回后再提示重新添加，不让说明在系统设置页打开时消失。
             _permissionSettingsPending = true;
           } else {
-            await _showGuide(result, square: square, settingsUnavailable: true);
+            await _showGuide(result, size: size, settingsUnavailable: true);
           }
         case WidgetPinResult.miuiManual:
         case WidgetPinResult.originOsManual:
         case WidgetPinResult.manual:
-          await _showGuide(result, square: square);
+          await _showGuide(result, size: size);
       }
     } finally {
       if (mounted) setState(() => _pinning = false);
@@ -511,7 +528,7 @@ class _TimetableWidgetSettingsPageState
 
   Future<bool> _showGuide(
     WidgetPinResult result, {
-    required bool square,
+    required WidgetPinSize size,
     bool settingsUnavailable = false,
   }) async {
     return await showModalBottomSheet<bool>(
@@ -521,117 +538,927 @@ class _TimetableWidgetSettingsPageState
           constraints: const BoxConstraints(maxWidth: 560),
           builder: (_) => _WidgetPinGuideSheet(
             result: result,
-            square: square,
+            size: size,
             settingsUnavailable: settingsUnavailable,
           ),
         ) ??
         false;
   }
 
+  Widget _weekOpacitySlider(
+    TimetableController c,
+    ReminderActions a, {
+    required bool surface,
+  }) {
+    int? draft() => surface ? _draftWeekSurfaceOpacity : _draftWeekOpacity;
+    int saved(TimetableSettings s) =>
+        surface ? s.widgetWeekWidgetOpacity : s.widgetWeekOpacity;
+    void setDraft(int? value) => setState(() {
+      if (surface) {
+        _draftWeekSurfaceOpacity = value;
+      } else {
+        _draftWeekOpacity = value;
+      }
+    });
+
+    final setter = surface
+        ? a.setWeekWidgetSurfaceOpacity
+        : a.setWeekWidgetOpacity;
+    final field = surface ? 'widgetWeekWidgetOpacity' : 'widgetWeekOpacity';
+    final value = draft() ?? saved(c.settings);
+    return _WidgetSliderRow(
+      title: surface
+          ? TtSettingsText.weekWidgetOpacity
+          : TtSettingsText.weekOpacity,
+      valueLabel: '$value%',
+      valueKey: Key('tt_settings_${field}_value'),
+      slider: Slider(
+        key: Key('tt_settings_$field'),
+        min: 30,
+        max: 100,
+        divisions: 7,
+        value: value.toDouble(),
+        label: '$value%',
+        onChanged: (v) => setDraft(v.round()),
+        onChangeEnd: (v) async {
+          final next = v.round();
+          if (next != saved(c.settingsForEditing)) {
+            await _saveSettingsAction(context, () => setter(next));
+          }
+          if (mounted && draft() == next) setDraft(null);
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = widget.controller ?? TimetableController.instance;
     final a = widget.actions ?? ReminderActions(controller: c);
+    final week = _size == WidgetPinSize.week;
+    final square = _size == WidgetPinSize.square;
     return _SettingsSubpage(
       title: TtSettingsText.widgetCard,
       controller: c,
-      children: () => [
-        TimetableSettingsGroup(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: SegmentedButton<bool>(
-                key: const Key('tt_settings_widget_size'),
-                segments: const [
-                  ButtonSegment(value: false, label: Text('4×2 今日课表')),
-                  ButtonSegment(value: true, label: Text('2×2 当前与下一节')),
-                ],
-                selected: {_square},
-                showSelectedIcon: false,
-                onSelectionChanged: (v) => setState(() => _square = v.single),
+      pinnedAfterFirst: week
+          ? (maxHeight) => _WeekWidgetSettingsPreview(
+              settings: c.settings.copyWith(
+                widgetWeekOpacity: _draftWeekOpacity,
+                widgetWeekWidgetOpacity: _draftWeekSurfaceOpacity,
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: Wrap(
-                spacing: 8,
-                children: [
-                  ChoiceChip(
-                    label: const Text('有后续课程'),
-                    selected: !_previewLast,
-                    onSelected: (_) => setState(() => _previewLast = false),
-                  ),
-                  ChoiceChip(
-                    label: const Text('最后一节'),
-                    selected: _previewLast,
-                    onSelected: (_) => setState(() => _previewLast = true),
-                  ),
-                ],
-              ),
-            ),
-            _WidgetSettingsPreview(
-              settings: c.settings,
-              square: _square,
-              last: _previewLast,
-            ),
-            TimetableSettingsRow(
-              key: const Key('tt_settings_widget_pin'),
-              title: TtSettingsText.pinWidget,
-              value: _square ? '2×2' : '4×2',
-              showChevron: true,
-              enabled: !_pinning,
-              onTap: () => _pin(a),
-            ),
-          ],
-        ),
-        TimetableSettingsGroup(
-          key: const Key('tt_settings_group_widget'),
-          children: [
-            if (!_square)
-              TimetableSettingsChoiceRow<int>(
-                key: const Key('tt_settings_widgetCourseCount'),
-                title: TtSettingsText.courseCount,
-                showInlineOptions: false,
-                options: {
-                  for (final n in kWidgetCourseCountOptions)
-                    n: TtSettingsText.courses(n),
-                },
-                selected: a.widgetCourseCount,
-                onSelected: (n) => _saveSettingsAction(
-                  context,
-                  () => a.setWidgetCourseCount(n),
+              now: DateTime.now(),
+              maxHeight: maxHeight,
+            )
+          : null,
+      children: () {
+        final s = c.settings;
+        final pinRow = TimetableSettingsRow(
+          key: const Key('tt_settings_widget_pin'),
+          title: TtSettingsText.pinWidget,
+          value: switch (_size) {
+            WidgetPinSize.wide => '4×2',
+            WidgetPinSize.square => '2×2',
+            WidgetPinSize.week => '4×5',
+          },
+          showChevron: true,
+          enabled: !_pinning,
+          onTap: () => _pin(a),
+        );
+        return [
+          TimetableSettingsGroup(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Wrap(
+                  key: const Key('tt_settings_widget_size'),
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final (size, label) in [
+                      (WidgetPinSize.wide, '今日课表'),
+                      (WidgetPinSize.square, '当前与下一节'),
+                      (WidgetPinSize.week, '当周课表'),
+                    ])
+                      ChoiceChip(
+                        label: Text(label),
+                        showCheckmark: false,
+                        selected: _size == size,
+                        onSelected: (_) => setState(() => _size = size),
+                      ),
+                  ],
                 ),
               ),
-            for (final option in WidgetDisplayOption.values)
-              if (!_square ||
-                  option == WidgetDisplayOption.teacher ||
-                  option == WidgetDisplayOption.location)
+              if (!week)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  child: Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('有后续课程'),
+                        selected: !_previewLast,
+                        onSelected: (_) => setState(() => _previewLast = false),
+                      ),
+                      ChoiceChip(
+                        label: const Text('最后一节'),
+                        selected: _previewLast,
+                        onSelected: (_) => setState(() => _previewLast = true),
+                      ),
+                    ],
+                  ),
+                ),
+              if (week)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  child: Text(
+                    '显示效果预览 · 示例内容',
+                    style: TimetableTheme.captionStyle(
+                      color: TimetableTheme.colorsOf(context).labelText,
+                    ),
+                  ),
+                )
+              else ...[
+                _WidgetSettingsPreview(
+                  settings: s,
+                  square: square,
+                  last: _previewLast,
+                ),
+                pinRow,
+              ],
+            ],
+          ),
+          if (week) TimetableSettingsGroup(children: [pinRow]),
+          TimetableSettingsGroup(
+            key: const Key('tt_settings_group_widget'),
+            children: [
+              if (_size == WidgetPinSize.wide)
+                TimetableSettingsChoiceRow<int>(
+                  key: const Key('tt_settings_widgetCourseCount'),
+                  title: TtSettingsText.courseCount,
+                  showInlineOptions: false,
+                  options: {
+                    for (final n in kWidgetCourseCountOptions)
+                      n: TtSettingsText.courses(n),
+                  },
+                  selected: a.widgetCourseCount,
+                  onSelected: (n) => _saveSettingsAction(
+                    context,
+                    () => a.setWidgetCourseCount(n),
+                  ),
+                ),
+              if (week) ...[
+                _weekOpacitySlider(c, a, surface: false),
+                _weekOpacitySlider(c, a, surface: true),
                 TimetableSettingsSwitchRow(
-                  key: Key('tt_settings_${option.field}'),
-                  title: option.title,
-                  value: a.widgetOption(option),
+                  key: const Key('tt_settings_widgetWeekShowWeekend'),
+                  title: TtSettingsText.weekShowWeekend,
+                  subtitle: TtSettingsText.weekShowWeekendSubtitle,
+                  value: a.widgetWeekShowWeekend,
                   onChanged: (v) => _saveSettingsAction(
                     context,
-                    () => a.setWidgetOption(option, v),
+                    () => a.setWeekWidgetShowWeekend(v),
                   ),
                 ),
-          ],
-        ),
-      ],
+              ],
+              for (final option in WidgetDisplayOption.values)
+                if (week
+                    ? (option == WidgetDisplayOption.teacher ||
+                          option == WidgetDisplayOption.period)
+                    : (!square ||
+                          option == WidgetDisplayOption.teacher ||
+                          option == WidgetDisplayOption.location))
+                  TimetableSettingsSwitchRow(
+                    key: Key('tt_settings_${option.field}'),
+                    title: option.title,
+                    value: a.widgetOption(option),
+                    onChanged: (v) => _saveSettingsAction(
+                      context,
+                      () => a.setWidgetOption(option, v),
+                    ),
+                  ),
+            ],
+          ),
+        ];
+      },
     );
   }
 }
+
+/// 设置页的小滑杆行；值在右侧，滑杆独占一行，避免窄屏挤压标题。
+class _WidgetSliderRow extends StatelessWidget {
+  const _WidgetSliderRow({
+    required this.title,
+    required this.valueLabel,
+    required this.valueKey,
+    required this.slider,
+  });
+
+  final String title;
+  final String valueLabel;
+  final Key valueKey;
+  final Widget slider;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: TimetableSettingsRow.textStyle(context),
+                ),
+              ),
+              Text(
+                valueLabel,
+                key: valueKey,
+                style: TimetableSettingsRow.textStyle(context)
+                    .copyWith(color: colors.labelText),
+              ),
+            ],
+          ),
+          slider,
+        ],
+      ),
+    );
+  }
+}
+
+/// 4×5 当周课表预览：示例内容走同一布局和颜色规则，不读取真实课程。
+class _WeekWidgetSettingsPreview extends StatelessWidget {
+  const _WeekWidgetSettingsPreview({
+    required this.settings,
+    required this.now,
+    required this.maxHeight,
+  });
+
+  final TimetableSettings settings;
+  final DateTime now;
+  final double maxHeight;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    final prefs = WeekWidgetPrefs.fromSettings(settings);
+    final week = WeekWidgetWeek(
+      start: weekWidgetMonday(now),
+      week: 7,
+      days: _previewWeekDays(now),
+    );
+    return Padding(
+      key: const Key('tt_settings_widget_preview'),
+      padding: const EdgeInsets.fromLTRB(28, 8, 28, 8),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = math.min(constraints.maxWidth, 360.0);
+          final height = width * 1.25;
+          final visibleHeight = math.min(height, math.max(0.0, maxHeight - 16));
+          if (visibleHeight == 0 ||
+              height <
+                  WeekWidgetGeometry.headerHeight +
+                      WeekWidgetGeometry.weekdayHeight) {
+            return const SizedBox.shrink();
+          }
+          final plan = planWeekWidget(
+            week: week,
+            periods: _previewWeekPeriods,
+            prefs: prefs,
+            widthDp: width,
+            heightDp: height,
+            today: now,
+          );
+          const radius = BorderRadius.all(
+            Radius.circular(TimetableTheme.cardRadius),
+          );
+          // 缩短窗口时等比缩放整卡，不改变字号基准、节次预算或裁掉顶栏。
+          return SizedBox(
+            height: visibleHeight,
+            child: FittedBox(
+              fit: BoxFit.contain,
+              child: SizedBox(
+                key: const Key('tt_widget_preview_4x5'),
+                width: width,
+                height: height,
+                child: ClipRRect(
+                  borderRadius: radius,
+                  child: DecoratedBox(
+                    key: const Key('tt_widget_preview_week_background'),
+                    decoration: BoxDecoration(
+                      color: prefs.background(colors),
+                      borderRadius: radius,
+                    ),
+                    child: _WeekWidgetPreviewGrid(plan: plan, prefs: prefs),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _WeekWidgetPreviewGrid extends StatelessWidget {
+  const _WeekWidgetPreviewGrid({required this.plan, required this.prefs});
+
+  final WeekWidgetPlan plan;
+  final WeekWidgetPrefs prefs;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    final geometry = plan.geometry;
+    final heading = TextStyle(
+      fontSize: 16,
+      fontWeight: FontWeight.w500,
+      color: prefs.componentColor(colors.titleText),
+    );
+    // 与原生桌面周次标注使用同一套 wg_t2 浅 / 深色。
+    final weekStyle = TimetableTheme.captionStyle(
+      color: prefs.componentColor(
+        colors.isDark ? const Color(0xFFAAB1C1) : const Color(0xFF5F6675),
+      ),
+    );
+    final height = geometry.rowHeight * plan.rows.length;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: WeekWidgetGeometry.headerHeight,
+          child: Padding(
+            padding: const EdgeInsets.only(
+              left: TimetableTheme.pagePaddingH,
+              right: 8,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _fitted(
+                    Text('当周课表', maxLines: 1, style: heading),
+                    alignment: Alignment.centerLeft,
+                  ),
+                ),
+                if (plan.weekLabel.isNotEmpty)
+                  Flexible(
+                    child: _fitted(
+                      Text(plan.weekLabel, maxLines: 1, style: weekStyle),
+                      alignment: Alignment.centerRight,
+                    ),
+                  ),
+                for (final icon in [Icons.arrow_forward, Icons.settings])
+                  SizedBox(
+                    width: 44,
+                    child: Icon(
+                      icon,
+                      size: 18,
+                      color: prefs.componentColor(colors.labelText),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        SizedBox(
+          height: WeekWidgetGeometry.weekdayHeight,
+          child: Row(
+            children: [
+              if (geometry.showTimeColumn)
+                SizedBox(
+                  width: geometry.timeColumnWidth,
+                  child: _fitted(
+                    Text(
+                      '${plan.month}月',
+                      style: TimetableTheme.microStyle(
+                        color: prefs.componentColor(colors.hint),
+                      ),
+                    ),
+                  ),
+                ),
+              for (final weekday in plan.weekdays)
+                Expanded(child: _dayHeader(weekday, colors)),
+            ],
+          ),
+        ),
+        if (plan.rows.isNotEmpty)
+          SizedBox(
+            height: height,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (geometry.showTimeColumn)
+                  SizedBox(
+                    width: geometry.timeColumnWidth,
+                    child: Column(
+                      children: [
+                        for (final row in plan.rows) _periodLabel(row, colors),
+                      ],
+                    ),
+                  ),
+                Expanded(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (prefs.showGridLines)
+                        CustomPaint(
+                          key: const Key('tt_widget_preview_week_grid'),
+                          painter: _WeekWidgetPreviewLines(
+                            plan,
+                            prefs.gridLine(colors),
+                          ),
+                        ),
+                      for (final (column, weekday) in plan.weekdays.indexed)
+                        for (final block in plan.blocks[weekday]!)
+                          _courseBlock(dpr, column, weekday, block, colors),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _dayHeader(int weekday, TimetableColors colors) {
+    final today = plan.todayWeekday == weekday;
+    final dot = plan.unplaced[weekday]?.firstOrNull;
+    return Container(
+      key: ValueKey('tt_widget_preview_week_header_$weekday'),
+      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      decoration: today
+          ? BoxDecoration(
+              color: prefs.componentColor(colors.accentSoft),
+              borderRadius: BorderRadius.circular(
+                TimetableTheme.todayHeaderRadius,
+              ),
+            )
+          : null,
+      child: _fitted(
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _weekdayShort(weekday),
+              style: TextStyle(
+                fontSize: prefs.headerTextSize,
+                fontWeight: FontWeight.w500,
+                height: 1.1,
+                color: prefs.componentColor(
+                  today ? colors.accent : colors.labelText,
+                ),
+              ),
+            ),
+            Text(
+              '${plan.dates[weekday]}',
+              style: TimetableTheme.microStyle(
+                color: prefs.componentColor(
+                  today ? colors.accent : colors.hint,
+                ),
+              ),
+            ),
+            if (dot != null) ...[
+              const SizedBox(height: 1),
+              Container(
+                width: 4,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: prefs.componentColor(Color(dot.barColor)),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _periodLabel(WeekWidgetRow row, TimetableColors colors) => SizedBox(
+    height: plan.geometry.rowHeight,
+    child: _fitted(
+      Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '${row.node}',
+            key: ValueKey('tt_widget_preview_week_number_${row.node}'),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              height: 1.05,
+              color: prefs.componentColor(colors.titleText),
+            ),
+          ),
+          if (row.period case final period?)
+            Text(
+              '${period.start}\n${period.end}',
+              key: ValueKey('tt_widget_preview_week_time_${row.node}'),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 9,
+                height: 1.05,
+                color: prefs.componentColor(colors.hint),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _courseBlock(
+    double dpr,
+    int column,
+    int weekday,
+    WeekWidgetBlock block,
+    TimetableColors colors,
+  ) {
+    final geometry = plan.geometry;
+    final margin = geometry.cellMargin;
+    final inset = geometry.cellPadding;
+    final area = TimetableTheme.snapDeviceRect(
+      left: column * geometry.cellWidth + margin,
+      top: (block.startNode - 1) * geometry.rowHeight + margin,
+      width: geometry.cellWidth - margin * 2,
+      height: block.span * geometry.rowHeight - margin * 2,
+      dpr: dpr,
+    );
+    if (area.width <= inset * 2 || area.height <= inset * 2) {
+      return const SizedBox.shrink();
+    }
+    final primary = block.primary;
+    final pair = TimetableTheme.autoCoursePair(
+      _previewColorIndex(primary.name),
+      dark: colors.isDark,
+    );
+    final bg = TimetableTheme.blendCellBg(
+      pair.bg,
+      prefs.opacity,
+      dark: colors.isDark,
+    );
+    final fg = TimetableTheme.cellTextFor(
+      TimetableTheme.readableCellText(bg, pair.fg),
+      prefs.cellTextColor,
+    );
+    final badge = switch (block.courses.length) {
+      > 1 => '${block.courses.length} 门',
+      _ when primary.weekTag == '单周' || primary.weekTag == '双周' =>
+        primary.weekTag,
+      _ => '',
+    };
+    return Positioned(
+      left: area.left,
+      top: area.top,
+      width: area.width,
+      height: area.height,
+      child: Material(
+        key: ValueKey(
+          'tt_widget_preview_week_cell_${weekday}_${block.startNode}',
+        ),
+        type: MaterialType.transparency,
+        child: Ink(
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(TimetableTheme.cellRadius),
+          ),
+          child: Builder(
+            builder: (context) {
+              final base = DefaultTextStyle.of(context).style;
+              final scaler = MediaQuery.textScalerOf(context);
+              final direction = Directionality.of(context);
+              final nameStyle = TimetableTheme.cellStyle(color: fg);
+              final subStyle = TimetableTheme.cellSubStyle(color: fg);
+              final locationStyle = TimetableTheme.cellLocationStyle(color: fg);
+              final actualWidth = area.width - inset * 2;
+              final actualHeight = area.height - inset * 2;
+              final sizes = TimetableTheme.cellTextSizesForWidth(
+                maxWidth: math.max(
+                  1.0,
+                  geometry.fontReferenceWidth(dpr) - inset * 2,
+                ),
+                nameStyle: base.merge(nameStyle),
+                factor: prefs.fontScale.factor,
+                minSize: geometry.minimumTextSize,
+                referenceText: geometry.compactText ? '课课课课' : '课课课',
+                textScaler: scaler,
+                textDirection: direction,
+              );
+              final minSize = geometry.minimumTextSize;
+              final scale = scaler.scale(1);
+              final minimum = scale > 0
+                  ? (minSize / scale).ceilToDouble()
+                  : minSize;
+              var location = primary.location.isEmpty
+                  ? ''
+                  : cellLocationText(primary.location);
+              if (location.isNotEmpty && geometry.compactText) {
+                final withoutMarker = cellLocationText(
+                  primary.location,
+                  showMarker: false,
+                );
+                final style = base
+                    .merge(locationStyle)
+                    .copyWith(fontSize: minimum);
+                int lines(String value) => TimetableTheme.measureText(
+                  value,
+                  style,
+                  maxWidth: actualWidth,
+                  scaler: scaler,
+                  direction: direction,
+                ).lines;
+                if (lines(location) > lines(withoutMarker)) {
+                  location = withoutMarker;
+                }
+              }
+              final teacher = prefs.showTeacher
+                  ? cellTeacherText(primary.teachers.join('，'))
+                  : '';
+              var badgeReserve = 0.0;
+              if (badge.isNotEmpty) {
+                final badgeSize = TimetableTheme.cellBadgeSize(
+                  context,
+                  badge,
+                  maxWidth: area.width,
+                );
+                final reserve = math.max(
+                  CourseCell.badgeReserve,
+                  badgeSize.height + 2,
+                );
+                final minNameHeight = TimetableTheme.measureText(
+                  '课',
+                  base.merge(nameStyle).copyWith(fontSize: minimum),
+                  maxWidth: actualWidth,
+                  scaler: scaler,
+                  direction: direction,
+                ).height;
+                final minLocationHeight = location.isNotEmpty
+                    ? TimetableTheme.measureText(
+                        location,
+                        base.merge(locationStyle).copyWith(fontSize: minimum),
+                        maxWidth: actualWidth,
+                        scaler: scaler,
+                        direction: direction,
+                      ).height
+                    : 0.0;
+                if (badgeSize.width <= area.width &&
+                    reserve + minNameHeight + minLocationHeight <=
+                        actualHeight) {
+                  badgeReserve = reserve;
+                }
+              }
+              CellContentPlan measure(String teacher) => planCellContent(
+                name: primary.name,
+                location: location,
+                teacher: teacher,
+                nameStyle: base.merge(nameStyle),
+                subStyle: base.merge(subStyle),
+                locationStyle: base.merge(locationStyle),
+                nameSize: sizes.nameSize,
+                subSize: sizes.subSize,
+                maxWidth: actualWidth,
+                maxHeight:
+                    actualHeight - badgeReserve - (teacher.isEmpty ? 0 : 1),
+                minSize: minSize,
+                maxTeacherGap: geometry.compactText ? 2 : double.infinity,
+                textScaler: scaler,
+                textDirection: direction,
+              );
+              final withTeacher = measure(teacher);
+              final text = withTeacher.showTeacher && !withTeacher.fits
+                  ? measure('')
+                  : withTeacher;
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    left: inset,
+                    right: inset,
+                    top: inset,
+                    bottom: inset + badgeReserve,
+                    child: ClipRect(
+                      child: OverflowBox(
+                        alignment: AlignmentDirectional.topStart,
+                        minHeight: 0,
+                        maxHeight: double.infinity,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            CourseNameText(
+                              name: primary.name,
+                              style: nameStyle.copyWith(
+                                fontSize: text.nameSize,
+                              ),
+                              maxWidth: actualWidth,
+                              maxLines: text.nameLines,
+                              laidOutText: text.laidOutName,
+                            ),
+                            if (location.isNotEmpty)
+                              Text(
+                                location,
+                                softWrap: true,
+                                overflow: TextOverflow.clip,
+                                style: locationStyle.copyWith(
+                                  fontSize: text.subSize,
+                                ),
+                              ),
+                            if (text.showTeacher) ...[
+                              SizedBox(height: text.teacherGap),
+                              Text(
+                                teacher,
+                                softWrap: true,
+                                overflow: TextOverflow.clip,
+                                style: subStyle.copyWith(
+                                  fontSize: text.subSize,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (badgeReserve > 0)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 3,
+                      child: Center(
+                        child: SchedulePill(text: badge, color: fg),
+                      ),
+                    ),
+                  if (block.courses.length > 1)
+                    Positioned(
+                      top: inset,
+                      right: inset,
+                      child: Container(
+                        width: TimetableTheme.conflictDotSize,
+                        height: TimetableTheme.conflictDotSize,
+                        decoration: BoxDecoration(
+                          color: fg,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  static Widget _fitted(
+    Widget child, {
+    Alignment alignment = Alignment.center,
+  }) => Align(
+    alignment: alignment,
+    child: FittedBox(fit: BoxFit.scaleDown, child: child),
+  );
+}
+
+class _WeekWidgetPreviewLines extends CustomPainter {
+  _WeekWidgetPreviewLines(this.plan, this.color);
+
+  final WeekWidgetPlan plan;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const strokeWidth = 1.0;
+    final lines = Path();
+    for (var i = 0; i <= plan.rows.length; i++) {
+      final y = (i * plan.geometry.rowHeight - strokeWidth / 2)
+          .clamp(0.0, math.max(0.0, size.height - strokeWidth))
+          .toDouble();
+      lines.addRect(Rect.fromLTWH(0, y, size.width, strokeWidth));
+    }
+    for (var i = 0; i < plan.weekdays.length; i++) {
+      final x = i * plan.geometry.cellWidth;
+      lines.addRect(Rect.fromLTWH(x, 0, strokeWidth, size.height));
+    }
+    // 一次上色，交点不会因为多画一层而比线条更不透明。
+    canvas.drawPath(
+      lines,
+      Paint()
+        ..color = color
+        ..isAntiAlias = false,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_WeekWidgetPreviewLines old) =>
+      color != old.color ||
+      plan.geometry.cellWidth != old.plan.geometry.cellWidth ||
+      plan.geometry.rowHeight != old.plan.geometry.rowHeight ||
+      plan.rows.length != old.plan.rows.length ||
+      plan.weekdays.length != old.plan.weekdays.length;
+}
+
+final _previewWeekPeriods = [
+  for (final period in TimetableController.defaultPeriods())
+    WeekWidgetPeriod(node: period.node, start: period.start, end: period.end),
+];
+
+List<WeekWidgetDay> _previewWeekDays(DateTime now) {
+  final monday = weekWidgetMonday(now);
+  final courses = <int, List<NotifyClass>>{
+    1: [
+      _previewCourse(monday, 1, '高等数学 A', '示例教室 A101', 1, 2, '单周'),
+      _previewCourse(monday, 1, '大学物理', '示例教室 B203', 5, 6),
+    ],
+    2: [_previewCourse(monday, 2, '大学英语', '示例教室 C102', 3, 4)],
+    3: [
+      _previewCourse(monday, 3, '程序设计', '示例机房 D401', 1, 2),
+      _previewCourse(monday, 3, '体育', '示例操场', 7, 8),
+    ],
+    4: [
+      _previewCourse(monday, 4, '大学物理', '示例教室 B203', 5, 6),
+      _previewCourse(monday, 4, '物理实验', '示例教室 A103', 6, 6),
+    ],
+    5: [
+      _previewCourse(monday, 5, '高等数学 A', '示例教室 A101', 1, 2),
+      _previewCourse(monday, 5, '大学英语', '示例教室 C102', 3, 4),
+    ],
+    6: [_previewCourse(monday, 6, '选修课', '示例教室 E105', 3, 4)],
+  };
+  return [
+    for (var index = 0; index < 7; index++)
+      WeekWidgetDay(
+        date: DateTime(monday.year, monday.month, monday.day + index),
+        weekday: index + 1,
+        items: courses[index + 1] ?? const [],
+      ),
+  ];
+}
+
+NotifyClass _previewCourse(
+  DateTime monday,
+  int weekday,
+  String name,
+  String location,
+  int startNode,
+  int endNode, [
+  String weekTag = '',
+]) {
+  final startPeriod = _previewWeekPeriods.firstWhere(
+    (period) => period.node == startNode,
+  );
+  final endPeriod = _previewWeekPeriods.firstWhere(
+    (period) => period.node == endNode,
+  );
+  final date = DateTime(monday.year, monday.month, monday.day + weekday - 1);
+  return NotifyClass(
+    name: name,
+    location: location,
+    teachers: const ['示例教师'],
+    start: _previewClock(date, startPeriod.start),
+    end: _previewClock(date, endPeriod.end),
+    startNode: startNode,
+    endNode: endNode,
+    weekTag: weekTag,
+  );
+}
+
+DateTime _previewClock(DateTime day, String hhmm) {
+  final parts = hhmm.split(':');
+  return DateTime(
+    day.year,
+    day.month,
+    day.day,
+    int.parse(parts[0]),
+    int.parse(parts[1]),
+  );
+}
+
+int _previewColorIndex(String name) => switch (name) {
+  '高等数学 A' => 0,
+  '大学英语' => 1,
+  '程序设计' => 2,
+  '大学物理' => 3,
+  '体育' => 4,
+  _ => 5,
+};
+
+String _weekdayShort(int weekday) =>
+    const ['一', '二', '三', '四', '五', '六', '日'][weekday - 1];
 
 /// 仅由添加失败或指定桌面的添加请求打开，步骤内容可滚动，确认按钮保留在底部。
 class _WidgetPinGuideSheet extends StatelessWidget {
   const _WidgetPinGuideSheet({
     required this.result,
-    required this.square,
+    required this.size,
     this.settingsUnavailable = false,
   });
 
   final WidgetPinResult result;
-  final bool square;
+  final WidgetPinSize size;
   final bool settingsUnavailable;
 
   @override
@@ -641,7 +1468,7 @@ class _WidgetPinGuideSheet extends StatelessWidget {
     final permissionPrompt = permission && !settingsUnavailable;
     final steps = TtSettingsText.pinWidgetSteps(
       result,
-      square: square,
+      size: size,
       settingsUnavailable: settingsUnavailable,
     );
     final bodyStyle = TimetableTheme.bodyStyle(color: colors.labelText)
@@ -857,10 +1684,12 @@ class _SettingsSubpage extends StatelessWidget {
     required this.title,
     required this.controller,
     required this.children,
+    this.pinnedAfterFirst,
   });
   final String title;
   final TimetableController controller;
   final List<Widget> Function() children;
+  final Widget Function(double maxHeight)? pinnedAfterFirst;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -874,10 +1703,32 @@ class _SettingsSubpage extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 600),
           child: ListenableBuilder(
             listenable: controller,
-            builder: (context, _) => ListView(
-              padding: const EdgeInsets.only(bottom: 24),
-              children: children(),
-            ),
+            builder: (context, _) {
+              final content = children();
+              final preview = pinnedAfterFirst;
+              if (preview == null) {
+                return ListView(
+                  padding: const EdgeInsets.only(bottom: 24),
+                  children: content,
+                );
+              }
+              return LayoutBuilder(
+                builder: (context, constraints) => CustomScrollView(
+                  slivers: [
+                    SliverToBoxAdapter(child: content.first),
+                    PinnedHeaderSliver(
+                      child: ColoredBox(
+                        color: TimetableTheme.colorsOf(context).pageBg,
+                        child: preview(constraints.maxHeight * 0.6),
+                      ),
+                    ),
+                    for (final child in content.skip(1))
+                      SliverToBoxAdapter(child: child),
+                    const SliverToBoxAdapter(child: SizedBox(height: 24)),
+                  ],
+                ),
+              );
+            },
           ),
         ),
       ),

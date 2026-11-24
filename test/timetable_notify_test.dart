@@ -70,11 +70,23 @@ void main() {
       for (final result in WidgetPinResult.values) {
         messenger.setMockMethodCallHandler(channel, (call) async {
           expect(call.method, 'pinWidget');
-          expect(call.arguments, {'square': true});
+          expect(call.arguments, {'size': 'square'});
           return result.name;
         });
-        expect(await bridge.pinWidget(square: true), result);
+        expect(await bridge.pinWidget(size: WidgetPinSize.square), result);
       }
+    });
+
+    test('4×5 当周课表传递 week 尺寸', () async {
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        expect(call.method, 'pinWidget');
+        expect(call.arguments, {'size': 'week'});
+        return WidgetPinResult.requested.name;
+      });
+      expect(
+        await bridge.pinWidget(size: WidgetPinSize.week),
+        WidgetPinResult.requested,
+      );
     });
 
     test('原生失败保留方法与原因，且不记录小组件正文', () async {
@@ -138,12 +150,21 @@ void main() {
           if (response is PlatformException) throw response;
           return response;
         });
-        expect(await bridge.pinWidget(square: false), WidgetPinResult.manual);
+        expect(
+          await bridge.pinWidget(size: WidgetPinSize.wide),
+          WidgetPinResult.manual,
+        );
       }
       messenger.setMockMethodCallHandler(channel, null);
-      expect(await bridge.pinWidget(square: false), WidgetPinResult.manual);
+      expect(
+        await bridge.pinWidget(size: WidgetPinSize.wide),
+        WidgetPinResult.manual,
+      );
       TimetableNotifyBridge.debugIsAndroid = false;
-      expect(await bridge.pinWidget(square: false), WidgetPinResult.manual);
+      expect(
+        await bridge.pinWidget(size: WidgetPinSize.wide),
+        WidgetPinResult.manual,
+      );
     });
   });
 
@@ -979,6 +1000,45 @@ void main() {
       expect(TimetableSettings.fromJson(json).widgetShowCountdown, isFalse);
     });
 
+    test('4×5 设置保存后立即刷新共享 payload 的 week 段', () async {
+      final b = _FakeBridge();
+      final s = svc(b);
+      final old = s.currentWidgetPayload();
+      await s.setWeekWidgetOpacity(60);
+      await s.setWeekWidgetSurfaceOpacity(70);
+      await s.setWeekWidgetShowWeekend(true);
+      expect(b.widgets, hasLength(3));
+      Map weekPrefs(Map payload) => (payload['week'] as Map)['prefs'] as Map;
+      expect(weekPrefs(b.widgets.first)['opacity'], 60);
+      expect(weekPrefs(b.widgets.first)['showWeekend'], isFalse);
+      expect(weekPrefs(b.widgets.first)['widgetOpacity'], 100);
+      expect(weekPrefs(b.widgets.last)['showWeekend'], isTrue);
+      expect(weekPrefs(b.widgets.last)['opacity'], 60);
+      expect(weekPrefs(b.widgets.last)['widgetOpacity'], 70);
+      expect(c.settings.widgetWeekOpacity, 60);
+      expect(c.settings.widgetWeekWidgetOpacity, 70);
+      expect(c.settings.widgetWeekShowWeekend, isTrue);
+      expect(b.widgets.last['version'], old['version']);
+      expect(b.widgets.last['days'], old['days']);
+      expect(b.widgets.last['prefs'], old['prefs']);
+      await s.setWeekWidgetOpacity(5);
+      await s.setWeekWidgetShowWeekend(false);
+      expect(c.settings.widgetWeekOpacity, 30);
+      expect(weekPrefs(b.widgets.last)['opacity'], 30);
+      expect(weekPrefs(b.widgets.last)['widgetOpacity'], 70);
+      expect(weekPrefs(b.widgets.last)['showWeekend'], isFalse);
+
+      await s.setWidgetShowLocation(false);
+      final payload = b.widgets.last;
+      final today = (payload['days'] as List).first as Map;
+      final week = ((payload['week'] as Map)['weeks'] as List).first as Map;
+      final monday = (week['days'] as List).first as Map;
+      expect((payload['prefs'] as Map)['showLocation'], isFalse);
+      expect((today['items'] as List).single['location'], isEmpty);
+      expect(weekPrefs(payload)['showLocation'], isTrue);
+      expect((monday['items'] as List).single['location'], '教一-101');
+    });
+
     test('widgetCourseCount 读取：1–3 原样，其他回落 2；旧 widgetShowUpcoming 忽略', () {
       TimetableSettings parse(Object? v) => TimetableSettings.fromJson({
         'widgetCourseCount': v,
@@ -1109,6 +1169,68 @@ void main() {
       expect(p['state'], 'ok');
     });
 
+    test('小组件 payload 新增 week 段：顶层版本不变，本周与下周各一份', () {
+      final p = svc(_FakeBridge()).currentWidgetPayload();
+      expect(p['version'], 1);
+      final week = p['week'] as Map;
+      expect((week['prefs'] as Map)['showWeekend'], isFalse);
+      expect(week['termStartMissing'], isFalse);
+      expect(week['periods'], isNotEmpty);
+      final weeks = week['weeks'] as List;
+      expect(weeks, hasLength(2));
+      expect((weeks.first as Map)['start'], '2026-09-07');
+      expect((weeks.last as Map)['start'], '2026-09-14');
+      final days = (weeks.first as Map)['days'] as List;
+      expect(days, hasLength(7));
+      final monday = days.first as Map;
+      expect(monday['date'], '2026-09-07');
+      final item = (monday['items'] as List).first as Map;
+      expect(item['name'], '高数');
+      expect(item['nodes'], '第1-2节');
+      expect(item['start'], '2026-09-07T08:00');
+      expect(item['weekTag'], '第1–16周');
+    });
+
+    test('无开学日不是无课：只在 week 段明确标记', () {
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          periods: TimetableController.defaultPeriods(),
+          syncedAt: mon2,
+        ),
+      );
+      final p = svc(_FakeBridge()).currentWidgetPayload();
+      final week = p['week'] as Map;
+      expect(week['termStartMissing'], isTrue);
+      expect((week['weeks'] as List).first['week'], isNull);
+      expect(p.containsKey('termStartMissing'), isFalse);
+      expect(p['state'], 'ok');
+    });
+
+    test('共享缓存带毫秒同步时间，恰好七天可用、超过七天过期', () {
+      final sevenDaysAgo = mon2.subtract(const Duration(days: 7));
+      Map<String, Object?> currentPayload(DateTime syncedAt) {
+        c.debugSetSnapshot(
+          TimetableSnapshot(
+            periods: TimetableController.defaultPeriods(),
+            settings: TimetableSettings(termStartDate: termStart),
+            syncedAt: syncedAt,
+          ),
+        );
+        return svc(_FakeBridge()).currentWidgetPayload();
+      }
+
+      final fresh = currentPayload(sevenDaysAgo);
+      final staleSync = sevenDaysAgo.subtract(const Duration(milliseconds: 1));
+      final stale = currentPayload(staleSync);
+      expect(fresh['state'], 'ok');
+      expect(stale['state'], 'needsUpdate');
+      expect(stale['hasCache'], isTrue);
+      expect(stale['lastSyncedAt'], staleSync.millisecondsSinceEpoch);
+      final week = stale['week'] as Map;
+      expect(week['termStartMissing'], isFalse);
+      expect((week['weeks'] as List).first['start'], '2026-09-07');
+    });
+
     test('小组件按时间混排课程、考试与其他日程，并携带类型', () async {
       await c.addScheduleEvent(
         ScheduleEvent(
@@ -1144,6 +1266,18 @@ void main() {
       expect(items.first['location'], '社团活动室');
       expect(items.first['nodes'], isEmpty);
       expect(items.last['location'], '教二-201');
+      final week = (payload['week'] as Map)['weeks'] as List;
+      final monday = (week.first['days'] as List).first as Map;
+      final weekItems = (monday['items'] as List).cast<Map>();
+      expect(
+        weekItems.map((item) => item['name']),
+        items.map((item) => item['name']),
+      );
+      expect(
+        [weekItems.first['startNode'], weekItems.first['endNode']],
+        [0, 0],
+      );
+      expect([weekItems.last['startNode'], weekItems.last['endNode']], [3, 4]);
     });
 
     test('关闭显示考试只隐藏考试，其他日程仍进入小组件', () async {

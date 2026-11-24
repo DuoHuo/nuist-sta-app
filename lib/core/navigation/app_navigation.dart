@@ -125,6 +125,10 @@ class AppNavigationController extends ChangeNotifier {
   /// 分支中是否存在详情页（普通对话框不改变底栏布局）。
   bool hasDetails(int index) => _branchObservers[index].hasDetails;
 
+  /// 分支实际最上层路由，包含 GoRouter 地址不反映的本地子页或弹层。
+  Route<dynamic>? topRouteInBranch(int index) =>
+      _branchObservers[index]._routes.lastOrNull;
+
   /// 可见分支或全局弹层需要处理返回时，由 Flutter 接管 Android 系统返回。
   bool get canHandleBack =>
       _rootObserver.hasRouteAboveRoot || _backBranch != null;

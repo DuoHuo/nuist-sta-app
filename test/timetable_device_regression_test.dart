@@ -18,6 +18,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_bridge.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_plan.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_service.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_timing.dart';
 
@@ -246,6 +247,42 @@ void main() {
       hasLength(1),
     );
     await open('/apps/timetable?focus=tomorrow');
+    final nextWeek = (ctl.currentWeek + 1).clamp(1, ctl.totalWeeks);
+    await open('/apps/timetable?week=next');
+    expect(ctl.viewingWeek, nextWeek);
+    ctl.setViewingWeek(nextWeek == 1 ? 2 : 1);
+    await tester.pumpAndSettle();
+    await open('/apps/timetable?week=next');
+    expect(ctl.viewingWeek, nextWeek);
+
+    await tester.tap(find.byKey(const Key('timetable_settings_button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TimetableWidgetSettingsPage>(
+            find.byType(TimetableWidgetSettingsPage),
+          )
+          .initialSize,
+      WidgetPinSize.wide,
+    );
+    await open('/apps/timetable?open=widgetSettings');
+    final settings = find.byType(TimetableWidgetSettingsPage);
+    expect(settings, findsOneWidget);
+    expect(
+      tester.widget<TimetableWidgetSettingsPage>(settings).initialSize,
+      WidgetPinSize.week,
+    );
+    final settingsContext = tester.element(settings);
+    expect(
+      (ModalRoute.of(settingsContext)! as PageRoute).popGestureEnabled,
+      isTrue,
+    );
+    await open('/apps/timetable?week=next');
+    expect(settings, findsNothing);
+    expect(find.byType(TimetablePage), findsOneWidget);
+    expect(ctl.viewingWeek, nextWeek);
     expect(
       _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
       hasLength(1),
@@ -256,6 +293,43 @@ void main() {
     expect(context.mounted, isTrue);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets('冷启动齿轮直接打开当周小组件设置，返回依次回到课表和首页', (tester) async {
+    const path = '/apps/timetable?open=widgetSettings';
+    tester.platformDispatcher.defaultRouteNameTestValue = path;
+    TimetableNotifyBridge.debugIsAndroid = true;
+    const channel = MethodChannel('dev.duohuo.nuist_sta_app/notify_widget');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final launch = Completer<String?>();
+    messenger.setMockMethodCallHandler(
+      channel,
+      (call) async => call.method == 'takeLaunchRoute' ? launch.future : null,
+    );
+    addTearDown(() {
+      if (!launch.isCompleted) launch.complete(null);
+      messenger.setMockMethodCallHandler(channel, null);
+      tester.platformDispatcher.clearDefaultRouteNameTestValue();
+    });
+    load(TimetableParser.parseKbRows([row(1, 2)]).courses);
+    await tester.pumpWidget(const NuistApp());
+    await tester.pumpAndSettle();
+    final settings = find.byType(TimetableWidgetSettingsPage);
+    expect(
+      tester.widget<TimetableWidgetSettingsPage>(settings).initialSize,
+      WidgetPinSize.week,
+    );
+    launch.complete(path);
+    await tester.pumpAndSettle();
+    Navigator.of(tester.element(settings)).pop();
+    await tester.pumpAndSettle();
+    expect(settings, findsNothing);
+    final timetable = find.byType(TimetablePage);
+    expect(timetable, findsOneWidget);
+    Navigator.of(tester.element(timetable)).pop();
+    await tester.pumpAndSettle();
+    expect(find.byType(HomePage), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   for (final theme in [ThemeMode.light, ThemeMode.dark]) {
     testWidgets('冷小组件初始路由首帧显示课表且不等待平台回执，${theme.name} 保留首页返回栈', (tester) async {

@@ -10,6 +10,8 @@ import 'timetable_notify_plan.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_layout.dart';
 import 'timetable_theme.dart';
+import 'timetable_week_format.dart';
+import 'timetable_week_widget_layout.dart';
 
 /// 上课提醒 + 桌面小组件的编排层：从 [TimetableController] 取课，算好后交给原生。
 ///
@@ -163,6 +165,31 @@ class TimetableNotifyService {
     ),
   );
 
+  // ---- 当周课表小组件设置 ----
+
+  /// 周课表的显示设置，预览与原生端共用。
+  WeekWidgetPrefs weekWidgetPrefs() =>
+      WeekWidgetPrefs.fromSettings(_ctl.settings);
+
+  bool get widgetWeekShowWeekend => _ctl.settings.widgetWeekShowWeekend;
+
+  Future<void> setWeekWidgetOpacity(int value) => _setWidgetPref(
+    _ctl.settingsForEditing.copyWith(
+      widgetWeekOpacity: TimetableSettings.sanitizeOpacity(value),
+    ),
+  );
+
+  /// 只修改周组件框架不透明度，不修改课程设置。
+  Future<void> setWeekWidgetSurfaceOpacity(int value) => _setWidgetPref(
+    _ctl.settingsForEditing.copyWith(
+      widgetWeekWidgetOpacity: TimetableSettings.sanitizeOpacity(value),
+    ),
+  );
+
+  Future<void> setWeekWidgetShowWeekend(bool value) => _setWidgetPref(
+    _ctl.settingsForEditing.copyWith(widgetWeekShowWeekend: value),
+  );
+
   // ---- 权限 ----
 
   Future<NotifyPermissionStatus> permissionStatus() =>
@@ -186,8 +213,8 @@ class TimetableNotifyService {
     return _bridge.openNotificationSettings();
   }
 
-  Future<WidgetPinResult> pinWidget({required bool square}) =>
-      _bridge.pinWidget(square: square);
+  Future<WidgetPinResult> pinWidget({required WidgetPinSize size}) =>
+      _bridge.pinWidget(size: size);
 
   /// 确认权限说明后打开系统设置。
   Future<bool> openWidgetShortcutSettings() =>
@@ -243,9 +270,26 @@ class TimetableNotifyService {
       teachers: widgetTeachers(item.slot.teacher),
       startNode: item.slot.startNode,
       endNode: item.slot.endNode,
+      weekTag: _widgetWeekTag(item.slot),
       barColor: coursePairFor(_ctl, item.course).bg.toARGB32(),
       barColorDark: coursePairFor(_ctl, item.course, dark: true).bg.toARGB32(),
     );
+  }
+
+  String _widgetWeekTag(CourseSlot slot) {
+    switch (slot.displayParity) {
+      case WeekParity.odd:
+        return '单周';
+      case WeekParity.even:
+        return '双周';
+      case WeekParity.all:
+        final weeks = weeksFromBits(slot.weeks);
+        if (weeks.isEmpty ||
+            (weeks.first == 1 && weeks.length >= _ctl.totalWeeks)) {
+          return '';
+        }
+        return formatWeeks(weeks, maxSegments: 1).replaceAll(' ', '');
+    }
   }
 
   NotifyClass _widgetEvent(DateTime date, ScheduleEvent event) {
@@ -336,7 +380,7 @@ class TimetableNotifyService {
         itemsByDate[date] ??= widgetItemsOn(date);
     NotifyClass? tomorrowFirst(DateTime date) =>
         itemsOn(DateTime(date.year, date.month, date.day + 1)).firstOrNull;
-    return buildWidgetPayload(
+    final payload = buildWidgetPayload(
       now: now,
       classesOn: itemsOn,
       weekOf: _ctl.actualWeek,
@@ -347,6 +391,23 @@ class TimetableNotifyService {
       tomorrowFirst: tomorrowFirst(now),
       tomorrowFirstOn: tomorrowFirst,
     );
+    // 顶层 version 保持 1；周课表只新增 week 段，旧版原生忽略即可。
+    payload['week'] = buildWeekWidgetPayload(
+      now: now,
+      termStartMissing: _ctl.weekPending,
+      prefs: weekWidgetPrefs(),
+      periods: [
+        for (final period in _ctl.periods)
+          WeekWidgetPeriod(
+            node: period.node,
+            start: period.start,
+            end: period.end,
+          ),
+      ],
+      weekOf: _ctl.actualWeek,
+      itemsOn: itemsOn,
+    );
+    return payload;
   }
 
   Object _rescheduleFingerprint() {
@@ -373,6 +434,15 @@ class TimetableNotifyService {
       s.widgetShowCount,
       s.widgetShowPeriod,
       s.widgetCourseCount,
+      s.widgetWeekOpacity,
+      s.widgetWeekWidgetOpacity,
+      s.widgetWeekShowWeekend,
+      s.nodesPerDay,
+      s.weekStartsSunday,
+      s.showGridLines,
+      s.headerTextSize,
+      s.fontScale,
+      s.cellTextColor,
       _ctl.portalBound,
       _ctl.hasReminderScheduleSource,
       synced,

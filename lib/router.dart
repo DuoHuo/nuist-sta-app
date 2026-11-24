@@ -38,6 +38,11 @@ class TimetableLaunchExtra {
   final int? focusToken;
 }
 
+/// 桌面周组件的热启动操作可以按相同地址重复触发。
+class TimetableWidgetLaunchRequest extends TimetableLaunchExtra {
+  TimetableWidgetLaunchRequest({super.focusToken});
+}
+
 bool isTimetableDirectLaunch(Object? extra) =>
     extra == timetableDirectLaunch || extra is TimetableLaunchExtra;
 
@@ -187,6 +192,12 @@ List<GoRoute> _detailRoutes({
             ? TimetablePage(
                 focusTomorrow: state.uri.queryParameters['focus'] == 'tomorrow',
                 focusTomorrowToken: focusToken,
+                focusNextWeek: state.uri.queryParameters['week'] == 'next',
+                openWidgetSettings:
+                    state.uri.queryParameters['open'] == 'widgetSettings',
+                widgetLaunchRequest: launchExtra is TimetableWidgetLaunchRequest
+                    ? launchExtra
+                    : null,
                 focusEvent: launchExtra is ScheduleEvent ? launchExtra : null,
               )
             : manifest.entry!(context);

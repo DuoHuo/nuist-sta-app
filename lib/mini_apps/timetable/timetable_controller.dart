@@ -1556,6 +1556,11 @@ class TimetableController extends ChangeNotifier {
     'widgetShowCount',
     'widgetShowPeriod',
     'widgetCourseCount',
+    'widgetWeekCellHeight',
+    'widgetWeekFontSize',
+    'widgetWeekOpacity',
+    'widgetWeekCompactRows',
+    'widgetWeekShowWeekend',
   };
 
   /// 保存本次真正改动的设置；失败时恢复最后成功保存的状态。

@@ -24,6 +24,7 @@ class NotifyClass {
     this.barColor = 0xFF2196F3,
     this.barColorDark = 0xFF2196F3,
     this.kind = WidgetItemKind.course,
+    this.weekTag = '',
   });
 
   final String name;
@@ -45,6 +46,9 @@ class NotifyClass {
 
   /// 原生端据此显示“考试 / 日程”标识；旧 payload 缺失时按课程处理。
   final WidgetItemKind kind;
+
+  /// 当周小组件大列显示的单双周或阶段；今日小组件不使用。
+  final String weekTag;
 
   /// `第3-4节 10:10-11:50`：节次 + 时段（小组件副行，永不省略）。
   String get periodTime => [
