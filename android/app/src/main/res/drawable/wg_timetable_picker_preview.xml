@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 今日课表：日期、两行课程卡片及右侧的倒计时和上课时间；横条表示示例文字。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="256dp"
+    android:height="120dp"
+    android:viewportWidth="256"
+    android:viewportHeight="120">
+    <path
+        android:fillColor="@color/wg_bg"
+        android:pathData="M20,0h216q20,0 20,20v80q0,20 -20,20H20q-20,0 -20,-20V20q0,-20 20,-20z" />
+    <path
+        android:fillColor="@color/wg_chip"
+        android:pathData="M20,28h216q10,0 10,10v19q0,10 -10,10H20q-10,0 -10,-10V38q0,-10 10,-10z M20,72h216q10,0 10,10v19q0,10 -10,10H20q-10,0 -10,-10V82q0,-10 10,-10z" />
+    <path
+        android:fillColor="@color/wg_t2"
+        android:pathData="M10,16h46v5H10z M202,17h25v4h-25z" />
+    <path
+        android:fillColor="@color/wg_weekday"
+        android:pathData="M232,17h14v4h-14z" />
+    <path
+        android:fillColor="@color/wg_acc"
+        android:pathData="M20,33q2,0 2,2v25q0,2 -2,2t-2,-2V35q0,-2 2,-2z M20,77q2,0 2,2v25q0,2 -2,2t-2,-2V79q0,-2 2,-2z M214,38h24v4h-24z M194,47h44v8h-44z" />
+    <path
+        android:fillColor="@color/wg_t1"
+        android:pathData="M30,35h75v6H30z M30,79h60v6H30z M205,91h33v7h-33z" />
+    <path
+        android:fillColor="@color/wg_t3"
+        android:pathData="M30,46h52v4H30z M30,55h45v4H30z M30,90h55v4H30z M30,99h46v4H30z M222,82h16v4h-16z" />
+</vector>
