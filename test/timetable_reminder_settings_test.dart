@@ -223,9 +223,14 @@ void main() {
   });
 
   testWidgets('通知权限被拒：提示 + 去设置打开通知设置', (tester) async {
+    await tester.runAsync(
+      () => _c.updateSettings(
+        _c.settings.copyWith(nextDayReminderEnabled: false),
+      ),
+    );
     final a = _FakeActions(_perm(notif: false));
     await pump(tester, a);
-    // 提醒关着不提示。
+    // 所有提醒均关着不提示。
     expect(
       find.byKey(const Key('tt_settings_reminder_permission')),
       findsNothing,
@@ -235,6 +240,42 @@ void main() {
     expect(find.text(TtSettingsText.permissionNotification), findsOneWidget);
     await tester.tap(find.byKey(const Key('tt_settings_reminder_goto')));
     expect(a.calls.last, 'notif');
+  });
+
+  testWidgets('仅开启前一晚提醒且通知权限被拒时，仍显示权限提示与去设置按钮', (tester) async {
+    expect(_c.settings.reminderEnabled, isFalse);
+    expect(_c.settings.nextDayReminderEnabled, isTrue);
+    final a = _FakeActions(_perm(notif: false));
+    await pump(tester, a);
+    expect(
+      find.byKey(const Key('tt_settings_reminder_permission')),
+      findsOneWidget,
+    );
+    expect(find.text(TtSettingsText.permissionNotification), findsOneWidget);
+    await tester.tap(find.byKey(const Key('tt_settings_reminder_goto')));
+    expect(a.calls.last, 'notif');
+
+    // 仅前一晚提醒开启时，仅缺精确闹钟权限不显示提示。
+    expect(
+      reminderPermissionHint(_perm(notif: true, exact: false), false),
+      isNull,
+    );
+    expect(
+      reminderPermissionHint(
+        _perm(notif: true, exact: false),
+        false,
+        nextDayEnabled: true,
+      ),
+      isNull,
+    );
+    expect(
+      reminderPermissionHint(
+        _perm(notif: false, exact: true),
+        false,
+        nextDayEnabled: true,
+      ),
+      TtSettingsText.permissionNotification,
+    );
   });
 
   testWidgets('精确闹钟被拒：提示 + 去设置打开闹钟授权页；回前台刷新', (tester) async {

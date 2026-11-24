@@ -442,6 +442,13 @@ class TimetableController extends ChangeNotifier {
   bool get _loggedInForReminder =>
       _portalBound || primaryScheduleMeta?.isImportedSchedule == true;
 
+  /// 当前主课表是否有可用作课表提醒的数据源（已绑定门户，或主课表为导入课表）。
+  bool get hasReminderScheduleSource => _loggedInForReminder;
+
+  /// 当前控制器或其宿主是否为 [TimetableController.instance]。
+  bool get isAttachedToPrimaryHost =>
+      identical(_manager ?? this, TimetableController.instance);
+
   Object _nextDayReminderInputs() {
     final now = syncClock();
     return (
@@ -453,6 +460,7 @@ class TimetableController extends ChangeNotifier {
       _daySwaps,
       _dateEdits,
       settings.termStartDate,
+      settings.maxWeeks,
       _loggedInForReminder,
       settings.nextDayReminderEnabled,
       settings.nextDayReminderMinute,

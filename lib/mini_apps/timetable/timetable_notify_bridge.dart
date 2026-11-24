@@ -81,8 +81,11 @@ class TimetableNotifyBridge {
         !Platform.environment.containsKey('FLUTTER_TEST');
   }
 
-  Future<T?> _call<T>(String method, [Object? args]) async {
-    if (!_android) return null;
+  Future<({bool ok, T? value})> _callWithStatus<T>(
+    String method, [
+    Object? args,
+  ]) async {
+    if (!_android) return (ok: true, value: null);
     final watch = Stopwatch()..start();
     try {
       final result = await _channel.invokeMethod<T>(method, args);
@@ -110,7 +113,7 @@ class TimetableNotifyBridge {
           'duration_ms': watch.elapsedMilliseconds,
         },
       );
-      return result;
+      return (ok: true, value: result);
     } on MissingPluginException catch (error, stackTrace) {
       AppLog.reportOutcome('degraded', reason: 'platform_unavailable');
       _log.debug(
@@ -119,7 +122,7 @@ class TimetableNotifyBridge {
         error: error,
         stackTrace: stackTrace,
       );
-      return null;
+      return (ok: false, value: null);
     } on PlatformException catch (error, stackTrace) {
       AppLog.reportOutcome('degraded', reason: 'native_call_failed');
       _log.warning(
@@ -132,14 +135,18 @@ class TimetableNotifyBridge {
         error: error,
         stackTrace: stackTrace,
       );
-      return null;
+      return (ok: false, value: null);
     }
   }
 
+  Future<T?> _call<T>(String method, [Object? args]) async =>
+      (await _callWithStatus<T>(method, args)).value;
+
   /// 用新列表替换全部已排提醒（空列表 = 全部取消）。
-  Future<void> scheduleReminders(List<Map<String, Object?>> alarms) async {
-    await _call<Object?>('scheduleReminders', {'alarms': jsonEncode(alarms)});
-  }
+  Future<bool> scheduleReminders(List<Map<String, Object?>> alarms) async =>
+      (await _callWithStatus<Object?>('scheduleReminders', {
+        'alarms': jsonEncode(alarms),
+      })).ok;
 
   /// 取消全部提醒。
   Future<void> cancelReminders() async {
@@ -147,8 +154,10 @@ class TimetableNotifyBridge {
   }
 
   /// 写入小组件数据并立即刷新所有小组件实例。
-  Future<void> updateWidget(Map<String, Object?> payload) =>
-      _call<void>('updateWidget', {'payload': jsonEncode(payload)});
+  Future<bool> updateWidget(Map<String, Object?> payload) async =>
+      (await _callWithStatus<void>('updateWidget', {
+        'payload': jsonEncode(payload),
+      })).ok;
 
   /// 当前权限状态。
   Future<NotifyPermissionStatus> permissionStatus() async {

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_import_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_bridge.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_plan.dart';
@@ -26,17 +27,23 @@ class _FakeBridge extends TimetableNotifyBridge {
   final scheduled = <List<Map<String, Object?>>>[];
   final widgets = <Map<String, Object?>>[];
   int cancels = 0;
+  bool scheduleResult = true;
+  bool widgetResult = true;
 
   @override
-  Future<void> scheduleReminders(List<Map<String, Object?>> alarms) async =>
-      scheduled.add(alarms);
+  Future<bool> scheduleReminders(List<Map<String, Object?>> alarms) async {
+    scheduled.add(alarms);
+    return scheduleResult;
+  }
 
   @override
   Future<void> cancelReminders() async => cancels++;
 
   @override
-  Future<void> updateWidget(Map<String, Object?> payload) async =>
-      widgets.add(jsonDecode(jsonEncode(payload)) as Map<String, Object?>);
+  Future<bool> updateWidget(Map<String, Object?> payload) async {
+    widgets.add(jsonDecode(jsonEncode(payload)) as Map<String, Object?>);
+    return widgetResult;
+  }
 
   @override
   Future<bool> requestNotificationPermission() async => true;
@@ -87,7 +94,7 @@ void main() {
           },
         );
       });
-      await bridge.updateWidget({'title': '合成课程隐私文本'});
+      expect(await bridge.updateWidget({'title': '合成课程隐私文本'}), isFalse);
       final failed = records.singleWhere((r) => r['event'] == 'native.failed');
       expect((failed['attrs'] as Map)['endpoint'], 'notify.updateWidget');
       expect((failed['attrs'] as Map)['error_type'], 'PlatformException');
@@ -115,7 +122,7 @@ void main() {
           ],
         },
       );
-      await bridge.scheduleReminders([]);
+      expect(await bridge.scheduleReminders([]), isTrue);
       final event = records.singleWhere((r) => r['event'] == 'native.degraded');
       expect(event.toString(), contains('exact_alarm_permission_revoked'));
       expect(event.toString(), contains('SyntheticAlarm.kt:10'));
@@ -187,6 +194,17 @@ void main() {
       expect(plan.single.toJson()['fireAt'], '2026-10-20T07:45');
       expect(plan.single.toJson()['classStart'], '2026-10-20T08:00');
       expect(plan.single.title, '高数 即将上课');
+      expect(plan.single.body, '08:00 上课');
+
+      final withLoc = planReminders(
+        now: now,
+        leadMinutes: 15,
+        days: 1,
+        classesOn: (d) => d.day == 20
+            ? [_c('高数', DateTime(2026, 10, 20, 8), loc: 'A101')]
+            : [],
+      );
+      expect(withLoc.single.body, '08:00 · A101');
     });
 
     test('同一时间两门课合并为一条', () {
@@ -202,7 +220,15 @@ void main() {
       expect(plan, hasLength(1));
       expect(plan.single.names, ['英语', '物理']);
       expect(plan.single.title, '2 门课即将上课');
-      expect(plan.single.body, contains('A101 / B202'));
+      expect(plan.single.body, '10:10 · 英语、物理 · A101 / B202');
+
+      final noLoc = planReminders(
+        now: now,
+        leadMinutes: 10,
+        days: 1,
+        classesOn: (d) => d.day == 20 ? [_c('英语', s), _c('物理', s)] : [],
+      );
+      expect(noLoc.single.body, '10:10 · 英语、物理');
     });
 
     test('已过的提醒不补发', () {
@@ -1353,6 +1379,111 @@ void main() {
 
       expect(plan, hasLength(1));
       expect(plan.single.names, ['高数']);
+    });
+
+    test(
+      'reschedule 在 scheduleReminders 或 updateWidget 返回 false 时不缓存指纹并重试',
+      () async {
+        final b = _FakeBridge();
+        final s = svc(b);
+        addTearDown(s.dispose);
+
+        // 1) scheduleReminders 返回 false：不写入指纹，下次调用重试。
+        b.scheduleResult = false;
+        await s.reschedule();
+        expect(b.scheduled, hasLength(1));
+        expect(b.widgets, hasLength(1));
+
+        b.scheduleResult = true;
+        await s.reschedule();
+        expect(b.scheduled, hasLength(2));
+        expect(b.widgets, hasLength(2));
+
+        // 2) 两次均成功后命中指纹去重。
+        await s.reschedule();
+        expect(b.scheduled, hasLength(2));
+        expect(b.widgets, hasLength(2));
+
+        // 3) 条件变化后 updateWidget 返回 false：同样不写入指纹，下次重试。
+        await c.updateSettings(
+          c.settingsForEditing.copyWith(reminderEnabled: true),
+        );
+        b.widgetResult = false;
+        await s.reschedule();
+        expect(b.scheduled, hasLength(3));
+        expect(b.widgets, hasLength(3));
+
+        b.widgetResult = true;
+        await s.reschedule();
+        expect(b.scheduled, hasLength(4));
+        expect(b.widgets, hasLength(4));
+
+        await s.reschedule();
+        expect(b.scheduled, hasLength(4));
+        expect(b.widgets, hasLength(4));
+      },
+    );
+
+    test('导入主课表无门户绑定也可生成上课提醒，且解绑门户不取消其提醒', () async {
+      TimetableController.bindingCheck = () async => false;
+      await c.handleLogout(clearJwxt: true);
+      expect(c.portalBound, isFalse);
+
+      await c.importWakeupSchedule(
+        WakeupImportResult(
+          defaultName: '好友导入课表',
+          snapshot: TimetableSnapshot(
+            courses: const [
+              Course(
+                id: 'WAKEUP|01',
+                name: '线性代数',
+                source: CourseSource.manual,
+                slots: [
+                  CourseSlot(
+                    day: 1,
+                    startNode: 3,
+                    endNode: 4,
+                    weeks: '1111111111111111',
+                    location: '教二-202',
+                  ),
+                ],
+              ),
+            ],
+            periods: TimetableController.defaultPeriods(),
+            settings: TimetableSettings(
+              termCode: '2026-2027-1',
+              termStartDate: termStart,
+              termStartFromJwxt: true,
+            ),
+          ),
+          courseCount: 1,
+          slotCount: 1,
+        ),
+        name: '好友导入课表',
+        setAsPrimary: true,
+      );
+      await c.updateSettings(
+        c.settingsForEditing.copyWith(reminderEnabled: true),
+      );
+
+      final b = _FakeBridge();
+      final s = svc(b);
+      addTearDown(s.dispose);
+      expect(c.portalBound, isFalse);
+      expect(c.hasReminderScheduleSource, isTrue);
+
+      final planBeforeUnbind = s.currentPlan();
+      expect(planBeforeUnbind, hasLength(1));
+      expect(planBeforeUnbind.single.names, ['线性代数']);
+
+      // 解绑门户时主课表为导入课表：不立即取消提醒，且计划仍保留。
+      await c.handleLogout(clearJwxt: true);
+      await pumpEventQueue();
+      expect(b.cancels, 0);
+      expect(c.hasReminderScheduleSource, isTrue);
+      final planAfterUnbind = s.currentPlan();
+      expect(planAfterUnbind, hasLength(1));
+      expect(planAfterUnbind.single.names, ['线性代数']);
     });
   });
 }

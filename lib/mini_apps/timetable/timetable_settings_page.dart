@@ -86,8 +86,9 @@ class TimetableSettingsPage extends StatelessWidget {
 
   Future<void> _pickNextDayTime(
     BuildContext context,
-    TimetableController c,
-  ) async {
+    TimetableController c, {
+    Future<void> Function()? onPermissionChecked,
+  }) async {
     var saving = false;
     String? saveError;
     final saved = await showModalBottomSheet<bool>(
@@ -140,6 +141,7 @@ class TimetableSettingsPage extends StatelessWidget {
     );
     if (saved != true || !context.mounted) return;
     await NextDayReminderChannel.requestPermission();
+    await onPermissionChecked?.call();
   }
 
   @override
@@ -166,7 +168,9 @@ class TimetableSettingsPage extends StatelessWidget {
               builder: (context, _) {
                 final s = c.settings;
                 final a = reminderActions ?? ReminderActions(controller: c);
-                final nextDayRows = <Widget>[
+                List<Widget> buildNextDayRows([
+                  Future<void> Function()? onPermissionChecked,
+                ]) => [
                   TimetableSettingsSwitchRow(
                     key: const Key('tt_settings_next_day_reminder'),
                     title: TtSettingsText.nextDayReminder,
@@ -178,6 +182,7 @@ class TimetableSettingsPage extends StatelessWidget {
                       );
                       if (saved && v && context.mounted) {
                         await NextDayReminderChannel.requestPermission();
+                        await onPermissionChecked?.call();
                       }
                     },
                   ),
@@ -187,7 +192,11 @@ class TimetableSettingsPage extends StatelessWidget {
                     enabled: s.nextDayReminderEnabled,
                     value: _reminderTime(s.nextDayReminderMinute),
                     showChevron: true,
-                    onTap: () => _pickNextDayTime(context, c),
+                    onTap: () => _pickNextDayTime(
+                      context,
+                      c,
+                      onPermissionChecked: onPermissionChecked,
+                    ),
                   ),
                 ];
                 return ListView(
@@ -261,13 +270,13 @@ class TimetableSettingsPage extends StatelessWidget {
                         controller: c,
                         actions: a,
                         onToggle: onReminderToggle,
-                        nextDayRows: nextDayRows,
+                        nextDayRowsBuilder: buildNextDayRows,
                       )
                     else
                       TimetableSettingsGroup(
                         key: const Key('tt_settings_group_reminder'),
                         title: TtSettingsText.reminderCard,
-                        children: nextDayRows,
+                        children: buildNextDayRows(),
                       ),
                     TimetableSettingsGroup(
                       key: const Key('tt_settings_group_management'),
@@ -1337,14 +1346,15 @@ class _ReminderCard extends StatefulWidget {
   const _ReminderCard({
     required this.controller,
     required this.actions,
-    required this.nextDayRows,
+    required this.nextDayRowsBuilder,
     this.onToggle,
   });
 
   final TimetableController controller;
   final ReminderActions actions;
   final ReminderToggleHandler? onToggle;
-  final List<Widget> nextDayRows;
+  final List<Widget> Function(Future<void> Function() refreshPermission)
+  nextDayRowsBuilder;
 
   @override
   State<_ReminderCard> createState() => _ReminderCardState();
@@ -1425,7 +1435,11 @@ class _ReminderCardState extends State<_ReminderCard>
   Widget build(BuildContext context) {
     final s = widget.controller.settings;
     final colors = TimetableTheme.colorsOf(context);
-    final hint = reminderPermissionHint(_perm, s.reminderEnabled);
+    final hint = reminderPermissionHint(
+      _perm,
+      s.reminderEnabled,
+      nextDayEnabled: s.nextDayReminderEnabled,
+    );
     return TimetableSettingsGroup(
       key: const Key('tt_settings_group_reminder'),
       title: TtSettingsText.reminderCard,
@@ -1484,7 +1498,7 @@ class _ReminderCardState extends State<_ReminderCard>
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Divider(height: 1, color: colors.divider),
         ),
-        ...widget.nextDayRows,
+        ...widget.nextDayRowsBuilder(_refreshPermission),
         TimetableSettingsRow(
           key: const Key('tt_settings_keepalive_entry'),
           title: TtSettingsText.keepAliveEntry,

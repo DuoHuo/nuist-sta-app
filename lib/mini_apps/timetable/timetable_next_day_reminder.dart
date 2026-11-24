@@ -8,12 +8,10 @@ class NextDayReminderPayload {
   final String body;
   final String? warmLine;
 
-  /// 原生通知页脚固定标明数据来源。
   Map<String, Object?> toJson() => {
     'title': title,
     'body': body,
-    'warmLine': warmLine,
-    'footer': '按本机已保存课表',
+    if (warmLine != null) 'warmLine': warmLine,
   };
 }
 
@@ -58,11 +56,7 @@ NextDayReminderPayload? buildNextDayReminder({
   }
   final weekend = tomorrow.weekday >= DateTime.saturday;
   if (courses.isEmpty) {
-    return NextDayReminderPayload(
-      weekend ? '周末没课' : '明天没课',
-      '好好休息',
-      warmLine: weekend ? null : '难得轻松一天',
-    );
+    return NextDayReminderPayload(weekend ? '周末没课' : '明天没课', '好好休息');
   }
   final sorted = [...courses]
     ..sort((a, b) => a.slot.startNode.compareTo(b.slot.startNode));
@@ -80,18 +74,26 @@ NextDayReminderPayload? buildNextDayReminder({
     16,
   );
   final location = _short(first.slot.location, 12);
-  final body = courses.length > 1 && !early
-      ? '首节 ${time ?? when} · $name；还有 ${courses.length - 1} 节'
-      : '${weekend ? '首节 ' : ''}$when · $name${location.isEmpty ? '' : ' · $location'}';
-  return NextDayReminderPayload(
-    weekend
-        ? '周末有课'
-        : early
-        ? '明天早八'
-        : courses.length > 1
-        ? '明天有 ${courses.length} 节课'
-        : '明天第$node节开始',
-    body,
-    warmLine: early && !weekend ? '记得早睡' : null,
-  );
+  final firstDesc = '$when · $name${location.isEmpty ? '' : ' · $location'}';
+  if (weekend) {
+    return NextDayReminderPayload(
+      '周末有课',
+      courses.length > 1
+          ? '首节 ${time ?? when} · $name；还有 ${courses.length - 1} 节'
+          : firstDesc,
+    );
+  }
+  if (early) {
+    return NextDayReminderPayload(
+      '明天早八',
+      courses.length > 1 ? '$firstDesc；还有 ${courses.length - 1} 节' : firstDesc,
+    );
+  }
+  if (courses.length > 1) {
+    return NextDayReminderPayload(
+      '明天有 ${courses.length} 节课',
+      '首节 ${time ?? when} · $name；还有 ${courses.length - 1} 节',
+    );
+  }
+  return NextDayReminderPayload('明天第$node节开始', firstDesc);
 }

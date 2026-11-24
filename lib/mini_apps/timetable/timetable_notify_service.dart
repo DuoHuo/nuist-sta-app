@@ -58,8 +58,8 @@ class TimetableNotifyService {
   Future<void> _start() async {
     await _ctl.ensureStarted();
     _changeSub = _ctl.scheduleChanged.listen((r) {
-      if (r == ScheduleChangeReason.unbind) {
-        // 解绑：取消全部提醒，开关保留。
+      if (r == ScheduleChangeReason.unbind && !_ctl.hasReminderScheduleSource) {
+        // 解绑：取消全部提醒，开关保留；若主课表为导入课表则由后续重排保留。
         unawaited(_bridge.cancelReminders());
       }
       _scheduleSoon();
@@ -301,9 +301,9 @@ class TimetableNotifyService {
     return DateTime(day.year, day.month, day.day, h, m);
   }
 
-  /// 当前应排的提醒（关闭 / 未绑定 → 空）。
+  /// 当前应排的提醒（关闭 / 无可用课表来源 → 空）。
   List<ReminderAlarm> currentPlan() {
-    if (!reminderEnabled || !_ctl.portalBound) return const [];
+    if (!reminderEnabled || !_ctl.hasReminderScheduleSource) return const [];
     return planReminders(
       now: _clock(),
       leadMinutes: reminderLeadMinutes,
@@ -374,6 +374,7 @@ class TimetableNotifyService {
       s.widgetShowPeriod,
       s.widgetCourseCount,
       _ctl.portalBound,
+      _ctl.hasReminderScheduleSource,
       synced,
       _lastSyncFailed,
     );
@@ -390,7 +391,9 @@ class TimetableNotifyService {
     var remindersOk = true;
     try {
       final plan = currentPlan();
-      await _bridge.scheduleReminders([for (final a in plan) a.toJson()]);
+      remindersOk = await _bridge.scheduleReminders([
+        for (final a in plan) a.toJson(),
+      ]);
     } catch (error, stackTrace) {
       remindersOk = false;
       AppLog.logger('timetable.notify').warning(
@@ -416,8 +419,7 @@ class TimetableNotifyService {
 
   Future<bool> _refreshWidgetInternal() async {
     try {
-      await _bridge.updateWidget(currentWidgetPayload());
-      return true;
+      return await _bridge.updateWidget(currentWidgetPayload());
     } catch (error, stackTrace) {
       AppLog.logger('timetable.notify').warning(
         'widget.refresh_failed',

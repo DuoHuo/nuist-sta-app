@@ -69,7 +69,7 @@ class AppUpdateService : Service() {
         val token = intent?.getLongExtra(EXTRA_TOKEN, -1) ?: -1
         latestStartId = startId
         try {
-            promoteForeground("准备下载更新", true)
+            promoteForeground("准备下载", true)
         } catch (_: Exception) {
             if (!running) {
                 running = false
@@ -214,7 +214,7 @@ class AppUpdateService : Service() {
                                     lastSave = now
                                 }
                                 AppUpdateStore.update(token, "downloading", count, nextEtag = etag, save = save)
-                                updateNotification("正在下载更新")
+                                updateNotification(token, "正在下载")
                                 lastEvent = now
                             }
                             if (now - lastCheck >= 30000) {
@@ -232,7 +232,7 @@ class AppUpdateService : Service() {
         }
         if (!active(token)) throw AppUpdateFailure("cancelled")
         AppUpdateStore.update(token, "verifying", item.size)
-        updateNotification("正在校验安装包")
+        updateNotification(token, "正在校验")
         AppUpdateStore.verify(item, if (complete.exists()) complete else part) { active(token) }
         checkStatus(item, headers)
         if (!active(token)) throw AppUpdateFailure("cancelled")
@@ -281,7 +281,8 @@ class AppUpdateService : Service() {
         ))
     }
 
-    private fun updateNotification(text: String) {
+    private fun updateNotification(token: Long, text: String) {
+        if (!active(token)) return
         try {
             getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification(this, text, true))
         } catch (_: SecurityException) { /* 通知权限被拒仍可完成前台服务的传输。 */ }
@@ -307,6 +308,9 @@ class AppUpdateService : Service() {
         stopping = true
         abortActiveConnection()
         worker.shutdownNow()
+        if (stopping && AppUpdateStore.status != "ready") {
+            getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+        }
         super.onDestroy()
     }
 
@@ -319,7 +323,7 @@ class AppUpdateService : Service() {
         fun createChannel(context: Context) {
             context.getSystemService(NotificationManager::class.java)
                 ?.createNotificationChannel(NotificationChannel(CHANNEL_ID, "应用更新", NotificationManager.IMPORTANCE_LOW).apply {
-                    description = "下载应用更新时显示进度和取消入口"
+                    description = "显示更新下载进度"
                 })
         }
 
@@ -328,7 +332,7 @@ class AppUpdateService : Service() {
             createChannel(context)
             try {
                 context.getSystemService(NotificationManager::class.java)
-                    ?.notify(NOTIFICATION_ID, notification(context, "更新已下载，点击回到应用安装", false))
+                    ?.notify(NOTIFICATION_ID, notification(context, "下载完成，点击安装", false))
             } catch (_: SecurityException) { }
         }
 
@@ -340,7 +344,7 @@ class AppUpdateService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val builder = Notification.Builder(context, CHANNEL_ID)
             builder.setSmallIcon(if (ongoing) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_download_done)
-                .setContentTitle("NUIST++ 应用更新").setContentText(text).setContentIntent(view)
+                .setContentTitle("应用更新").setContentText(text).setContentIntent(view)
                 .setOnlyAlertOnce(true).setOngoing(ongoing).setAutoCancel(!ongoing)
                 .setCategory(Notification.CATEGORY_PROGRESS)
             if (ongoing) {

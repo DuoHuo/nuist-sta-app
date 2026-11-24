@@ -42,6 +42,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
     @Volatile private var resumed = false
     private var pendingOpen = false
     private var permissionResult: MethodChannel.Result? = null
+    private var permissionInFlight = false
     private var notificationResultReady = false
     @Volatile private var installPreparing = false
     @Volatile private var confirmationLaunchedToken = -1L
@@ -183,7 +184,9 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
             result.success(AppUpdateStore.notificationsAllowed(app))
             return
         }
-        if (permissionResult != null) throw AppUpdateFailure("busy")
+        if (permissionResult != null || NotifyStore.notificationPermissionInFlight) throw AppUpdateFailure("busy")
+        NotifyStore.notificationPermissionInFlight = true
+        permissionInFlight = true
         permissionResult = result
         notificationResultReady = false
         activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_REQUEST)
@@ -191,6 +194,10 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray): Boolean {
         if (requestCode != NOTIFICATION_REQUEST) return false
+        if (permissionInFlight) {
+            permissionInFlight = false
+            NotifyStore.notificationPermissionInFlight = false
+        }
         notificationResultReady = true
         completeNotificationRequest()
         AppUpdateStore.notifyChanged()
@@ -337,6 +344,10 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         binding = null
         resumed = false
         clearPendingInstallTimeout()
+        if (permissionInFlight) {
+            permissionInFlight = false
+            NotifyStore.notificationPermissionInFlight = false
+        }
         permissionResult?.success(AppUpdateStore.notificationsAllowed(app))
         permissionResult = null
         notificationResultReady = false

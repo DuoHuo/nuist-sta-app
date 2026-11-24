@@ -183,10 +183,11 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
             result.success(notificationsGranted())
             return
         }
-        if (pendingPermission != null) {
+        if (pendingPermission != null || NotifyStore.notificationPermissionInFlight) {
             result.success(false)
             return
         }
+        NotifyStore.notificationPermissionInFlight = true
         pendingPermission = result
         act.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY)
     }
@@ -195,8 +196,18 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
         requestCode: Int, permissions: Array<out String>, grantResults: IntArray,
     ): Boolean {
         if (requestCode != REQ_NOTIFY) return false
-        pendingPermission?.success(notificationsGranted())
-        pendingPermission = null
+        val granted = notificationsGranted()
+        if (pendingPermission != null) {
+            NotifyStore.notificationPermissionInFlight = false
+            pendingPermission?.success(granted)
+            pendingPermission = null
+        }
+        if (granted) {
+            val context = app
+            TimetableNativeWork.background(context, "next_day.permission_reschedule", "next_day_dispatch_failed") {
+                NextDayReminder.reschedule(context, it)
+            }
+        }
         return true
     }
 
@@ -323,20 +334,25 @@ class NotifyWidgetPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activ
         b.addOnNewIntentListener(this)
         // 冷启动时的点击路由：存起来等 Dart 侧 takeLaunchRoute 取。
         val intent = b.activity.intent
+        val isNextDayUri = intent?.dataString == NextDayReminder.OPEN_URI
         val route = intent?.getStringExtra(NotifyStore.EXTRA_ROUTE)
-            ?: if (intent?.dataString == NextDayReminder.OPEN_URI) "/apps/timetable?focus=tomorrow" else null
+            ?: if (isNextDayUri) "/apps/timetable?focus=tomorrow" else null
         route?.let {
             NotifyStore.prefs(app).edit().putString(NotifyStore.KEY_PENDING_ROUTE, it).apply()
             intent?.removeExtra(NotifyStore.EXTRA_ROUTE)
         }
+        if (isNextDayUri) intent?.data = null
     }
 
     private fun detach() {
         binding?.removeRequestPermissionsResultListener(this)
         binding?.removeOnNewIntentListener(this)
         binding = null
-        pendingPermission?.success(notificationsGranted())
-        pendingPermission = null
+        if (pendingPermission != null) {
+            NotifyStore.notificationPermissionInFlight = false
+            pendingPermission?.success(notificationsGranted())
+            pendingPermission = null
+        }
     }
 
     override fun onAttachedToActivity(b: ActivityPluginBinding) = attach(b)

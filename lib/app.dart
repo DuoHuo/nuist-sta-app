@@ -20,6 +20,7 @@ import 'core/schedule/weekly_classes.dart';
 import 'core/theme.dart';
 import 'core/theme_mode.dart';
 import 'mini_apps/student_info/student_info_academic_source.dart';
+import 'mini_apps/timetable/timetable_controller.dart';
 import 'mini_apps/timetable/timetable_lifecycle.dart';
 import 'mini_apps/timetable/timetable_notify_bridge.dart';
 import 'mini_apps/timetable/timetable_week_classes.dart';
@@ -71,6 +72,7 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   late final _vpnGateway = widget.vpnGateway ?? VpnGateway.instance;
   bool _openingUpdate = false;
   bool _consentPendingSet = false;
+  int _timetableFocusToken = 0;
   bool get _askConsent =>
       widget.consent != null ||
       (!kIsWeb &&
@@ -92,15 +94,19 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   String? _network;
   Timer? _networkDebounce;
 
-  String? _initialTimetableRoute() {
-    final route = WidgetsBinding.instance.platformDispatcher.defaultRouteName;
+  Uri? _parseTimetableUri(String route) {
     final uri = Uri.tryParse(route);
     return uri != null &&
             !uri.hasScheme &&
             !uri.hasAuthority &&
             uri.path == '/apps/timetable'
-        ? route
+        ? uri
         : null;
+  }
+
+  String? _initialTimetableRoute() {
+    final route = WidgetsBinding.instance.platformDispatcher.defaultRouteName;
+    return _parseTimetableUri(route) != null ? route : null;
   }
 
   @override
@@ -135,7 +141,16 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     final bridge = TimetableNotifyBridge.instance;
     bridge.setRouteHandler(_openRoute);
     bridge.takeLaunchRoute().then((r) {
-      if (r != null) _openRoute(r);
+      if (r == null) return;
+      final initial = _systemTimetableRoute;
+      if (initial != null &&
+          (r == initial ||
+              (_parseTimetableUri(r) != null &&
+                  AppNavigation.locationInBranch(r, 0) ==
+                      AppNavigation.locationInBranch(initial, 0)))) {
+        return;
+      }
+      _openRoute(r);
     });
     if (_listenForUpdates) {
       _updateBridge.setOpenHandler(_openUpdate);
@@ -248,18 +263,19 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
 
   Future<void> _showTimetableRoute(String route) async {
     // 只接受站内课表路由，防止外部 Intent 注入任意跳转。
-    final uri = Uri.tryParse(route);
-    if (!mounted ||
-        uri == null ||
-        uri.hasScheme ||
-        uri.hasAuthority ||
-        uri.path != '/apps/timetable') {
+    final uri = _parseTimetableUri(route);
+    if (!mounted || uri == null) {
       return;
     }
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted) return;
     await _navigation.gestureFinished;
     if (!mounted) return;
+    final ctl = TimetableController.instance;
+    if (ctl.viewingScheduleId != ctl.primaryScheduleId) {
+      await ctl.switchViewingSchedule(ctl.primaryScheduleId);
+      if (!mounted) return;
+    }
     _navigation.activate(0);
     final target = AppNavigation.locationInBranch(route, 0);
     final targetPath = Uri.parse(target).path;
@@ -282,13 +298,17 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
         }
       }
     }
+    final focusTomorrow = uri.queryParameters['focus'] == 'tomorrow';
+    final launchExtra = focusTomorrow
+        ? TimetableLaunchExtra(focusToken: ++_timetableFocusToken)
+        : timetableDirectLaunch;
     if (_router.state.uri.path == targetPath) {
-      if (_router.state.uri.toString() != target) {
-        _router.replace(target, extra: timetableDirectLaunch);
+      if (_router.state.uri.toString() != target || focusTomorrow) {
+        _router.replace(target, extra: launchExtra);
       }
       return;
     }
-    _router.push(target, extra: timetableDirectLaunch);
+    _router.push(target, extra: launchExtra);
   }
 
   /// 冷启动等待任务与导航器就绪，通知和页面入口共用更新详情。

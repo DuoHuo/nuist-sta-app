@@ -9,7 +9,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
+import android.content.res.Configuration
 import android.os.Build
 import android.text.SpannableString
 import android.text.Spanned
@@ -99,7 +99,7 @@ object NextDayReminder {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(NotificationChannel(
             CHANNEL_ID, "明日课表", NotificationManager.IMPORTANCE_DEFAULT,
-        ).apply { description = "按本机已保存课表推送明日安排" })
+        ).apply { description = "每晚推送次日课程安排" })
     }
 
     private fun notifyToday(context: Context, now: Calendar, diagnostics: MutableList<Map<String, Any?>>) {
@@ -119,11 +119,7 @@ object NextDayReminder {
         ) return
         val system = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (system.getNotificationChannel(CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) return
-        val open = Intent(context, MainActivity::class.java).apply {
-            action = Intent.ACTION_VIEW
-            data = Uri.parse(OPEN_URI)
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
+        val open = NotifyStore.launchIntent(context, "/apps/timetable?focus=tomorrow")
         val contentIntent = PendingIntent.getActivity(
             context, NOTIFICATION_ID, open,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -131,17 +127,19 @@ object NextDayReminder {
         val title = payload.optString("title")
         val body = payload.optString("body")
         val warm = payload.optString("warmLine", "").takeUnless { it == "null" }.orEmpty()
-        val footer = "按本机已保存课表"
-        val expanded = SpannableString(listOf(body, warm, footer).filter { it.isNotEmpty() }.joinToString("\n"))
+        val expanded = SpannableString(listOf(body, warm).filter { it.isNotEmpty() }.joinToString("\n"))
         if (warm.isNotEmpty()) {
-            val start = body.length + 1
-            expanded.setSpan(ForegroundColorSpan(0xFFB7791F.toInt()), start, start + warm.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val start = expanded.indexOf(warm)
+            if (start >= 0) {
+                val isNight = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+                val color = if (isNight) 0xFFF5B851.toInt() else 0xFFB7791F.toInt()
+                expanded.setSpan(ForegroundColorSpan(color), start, start + warm.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
         }
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_timetable_notification)
             .setContentTitle(title)
             .setContentText(body)
-            .setSubText(footer)
             .setStyle(NotificationCompat.BigTextStyle().setBigContentTitle(title).bigText(expanded))
             .setContentIntent(contentIntent)
             .setAutoCancel(true)
@@ -162,10 +160,23 @@ object NextDayReminder {
 /** 闹钟、开机、校时、时区变化和升级后恢复下一次本地调度。 */
 class NextDayReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action !in ALLOWED_ACTIONS) return
         val pending = goAsync()
         val app = context.applicationContext
         TimetableNativeWork.background(app, "next_day.dispatch", "next_day_dispatch_failed", pending::finish) {
             NextDayReminder.reschedule(app, it)
         }
+    }
+
+    companion object {
+        private val ALLOWED_ACTIONS = setOf(
+            "nuist.TIMETABLE_EVE",
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_TIME_CHANGED,
+            Intent.ACTION_TIMEZONE_CHANGED,
+            Intent.ACTION_DATE_CHANGED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED",
+        )
     }
 }

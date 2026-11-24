@@ -20,10 +20,18 @@ import 'timetable_week_grid.dart';
 
 /// 课表周视图主页：顶栏 + PageView 翻周 + 网格。
 class TimetablePage extends StatefulWidget {
-  const TimetablePage({super.key, this.focusTomorrow = false, this.focusEvent});
+  const TimetablePage({
+    super.key,
+    this.focusTomorrow = false,
+    this.focusTomorrowToken,
+    this.focusEvent,
+  });
 
   /// 从明日通知进入时定位到明天所在周。
   final bool focusTomorrow;
+
+  /// 重复点击明日通知时的去重令牌，变化后再次定位到明天所在周。
+  final int? focusTomorrowToken;
 
   /// 从考试安排进入时，定位并短暂强调这一场考试。
   final ScheduleEvent? focusEvent;
@@ -248,7 +256,11 @@ class _TimetablePageState extends State<TimetablePage> {
           _queuePendingChangeAlert();
         }
       });
-    } else if (widget.focusTomorrow && _ready) {
+    }
+    if (widget.focusTomorrow &&
+        _ready &&
+        (!oldWidget.focusTomorrow ||
+            widget.focusTomorrowToken != oldWidget.focusTomorrowToken)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final now = DateTime.now();

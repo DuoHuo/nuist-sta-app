@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:nuist_sta_app/app.dart';
 import 'package:nuist_sta_app/core/theme_mode.dart';
+import 'package:nuist_sta_app/router.dart';
 import 'package:nuist_sta_app/shell/home/home_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
@@ -553,4 +554,105 @@ void main() {
       await File(out).writeAsString((report.toList()..sort()).join('\n'));
     }
   }, skip: !File(samplePath).existsSync() ? 'real sample not present' : false);
+
+  testWidgets(
+    '未知 URI 显示友好回退页并可返回首页，nuist://timetable/today?focus=tomorrow 安全回落首页',
+    (tester) async {
+      final router = buildRouter();
+      addTearDown(router.dispose);
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pumpAndSettle();
+
+      router.go('nuist://timetable/today?focus=tomorrow');
+      await tester.pumpAndSettle();
+      expect(router.routerDelegate.currentConfiguration.uri.path, '/');
+      expect(find.byType(HomePage), findsOneWidget);
+      expect(find.textContaining('GoException'), findsNothing);
+      expect(find.textContaining('Page Not Found'), findsNothing);
+
+      router.go('/nonexistent/invalid/path?foo=bar');
+      await tester.pumpAndSettle();
+      expect(find.textContaining('GoException'), findsNothing);
+      expect(find.textContaining('Page Not Found'), findsNothing);
+      expect(find.text('页面不存在'), findsOneWidget);
+      expect(find.text('返回首页'), findsOneWidget);
+      await tester.tap(find.text('返回首页'));
+      await tester.pumpAndSettle();
+      expect(router.routerDelegate.currentConfiguration.uri.path, '/');
+      expect(find.byType(HomePage), findsOneWidget);
+
+      // 冷启动带着自定义 scheme 初始路由进入 NuistApp 也安全落回首页。
+      tester.platformDispatcher.defaultRouteNameTestValue =
+          'nuist://timetable/today?focus=tomorrow';
+      addTearDown(tester.platformDispatcher.clearDefaultRouteNameTestValue);
+      await tester.pumpWidget(const NuistApp());
+      await tester.pumpAndSettle();
+      expect(find.byType(HomePage), findsOneWidget);
+      expect(find.textContaining('GoException'), findsNothing);
+      expect(find.textContaining('Page Not Found'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    '已在 ?focus=tomorrow 滑动到其他周后再次打开 /apps/timetable?focus=tomorrow 重新聚焦明天所在周',
+    (tester) async {
+      final now = DateTime.now();
+      final tomorrow = DateTime(now.year, now.month, now.day + 1);
+      final tomorrowMonday = tomorrow.subtract(
+        Duration(days: tomorrow.weekday - DateTime.monday),
+      );
+      // 让明天落在第 2 周，便于验证第 2 周 ↔ 其他周的切换。
+      final dynamicTermStart = tomorrowMonday.subtract(const Duration(days: 7));
+      ctl.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: TimetableParser.parseKbRows([row(1, 2, weeks: '11111')])
+              .courses,
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(termStartDate: dynamicTermStart),
+          syncedAt: now,
+        ),
+      );
+      expect(ctl.actualWeek(tomorrow), 2);
+
+      await tester.pumpWidget(const NuistApp());
+      await tester.pumpAndSettle();
+      final router =
+          tester.widget<MaterialApp>(find.byType(MaterialApp)).routerConfig!
+              as GoRouter;
+      Future<void> open(String route) async {
+        final data = const StandardMethodCodec().encodeMethodCall(
+          MethodCall('openRoute', route),
+        );
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'dev.duohuo.nuist_sta_app/notify_widget',
+          data,
+          (_) {},
+        );
+        await tester.pumpAndSettle();
+      }
+
+      await open('/apps/timetable?focus=tomorrow');
+      expect(find.byType(TimetablePage), findsOneWidget);
+      expect(ctl.viewingWeek, 2);
+      expect(
+        router.state.uri.toString(),
+        '/home/apps/timetable?focus=tomorrow',
+      );
+
+      // 用户手动向左滑动到第 3 周。
+      await tester.drag(find.byType(PageView), const Offset(-600, 0));
+      await tester.pumpAndSettle();
+      expect(ctl.viewingWeek, 3);
+
+      // 再次点击明日课表通知：路由 URI 未变但仍触发重新聚焦明天所在第 2 周，且不叠页。
+      await open('/apps/timetable?focus=tomorrow');
+      expect(ctl.viewingWeek, 2);
+      expect(
+        _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
+        hasLength(1),
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 }

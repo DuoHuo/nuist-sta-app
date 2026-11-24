@@ -31,6 +31,16 @@ import 'shell/study/study_page.dart';
 /// 系统通知和桌面小组件进入课表时直接显示内容，返回仍沿用 Material 手势。
 const timetableDirectLaunch = 'timetableDirectLaunch';
 
+/// 需要复用当前课表页并重新聚焦（如重复点击明日课表通知）时携带的启动标记。
+class TimetableLaunchExtra {
+  const TimetableLaunchExtra({this.focusToken});
+
+  final int? focusToken;
+}
+
+bool isTimetableDirectLaunch(Object? extra) =>
+    extra == timetableDirectLaunch || extra is TimetableLaunchExtra;
+
 /// 创建一次固定的三分支路由树；宽窄变化仅由壳改变导航器的布局。
 ///
 /// AppNavigation 将公开详情路径放入所属分支；无来源深链进入首页分支。
@@ -56,6 +66,12 @@ GoRouter buildRouter({
     overridePlatformDefaultLocation: ignorePlatformInitialRoute,
     navigatorKey: panes.rootNavigatorKey,
     observers: [panes.rootObserver],
+    redirect: (_, state) =>
+        state.uri.path == '/today' &&
+            state.uri.queryParameters['focus'] == 'tomorrow'
+        ? '/'
+        : null,
+    errorBuilder: (context, _) => const _RouteNotFoundPage(),
     routes: [
       StatefulShellRoute(
         notifyRootObserver: false,
@@ -161,21 +177,24 @@ List<GoRoute> _detailRoutes({
         if (manifest == null) {
           return page(state, _MiniAppNotFoundPage(appId: id));
         }
+        final launchExtra = state.extra;
+        final focusToken = launchExtra is TimetableLaunchExtra
+            ? launchExtra.focusToken
+            : null;
         final child = manifest.isWeb
             ? MiniWebViewPage(manifest: manifest)
             : id == 'timetable'
             ? TimetablePage(
                 focusTomorrow: state.uri.queryParameters['focus'] == 'tomorrow',
-                focusEvent: state.extra is ScheduleEvent
-                    ? state.extra as ScheduleEvent
-                    : null,
+                focusTomorrowToken: focusToken,
+                focusEvent: launchExtra is ScheduleEvent ? launchExtra : null,
               )
             : manifest.entry!(context);
         return AppPage<void>(
           key: state.pageKey,
           navigation: navigation,
           directLaunch:
-              id == 'timetable' && state.extra == timetableDirectLaunch,
+              id == 'timetable' && isTimetableDirectLaunch(launchExtra),
           child: child,
         );
       },
@@ -254,6 +273,31 @@ class _MiniAppNotFoundPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('小程序')),
       body: Center(child: Text('小程序「$appId」不存在或已下线')),
+    );
+  }
+}
+
+/// 未知路由兜底页，避免展示 GoRouter 原始报错页。
+class _RouteNotFoundPage extends StatelessWidget {
+  const _RouteNotFoundPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('页面不存在')),
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('页面不存在或已失效'),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: () => context.go('/'),
+              child: const Text('返回首页'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -41,11 +41,12 @@
             android:process=":bulletin_word" />
         <receiver android:name=".AppUpdateActionReceiver" android:exported="false"/>
         <receiver android:name=".AppUpdateInstallReceiver" android:exported="false"/>
-        <receiver android:name=".NextDayReminderReceiver" android:exported="true">
+        <receiver android:name=".NextDayReminderReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.TIME_SET"/>
                 <action android:name="android.intent.action.TIMEZONE_CHANGED"/>
+                <action android:name="android.intent.action.DATE_CHANGED"/>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
                 <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"/>
             </intent-filter>
@@ -84,6 +85,7 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="false"/>
         </activity-alias>
         <activity-alias
             android:name="dev.duohuo.nuist_sta_app.MascotIcon"
@@ -97,6 +99,7 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="false"/>
         </activity-alias>
         <activity-alias
             android:name="dev.duohuo.nuist_sta_app.MascotColorIcon"
@@ -110,6 +113,7 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="false"/>
         </activity-alias>
         <!-- 自定义桌面快捷方式的固定回调；只由应用自身 PendingIntent 触发。 -->
         <receiver android:name=".AppIconShortcutReceiver" android:exported="false"/>

@@ -1,5 +1,6 @@
 package dev.duohuo.nuist_sta_app
 
+import android.Manifest
 import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -8,6 +9,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import org.json.JSONArray
 
@@ -23,12 +25,12 @@ object ReminderScheduler {
     private const val LATE_TOLERANCE_MS = 10 * 60 * 1000L
 
     fun replace(ctx: Context, alarmsJson: String): Map<String, Any?> {
-        NotifyStore.prefs(ctx).edit().putString(NotifyStore.KEY_ALARMS, alarmsJson).apply()
+        NotifyStore.prefs(ctx).edit().putString(NotifyStore.KEY_ALARMS, alarmsJson).commit()
         return reschedule(ctx)
     }
 
     fun cancelAll(ctx: Context): Map<String, Any?> {
-        NotifyStore.prefs(ctx).edit().putString(NotifyStore.KEY_ALARMS, "[]").apply()
+        NotifyStore.prefs(ctx).edit().putString(NotifyStore.KEY_ALARMS, "[]").commit()
         return reschedule(ctx)
     }
 
@@ -51,37 +53,47 @@ object ReminderScheduler {
             diagnostics.add(notifyFailureDetails(error, "reminder.decode") + ("reason_code" to "alarm_cache_invalid_json"))
             JSONArray()
         }
+        if (arr.length() > 0) ensureChannel(ctx)
         val now = System.currentTimeMillis()
         val exact = NotifyStore.canExact(ctx)
         if (!exact && arr.length() > 0) diagnostics.add(mapOf("reason_code" to "exact_alarm_permission_unavailable", "stage" to "reminder.schedule"))
         var n = 0
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val fireAt = NotifyStore.parseLocal(o.optString("fireAt")) ?: continue
-            val start = NotifyStore.parseLocal(o.optString("classStart")) ?: continue
-            if (fireAt <= now) continue
-            val intent = Intent(ctx, ReminderReceiver::class.java).apply {
-                action = ACTION_FIRE
-                putExtra("title", o.optString("title"))
-                putExtra("body", o.optString("body"))
-                putExtra("fireAt", fireAt)
-                putExtra("classStart", start)
-            }
-            val pi = pending(ctx, n, intent, PendingIntent.FLAG_UPDATE_CURRENT) ?: continue
-            try {
-                if (exact) {
-                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, pi)
-                } else {
-                    am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, pi)
+        try {
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val fireAt = NotifyStore.parseLocal(o.optString("fireAt")) ?: continue
+                val start = NotifyStore.parseLocal(o.optString("classStart")) ?: continue
+                if (fireAt <= now) continue
+                val intent = Intent(ctx, ReminderReceiver::class.java).apply {
+                    action = ACTION_FIRE
+                    putExtra("title", o.optString("title"))
+                    putExtra("body", o.optString("body"))
+                    putExtra("fireAt", fireAt)
+                    putExtra("classStart", start)
                 }
-                n++
-            } catch (error: SecurityException) {
-                diagnostics.add(notifyFailureDetails(error, "reminder.schedule") + ("reason_code" to "exact_alarm_permission_revoked"))
-                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, pi)
-                n++
+                val pi = pending(ctx, n, intent, PendingIntent.FLAG_UPDATE_CURRENT) ?: continue
+                try {
+                    if (exact) {
+                        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, pi)
+                    } else {
+                        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, pi)
+                    }
+                    n++
+                } catch (error: SecurityException) {
+                    diagnostics.add(notifyFailureDetails(error, "reminder.schedule") + ("reason_code" to "exact_alarm_permission_revoked"))
+                    try {
+                        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, pi)
+                        n++
+                    } catch (fallbackError: RuntimeException) {
+                        diagnostics.add(notifyFailureDetails(fallbackError, "reminder.schedule") + ("reason_code" to "alarm_schedule_failed"))
+                    }
+                } catch (error: RuntimeException) {
+                    diagnostics.add(notifyFailureDetails(error, "reminder.schedule") + ("reason_code" to "alarm_schedule_failed"))
+                }
             }
+        } finally {
+            prefs.edit().putInt(NotifyStore.KEY_ALARM_COUNT, n).commit()
         }
-        prefs.edit().putInt(NotifyStore.KEY_ALARM_COUNT, n).apply()
         return mapOf("scheduled_count" to n, "exact" to exact, "diagnostics" to diagnostics)
     }
 
@@ -97,7 +109,7 @@ object ReminderScheduler {
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "上课提醒", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "开课前按设置的提前量提醒"
+                description = "上课前提醒"
             },
         )
     }
@@ -109,6 +121,14 @@ object ReminderScheduler {
         // 不补发：迟到太多或课已开始。
         if (now - fireAt > LATE_TOLERANCE_MS || now >= start) return
         ensureChannel(ctx)
+        val nm = ctx.getSystemService(NotificationManager::class.java)
+        val postDenied = Build.VERSION.SDK_INT >= 33 &&
+            ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        val channelBlocked = nm?.getNotificationChannel(CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE
+        if (postDenied || nm == null || !nm.areNotificationsEnabled() || channelBlocked) {
+            diagnostics.add(mapOf("reason_code" to "notification_permission_denied", "stage" to "reminder.notify"))
+            return
+        }
         val tap = PendingIntent.getActivity(
             ctx, (start / 60000L).toInt(), NotifyStore.launchIntent(ctx),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -126,8 +146,7 @@ object ReminderScheduler {
             .setContentIntent(tap)
             .build()
         try {
-            ctx.getSystemService(NotificationManager::class.java)
-                ?.notify((start / 60000L).toInt(), n)
+            nm.notify((start / 60000L).toInt(), n)
         } catch (error: SecurityException) {
             diagnostics.add(notifyFailureDetails(error, "reminder.notify") + ("reason_code" to "notification_permission_denied"))
             // 未授予通知权限。

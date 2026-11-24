@@ -20,7 +20,7 @@ abstract final class TtSettingsText {
   static const nextDayTime = '前一晚提醒时间';
   static String minutes(int m) => '$m $minuteUnit';
   static const minuteUnit = '分钟';
-  static const permissionNotification = '通知权限未开启，收不到上课提醒';
+  static const permissionNotification = '通知权限未开启，收不到课表提醒';
   static const permissionExactAlarm = '授予精确闹钟权限可准时提醒';
   static const gotoSettings = '去设置';
   static const keepAliveEntry = '后台运行设置';

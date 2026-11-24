@@ -17,7 +17,7 @@ class ReminderActions {
   final TimetableController? controller;
 
   bool get _useService =>
-      controller == null || identical(controller, TimetableController.instance);
+      controller == null || controller!.isAttachedToPrimaryHost;
 
   TimetableNotifyService get _svc => TimetableNotifyService.instance;
 
@@ -234,9 +234,15 @@ class TimetableKeepAliveGuidePage extends StatelessWidget {
 }
 
 /// 卡片里的权限提示文案。
-String? reminderPermissionHint(NotifyPermissionStatus s, bool enabled) {
-  if (!enabled || !s.supported) return null;
+String? reminderPermissionHint(
+  NotifyPermissionStatus s,
+  bool enabled, {
+  bool nextDayEnabled = false,
+}) {
+  if (!(enabled || nextDayEnabled) || !s.supported) return null;
   if (!s.notificationsGranted) return TtSettingsText.permissionNotification;
-  if (!s.exactAlarmGranted) return TtSettingsText.permissionExactAlarm;
+  if (enabled && !s.exactAlarmGranted) {
+    return TtSettingsText.permissionExactAlarm;
+  }
   return null;
 }

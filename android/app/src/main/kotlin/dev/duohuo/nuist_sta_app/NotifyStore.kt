@@ -19,6 +19,9 @@ object NotifyStore {
     const val EXTRA_ROUTE = "nuist_route"
     const val ROUTE_TIMETABLE = "/apps/timetable"
 
+    /** 主线程共享的 POST_NOTIFICATIONS 请求互斥标记，避免多个入口并发弹窗互相取消。 */
+    @Volatile var notificationPermissionInFlight: Boolean = false
+
     fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     /** 解析 Flutter 写的本地墙上时间 `yyyy-MM-ddTHH:mm`，按**当前**时区换算。 */

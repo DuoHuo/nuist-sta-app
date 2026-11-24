@@ -86,12 +86,15 @@ class ReminderAlarm {
   String get title =>
       names.length == 1 ? '${names.first} 即将上课' : '${names.length} 门课即将上课';
 
-  /// 通知正文：`08:00 开始 · 教室`。
+  /// 通知正文：`08:00 · 教室` / `08:00 上课`。
   String get body {
     final locs = locations.where((l) => l.isNotEmpty).toSet().join(' / ');
     final time = formatHm(classStart);
-    final head = names.length == 1 ? '$time 开始' : '$time 开始：${names.join('、')}';
-    return locs.isEmpty ? head : '$head · $locs';
+    if (names.length == 1) {
+      return locs.isEmpty ? '$time 上课' : '$time · $locs';
+    }
+    final list = names.join('、');
+    return locs.isEmpty ? '$time · $list' : '$time · $list · $locs';
   }
 
   Map<String, Object?> toJson() => {

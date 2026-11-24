@@ -28,25 +28,27 @@ class _RecordingBridge extends TimetableNotifyBridge {
   Completer<void>? scheduleEntered;
 
   @override
-  Future<void> scheduleReminders(List<Map<String, Object?>> alarms) async {
+  Future<bool> scheduleReminders(List<Map<String, Object?>> alarms) async {
     scheduleEntered?.complete();
     if (scheduleGate case final gate?) {
       await gate.future;
     }
     if (failNextSchedule) {
       failNextSchedule = false;
-      throw PlatformException(code: 'schedule_error', message: '合成排程失败');
+      return false;
     }
     scheduled.add(alarms);
+    return true;
   }
 
   @override
-  Future<void> updateWidget(Map<String, Object?> payload) async {
+  Future<bool> updateWidget(Map<String, Object?> payload) async {
     if (failNextWidget) {
       failNextWidget = false;
-      throw PlatformException(code: 'widget_error', message: '合成小组件更新失败');
+      return false;
     }
     widgets.add(payload);
+    return true;
   }
 
   @override

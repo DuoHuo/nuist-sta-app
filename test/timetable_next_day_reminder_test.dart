@@ -198,13 +198,18 @@ void main() {
     expect(payload([], hasCache: false), isNull);
     expect(payload([])!.title, '明天没课');
     expect(payload([])!.body, '好好休息');
-    expect(payload([])!.warmLine, '难得轻松一天');
+    expect(payload([])!.warmLine, isNull);
   });
 
   test('周末与假期文案；假期优先，不把未知数据当假期', () {
     expect(payload([], date: saturday)!.title, '周末没课');
     expect(payload([], date: saturday)!.warmLine, isNull);
     expect(payload([course(1)], date: saturday)!.title, '周末有课');
+    expect(payload([course(3)], date: saturday)!.body, '10:10 · 测试课程');
+    expect(
+      payload([course(3), course(7)], date: saturday)!.body,
+      '首节 10:10 · 测试课程；还有 1 节',
+    );
     expect(payload([course(1)], date: saturday)!.warmLine, isNull);
     expect(payload([], outsideTerm: true)!.body, '假期模式');
     expect(payload([], outsideTerm: true)!.warmLine, isNull);
@@ -215,7 +220,7 @@ void main() {
     final early = payload([course(1, location: '测试教室')])!;
     expect(early.title, '明天早八');
     expect(early.body, '第1–2节 · 测试课程 · 测试教室');
-    expect(early.warmLine, '记得早睡');
+    expect(early.warmLine, isNull);
     expect(payload([course(2)])!.title, '明天早八');
     for (final node in [3, 5, 7]) {
       final p = payload([course(node)])!;
@@ -232,36 +237,38 @@ void main() {
   test('多门课按修改后的节次排序，正文带剩余数量且不输出教师', () {
     final p = payload([course(7), course(1, name: '第一门')])!;
     expect(p.title, '明天早八');
-    expect(p.body, '第1–2节 · 第一门');
-    expect(p.toJson()['footer'], '按本机已保存课表');
+    expect(p.body, '第1–2节 · 第一门；还有 1 节');
+    expect(p.toJson().containsKey('footer'), isFalse);
+    expect(p.toJson().containsKey('warmLine'), isFalse);
     expect(payload([course(7), course(3)])!.title, '明天有 2 节课');
     expect(payload([course(7), course(3)])!.body, '首节 10:10 · 测试课程；还有 1 节');
   });
 
-  test('标题随次日首节与周末变化，页脚始终是本机已保存课表', () {
+  test('标题随次日首节与周末变化，不含冗余页脚与暖心文案', () {
     final cases = [
-      (payload([course(1), course(5)])!, '明天早八', '记得早睡'),
-      (payload([course(3)])!, '明天第3节开始', null),
-      (payload([course(5)])!, '明天第5节开始', null),
-      (payload([course(7)])!, '明天第7节开始', null),
-      (payload([course(3), course(7)])!, '明天有 2 节课', null),
-      (payload([])!, '明天没课', '难得轻松一天'),
-      (payload([], date: saturday)!, '周末没课', null),
-      (payload([course(3)], date: saturday)!, '周末有课', null),
-      (payload([], outsideTerm: true)!, '明天没课', null),
+      (payload([course(1), course(5)])!, '明天早八'),
+      (payload([course(3)])!, '明天第3节开始'),
+      (payload([course(5)])!, '明天第5节开始'),
+      (payload([course(7)])!, '明天第7节开始'),
+      (payload([course(3), course(7)])!, '明天有 2 节课'),
+      (payload([])!, '明天没课'),
+      (payload([], date: saturday)!, '周末没课'),
+      (payload([course(3)], date: saturday)!, '周末有课'),
+      (payload([], outsideTerm: true)!, '明天没课'),
     ];
-    for (final (p, title, warm) in cases) {
+    for (final (p, title) in cases) {
       expect(p.title, title);
       expect(p.title.runes.length, lessThanOrEqualTo(8));
-      expect(p.warmLine, warm);
-      expect(p.toJson()['footer'], '按本机已保存课表');
+      expect(p.warmLine, isNull);
+      expect(p.toJson().containsKey('footer'), isFalse);
+      expect(p.toJson().containsKey('warmLine'), isFalse);
     }
   });
 
-  test('多门课含早八仍显示首节节次和地点，和设计稿早八行一致', () {
+  test('多门课含早八仍显示首节节次、地点与剩余节数', () {
     final p = payload([course(5), course(1, location: '测试教室')])!;
     expect(p.title, '明天早八');
-    expect(p.body, '第1–2节 · 测试课程 · 测试教室');
+    expect(p.body, '第1–2节 · 测试课程 · 测试教室；还有 1 节');
   });
 
   test('体育项目推送共用去序号显示名，项目为空保留原课名', () {
@@ -499,5 +506,67 @@ void main() {
     await c.updateNextDayReminder();
     await pumpEventQueue();
     expect(calls, 2);
+  });
+
+  test('修改 settings.maxWeeks 会失效 400 天明日提醒缓存并重算', () async {
+    final c = TimetableController.instance;
+    final tmp = await Directory.systemTemp.createTemp('tt_reminder_maxweeks');
+    final originalBindingCheck = TimetableController.bindingCheck;
+    final originalClock = TimetableController.syncClock;
+    const channel = MethodChannel('nuist/timetable_next_day');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final configurations = <Map<Object?, Object?>>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'update') {
+        configurations.add(call.arguments as Map<Object?, Object?>);
+      }
+      return {'diagnostics': <Object?>[]};
+    });
+    addTearDown(() async {
+      c.debugReset();
+      messenger.setMockMethodCallHandler(channel, null);
+      TimetableController.bindingCheck = originalBindingCheck;
+      TimetableController.syncClock = originalClock;
+      TimetableStore.debugDirectory = null;
+      await tmp.delete(recursive: true);
+    });
+    TimetableStore.debugDirectory = tmp;
+    TimetableController.bindingCheck = () async => true;
+    TimetableController.syncClock = () => DateTime(2027, 1, 16);
+    c.debugReset();
+    c.debugSetSnapshot(
+      TimetableSnapshot(
+        courses: [
+          Course(
+            id: 'week21-course',
+            name: '第21周课程',
+            slots: [
+              CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1' * 22),
+            ],
+          ),
+        ],
+        periods: TimetableController.defaultPeriods(),
+        settings: TimetableSettings(
+          termStartDate: DateTime(2026, 8, 31),
+          maxWeeks: 20,
+        ),
+      ),
+    );
+    await c.refreshPortalBound();
+    await c.updateNextDayReminder();
+    await pumpEventQueue();
+    expect(configurations, hasLength(1));
+
+    // maxWeeks 未变时不重算。
+    await c.updateNextDayReminder();
+    await pumpEventQueue();
+    expect(configurations, hasLength(1));
+
+    // 修改 settings.maxWeeks 会使 400 天明日提醒输入缓存失效并触发重算。
+    await c.updateSettings(c.settingsForEditing.copyWith(maxWeeks: 22));
+    await c.updateNextDayReminder();
+    await pumpEventQueue();
+    expect(configurations, hasLength(2));
   });
 }
