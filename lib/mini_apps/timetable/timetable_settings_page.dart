@@ -567,6 +567,7 @@ class _TimetableWidgetSettingsPageState
     final field = surface ? 'widgetWeekWidgetOpacity' : 'widgetWeekOpacity';
     final value = draft() ?? saved(c.settings);
     return _WidgetSliderRow(
+      useSettingsHeader: !surface,
       title: surface
           ? TtSettingsText.weekWidgetOpacity
           : TtSettingsText.weekOpacity,
@@ -600,16 +601,6 @@ class _TimetableWidgetSettingsPageState
     return _SettingsSubpage(
       title: TtSettingsText.widgetCard,
       controller: c,
-      pinnedAfterFirst: week
-          ? (maxHeight) => _WeekWidgetSettingsPreview(
-              settings: c.settings.copyWith(
-                widgetWeekOpacity: _draftWeekOpacity,
-                widgetWeekWidgetOpacity: _draftWeekSurfaceOpacity,
-              ),
-              now: DateTime.now(),
-              maxHeight: maxHeight,
-            )
-          : null,
       children: () {
         final s = c.settings;
         final pinRow = TimetableSettingsRow(
@@ -667,27 +658,19 @@ class _TimetableWidgetSettingsPageState
                     ],
                   ),
                 ),
-              if (week)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  child: Text(
-                    '显示效果预览 · 示例内容',
-                    style: TimetableTheme.captionStyle(
-                      color: TimetableTheme.colorsOf(context).labelText,
-                    ),
-                  ),
-                )
-              else ...[
-                _WidgetSettingsPreview(
-                  settings: s,
-                  square: square,
-                  last: _previewLast,
-                ),
-                pinRow,
-              ],
+              _WidgetSettingsPreview(
+                size: _size,
+                settings: week
+                    ? s.copyWith(
+                        widgetWeekOpacity: _draftWeekOpacity,
+                        widgetWeekWidgetOpacity: _draftWeekSurfaceOpacity,
+                      )
+                    : s,
+                last: _previewLast,
+              ),
+              pinRow,
             ],
           ),
-          if (week) TimetableSettingsGroup(children: [pinRow]),
           TimetableSettingsGroup(
             key: const Key('tt_settings_group_widget'),
             children: [
@@ -751,18 +734,35 @@ class _WidgetSliderRow extends StatelessWidget {
     required this.valueLabel,
     required this.valueKey,
     required this.slider,
+    required this.useSettingsHeader,
   });
 
   final String title;
   final String valueLabel;
   final Key valueKey;
   final Widget slider;
+  final bool useSettingsHeader;
 
   @override
   Widget build(BuildContext context) {
+    if (useSettingsHeader) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TimetableSettingsRow(
+            title: title,
+            trailing: Text(valueLabel, key: valueKey),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: slider,
+          ),
+        ],
+      );
+    }
     final colors = TimetableTheme.colorsOf(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -791,15 +791,10 @@ class _WidgetSliderRow extends StatelessWidget {
 
 /// 4×5 当周课表预览：示例内容走同一布局和颜色规则，不读取真实课程。
 class _WeekWidgetSettingsPreview extends StatelessWidget {
-  const _WeekWidgetSettingsPreview({
-    required this.settings,
-    required this.now,
-    required this.maxHeight,
-  });
+  const _WeekWidgetSettingsPreview({required this.settings, required this.now});
 
   final TimetableSettings settings;
   final DateTime now;
-  final double maxHeight;
 
   @override
   Widget build(BuildContext context) {
@@ -810,57 +805,53 @@ class _WeekWidgetSettingsPreview extends StatelessWidget {
       week: 7,
       days: _previewWeekDays(now),
     );
-    return Padding(
-      key: const Key('tt_settings_widget_preview'),
-      padding: const EdgeInsets.fromLTRB(28, 8, 28, 8),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final width = math.min(constraints.maxWidth, 360.0);
-          final height = width * 1.25;
-          final visibleHeight = math.min(height, math.max(0.0, maxHeight - 16));
-          if (visibleHeight == 0) {
-            return const SizedBox.shrink();
-          }
-          final plan = planWeekWidget(
-            week: week,
-            periods: _previewWeekPeriods,
-            prefs: prefs,
-            widthDp: width,
-            heightDp: height,
-            today: now,
-          );
-          const radius = BorderRadius.all(
-            Radius.circular(TimetableTheme.cardRadius),
-          );
-          // 缩短窗口时等比缩放整卡，不改变字号基准、节次预算或裁掉顶栏。
-          return SizedBox(
-            height: visibleHeight,
-            child: FittedBox(
-              fit: BoxFit.contain,
-              child: SizedBox(
-                key: const Key('tt_widget_preview_4x5'),
-                width: width,
-                height: height,
-                child: ClipRRect(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = math.min(constraints.maxWidth, 360.0);
+        final height = width * 1.25;
+        final plan = planWeekWidget(
+          week: week,
+          periods: _previewWeekPeriods,
+          prefs: prefs,
+          widthDp: width,
+          heightDp: height,
+          today: now,
+        );
+        const radius = BorderRadius.all(
+          Radius.circular(TimetableTheme.cardRadius),
+        );
+        return Center(
+          child: SizedBox(
+            key: const Key('tt_widget_preview_4x5'),
+            width: width,
+            height: height,
+            child: ClipRRect(
+              borderRadius: radius,
+              child: DecoratedBox(
+                key: const Key('tt_widget_preview_week_background'),
+                decoration: BoxDecoration(
+                  color: prefs.background(colors),
                   borderRadius: radius,
-                  child: DecoratedBox(
-                    key: const Key('tt_widget_preview_week_background'),
-                    decoration: BoxDecoration(
-                      color: prefs.background(colors),
-                      borderRadius: radius,
+                ),
+                child: DecoratedBox(
+                  position: DecorationPosition.foreground,
+                  decoration: BoxDecoration(
+                    borderRadius: radius,
+                    border: Border.all(
+                      color: prefs.componentColor(colors.divider),
                     ),
-                    child: _WeekWidgetPreviewGrid(
-                      plan: plan,
-                      prefs: prefs,
-                      examColor: Color(settings.examColor),
-                    ),
+                  ),
+                  child: _WeekWidgetPreviewGrid(
+                    plan: plan,
+                    prefs: prefs,
+                    examColor: Color(settings.examColor),
                   ),
                 ),
               ),
             ),
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 }
@@ -1753,12 +1744,10 @@ class _SettingsSubpage extends StatelessWidget {
     required this.title,
     required this.controller,
     required this.children,
-    this.pinnedAfterFirst,
   });
   final String title;
   final TimetableController controller;
   final List<Widget> Function() children;
-  final Widget Function(double maxHeight)? pinnedAfterFirst;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -1772,32 +1761,10 @@ class _SettingsSubpage extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 600),
           child: ListenableBuilder(
             listenable: controller,
-            builder: (context, _) {
-              final content = children();
-              final preview = pinnedAfterFirst;
-              if (preview == null) {
-                return ListView(
-                  padding: const EdgeInsets.only(bottom: 24),
-                  children: content,
-                );
-              }
-              return LayoutBuilder(
-                builder: (context, constraints) => CustomScrollView(
-                  slivers: [
-                    SliverToBoxAdapter(child: content.first),
-                    PinnedHeaderSliver(
-                      child: ColoredBox(
-                        color: TimetableTheme.colorsOf(context).pageBg,
-                        child: preview(constraints.maxHeight * 0.6),
-                      ),
-                    ),
-                    for (final child in content.skip(1))
-                      SliverToBoxAdapter(child: child),
-                    const SliverToBoxAdapter(child: SizedBox(height: 24)),
-                  ],
-                ),
-              );
-            },
+            builder: (context, _) => ListView(
+              padding: const EdgeInsets.only(bottom: 24),
+              children: children(),
+            ),
           ),
         ),
       ),
@@ -1809,12 +1776,14 @@ class _SettingsSubpage extends StatelessWidget {
 class _WidgetSettingsPreview extends StatelessWidget {
   const _WidgetSettingsPreview({
     required this.settings,
-    required this.square,
+    required this.size,
     required this.last,
   });
   final TimetableSettings settings;
-  final bool square;
+  final WidgetPinSize size;
   final bool last;
+
+  bool get square => size == WidgetPinSize.square;
 
   @override
   Widget build(BuildContext context) {
@@ -1907,10 +1876,19 @@ class _WidgetSettingsPreview extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          label('显示效果预览 · 示例内容', 12, color: colors.labelText),
+          Text(
+            '显示效果预览 · 示例内容',
+            style: TimetableTheme.captionStyle(color: colors.labelText),
+          ),
           const SizedBox(height: 12),
           LayoutBuilder(
             builder: (context, constraints) {
+              if (size == WidgetPinSize.week) {
+                return _WeekWidgetSettingsPreview(
+                  settings: settings,
+                  now: DateTime.now(),
+                );
+              }
               final width = constraints.maxWidth
                   .clamp(0.0, square ? 160.0 : 320.0)
                   .toDouble();

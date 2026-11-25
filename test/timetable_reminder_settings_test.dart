@@ -529,6 +529,67 @@ void main() {
     expect(find.text('选择 4×6，长按并拖到桌面空白处。'), findsOneWidget);
   });
 
+  testWidgets('三个小组件预览与添加按钮共用同一分组和说明样式', (tester) async {
+    final a = _FakeActions(_perm());
+    await pump(tester, a);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    const caption = '显示效果预览 · 示例内容';
+    final captionFinder = find.text(caption);
+    final captionStyle = tester.widget<Text>(captionFinder).style;
+    final captionLeft = tester.getTopLeft(captionFinder).dx;
+    final settingsGroup = find.byKey(const Key('tt_settings_group_widget'));
+    final settingsCard = find.descendant(
+      of: settingsGroup,
+      matching: find.byWidgetPredicate(
+        (widget) => widget is Material && widget.clipBehavior == Clip.antiAlias,
+      ),
+    );
+    final firstRowOffsets = <double>[];
+    for (final (label, size, firstRowLabel) in [
+      ('今日课表', '4x2', '最多显示课程数量'),
+      ('当前与下一节', '2x2', '显示教师'),
+      ('当周课表', '4x5', '课程不透明度'),
+    ]) {
+      await tester.tap(find.widgetWithText(ChoiceChip, label));
+      await tester.pumpAndSettle();
+      final group = find.ancestor(
+        of: captionFinder,
+        matching: find.byType(TimetableSettingsGroup),
+      );
+      expect(group, findsOneWidget);
+      expect(tester.widget<Text>(captionFinder).style, captionStyle);
+      expect(tester.getTopLeft(captionFinder).dx, captionLeft);
+      for (final key in ['tt_widget_preview_$size', 'tt_settings_widget_pin']) {
+        expect(
+          find.descendant(of: group, matching: find.byKey(Key(key))),
+          findsOneWidget,
+        );
+      }
+      final pin = tester.getRect(
+        find.byKey(const Key('tt_settings_widget_pin')),
+      );
+      expect(tester.getRect(settingsCard).top - pin.bottom, 16);
+      expect(tester.widget<Material>(settingsCard).borderRadius, isNotNull);
+      final title = find.descendant(
+        of: settingsCard,
+        matching: find.text(firstRowLabel),
+      );
+      expect(
+        find.ancestor(of: title, matching: find.byType(TimetableSettingsRow)),
+        findsOneWidget,
+      );
+      firstRowOffsets.add(tester.getRect(title).top - pin.bottom);
+    }
+    expect(firstRowOffsets, everyElement(closeTo(32, 0.1)));
+    final widgetOpacity = tester.getRect(find.text('组件不透明度'));
+    final courseSlider = tester.getRect(
+      find.byKey(const Key('tt_settings_widgetWeekOpacity')),
+    );
+    final sliderToTitle = widgetOpacity.top - courseSlider.bottom;
+    expect(sliderToTitle, closeTo(8, 0.1));
+  });
+
   testWidgets('4×5 当周课表：切换设置立即刷新预览，并仍传 week 添加尺寸', (tester) async {
     final a = _FakeActions(_perm())..pinResult = WidgetPinResult.manual;
     await pump(tester, a);
@@ -706,18 +767,6 @@ void main() {
     expect(_c.settings.widgetShowTeacher, isFalse);
     expect(text('示例教师'), findsNothing);
     expect(text('单周'), findsWidgets);
-    await tester.tap(find.byKey(const Key('tt_settings_widgetShowPeriod')));
-    await settleIo(tester);
-    expect(_c.settings.widgetShowPeriod, isFalse);
-    expect(
-      find.byKey(const Key('tt_widget_preview_week_number_1')),
-      findsNothing,
-    );
-    expect(
-      find.byKey(const Key('tt_widget_preview_week_time_1')),
-      findsNothing,
-    );
-
     // 默认没有周末列；只点开关、不重新打开页面，立即出现周六的课程和周日表头。
     final saturday = find.byKey(const Key('tt_widget_preview_week_cell_6_3'));
     expect(saturday, findsNothing);
@@ -726,6 +775,7 @@ void main() {
     await tester.tap(weekend);
     await settleIo(tester);
     expect(_c.settings.widgetWeekShowWeekend, isTrue);
+    expectGridBounds();
     expect(saturday, findsOneWidget);
     expect(text('选修课'), findsOneWidget);
     expect(
@@ -735,7 +785,21 @@ void main() {
     await tester.tap(weekend);
     await settleIo(tester);
     expect(_c.settings.widgetWeekShowWeekend, isFalse);
+    expectGridBounds();
     expect(saturday, findsNothing);
+
+    await tester.tap(find.byKey(const Key('tt_settings_widgetShowPeriod')));
+    await settleIo(tester);
+    expect(_c.settings.widgetShowPeriod, isFalse);
+    expectGridBounds(showPeriod: false);
+    expect(
+      find.byKey(const Key('tt_widget_preview_week_number_1')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('tt_widget_preview_week_time_1')),
+      findsNothing,
+    );
     await tester.tap(find.byKey(const Key('tt_settings_widget_pin')));
     await tester.pumpAndSettle();
     expect(a.calls, ['pin:week']);
@@ -862,17 +926,9 @@ void main() {
       expect(location.softWrap, isTrue);
       expect(location.maxLines, isNull);
       expect(location.overflow, TextOverflow.clip);
-      await tester.drag(find.byType(CustomScrollView), const Offset(0, -450));
-      await tester.pumpAndSettle();
-      final bounds = tester.getRect(preview);
-      expect(bounds.left, greaterThan(0));
-      expect(bounds.right, lessThan(viewport.width));
-      expect(bounds.bottom, lessThan(viewport.height));
-      expect(
-        bounds.top,
-        greaterThanOrEqualTo(tester.getRect(find.byType(AppBar)).bottom),
-      );
-      expect(bounds.contains(tester.getCenter(heading)), isTrue);
+      final boundsBefore = tester.getRect(preview);
+      expect(boundsBefore.left, greaterThan(0));
+      expect(boundsBefore.right, lessThan(viewport.width));
       expect(
         find.byKey(const Key('tt_widget_preview_week_number_11')),
         findsNothing,
@@ -881,6 +937,19 @@ void main() {
         find.byKey(const Key('tt_widget_preview_week_time_1')),
         findsOneWidget,
       );
+      final scrollState = tester.state<ScrollableState>(
+        find.byType(Scrollable).last,
+      );
+      final offsetBefore = scrollState.position.pixels;
+      await tester.drag(find.byType(ListView), const Offset(0, -450));
+      await tester.pumpAndSettle();
+      final bounds = tester.getRect(preview);
+      expect(
+        boundsBefore.top - bounds.top,
+        closeTo(scrollState.position.pixels - offsetBefore, 0.1),
+      );
+      expect(bounds.top, lessThan(tester.getRect(find.byType(AppBar)).bottom));
+      expect(heading.hitTestable(), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     }
