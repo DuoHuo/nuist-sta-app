@@ -47,6 +47,19 @@ WeekWidgetWeek _week(DateTime monday, Map<int, List<NotifyClass>> courses) =>
     );
 
 void main() {
+  test('0.75dp 网格线按密度取整且至少保留一个物理像素', () {
+    for (final (dpr, physicalPixels) in [
+      (0.75, 1),
+      (1.0, 1),
+      (1.5, 1),
+      (2.0, 2),
+      (3.0, 2),
+      (4.0, 3),
+    ]) {
+      expect(weekWidgetGridStroke(dpr) * dpr, closeTo(physicalPixels, 0.0001));
+    }
+  });
+
   final monday = DateTime(2026, 11, 23);
   final wednesday = DateTime(2026, 11, 25, 10);
 
@@ -147,7 +160,7 @@ void main() {
     expect(plan.weekLabel, '第13周');
   });
 
-  test('planWeekWidget：五列和七列共用行高下限，周末开关只改列宽和可见日', () {
+  test('planWeekWidget：周末开关只改变日列和可见日，不改变行高下限', () {
     final week = _week(monday, {
       6: [_course('选修课', DateTime(2026, 11, 28, 10), startNode: 3)],
     });
@@ -166,15 +179,54 @@ void main() {
     expect(weekend.weekdays, [1, 2, 3, 4, 5, 6, 7]);
     expect(weekend.blocks[6]!.single.primary.name, '选修课');
     expect(weekend.geometry.cellWidth, lessThan(weekdays.geometry.cellWidth));
-    expect(weekdays.geometry.rowHeight, weekend.geometry.cellWidth);
-    expect(weekend.geometry.rowHeight, weekend.geometry.cellWidth);
-    expect(
-      weekdays.geometry.fontReferenceWidth(3),
-      weekend.geometry.fontReferenceWidth(3),
-    );
+    expect(weekend.geometry.rowHeight, weekdays.geometry.rowHeight);
+    for (final geometry in [weekdays.geometry, weekend.geometry]) {
+      expect(geometry.unit, closeTo(geometry.gridWidth / 7, 0.001));
+      expect(geometry.rowHeight, greaterThanOrEqualTo(geometry.unit));
+      expect(
+        geometry.fontReferenceWidth(3),
+        ((geometry.unit - 2 * geometry.cellMargin) * 3).ceil() / 3,
+      );
+    }
   });
 
-  test('高度富余时铺满，低于七列列宽时只截断末节', () {
+  test('节次栏和两个表头各占八分之一，默认高度仍可截断', () {
+    const width = 360.0;
+    const height = 450.0;
+    const w = width / 8;
+    WeekWidgetGeometry geometry(int days, {bool showTimeColumn = true}) =>
+        WeekWidgetGeometry(
+          widthDp: width,
+          heightDp: height,
+          days: days,
+          totalRows: 11,
+          showTimeColumn: showTimeColumn,
+        );
+    for (final days in [5, 7]) {
+      final layout = geometry(days);
+      final noPeriod = geometry(days, showTimeColumn: false);
+      expect(layout.headerHeight, w);
+      expect(layout.weekdayHeight, w);
+      expect(layout.timeColumnWidth, w);
+      expect(layout.cellWidth, closeTo(7 * w / days, 0.001));
+      expect(layout.unit, closeTo(w, 0.001));
+      expect(layout.rowCount, 7);
+      expect(noPeriod.headerHeight, layout.headerHeight);
+      expect(noPeriod.weekdayHeight, layout.weekdayHeight);
+      expect(noPeriod.timeColumnWidth, 0);
+      expect(noPeriod.cellWidth, width / days);
+      expect(layout.rowHeight, greaterThanOrEqualTo(layout.unit));
+      expect(
+        layout.headerHeight +
+            layout.weekdayHeight +
+            layout.rowCount * layout.rowHeight +
+            WeekWidgetGeometry.bottomInset,
+        closeTo(height, 0.001),
+      );
+    }
+  });
+
+  test('先截去放不下的末节，可见节次铺满表体', () {
     final week = _week(monday, {
       1: [
         _course('晚课', monday.add(const Duration(hours: 19)), startNode: 11),
@@ -185,13 +237,21 @@ void main() {
       week: week,
       periods: _periods,
       prefs: const WeekWidgetPrefs(),
-      widthDp: 314, // (314 - 34) / 7 = 40
+      widthDp: 314,
       heightDp: height,
       today: wednesday,
     );
     final short = plan(318);
-    expect(short.rows.map((row) => row.node), [1, 2, 3, 4, 5]);
-    expect(short.geometry.rowHeight, 40);
+    expect(short.rows.map((row) => row.node), [1, 2, 3, 4, 5, 6]);
+    expect(short.geometry.rowHeight, greaterThanOrEqualTo(short.geometry.unit));
+    final fixedHeight =
+        short.geometry.headerHeight +
+        short.geometry.weekdayHeight +
+        WeekWidgetGeometry.bottomInset;
+    expect(
+      short.geometry.rowHeight * short.rows.length + fixedHeight,
+      closeTo(318, 0.001),
+    );
     expect(short.blocks[1], isEmpty);
     expect(short.hasCourses, isTrue, reason: '截断不等于没有课');
 
@@ -213,11 +273,11 @@ void main() {
     expect(geometry.compactText, isTrue);
     expect(geometry.cellMargin, 1);
     expect(geometry.cellPadding, 2);
-    expect(geometry.minimumTextSize, 9);
+    expect(geometry.minimumTextSize, 8);
     expect(
       geometry.rowHeight * tall.rows.length +
-          WeekWidgetGeometry.headerHeight +
-          WeekWidgetGeometry.weekdayHeight +
+          geometry.headerHeight +
+          geometry.weekdayHeight +
           WeekWidgetGeometry.bottomInset,
       closeTo(fullscreenHeight, 0.01),
     );

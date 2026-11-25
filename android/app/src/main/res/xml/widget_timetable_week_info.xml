@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- updatePeriodMillis=0：不用系统轮询，刷新由 AlarmManager 在上下课和零点触发 -->
-<!-- 初始占 4×5 格；可缩至约 4×4，最大尺寸对应约 9×9，由 Launcher 网格进一步限制。 -->
+<!-- 初始占 4×6 格；可缩至约 4×4，最大尺寸对应约 9×9，由 Launcher 网格进一步限制。 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="@dimen/wg_week_min_width"
     android:minHeight="@dimen/wg_week_min_height"
     android:targetCellWidth="4"
-    android:targetCellHeight="5"
+    android:targetCellHeight="6"
     android:resizeMode="horizontal|vertical"
     android:minResizeWidth="250dp"
     android:minResizeHeight="250dp"

@@ -3,7 +3,6 @@ package dev.duohuo.nuist_sta_app.widget
 import android.app.PendingIntent
 import android.content.Context
 import android.content.res.Configuration
-import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -19,7 +18,6 @@ import android.widget.RemoteViews
 import androidx.core.graphics.ColorUtils
 import dev.duohuo.nuist_sta_app.R
 import kotlin.math.ceil
-import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -39,7 +37,6 @@ internal class TimetableWeekWidgetContent(
     private val componentAlpha = (255 * componentOpacity).roundToInt()
     private val palette = WeekPalette
     private val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-    private val legacySlotSizes = mutableMapOf<Int, Bitmap>()
     private val textSizes = context.weekTextSizesForWidth(
         referenceWidth = geometry.fontReferenceWidth(density) - geometry.cellPadding * 2,
         factor = prefs.fontScale,
@@ -50,10 +47,10 @@ internal class TimetableWeekWidgetContent(
     fun build(open: PendingIntent, settings: PendingIntent, flip: PendingIntent): RemoteViews =
         views(R.layout.widget_timetable_week).apply {
             shape(R.id.wg_week_background, R.drawable.wg_week_bg, palette.surface)
-            textColor(R.id.wg_week_title, palette.heading)
-            textSize(R.id.wg_week_title, context.fitWeekFont(16f, 28f))
-            textColor(R.id.wg_week_number, palette.weekNumber)
-            textSize(R.id.wg_week_number, context.fitWeekFont(12f, 18f))
+            // 用空容器的 padding 定尺寸，避免依赖 Android 12 才有的 setViewLayoutHeight。
+            setViewPadding(R.id.wg_week_header_size, 0, 0, 0, pixels.headerHeight)
+            setViewPadding(R.id.wg_week_weekday_size, 0, 0, 0, pixels.weekdayHeight)
+            styleHeader(next != null)
             setOnClickPendingIntent(R.id.wg_week_open, open)
             setContentDescription(R.id.wg_week_open, if (snapshot.state == "loadFailed" && snapshot.displayWeek() != null) "更新失败，请打开课表刷新" else "打开课表")
 
@@ -68,7 +65,7 @@ internal class TimetableWeekWidgetContent(
             setOnClickPendingIntent(R.id.wg_week_flip, flip)
             clearWeekContent()
             val hasWeek = snapshot.displayWeek() != null
-            val showGrid = hasWeek && prefs.showGridLines && pixels.hasGrid
+            val showGrid = hasWeek && prefs.showGridLines && current.rows.isNotEmpty()
             // 完整刷新替换旧网格；翻周仍不碰网格。
             removeAllViews(R.id.wg_week_grid_layer)
             visible(R.id.wg_week_grid_layer, showGrid)
@@ -84,6 +81,30 @@ internal class TimetableWeekWidgetContent(
             }
         }
 
+    private fun RemoteViews.styleHeader(canFlip: Boolean) {
+        val title = context.getString(R.string.wg_week_label)
+        val nextTitle = context.getString(R.string.wg_week_next_label)
+        val titles = if (canFlip) listOf(title, nextTitle) else listOf(title)
+        val numberLabels = listOf(current.weekLabel, next?.weekLabel.orEmpty()).filter { it.isNotEmpty() }
+        // 跟 XML 的标题内距和按钮宽度一致，尺寸预算扣掉它们后再按像素测字。
+        val textWidth = pixels.width - pixels.dp(18f) - pixels.dp(8f) - pixels.dp(4f) -
+            pixels.dp(44f) * (if (canFlip) 2 else 1)
+        // 与 XML 的 14dp 留白预算一致；视觉平移不改变可用于测字的高度。
+        val textHeight = pixels.headerHeight - pixels.dp(14f) - 2 * pixels.dp(3f)
+        val numberSize = numberLabels.minOfOrNull { label ->
+            context.fitWeekAxisFonts(label, 11f, "", 0f, textWidth / 2, textHeight).first
+        } ?: 11f
+        val numberPaint = context.weekTextPaint(numberSize)
+        val numberWidth = ceil(numberLabels.maxOfOrNull { numberPaint.measureText(it) } ?: 0f).toInt()
+        val titleSize = titles.minOf { label ->
+            context.fitWeekAxisFonts(label, 16f, "", 0f, textWidth - numberWidth, textHeight, primaryMedium = true).first
+        }
+        textColor(R.id.wg_week_title, palette.heading)
+        textSize(R.id.wg_week_title, titleSize)
+        textColor(R.id.wg_week_number, palette.weekNumber)
+        textSize(R.id.wg_week_number, numberSize)
+    }
+
     private fun RemoteViews.clearWeekContent() {
         // 缩放时宿主可重应用旧根布局；先移除动态列，不复用列内已挂载的节次。
         for (container in listOf(
@@ -95,37 +116,20 @@ internal class TimetableWeekWidgetContent(
     }
 
     private fun RemoteViews.addGrid() {
-        val height = pixels.gridHeight
-        if (Build.VERSION.SDK_INT >= 31) {
-            setViewLayoutHeight(R.id.wg_week_grid_layer, height.toFloat(), TypedValue.COMPLEX_UNIT_PX)
-        }
-        setViewPadding(R.id.wg_week_grid_layer, pixels.periodWidth, 0, 0,
-            if (Build.VERSION.SDK_INT >= 31) 0 else pixels.bodyHeight - height)
+        setViewPadding(R.id.wg_week_grid_layer, pixels.periodWidth, 0, 0, 0)
         addView(R.id.wg_week_grid_layer, views(R.layout.widget_timetable_week_grid).apply {
             repeat(current.weekdays.size) {
                 addView(R.id.wg_week_grid_columns, views(R.layout.widget_timetable_week_grid_column).apply {
                     gridLineColor(R.id.wg_week_grid_column_line)
                 })
             }
-            val stroke = context.resources.getDimensionPixelSize(R.dimen.wg_week_grid_stroke)
-            val lastTop = (height - stroke).coerceAtLeast(0)
-            for (row in 0..current.rows.size) {
-                val top = (pixels.y(row) - stroke / 2).coerceIn(0, lastTop)
+            repeat(current.rows.size) {
                 val line = views(R.layout.widget_timetable_week_grid_row).apply {
                     gridLineColor(R.id.wg_week_grid_row_line)
                 }
-                val positioned = if (Build.VERSION.SDK_INT >= 31) {
-                    line.apply {
-                        setViewLayoutMargin(R.id.wg_week_grid_row_line, RemoteViews.MARGIN_TOP, top.toFloat(), TypedValue.COMPLEX_UNIT_PX)
-                    }
-                } else {
-                    views(R.layout.widget_timetable_week_grid_row_anchor).apply {
-                        setViewPadding(R.id.wg_week_grid_row_anchor, 0, top, 0, 0)
-                        addView(R.id.wg_week_grid_row_anchor, line)
-                    }
-                }
-                addView(R.id.wg_week_grid_rows, positioned)
+                addView(R.id.wg_week_grid_rows, slot(1, line))
             }
+            gridLineColor(R.id.wg_week_grid_bottom_line)
         })
     }
 
@@ -140,18 +144,24 @@ internal class TimetableWeekWidgetContent(
         setViewPadding(bodyId, pixels.periodWidth, 0, 0, 0)
         if (pixels.periodWidth > 0) {
             val month = plan.month?.let { "${it}月" }.orEmpty()
-            addView(daysId, column(axis(month, context.fitWeekFont(10f, 11f), palette.hint), period = true))
+            val monthLabel = axis(month, 9f, palette.hint, pixels.periodWidth, pixels.weekdayHeight)
+            addView(daysId, column(monthLabel, period = true))
         }
         for ((dayIndex, weekday) in plan.weekdays.withIndex()) {
             val today = plan.todayWeekday == weekday
             val events = plan.unplaced[weekday].orEmpty()
             val label = weekWeekdayLabels[weekday - 1]
             val date = plan.dates[weekday].orEmpty()
+            val dayWidth = pixels.x(dayIndex + 1) - pixels.x(dayIndex)
             val header = axis(
-                label, context.fitWeekFont(prefs.headerTextSize, if (events.isEmpty()) 13f else 11f),
-                if (today) palette.accent else palette.label,
-                date, context.fitWeekFont(10f, if (events.isEmpty()) 11f else 9f),
-                if (today) palette.accent else palette.hint,
+                label = label,
+                labelSp = prefs.headerTextSize,
+                color = if (today) palette.accent else palette.label,
+                width = dayWidth,
+                height = pixels.weekdayHeight - if (events.isEmpty()) 0 else pixels.dp(4f) + pixels.dp(1f),
+                detail = date,
+                detailSp = 9f,
+                detailColor = if (today) palette.accent else palette.hint,
             ).apply {
                 if (today) {
                     visible(R.id.wg_week_axis_today, true)
@@ -169,21 +179,21 @@ internal class TimetableWeekWidgetContent(
                 })
             }
             addView(daysId, column(header))
-            val dayWidth = pixels.x(dayIndex + 1) - pixels.x(dayIndex)
             val day = column().apply {
                 var end = 0
+                val margin = pixels.dp(geometry.cellMargin)
                 for (block in plan.blocks[weekday].orEmpty()) {
-                    val start = pixels.y(block.startNode - 1)
-                    if (start > end) addView(R.id.wg_week_column, slot(null, start - end))
-                    end = pixels.y(block.endNode)
-                    val margin = pixels.dp(geometry.cellMargin)
-                    if (dayWidth <= margin * 2 || end - start <= margin * 2) {
-                        addView(R.id.wg_week_column, slot(null, end - start))
-                    } else {
-                        val cell = courseCell(dayWidth - margin * 2, end - start - margin * 2, weekday, block)
-                        addView(R.id.wg_week_column, slot(cell, end - start, R.id.wg_week_course_cell, margin))
-                    }
+                    val start = block.startNode - 1
+                    if (start > end) addView(R.id.wg_week_column, slot(start - end))
+                    end = block.endNode
+                    val span = end - start
+                    val width = dayWidth - margin * 2
+                    val textBudget = pixels.dp(plan.geometry.rowHeight * span) - margin * 2
+                    val child = if (width > 0 && textBudget > 0) courseCell(width, textBudget, weekday, block) else null
+                    addView(R.id.wg_week_column, slot(span, child, margin))
                 }
+                val tail = plan.rows.size - end
+                if (tail > 0) addView(R.id.wg_week_column, slot(tail))
             }
             addView(bodyId, day)
         }
@@ -193,13 +203,18 @@ internal class TimetableWeekWidgetContent(
         if (pixels.periodWidth == 0) return
         val periods = column(period = true).apply {
             for (row in current.rows) {
-                val height = pixels.y(row.node) - pixels.y(row.node - 1)
-                if (height <= 0) continue
                 val times = row.period?.let { "${it.start}\n${it.end}" }.orEmpty()
-                val limit = height / density / if (times.isEmpty()) 1.2f else 3.8f
-                val label = axis(row.node.toString(), context.fitWeekFont(12f, limit * 1.33f), palette.heading,
-                    times, context.fitWeekFont(9f, limit), palette.hint)
-                addView(R.id.wg_week_column, slot(label, height, R.id.wg_week_axis))
+                val label = axis(
+                    label = row.node.toString(),
+                    labelSp = 12f,
+                    color = palette.heading,
+                    width = pixels.periodWidth,
+                    height = pixels.dp(geometry.rowHeight),
+                    detail = times,
+                    detailSp = 9f,
+                    detailColor = palette.hint,
+                )
+                addView(R.id.wg_week_column, slot(1, label))
             }
         }
         addView(R.id.wg_week_periods, periods)
@@ -207,6 +222,7 @@ internal class TimetableWeekWidgetContent(
 
     private fun column(header: RemoteViews? = null, period: Boolean = false) =
         views(if (period) R.layout.widget_timetable_week_period_column else R.layout.widget_timetable_week_column).apply {
+            if (period) setViewPadding(R.id.wg_week_period_size, pixels.periodWidth, 0, 0, 0)
             if (header != null) addView(R.id.wg_week_column, header)
         }
 
@@ -214,12 +230,19 @@ internal class TimetableWeekWidgetContent(
         label: String,
         labelSp: Float,
         color: WeekColor,
+        width: Int,
+        height: Int,
         detail: String = "",
         detailSp: Float = 0f,
         detailColor: WeekColor = color,
     ) = views(R.layout.widget_timetable_week_axis).apply {
-        text(R.id.wg_week_axis_label, label, labelSp, color)
-        if (detail.isNotEmpty()) text(R.id.wg_week_axis_detail, detail, detailSp, detailColor)
+        val (primarySize, secondarySize) = context.fitWeekAxisFonts(
+            label, labelSp, detail, detailSp,
+            width - 2 * pixels.dp(2f), height - 2 * pixels.dp(2f),
+            primaryMedium = true,
+        )
+        text(R.id.wg_week_axis_label, label, primarySize, color)
+        if (detail.isNotEmpty()) text(R.id.wg_week_axis_detail, detail, secondarySize, detailColor)
     }
 
     private fun courseCell(width: Int, height: Int, weekday: Int, block: WeekCourseBlock): RemoteViews {
@@ -278,31 +301,14 @@ internal class TimetableWeekWidgetContent(
 
     private fun views(layout: Int) = RemoteViews(context.packageName, layout)
 
-    /** 节次高度使用固定 LayoutParams；旧平台用透明高条为 RelativeLayout 提供同一高度。 */
-    private fun slot(content: RemoteViews?, height: Int, viewId: Int = R.id.wg_week_gap, margin: Int = 0): RemoteViews {
-        if (Build.VERSION.SDK_INT >= 31) {
-            return (content ?: views(R.layout.widget_timetable_week_gap)).apply {
-                setViewLayoutHeight(viewId, (height - margin * 2).toFloat(), TypedValue.COMPLEX_UNIT_PX)
-                if (margin > 0) {
-                    for (side in listOf(RemoteViews.MARGIN_LEFT, RemoteViews.MARGIN_TOP, RemoteViews.MARGIN_RIGHT, RemoteViews.MARGIN_BOTTOM)) {
-                        setViewLayoutMargin(viewId, side, margin.toFloat(), TypedValue.COMPLEX_UNIT_PX)
-                    }
-                }
-            }
-        }
-        return views(R.layout.widget_timetable_week_slot).apply {
-            val sizer = legacySlotSizes.getOrPut(height.coerceAtLeast(1)) {
-                Bitmap.createBitmap(1, height.coerceAtLeast(1), Bitmap.Config.ARGB_8888).apply {
-                    density = context.resources.displayMetrics.densityDpi
-                }
-            }
-            setImageViewBitmap(R.id.wg_week_slot_height, sizer)
+    /** 列的总权重固定为可见节数；由 Launcher 给每个块分配真实高度。 */
+    private fun slot(span: Int, content: RemoteViews? = null, margin: Int = 0): RemoteViews =
+        views(weekSlotLayouts[span - 1]).apply {
             if (content != null) {
-                setViewPadding(R.id.wg_week_slot_content, margin, margin, margin, margin)
+                if (margin != 0) setViewPadding(R.id.wg_week_slot_content, margin, margin, margin, margin)
                 addView(R.id.wg_week_slot_content, content)
             }
         }
-    }
 
     private fun RemoteViews.textColor(id: Int, color: WeekColor, opacity: Float = componentOpacity) {
         val light = color.light.withOpacity(opacity)
@@ -351,19 +357,31 @@ internal fun RemoteViews.applyWeekSelection(context: Context, showNext: Boolean,
     setContentDescription(R.id.wg_week_flip, context.getString(if (showNext) R.string.wg_week_switch_current else R.string.wg_week_switch_next))
 }
 
-// 日期行与表体在 XML 中分开；节次、网格、课程均以表体左上角为原点。
+// 框架比例和测字使用同一份宿主尺寸，表体的实际行列边界仍由 XML 权重决定。
 private class WeekPixels(size: SizeF, private val density: Float, private val plan: WeekPlan) {
     val width = dp(size.width)
-    val weekdayHeight = dp(WeekGeometry.WEEKDAY_HEIGHT)
-    val bodyHeight = (dp(size.height) - dp(WeekGeometry.HEADER_HEIGHT) - weekdayHeight).coerceAtLeast(0)
     val periodWidth = dp(plan.geometry.periodWidth)
-    val gridHeight get() = y(plan.rows.size)
-    val hasGrid get() = width > periodWidth && gridHeight > 0
+    val headerHeight = dp(plan.geometry.headerHeight)
+    val weekdayHeight = dp(plan.geometry.weekdayHeight)
 
     fun dp(size: Float) = (size * density).roundToInt()
     fun x(column: Int) = periodWidth + ((width - periodWidth) * column / plan.weekdays.size.toFloat()).roundToInt()
-    fun y(row: Int) = dp(plan.geometry.rowHeight * row).coerceAtMost(bodyHeight)
 }
+
+// RemoteViews 不能动态设置 layout_weight。模板的权重对应 1 至 11 节。
+private val weekSlotLayouts = intArrayOf(
+    R.layout.widget_timetable_week_slot,
+    R.layout.widget_timetable_week_slot_2,
+    R.layout.widget_timetable_week_slot_3,
+    R.layout.widget_timetable_week_slot_4,
+    R.layout.widget_timetable_week_slot_5,
+    R.layout.widget_timetable_week_slot_6,
+    R.layout.widget_timetable_week_slot_7,
+    R.layout.widget_timetable_week_slot_8,
+    R.layout.widget_timetable_week_slot_9,
+    R.layout.widget_timetable_week_slot_10,
+    R.layout.widget_timetable_week_slot_11,
+)
 
 private fun RemoteViews.visible(id: Int, visible: Boolean) = setViewVisibility(id, if (visible) View.VISIBLE else View.GONE)
 private fun RemoteViews.textSize(id: Int, size: Float) = setTextViewTextSize(id, TypedValue.COMPLEX_UNIT_SP, size)
@@ -380,12 +398,8 @@ private const val REGULAR_FONT = "sans-serif"
 private fun Context.spPx(size: Float): Float =
     TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, size, resources.displayMetrics)
 
-private fun Context.fitWeekFont(size: Float, maxDp: Float): Float =
-    size * (maxDp * resources.displayMetrics.density / spPx(size)).coerceAtMost(1f)
-
-private const val CELL_MIN_TEXT_SIZE = 10f
-private const val CELL_NAME_SIZE = 12f
-private const val CELL_SUB_SIZE = 11f
+private const val CELL_NAME_SIZE = 11f
+private const val CELL_SUB_SIZE = 10f
 private const val TEXT_EPSILON = 0.01f
 
 private data class WeekTextSizes(val name: Float, val sub: Float, val step: Float, val minimum: Float)
@@ -404,11 +418,46 @@ private fun weekTextLayout(text: String, paint: TextPaint, width: Int): StaticLa
         .apply { if (Build.VERSION.SDK_INT >= 28) setUseLineSpacingFromFallbacks(true) }
         .build()
 
+/** 先以当前系统的 sp → px 转换测量，再按容器的物理像素预算缩小。 */
+private fun Context.fitWeekAxisFonts(
+    label: String,
+    labelSp: Float,
+    detail: String,
+    detailSp: Float,
+    widthPx: Int,
+    heightPx: Int,
+    primaryMedium: Boolean = false,
+): Pair<Float, Float> {
+    fun fits(scale: Float): Boolean {
+        var measuredWidth = 0
+        var measuredHeight = 0
+        fun measure(text: String, size: Float, medium: Boolean = false) {
+            if (text.isEmpty()) return
+            val paint = weekTextPaint(size * scale, medium)
+            val lineWidth = ceil(text.lineSequence().maxOf { paint.measureText(it) }).toInt()
+            measuredWidth = max(measuredWidth, lineWidth)
+            measuredHeight += weekTextLayout(text, paint, lineWidth + 1).height
+        }
+        measure(label, labelSp, primaryMedium)
+        measure(detail, detailSp)
+        return measuredWidth <= widthPx && measuredHeight <= heightPx
+    }
+    if (fits(1f)) return labelSp to detailSp
+    var low = 0f
+    var high = 1f
+    // Android 14 起系统字号缩放可能是非线性的，不能直接拿 px 比例换算 sp。
+    repeat(8) {
+        val mid = (low + high) / 2f
+        if (fits(mid)) low = mid else high = mid
+    }
+    return labelSp * low to detailSp * low
+}
+
 /** 对应 TimetableTheme.cellTextSizesForWidth：七列格宽量「课课课」，副文字等比缩小。 */
 private fun Context.weekTextSizesForWidth(
     referenceWidth: Float,
     factor: Float,
-    minSize: Float = CELL_MIN_TEXT_SIZE,
+    minSize: Float,
     referenceText: String = "课课课",
 ): WeekTextSizes {
     val density = resources.displayMetrics.density
@@ -574,7 +623,7 @@ private object WeekPalette {
     val label = WeekColor(0xFF4A4F66, 0xFFC8CBD2)
     val weekNumber = WeekColor(0xFF5F6675, 0xFFAAB1C1)
     val hint = WeekColor(0xFF9AA0B4, 0xFF8A8F99)
-    // 与 Dart 设置预览的 1dp 网格色对齐。
+    // 与 Dart 设置预览的网格色对齐。
     val divider = WeekColor(0xFFD9DDE3, 0xFF454851)
     val accent = WeekColor(0xFF0082EF, 0xFF4DA3F5)
     val today = WeekColor(0x1F0082EF, 0x2E4DA3F5)

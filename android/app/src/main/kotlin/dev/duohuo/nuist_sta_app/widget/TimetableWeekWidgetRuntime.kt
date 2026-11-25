@@ -27,7 +27,7 @@ import kotlin.math.abs
 /** 课程布局在后台生成；发布完整布局和翻周只在主线程串行应用。 */
 internal object TimetableWeekWidgetRuntime {
     const val ACTION_FLIP = "dev.duohuo.nuist_sta_app.WIDGET_WEEK_FLIP"
-    private const val LAYOUT_VERSION = 7
+    private const val LAYOUT_VERSION = 11
     private const val PENDING_FLAGS = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     private val main = Handler(Looper.getMainLooper())
     // 只在主线程访问。应用进程死亡后的首次点击才从持久状态恢复。
@@ -137,7 +137,7 @@ internal object TimetableWeekWidgetRuntime {
             .setAction(ACTION_FLIP).putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id), PENDING_FLAGS,
     )
 
-    /** 使用当前方向的宿主内容尺寸，保持单一根布局，让同一份局部补丁适用。 */
+    /** 估算当前方向的节数和文字预算；实际行高由宿主测量权重布局。 */
     @Suppress("DEPRECATION")
     private fun Context.contentSize(options: Bundle): SizeF {
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE

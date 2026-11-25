@@ -18,6 +18,10 @@ import 'timetable_week_layout.dart';
 const kWeekWidgetGridLight = Color(0xFFD9DDE3);
 const kWeekWidgetGridDark = Color(0xFF454851);
 
+/// 与 Android 尺寸资源的 0.75dp 取整一致，至少保留一个物理像素。
+double weekWidgetGridStroke(double devicePixelRatio) =>
+    math.max(1, (0.75 * devicePixelRatio).round()) / devicePixelRatio;
+
 /// 周课表的显示设置；地点常显，教师、节次开关与 4×2 共用。
 @immutable
 class WeekWidgetPrefs {
@@ -169,28 +173,28 @@ const int kWeekWidgetMaxRows = TimetableTheme.defaultNodesPerDay;
 /// 周组件复用 App 的节次列与格子样式；表头和行高按桌面宿主尺寸计算。
 @immutable
 class WeekWidgetGeometry {
-  WeekWidgetGeometry({
+  const WeekWidgetGeometry({
     required double widthDp,
     required double heightDp,
     required this.days,
     required this.totalRows,
-    required bool showTimeColumn,
-  }) : timeColumnWidth = showTimeColumn
-           ? math.min(widthDp, TimetableTheme.periodColumnWidth)
-           : 0,
-       _width = widthDp,
+    required this._showTimeColumn,
+  }) : _width = widthDp,
        _height = heightDp;
 
-  static const double headerHeight = 44;
-  static const double weekdayHeight = 36;
   static const double bottomInset = 2;
 
   final double _width;
   final double _height;
+  final bool _showTimeColumn;
   final int days;
   final int totalRows;
 
-  final double timeColumnWidth;
+  // W 固定按七列加节次栏计算；显示周末或节次栏的开关不改变基准。
+  double get _baseWidth => _width / 8;
+  double get headerHeight => _baseWidth;
+  double get weekdayHeight => _baseWidth;
+  double get timeColumnWidth => _showTimeColumn ? _baseWidth : 0;
   bool get showTimeColumn => timeColumnWidth > 0;
   double get gridWidth => math.max(0, _width - timeColumnWidth);
   double get cellWidth => gridWidth / days;
@@ -199,9 +203,9 @@ class WeekWidgetGeometry {
   bool get compactText => days == 7 && cellWidth < 46;
   double get cellMargin => compactText ? 1 : TimetableTheme.cellMargin;
   double get cellPadding => compactText ? 2 : 4;
-  double get minimumTextSize => days == 7 ? 9 : 10;
+  double get minimumTextSize => days == 7 ? 8 : 9;
 
-  /// 总用完整七列的列宽作行高下限，隐藏周末不改变下限。
+  /// 扣除节次栏后，总按七列均分课程区宽度作为行高下限。
   double get unit => gridWidth / 7;
 
   /// 按七列的格面取整，只用于字号；换行仍用实际显示列的内容宽度。
@@ -213,12 +217,11 @@ class WeekWidgetGeometry {
   double get _available =>
       math.max(0, _height - headerHeight - weekdayHeight - bottomInset);
 
-  /// 不足时保持最小行高，仅从末尾丢弃放不下的整行。
+  /// 不足时先按最小行高截去末节，再由可见节次平分整个表体。
   int get rowCount =>
       unit > 0 ? math.min(totalRows, (_available / unit).floor()) : 0;
-  double get rowHeight => rowCount == totalRows && rowCount > 0
-      ? math.max(unit, _available / rowCount)
-      : unit;
+  double get rowHeight =>
+      rowCount > 0 ? math.max(unit, _available / rowCount) : unit;
 }
 
 /// 一行节次及其起止作息。

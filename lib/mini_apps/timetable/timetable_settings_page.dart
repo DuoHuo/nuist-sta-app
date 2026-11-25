@@ -618,7 +618,7 @@ class _TimetableWidgetSettingsPageState
           value: switch (_size) {
             WidgetPinSize.wide => '4×2',
             WidgetPinSize.square => '2×2',
-            WidgetPinSize.week => '4×5',
+            WidgetPinSize.week => '4×6',
           },
           showChevron: true,
           enabled: !_pinning,
@@ -818,10 +818,7 @@ class _WeekWidgetSettingsPreview extends StatelessWidget {
           final width = math.min(constraints.maxWidth, 360.0);
           final height = width * 1.25;
           final visibleHeight = math.min(height, math.max(0.0, maxHeight - 16));
-          if (visibleHeight == 0 ||
-              height <
-                  WeekWidgetGeometry.headerHeight +
-                      WeekWidgetGeometry.weekdayHeight) {
+          if (visibleHeight == 0) {
             return const SizedBox.shrink();
           }
           final plan = planWeekWidget(
@@ -884,60 +881,66 @@ class _WeekWidgetPreviewGrid extends StatelessWidget {
       color: prefs.componentColor(
         colors.isDark ? const Color(0xFFAAB1C1) : const Color(0xFF5F6675),
       ),
-    );
+    ).copyWith(fontSize: 11);
     final height = geometry.rowHeight * plan.rows.length;
     final dpr = MediaQuery.devicePixelRatioOf(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SizedBox(
-          height: WeekWidgetGeometry.headerHeight,
+          height: geometry.headerHeight,
           child: Padding(
-            padding: const EdgeInsets.only(
-              left: TimetableTheme.pagePaddingH,
-              right: 8,
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _fitted(
-                    Text('当周课表', maxLines: 1, style: heading),
-                    alignment: Alignment.centerLeft,
-                  ),
-                ),
-                if (plan.weekLabel.isNotEmpty)
-                  Flexible(
-                    child: _fitted(
-                      Text(plan.weekLabel, maxLines: 1, style: weekStyle),
-                      alignment: Alignment.centerRight,
+            // 标题行整体比 v24 上移 3dp，行高与文字预算均不变。
+            padding: const EdgeInsets.only(top: 11, bottom: 3),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 3, 8, 3),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: _fitted(
+                        Text('当周课表', maxLines: 1, style: heading),
+                        alignment: Alignment.centerLeft,
+                      ),
                     ),
                   ),
-                for (final icon in [Icons.arrow_forward, Icons.settings])
-                  SizedBox(
-                    width: 44,
-                    child: Icon(
-                      icon,
-                      size: 18,
-                      color: prefs.componentColor(colors.labelText),
+                  if (plan.weekLabel.isNotEmpty)
+                    Flexible(
+                      child: _fitted(
+                        Text(plan.weekLabel, maxLines: 1, style: weekStyle),
+                        alignment: Alignment.centerRight,
+                      ),
                     ),
-                  ),
-              ],
+                  for (final icon in [Icons.arrow_forward, Icons.settings])
+                    SizedBox(
+                      width: 44,
+                      child: Icon(
+                        icon,
+                        size: 18,
+                        color: prefs.componentColor(colors.labelText),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
         SizedBox(
-          height: WeekWidgetGeometry.weekdayHeight,
+          height: geometry.weekdayHeight,
           child: Row(
             children: [
               if (geometry.showTimeColumn)
                 SizedBox(
                   width: geometry.timeColumnWidth,
                   child: _fitted(
+                    padding: const EdgeInsets.all(2),
                     Text(
                       '${plan.month}月',
                       style: TimetableTheme.microStyle(
                         color: prefs.componentColor(colors.hint),
-                      ),
+                      ).copyWith(fontSize: 9),
                     ),
                   ),
                 ),
@@ -990,60 +993,68 @@ class _WeekWidgetPreviewGrid extends StatelessWidget {
   Widget _dayHeader(int weekday, TimetableColors colors) {
     final today = plan.todayWeekday == weekday;
     final dot = plan.unplaced[weekday]?.firstOrNull;
-    return Container(
+    return Stack(
       key: ValueKey('tt_widget_preview_week_header_$weekday'),
-      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      decoration: today
-          ? BoxDecoration(
-              color: prefs.componentColor(colors.accentSoft),
-              borderRadius: BorderRadius.circular(
-                TimetableTheme.todayHeaderRadius,
-              ),
-            )
-          : null,
-      child: _fitted(
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              _weekdayShort(weekday),
-              style: TextStyle(
-                fontSize: prefs.headerTextSize,
-                fontWeight: FontWeight.w500,
-                height: 1.1,
-                color: prefs.componentColor(
-                  today ? colors.accent : colors.labelText,
+      fit: StackFit.expand,
+      children: [
+        if (today)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: prefs.componentColor(colors.accentSoft),
+                borderRadius: BorderRadius.circular(
+                  TimetableTheme.todayHeaderRadius,
                 ),
               ),
             ),
-            Text(
-              '${plan.dates[weekday]}',
-              style: TimetableTheme.microStyle(
-                color: prefs.componentColor(
-                  today ? colors.accent : colors.hint,
+          ),
+        _fitted(
+          padding: const EdgeInsets.all(2),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _weekdayShort(weekday),
+                style: TextStyle(
+                  fontSize: prefs.headerTextSize,
+                  fontWeight: FontWeight.w500,
+                  height: 1.1,
+                  color: prefs.componentColor(
+                    today ? colors.accent : colors.labelText,
+                  ),
                 ),
               ),
-            ),
-            if (dot != null) ...[
-              const SizedBox(height: 1),
-              Container(
-                width: 4,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: prefs.componentColor(Color(dot.barColor)),
-                  shape: BoxShape.circle,
-                ),
+              Text(
+                '${plan.dates[weekday]}',
+                style: TimetableTheme.microStyle(
+                  color: prefs.componentColor(
+                    today ? colors.accent : colors.hint,
+                  ),
+                ).copyWith(fontSize: 9),
               ),
+              if (dot != null) ...[
+                const SizedBox(height: 1),
+                Container(
+                  width: 4,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: prefs.componentColor(Color(dot.barColor)),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 
   Widget _periodLabel(WeekWidgetRow row, TimetableColors colors) => SizedBox(
     height: plan.geometry.rowHeight,
     child: _fitted(
+      padding: const EdgeInsets.all(2),
       Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1145,6 +1156,8 @@ class _WeekWidgetPreviewGrid extends StatelessWidget {
                 ),
                 nameStyle: base.merge(nameStyle),
                 factor: prefs.fontScale.factor,
+                nameBaseSize: TimetableTheme.cellSize - 1,
+                subBaseSize: TimetableTheme.cellSubSize - 1,
                 minSize: geometry.minimumTextSize,
                 referenceText: geometry.compactText ? '课课课课' : '课课课',
                 textScaler: scaler,
@@ -1318,9 +1331,13 @@ class _WeekWidgetPreviewGrid extends StatelessWidget {
   static Widget _fitted(
     Widget child, {
     Alignment alignment = Alignment.center,
-  }) => Align(
-    alignment: alignment,
-    child: FittedBox(fit: BoxFit.scaleDown, child: child),
+    EdgeInsets padding = EdgeInsets.zero,
+  }) => Padding(
+    padding: padding,
+    child: Align(
+      alignment: alignment,
+      child: FittedBox(fit: BoxFit.scaleDown, child: child),
+    ),
   );
 }
 
@@ -1333,18 +1350,18 @@ class _WeekWidgetPreviewLines extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 与 Android 尺寸资源取整方式一致，低密度也至少保留一个像素。
-    final strokeWidth =
-        math.max(1, (0.5 * devicePixelRatio).round()) / devicePixelRatio;
+    final strokeWidth = weekWidgetGridStroke(devicePixelRatio);
+    double snap(double offset) =>
+        (offset * devicePixelRatio).round() / devicePixelRatio;
     final lines = Path();
     for (var i = 0; i <= plan.rows.length; i++) {
-      final y = (i * plan.geometry.rowHeight - strokeWidth / 2)
+      final y = snap(i * plan.geometry.rowHeight)
           .clamp(0.0, math.max(0.0, size.height - strokeWidth))
           .toDouble();
       lines.addRect(Rect.fromLTWH(0, y, size.width, strokeWidth));
     }
     for (var i = 0; i < plan.weekdays.length; i++) {
-      final x = i * plan.geometry.cellWidth;
+      final x = snap(i * plan.geometry.cellWidth);
       lines.addRect(Rect.fromLTWH(x, 0, strokeWidth, size.height));
     }
     // 一次上色，交点不会因为多画一层而比线条更不透明。

@@ -61,7 +61,7 @@ abstract final class TtSettingsText {
     final add = switch (size) {
       WidgetPinSize.wide => ('添加「今日课表」', '选择 4×2，长按并拖到桌面空白处。'),
       WidgetPinSize.square => ('添加「当前/下一节」', '选择 2×2，长按并拖到桌面空白处。'),
-      WidgetPinSize.week => ('添加「当周课表」', '选择 4×5，长按并拖到桌面空白处。'),
+      WidgetPinSize.week => ('添加「当周课表」', '选择 4×6，长按并拖到桌面空白处。'),
     };
     return switch (result) {
       WidgetPinResult.permissionRequired => [

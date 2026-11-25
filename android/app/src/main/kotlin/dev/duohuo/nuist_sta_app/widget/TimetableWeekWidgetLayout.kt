@@ -14,26 +14,27 @@ internal data class WeekCourseBlock(val startNode: Int, val endNode: Int, val co
 
 /** App 周视图尺寸；纵向行高单独按 Launcher 允许的高度拉伸。 */
 internal class WeekGeometry(widthDp: Float, heightDp: Float, days: Int, totalRows: Int, showPeriod: Boolean) {
-    val periodWidth = if (showPeriod) min(widthDp, PERIOD_COLUMN_WIDTH) else 0f
+    // W 固定按七列加节次栏计算；显示周末或节次栏的开关不改变基准。
+    private val baseWidth = widthDp / 8f
+    val headerHeight = baseWidth
+    val weekdayHeight = baseWidth
+    val periodWidth = if (showPeriod) baseWidth else 0f
     private val gridWidth = (widthDp - periodWidth).coerceAtLeast(0f)
     val dayWidth = gridWidth / days
     val compactText = days == 7 && dayWidth < 46f
     val cellMargin = if (compactText) 1f else 1.5f
     val cellPadding = if (compactText) 2f else 4f
-    val minimumTextSize = if (days == 7) 9f else 10f
+    val minimumTextSize = if (days == 7) 8f else 9f
     private val unit = gridWidth / 7f
-    private val available = (heightDp - HEADER_HEIGHT - WEEKDAY_HEIGHT - BOTTOM_INSET).coerceAtLeast(0f)
+    private val available = (heightDp - headerHeight - weekdayHeight - BOTTOM_INSET).coerceAtLeast(0f)
     val rowCount = if (unit > 0f) floor(available / unit).toInt().coerceIn(0, totalRows) else 0
-    val rowHeight = if (rowCount == totalRows && rowCount > 0) max(unit, available / rowCount) else unit
+    val rowHeight = if (rowCount > 0) max(unit, available / rowCount) else unit
 
     // 与 App 相同，格面宽向上对齐物理像素，扣除内距后才供测字。
     fun fontReferenceWidth(density: Float): Float =
         ceil((unit - cellMargin * 2) * density) / density
 
     companion object {
-        const val HEADER_HEIGHT = 44f
-        const val WEEKDAY_HEIGHT = 36f
-        const val PERIOD_COLUMN_WIDTH = 34f
         // 留出宿主布局的像素取整与卡片底边，不把最后一节压到裁切线上。
         private const val BOTTOM_INSET = 2f
         const val MAX_ROWS = 11

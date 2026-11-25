@@ -635,6 +635,8 @@ abstract final class TimetableTheme {
     required double maxWidth,
     required TextStyle nameStyle,
     double factor = 1,
+    double nameBaseSize = cellSize,
+    double subBaseSize = cellSubSize,
     double minSize = 10,
     String referenceText = '课课课',
     TextScaler textScaler = TextScaler.noScaling,
@@ -649,6 +651,8 @@ abstract final class TimetableTheme {
       maxWidth,
       nameStyle,
       factor,
+      nameBaseSize,
+      subBaseSize,
       minSize,
       referenceText,
       textScaler,
@@ -660,7 +664,7 @@ abstract final class TimetableTheme {
       return cached;
     }
     final initialSize = cellFontSize(
-      cellSize,
+      nameBaseSize,
       factor,
       textScaler,
       minSize: minSize,
@@ -689,7 +693,7 @@ abstract final class TimetableTheme {
     final sizes = (
       nameSize: nameSize,
       subSize: cellFontSize(
-        cellSubSize,
+        subBaseSize,
         factor * nameSize / initialSize,
         textScaler,
         minSize: minSize,

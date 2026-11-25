@@ -14,6 +14,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_bridge.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_widgets.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 
@@ -511,6 +512,22 @@ void main() {
     expect(find.byKey(const Key('tt_widget_preview_4x2')), findsOneWidget);
   });
 
+  testWidgets('当周课表的添加行和手动引导显示 4×6', (tester) async {
+    final a = _FakeActions(_perm())..pinResult = WidgetPinResult.manual;
+    await pump(tester, a);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ChoiceChip, '当周课表'));
+    await tester.pumpAndSettle();
+
+    final pinRow = find.byKey(const Key('tt_settings_widget_pin'));
+    expect(tester.widget<TimetableSettingsRow>(pinRow).value, '4×6');
+    await tester.tap(pinRow);
+    await tester.pumpAndSettle();
+    expect(a.calls, ['pin:week']);
+    expect(find.text('选择 4×6，长按并拖到桌面空白处。'), findsOneWidget);
+  });
+
   testWidgets('4×5 当周课表：切换设置立即刷新预览，并仍传 week 添加尺寸', (tester) async {
     final a = _FakeActions(_perm())..pinResult = WidgetPinResult.manual;
     await pump(tester, a);
@@ -558,6 +575,19 @@ void main() {
             .color!;
     const gridColor = Color(0xFFD9DDE3);
     final grid = find.byKey(const Key('tt_widget_preview_week_grid'));
+    void expectGridBounds({bool showPeriod = true}) {
+      final previewRect = tester.getRect(preview);
+      final gridRect = tester.getRect(grid);
+      final w = previewRect.width / 8;
+      expect(
+        gridRect.left - previewRect.left,
+        closeTo(showPeriod ? w : 0, 0.01),
+      );
+      expect(gridRect.top - previewRect.top, closeTo(2 * w, 0.01));
+      expect(gridRect.bottom, lessThan(previewRect.bottom));
+    }
+
+    expectGridBounds();
     final heading = text('当周课表');
     final headingColor = tester.widget<Text>(heading).style!.color!;
     final before = TimetableTheme.autoCoursePair(0).bg;
@@ -585,12 +615,12 @@ void main() {
       paints..path(
         color: gridColor.withValues(alpha: 0.7),
         includes: [
-          Offset(gridSize.width / 10, 0.25),
-          Offset(gridSize.width / 5 + 0.25, 2),
+          Offset(gridSize.width / 10, 0.35),
+          Offset(gridSize.width / 5 + 0.35, 2),
         ],
         excludes: [
-          Offset(gridSize.width / 10, 0.75),
-          Offset(gridSize.width / 5 + 0.75, 2),
+          Offset(gridSize.width / 10, 1),
+          Offset(gridSize.width / 5 + 1, 2),
         ],
       ),
     );
@@ -657,10 +687,13 @@ void main() {
 
   testWidgets('窄屏 4×5 预览保留完整地点和时间，教师放不下时不裁字', (tester) async {
     const viewport = Size(320, 670);
-    tester.view.physicalSize = viewport;
-    tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    for (final theme in [appLightTheme(), appDarkTheme()]) {
+    for (final (theme, dpr) in [
+      (appLightTheme(), 1.0),
+      (appDarkTheme(), 3.0),
+    ]) {
+      tester.view.devicePixelRatio = dpr;
+      tester.view.physicalSize = viewport * dpr;
       await tester.pumpWidget(
         MaterialApp(
           theme: theme,
@@ -686,7 +719,33 @@ void main() {
       final heading = find.descendant(of: preview, matching: find.text('当周课表'));
       final week = find.descendant(of: preview, matching: find.text('第7周'));
       expect(tester.widget<Text>(heading).style?.fontSize, 16);
-      expect(tester.widget<Text>(week).style?.fontSize, 12);
+      expect(tester.widget<Text>(week).style?.fontSize, 11);
+      expect(title.style.fontSize, lessThanOrEqualTo(11));
+      final previewBounds = tester.getRect(preview);
+      final headingBounds = tester.getRect(heading);
+      expect(
+        (headingBounds.left - previewBounds.left) * dpr,
+        greaterThanOrEqualTo(18 * dpr - 1),
+      );
+      final headerCenter = previewBounds.top + previewBounds.width / 16 + 4;
+      for (final label in [
+        heading,
+        week,
+        for (final icon in [Icons.arrow_forward, Icons.settings])
+          find.descendant(of: preview, matching: find.byIcon(icon)),
+      ]) {
+        final textBounds = tester.getRect(label);
+        expect(textBounds.center.dy, closeTo(headerCenter, 1 / dpr));
+        expect(
+          (textBounds.top - previewBounds.top) * dpr,
+          greaterThanOrEqualTo(3 * dpr - 1),
+        );
+        expect(
+          (previewBounds.top + previewBounds.width / 8 - textBounds.bottom) *
+              dpr,
+          greaterThanOrEqualTo(3 * dpr - 1),
+        );
+      }
       final frameColors = TimetableTheme.colorsOf(tester.element(preview));
       final background =
           tester
@@ -720,16 +779,29 @@ void main() {
           dark: theme.brightness == Brightness.dark,
         ).bg,
       );
+      final locations = {
+        cellLocationText('示例教室 A101'),
+        cellLocationText('示例教室 A101', showMarker: false),
+      };
       final location = tester.widget<Text>(
         find.descendant(
           of: cellFinder,
-          matching: find.text(cellLocationText('示例教室 A101')),
+          matching: find.byWidgetPredicate(
+            (widget) => widget is Text && locations.contains(widget.data),
+          ),
         ),
       );
-      expect(
-        find.descendant(of: cellFinder, matching: find.text('示例教师')),
-        findsNothing,
+      expect(location.style?.fontSize, lessThanOrEqualTo(10));
+      final teacher = find.descendant(
+        of: cellFinder,
+        matching: find.text('示例教师'),
       );
+      if (teacher.evaluate().isNotEmpty) {
+        expect(
+          tester.getRect(teacher).bottom,
+          lessThan(tester.getRect(cellFinder).bottom),
+        );
+      }
       expect(location.softWrap, isTrue);
       expect(location.maxLines, isNull);
       expect(location.overflow, TextOverflow.clip);
