@@ -521,6 +521,16 @@ const double kDefaultHeaderTextSize = 11;
 const double kHeaderTextSizeMin = 10;
 const double kHeaderTextSizeMax = 14;
 
+/// v1 周课表格子高度范围（dp）；仅保留旧设置存取兼容。
+const int kDefaultWidgetWeekCellHeight = 34;
+const int kWidgetWeekCellHeightMin = 24;
+const int kWidgetWeekCellHeightMax = 64;
+
+/// v1 周课表字号范围（sp）；仅保留旧设置存取兼容。
+const int kDefaultWidgetWeekFontSize = 10;
+const int kWidgetWeekFontSizeMin = 9;
+const int kWidgetWeekFontSizeMax = 14;
+
 /// 外观与学期设置（本地）。
 class TimetableSettings {
   const TimetableSettings({
@@ -560,7 +570,13 @@ class TimetableSettings {
     this.widgetShowCount = true,
     this.widgetShowPeriod = true,
     this.widgetCourseCount = 2,
-  });
+    this.widgetWeekCellHeight = kDefaultWidgetWeekCellHeight,
+    this.widgetWeekFontSize = kDefaultWidgetWeekFontSize,
+    this.widgetWeekOpacity = 100,
+    this.widgetWeekWidgetOpacity = 100,
+    this.widgetWeekCompactRows = true,
+    bool? widgetWeekShowWeekend,
+  }) : _widgetWeekShowWeekendOverride = widgetWeekShowWeekend;
 
   final String scheduleName;
   final String termCode;
@@ -639,7 +655,7 @@ class TimetableSettings {
   /// 小组件主块显示教师；默认开。
   final bool widgetShowTeacher;
 
-  /// 小组件显示地点；默认开。
+  /// 4×2 / 2×2 小组件显示地点；默认开。
   final bool widgetShowLocation;
 
   /// 小组件显示倒计时（关 → 静态上课 / 下课时间）；默认开。
@@ -658,6 +674,42 @@ class TimetableSettings {
   /// 1–3 之外（含非整数 / 缺失）一律回落到默认 2，不就近取值。
   static int sanitizeCourseCount(Object? raw) =>
       raw is int && raw >= 1 && raw <= 3 ? raw : 2;
+
+  /// v1 格子高度；v2 根据组件宽度计算。
+  final int widgetWeekCellHeight;
+
+  /// v1 课程字号；v2 根据组件宽度计算。
+  final int widgetWeekFontSize;
+
+  /// 4×5 当周课表的课程底色不透明度（30–100，默认 100）。
+  final int widgetWeekOpacity;
+
+  /// 4×5 当周课表的组件框架不透明度（30–100，默认 100）。
+  final int widgetWeekWidgetOpacity;
+
+  /// v1 紧凑开关；v2 只支持完整作息。
+  final bool widgetWeekCompactRows;
+
+  final bool? _widgetWeekShowWeekendOverride;
+
+  /// 4×5 当周课表显示周六、周日两列；未单独设置时，两项外观开关都开启才显示。
+  bool get widgetWeekShowWeekend =>
+      _widgetWeekShowWeekendOverride ?? (showSaturday && showSunday);
+
+  /// 格子高度：数字四舍五入后钳到 24–64；非数字/非有限值 → 34。
+  static int sanitizeWeekCellHeight(Object? raw) {
+    if (raw is! num || !raw.isFinite) return kDefaultWidgetWeekCellHeight;
+    return raw.round().clamp(
+      kWidgetWeekCellHeightMin,
+      kWidgetWeekCellHeightMax,
+    );
+  }
+
+  /// 字号：数字四舍五入后钳到 9–14；非数字/非有限值 → 10。
+  static int sanitizeWeekFontSize(Object? raw) {
+    if (raw is! num || !raw.isFinite) return kDefaultWidgetWeekFontSize;
+    return raw.round().clamp(kWidgetWeekFontSizeMin, kWidgetWeekFontSizeMax);
+  }
 
   /// 每周第一天是周日（设置 9；只影响列顺序）。存储键仍是 `weekStartsOnMonday`。
   bool get weekStartsSunday => !weekStartsOnMonday;
@@ -703,6 +755,13 @@ class TimetableSettings {
     bool? widgetShowCount,
     bool? widgetShowPeriod,
     int? widgetCourseCount,
+    int? widgetWeekCellHeight,
+    int? widgetWeekFontSize,
+    int? widgetWeekOpacity,
+    int? widgetWeekWidgetOpacity,
+    bool? widgetWeekCompactRows,
+    bool? widgetWeekShowWeekend,
+    bool clearWidgetWeekShowWeekend = false,
   }) => TimetableSettings(
     scheduleName: scheduleName ?? this.scheduleName,
     termCode: termCode ?? this.termCode,
@@ -747,6 +806,15 @@ class TimetableSettings {
     widgetShowCount: widgetShowCount ?? this.widgetShowCount,
     widgetShowPeriod: widgetShowPeriod ?? this.widgetShowPeriod,
     widgetCourseCount: widgetCourseCount ?? this.widgetCourseCount,
+    widgetWeekCellHeight: widgetWeekCellHeight ?? this.widgetWeekCellHeight,
+    widgetWeekFontSize: widgetWeekFontSize ?? this.widgetWeekFontSize,
+    widgetWeekOpacity: widgetWeekOpacity ?? this.widgetWeekOpacity,
+    widgetWeekWidgetOpacity:
+        widgetWeekWidgetOpacity ?? this.widgetWeekWidgetOpacity,
+    widgetWeekCompactRows: widgetWeekCompactRows ?? this.widgetWeekCompactRows,
+    widgetWeekShowWeekend: clearWidgetWeekShowWeekend
+        ? null
+        : widgetWeekShowWeekend ?? _widgetWeekShowWeekendOverride,
   );
 
   /// 用 [o] 的用户偏好（显示/外观/提醒/首页开关）覆盖本对象，学期字段不变。
@@ -781,6 +849,13 @@ class TimetableSettings {
     widgetShowCount: o.widgetShowCount,
     widgetShowPeriod: o.widgetShowPeriod,
     widgetCourseCount: o.widgetCourseCount,
+    widgetWeekCellHeight: o.widgetWeekCellHeight,
+    widgetWeekFontSize: o.widgetWeekFontSize,
+    widgetWeekOpacity: o.widgetWeekOpacity,
+    widgetWeekWidgetOpacity: o.widgetWeekWidgetOpacity,
+    widgetWeekCompactRows: o.widgetWeekCompactRows,
+    widgetWeekShowWeekend: o._widgetWeekShowWeekendOverride,
+    clearWidgetWeekShowWeekend: o._widgetWeekShowWeekendOverride == null,
   );
 
   Map<String, dynamic> toJson() => {
@@ -820,6 +895,12 @@ class TimetableSettings {
     'widgetShowCount': widgetShowCount,
     'widgetShowPeriod': widgetShowPeriod,
     'widgetCourseCount': widgetCourseCount,
+    'widgetWeekCellHeight': widgetWeekCellHeight,
+    'widgetWeekFontSize': widgetWeekFontSize,
+    'widgetWeekOpacity': widgetWeekOpacity,
+    'widgetWeekWidgetOpacity': widgetWeekWidgetOpacity,
+    'widgetWeekCompactRows': widgetWeekCompactRows,
+    'widgetWeekShowWeekend': ?_widgetWeekShowWeekendOverride,
   };
 
   // ---- 宽松读取（只在内存纠正，不回写磁盘）----
@@ -889,47 +970,55 @@ class TimetableSettings {
     return v.clamp(52, 90).toDouble();
   }
 
-  factory TimetableSettings.fromJson(Map<String, dynamic> json) =>
-      TimetableSettings(
-        scheduleName: '${json['scheduleName'] ?? '我的课表'}',
-        termCode: '${json['termCode'] ?? ''}',
-        termStartDate: _parseDate(json['termStartDate']?.toString()),
-        maxWeeks: _asInt(json['maxWeeks']) ?? 30,
-        nodesPerDay: _asInt(json['nodesPerDay']) ?? 11,
-        periodHeight: _parsePeriodHeight(json['periodHeight']),
-        cellRadius: (json['cellRadius'] as num?)?.toDouble() ?? 4,
-        showSaturday: json['showSaturday'] != false,
-        showSunday: json['showSunday'] != false,
-        showNonCurrentWeek: json['showNonCurrentWeek'] == true,
-        showGridLines: json['showGridLines'] != false,
-        weekStartsOnMonday: json['weekStartsOnMonday'] != false,
-        termStartFromJwxt: json['termStartFromJwxt'] == true,
-        showLocation: _bool(json['showLocation'], true),
-        showTeacher: _bool(json['showTeacher'], false),
-        fontScale: parseFontScale(json['fontScale']),
-        cellOpacity: sanitizeOpacity(json['cellOpacity']),
-        paletteScheme: parsePaletteScheme(json['paletteScheme']),
-        showTomorrowOnHome: _bool(json['showTomorrowOnHome'], true),
-        reminderEnabled: _bool(json['reminderEnabled'], false),
-        reminderLeadMinutes: sanitizeLeadMinutes(json['reminderLeadMinutes']),
-        nextDayReminderEnabled: _bool(json['nextDayReminderEnabled'], true),
-        nextDayReminderMinute: sanitizeNextDayMinute(
-          json['nextDayReminderMinute'],
-        ),
-        showExams: _bool(json['showExams'], true),
-        examColor: parseExamColor(json['examColor']),
-        cellTextColor: parseCellTextColor(json['cellTextColor']),
-        homeMaxItems: sanitizeHomeMaxItems(json['homeMaxItems']),
-        homeMaxExams: sanitizeHomeMaxExams(json['homeMaxExams']),
-        headerTextSize: sanitizeHeaderTextSize(json['headerTextSize']),
-        showPeriodTimes: _bool(json['showPeriodTimes'], true),
-        widgetShowTeacher: _bool(json['widgetShowTeacher'], true),
-        widgetShowLocation: _bool(json['widgetShowLocation'], true),
-        widgetShowCountdown: _bool(json['widgetShowCountdown'], true),
-        widgetShowCount: _bool(json['widgetShowCount'], true),
-        widgetShowPeriod: _bool(json['widgetShowPeriod'], true),
-        widgetCourseCount: sanitizeCourseCount(json['widgetCourseCount']),
-      );
+  factory TimetableSettings.fromJson(
+    Map<String, dynamic> json,
+  ) => TimetableSettings(
+    scheduleName: '${json['scheduleName'] ?? '我的课表'}',
+    termCode: '${json['termCode'] ?? ''}',
+    termStartDate: _parseDate(json['termStartDate']?.toString()),
+    maxWeeks: _asInt(json['maxWeeks']) ?? 30,
+    nodesPerDay: _asInt(json['nodesPerDay']) ?? 11,
+    periodHeight: _parsePeriodHeight(json['periodHeight']),
+    cellRadius: (json['cellRadius'] as num?)?.toDouble() ?? 4,
+    showSaturday: json['showSaturday'] != false,
+    showSunday: json['showSunday'] != false,
+    showNonCurrentWeek: json['showNonCurrentWeek'] == true,
+    showGridLines: json['showGridLines'] != false,
+    weekStartsOnMonday: json['weekStartsOnMonday'] != false,
+    termStartFromJwxt: json['termStartFromJwxt'] == true,
+    showLocation: _bool(json['showLocation'], true),
+    showTeacher: _bool(json['showTeacher'], false),
+    fontScale: parseFontScale(json['fontScale']),
+    cellOpacity: sanitizeOpacity(json['cellOpacity']),
+    paletteScheme: parsePaletteScheme(json['paletteScheme']),
+    showTomorrowOnHome: _bool(json['showTomorrowOnHome'], true),
+    reminderEnabled: _bool(json['reminderEnabled'], false),
+    reminderLeadMinutes: sanitizeLeadMinutes(json['reminderLeadMinutes']),
+    nextDayReminderEnabled: _bool(json['nextDayReminderEnabled'], true),
+    nextDayReminderMinute: sanitizeNextDayMinute(json['nextDayReminderMinute']),
+    showExams: _bool(json['showExams'], true),
+    examColor: parseExamColor(json['examColor']),
+    cellTextColor: parseCellTextColor(json['cellTextColor']),
+    homeMaxItems: sanitizeHomeMaxItems(json['homeMaxItems']),
+    homeMaxExams: sanitizeHomeMaxExams(json['homeMaxExams']),
+    headerTextSize: sanitizeHeaderTextSize(json['headerTextSize']),
+    showPeriodTimes: _bool(json['showPeriodTimes'], true),
+    widgetShowTeacher: _bool(json['widgetShowTeacher'], true),
+    widgetShowLocation: _bool(json['widgetShowLocation'], true),
+    widgetShowCountdown: _bool(json['widgetShowCountdown'], true),
+    widgetShowCount: _bool(json['widgetShowCount'], true),
+    widgetShowPeriod: _bool(json['widgetShowPeriod'], true),
+    widgetCourseCount: sanitizeCourseCount(json['widgetCourseCount']),
+    widgetWeekCellHeight: sanitizeWeekCellHeight(json['widgetWeekCellHeight']),
+    widgetWeekFontSize: sanitizeWeekFontSize(json['widgetWeekFontSize']),
+    widgetWeekOpacity: sanitizeOpacity(json['widgetWeekOpacity']),
+    widgetWeekWidgetOpacity: sanitizeOpacity(json['widgetWeekWidgetOpacity']),
+    widgetWeekCompactRows: _bool(json['widgetWeekCompactRows'], true),
+    widgetWeekShowWeekend: switch (json['widgetWeekShowWeekend']) {
+      final bool value => value,
+      _ => null,
+    },
+  );
 }
 
 /// 格子文字大小三档（§13.3）：系数乘以系统字号，最小 10sp（UI 负责）。
@@ -969,12 +1058,13 @@ class TimetableSnapshot {
     TimetableSettings? settings,
     DateTime? syncedAt,
     String? lastError,
+    bool clearSyncedAt = false,
     bool clearError = false,
   }) => TimetableSnapshot(
     courses: courses ?? this.courses,
     periods: periods ?? this.periods,
     settings: settings ?? this.settings,
-    syncedAt: syncedAt ?? this.syncedAt,
+    syncedAt: clearSyncedAt ? null : (syncedAt ?? this.syncedAt),
     lastError: clearError ? null : (lastError ?? this.lastError),
   );
 

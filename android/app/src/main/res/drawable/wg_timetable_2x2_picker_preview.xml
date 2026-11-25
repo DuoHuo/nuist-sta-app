@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 当前／下一节：突出当前课程，下一节用较小的标题和一行时间地点。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="128dp"
+    android:height="128dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+    <path
+        android:fillColor="@color/wg_bg"
+        android:pathData="M20,0h88q20,0 20,20v88q0,20 -20,20H20q-20,0 -20,-20V20q0,-20 20,-20z" />
+    <path
+        android:fillColor="@color/wg_t2"
+        android:pathData="M10,16h42v5H10z M79,17h22v4H79z" />
+    <path
+        android:fillColor="@color/wg_weekday"
+        android:pathData="M106,17h12v4h-12z" />
+    <path
+        android:fillColor="@color/wg_acc"
+        android:pathData="M12,35q2,0 2,2v40q0,2 -2,2t-2,-2V37q0,-2 2,-2z M12,88q2,0 2,2v22q0,2 -2,2t-2,-2V90q0,-2 2,-2z" />
+    <path
+        android:fillColor="@color/wg_t1"
+        android:pathData="M22,41h78v8H22z M22,91h57v6H22z" />
+    <path
+        android:fillColor="@color/wg_t3"
+        android:pathData="M22,57h61v5H22z M22,68h48v4H22z M22,103h66v4H22z" />
+</vector>

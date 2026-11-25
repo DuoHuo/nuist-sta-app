@@ -815,9 +815,9 @@ class CellContentPlan {
 /// 格内让位。地点（[location]，已是 [cellLocationText] 结果）和教师（[teacher]）
 /// 完整换行显示，空串表示不显示；教师前始终留一行，课序号不参与格内排版。
 /// 高度不够时依次 ① 课名截断到能放下的行数（≥1）
-/// ② 字号每级缩小 1sp（实际字号，含系统缩放），最小 10sp；算完取整。
+/// ② 字号每级缩小 1sp（含系统缩放），到 [minSize] 为止；算完取整。
 /// 到下限仍放不下：地点和教师完整排版、课名 1 行省略号截断，不再继续缩。
-/// [nameSize]/[subSize] 为未乘系统缩放的起始字号。
+/// [nameSize]/[subSize] 为未缩放字号；[maxTeacherGap] 可限制教师前留白。
 CellContentPlan planCellContent({
   required String name,
   required String location,
@@ -829,6 +829,8 @@ CellContentPlan planCellContent({
   required double subSize,
   required double maxWidth,
   required double maxHeight,
+  double minSize = kCellMinFontSize,
+  double maxTeacherGap = double.infinity,
   TextScaler textScaler = TextScaler.noScaling,
   TextDirection textDirection = TextDirection.ltr,
 }) {
@@ -849,6 +851,8 @@ CellContentPlan planCellContent({
     subSize,
     maxWidth,
     maxHeight,
+    minSize,
+    maxTeacherGap,
     textScaler,
     textDirection,
   );
@@ -868,6 +872,8 @@ CellContentPlan planCellContent({
     subSize: subSize,
     maxWidth: maxWidth,
     maxHeight: maxHeight,
+    minSize: minSize,
+    maxTeacherGap: maxTeacherGap,
     textScaler: textScaler,
     textDirection: textDirection,
   );
@@ -903,6 +909,8 @@ CellContentPlan _planCellContent({
   required double subSize,
   required double maxWidth,
   required double maxHeight,
+  required double minSize,
+  required double maxTeacherGap,
   required TextScaler textScaler,
   required TextDirection textDirection,
 }) {
@@ -930,17 +938,15 @@ CellContentPlan _planCellContent({
 
   final scale = textScaler.scale(1);
   final unit = scale > 0 ? 1 / scale : 1.0;
-  final minSize = scale > 0
-      ? (kCellMinFontSize / scale).ceilToDouble()
-      : kCellMinFontSize;
+  final minimum = scale > 0 ? (minSize / scale).ceilToDouble() : minSize;
   final hasTeacher = teacher.isNotEmpty;
   const eps = 0.01;
   bool fit(double h) => h <= maxHeight + eps;
   for (var i = 0; ; i++) {
     final ns = TimetableTheme.snapFontSp(
-      math.max(minSize, nameSize - i * unit),
+      math.max(minimum, nameSize - i * unit),
     );
-    final ss = TimetableTheme.snapFontSp(math.max(minSize, subSize - i * unit));
+    final ss = TimetableTheme.snapFontSp(math.max(minimum, subSize - i * unit));
     final nSt = nameStyle.copyWith(fontSize: ns);
     final sSt = subStyle.copyWith(fontSize: ss);
     final lSt = (locationStyle ?? subStyle).copyWith(fontSize: ss);
@@ -956,7 +962,7 @@ CellContentPlan _planCellContent({
     final needed = linesOf(laid, nSt);
     final locH = location.isEmpty ? 0.0 : heightOf(location, lSt);
     final teacherH = hasTeacher ? heightOf(teacher, sSt) : 0.0;
-    final teacherGap = hasTeacher ? subH : 0.0;
+    final teacherGap = hasTeacher ? math.min(subH, maxTeacherGap) : 0.0;
     final secondaryH = locH + teacherH + teacherGap;
     final full = needed * nameH;
     CellContentPlan plan(int lines, {bool fits = true}) => CellContentPlan(
@@ -980,7 +986,7 @@ CellContentPlan _planCellContent({
       return plan(lines);
     }
     // ② 字号再小一级；到 10sp 仍放不下：地点和教师完整排版、课名 1 行。
-    if (ns <= minSize + 1e-6 && ss <= minSize + 1e-6) {
+    if (ns <= minimum + 1e-6 && ss <= minimum + 1e-6) {
       return plan(1, fits: false);
     }
   }
@@ -999,12 +1005,12 @@ String cellTeacherText(String teacher) => teacher
     .where((name) => name.isNotEmpty)
     .join('\n');
 
-/// 格内地点文字「@地点」：在相邻两个非汉字（字母、数字、符号）之间插入 U+200B，
+/// 格内地点文字（[showMarker] 默认加 @）：相邻非汉字间插入 U+200B，
 /// 让「A101」这类串也能逐字换行（汉字之间本来就可断行）。只插不可见字符，可见文字不变。
-String cellLocationText(String location) {
+String cellLocationText(String location, {bool showMarker = true}) {
   final out = StringBuffer();
   int? prev;
-  for (final r in '@$location'.runes) {
+  for (final r in (showMarker ? '@$location' : location).runes) {
     if (prev != null && _breakableRun(prev) && _breakableRun(r)) {
       out.write(_zeroWidthSpace);
     }

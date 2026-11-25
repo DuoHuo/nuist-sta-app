@@ -18,6 +18,16 @@ object NotifyStore {
     /** 点击通知 / 小组件时带给 MainActivity 的 extra。 */
     const val EXTRA_ROUTE = "nuist_route"
     const val ROUTE_TIMETABLE = "/apps/timetable"
+    const val ROUTE_TIMETABLE_NEXT_WEEK = "$ROUTE_TIMETABLE?week=next"
+    const val ROUTE_TIMETABLE_WIDGET_SETTINGS = "$ROUTE_TIMETABLE?open=widgetSettings"
+
+    /** 独立于普通点击的齿轮启动动作；启动与新 Intent 均可从 action 恢复目标。 */
+    fun widgetSettingsAction(context: Context) = context.packageName + ".OPEN_WEEK_WIDGET_SETTINGS"
+
+    fun timetableLaunchRoute(context: Context, intent: Intent?): String? = when {
+        intent?.action == widgetSettingsAction(context) -> ROUTE_TIMETABLE_WIDGET_SETTINGS
+        else -> intent?.getStringExtra(EXTRA_ROUTE)
+    }
 
     /** 主线程共享的 POST_NOTIFICATIONS 请求互斥标记，避免多个入口并发弹窗互相取消。 */
     @Volatile var notificationPermissionInFlight: Boolean = false

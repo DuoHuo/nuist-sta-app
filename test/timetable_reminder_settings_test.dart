@@ -10,10 +10,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/ui/miuix_dialog.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_bridge.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_layout.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_widgets.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 
 final _c = TimetableController.instance;
 
@@ -42,8 +46,8 @@ class _FakeActions extends ReminderActions {
   }
 
   @override
-  Future<WidgetPinResult> pinWidget({required bool square}) async {
-    calls.add('pin:$square');
+  Future<WidgetPinResult> pinWidget({required WidgetPinSize size}) async {
+    calls.add('pin:${size.name}');
     return pendingPin == null ? pinResult : await pendingPin!.future;
   }
 
@@ -462,7 +466,7 @@ void main() {
     await pump(tester, a);
     await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('2×2 当前与下一节'));
+    await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('tt_widget_preview_2x2')), findsOneWidget);
     expect(
@@ -503,10 +507,456 @@ void main() {
     await tester.tap(find.byKey(const Key('tt_settings_widgetShowLocation')));
     await settleIo(tester);
     expect(_c.settings.widgetShowLocation, isFalse);
-    await tester.tap(find.text('4×2 今日课表'));
+    await tester.tap(find.widgetWithText(ChoiceChip, '今日课表'));
     await tester.pumpAndSettle();
     expect(sw(tester, 'tt_settings_widgetShowLocation'), isFalse);
     expect(find.byKey(const Key('tt_widget_preview_4x2')), findsOneWidget);
+  });
+
+  testWidgets('当周课表的添加行和手动引导显示 4×6', (tester) async {
+    final a = _FakeActions(_perm())..pinResult = WidgetPinResult.manual;
+    await pump(tester, a);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ChoiceChip, '当周课表'));
+    await tester.pumpAndSettle();
+
+    final pinRow = find.byKey(const Key('tt_settings_widget_pin'));
+    expect(tester.widget<TimetableSettingsRow>(pinRow).value, '4×6');
+    await tester.tap(pinRow);
+    await tester.pumpAndSettle();
+    expect(a.calls, ['pin:week']);
+    expect(find.text('选择 4×6，长按并拖到桌面空白处。'), findsOneWidget);
+  });
+
+  testWidgets('三个小组件预览与添加按钮共用同一分组和说明样式', (tester) async {
+    final a = _FakeActions(_perm());
+    await pump(tester, a);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    const caption = '显示效果预览 · 示例内容';
+    final captionFinder = find.text(caption);
+    final captionStyle = tester.widget<Text>(captionFinder).style;
+    final captionLeft = tester.getTopLeft(captionFinder).dx;
+    final settingsGroup = find.byKey(const Key('tt_settings_group_widget'));
+    final settingsCard = find.descendant(
+      of: settingsGroup,
+      matching: find.byWidgetPredicate(
+        (widget) => widget is Material && widget.clipBehavior == Clip.antiAlias,
+      ),
+    );
+    final firstRowOffsets = <double>[];
+    for (final (label, size, firstRowLabel) in [
+      ('今日课表', '4x2', '最多显示课程数量'),
+      ('当前与下一节', '2x2', '显示教师'),
+      ('当周课表', '4x5', '课程不透明度'),
+    ]) {
+      await tester.tap(find.widgetWithText(ChoiceChip, label));
+      await tester.pumpAndSettle();
+      final group = find.ancestor(
+        of: captionFinder,
+        matching: find.byType(TimetableSettingsGroup),
+      );
+      expect(group, findsOneWidget);
+      expect(tester.widget<Text>(captionFinder).style, captionStyle);
+      expect(tester.getTopLeft(captionFinder).dx, captionLeft);
+      for (final key in ['tt_widget_preview_$size', 'tt_settings_widget_pin']) {
+        expect(
+          find.descendant(of: group, matching: find.byKey(Key(key))),
+          findsOneWidget,
+        );
+      }
+      final pin = tester.getRect(
+        find.byKey(const Key('tt_settings_widget_pin')),
+      );
+      expect(tester.getRect(settingsCard).top - pin.bottom, 16);
+      expect(tester.widget<Material>(settingsCard).borderRadius, isNotNull);
+      final title = find.descendant(
+        of: settingsCard,
+        matching: find.text(firstRowLabel),
+      );
+      expect(
+        find.ancestor(of: title, matching: find.byType(TimetableSettingsRow)),
+        findsOneWidget,
+      );
+      firstRowOffsets.add(tester.getRect(title).top - pin.bottom);
+    }
+    expect(firstRowOffsets, everyElement(closeTo(32, 0.1)));
+    final widgetOpacity = tester.getRect(find.text('组件不透明度'));
+    final courseSlider = tester.getRect(
+      find.byKey(const Key('tt_settings_widgetWeekOpacity')),
+    );
+    final sliderToTitle = widgetOpacity.top - courseSlider.bottom;
+    expect(sliderToTitle, closeTo(8, 0.1));
+  });
+
+  testWidgets('4×5 当周课表：切换设置立即刷新预览，并仍传 week 添加尺寸', (tester) async {
+    await tester.runAsync(
+      () => _c.updateSettings(_c.settings.copyWith(showSaturday: false)),
+    );
+    final a = _FakeActions(_perm())..pinResult = WidgetPinResult.manual;
+    await pump(tester, a);
+    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_settings_widgetShowLocation')));
+    await settleIo(tester);
+    expect(_c.settings.widgetShowLocation, isFalse);
+    await tester.tap(find.widgetWithText(ChoiceChip, '当周课表'));
+    await tester.pumpAndSettle();
+    final preview = find.byKey(const Key('tt_widget_preview_4x5'));
+    expect(preview, findsOneWidget);
+    for (final key in [
+      'tt_settings_widgetWeekCellHeight',
+      'tt_settings_widgetWeekFontSize',
+      'tt_settings_widgetWeekCompactRows',
+      'tt_settings_widgetShowLocation',
+      'tt_settings_widgetCourseCount',
+      'tt_settings_widgetShowCountdown',
+      'tt_settings_widgetShowCount',
+    ]) {
+      expect(find.byKey(Key(key)), findsNothing);
+    }
+    final opacity = find.byKey(const Key('tt_settings_widgetWeekOpacity'));
+    final surfaceOpacity = find.byKey(
+      const Key('tt_settings_widgetWeekWidgetOpacity'),
+    );
+    expect(find.text('课程不透明度'), findsOneWidget);
+    expect(find.text('组件不透明度'), findsOneWidget);
+    Finder text(String value) =>
+        find.descendant(of: preview, matching: find.text(value));
+    final cell = find.byKey(const Key('tt_widget_preview_week_cell_1_1'));
+    final ink = find.descendant(of: cell, matching: find.byType(Ink));
+    BoxDecoration cellDecoration() =>
+        tester.widget<Ink>(ink).decoration as BoxDecoration;
+    Color cellColor() => cellDecoration().color!;
+    expect(
+      cellDecoration().borderRadius,
+      BorderRadius.circular(TimetableTheme.cellRadius),
+    );
+    Color surfaceColor() =>
+        (tester
+                    .widget<DecoratedBox>(
+                      find.byKey(
+                        const Key('tt_widget_preview_week_background'),
+                      ),
+                    )
+                    .decoration
+                as BoxDecoration)
+            .color!;
+    const gridColor = Color(0xFFD9DDE3);
+    final grid = find.byKey(const Key('tt_widget_preview_week_grid'));
+    void expectGridBounds({bool showPeriod = true}) {
+      final previewRect = tester.getRect(preview);
+      final gridRect = tester.getRect(grid);
+      final w = previewRect.width / 8;
+      expect(
+        gridRect.left - previewRect.left,
+        closeTo(showPeriod ? w : 0, 0.01),
+      );
+      expect(gridRect.top - previewRect.top, closeTo(2 * w, 0.01));
+      expect(gridRect.bottom, lessThan(previewRect.bottom));
+    }
+
+    expectGridBounds();
+    final heading = text('当周课表');
+    final headingColor = tester.widget<Text>(heading).style!.color!;
+    final before = TimetableTheme.autoCoursePair(0).bg;
+    expect(cellColor(), before);
+    expect(surfaceColor(), TimetableTheme.surface);
+    expect(grid, paints..path(color: gridColor));
+    tester.widget<Slider>(opacity).onChanged!(60);
+    await tester.pump();
+    final blended = TimetableTheme.blendCellBg(before, 60);
+    expect(cellColor(), blended);
+    expect(surfaceColor(), TimetableTheme.surface);
+    expect(grid, paints..path(color: gridColor));
+    expect(_c.settings.widgetWeekOpacity, 100);
+    tester.widget<Slider>(opacity).onChangeEnd!(60);
+    await settleIo(tester);
+    expect(_c.settings.widgetWeekOpacity, 60);
+    expect(tester.widget<Slider>(opacity).value, 60);
+
+    tester.widget<Slider>(surfaceOpacity).onChanged!(70);
+    await tester.pump();
+    expect(surfaceColor(), TimetableTheme.surface.withValues(alpha: 0.7));
+    final gridSize = tester.getSize(grid);
+    expect(
+      grid,
+      paints..path(
+        color: gridColor.withValues(alpha: 0.7),
+        includes: [
+          Offset(gridSize.width / 10, 0.35),
+          Offset(gridSize.width / 5 + 0.35, 2),
+        ],
+        excludes: [
+          Offset(gridSize.width / 10, 1),
+          Offset(gridSize.width / 5 + 1, 2),
+        ],
+      ),
+    );
+    expect(
+      tester.widget<Text>(heading).style!.color,
+      headingColor.withValues(alpha: 0.7),
+    );
+    expect(cellColor(), blended);
+    expect(_c.settings.widgetWeekWidgetOpacity, 100);
+    tester.widget<Slider>(surfaceOpacity).onChangeEnd!(70);
+    await settleIo(tester);
+    expect(_c.settings.widgetWeekWidgetOpacity, 70);
+    expect(_c.settings.widgetWeekOpacity, 60);
+    expect(cellColor(), blended);
+
+    expect(text(cellLocationText('示例教室 A101')), findsWidgets);
+    expect(text('示例教师'), findsWidgets);
+    expect(text('单周'), findsWidgets);
+    expect(text('2 门'), findsOneWidget);
+    for (final (key, label, paletteIndex) in [
+      ('1_1', '单周', 0),
+      ('2_3', '双周', 1),
+      ('4_1', '实验', 5),
+      ('3_3', '体育', 4),
+      ('5_5', '考试', null),
+      ('2_1', '日程', 5),
+      ('4_5', '2 门', 3),
+    ]) {
+      final sample = find.byKey(Key('tt_widget_preview_week_cell_$key'));
+      final pill = find.descendant(
+        of: sample,
+        matching: find.byType(SchedulePill),
+      );
+      expect(pill, findsOneWidget, reason: label);
+      final badge = find.descendant(of: pill, matching: find.text(label));
+      expect(badge, findsOneWidget, reason: label);
+      final outline = find.descendant(
+        of: pill,
+        matching: find.byType(Container),
+      );
+      final box = tester.widget<Container>(outline);
+      final decoration = box.decoration! as BoxDecoration;
+      final pair = paletteIndex == null
+          ? const CourseColorPair(
+              TimetableTheme.examDefault,
+              TimetableTheme.examText,
+            )
+          : TimetableTheme.autoCoursePair(paletteIndex);
+      final bg = paletteIndex == null
+          ? pair.bg
+          : TimetableTheme.blendCellBg(pair.bg, 60);
+      final color = TimetableTheme.readableCellText(bg, pair.fg);
+      expect(decoration.color, isNull);
+      expect(decoration.borderRadius, BorderRadius.circular(8));
+      expect(decoration.border, Border.all(color: color));
+      expect(
+        box.padding!.add(decoration.padding),
+        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      );
+      final labelWidget = tester.widget<Text>(badge);
+      expect(labelWidget.style!.color, color);
+      expect(labelWidget.style!.fontSize, 8);
+      expect(labelWidget.maxLines, 1);
+      expect(labelWidget.overflow, TextOverflow.ellipsis);
+      final sampleBounds = tester.getRect(sample);
+      final outlineBounds = tester.getRect(outline);
+      expect(sampleBounds.contains(outlineBounds.topLeft), isTrue);
+      expect(sampleBounds.contains(outlineBounds.bottomRight), isTrue);
+      expect(sampleBounds.bottom - outlineBounds.bottom, closeTo(3, 0.01));
+    }
+    expect(
+      find.byKey(const Key('tt_widget_preview_week_time_1')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('tt_settings_widgetShowTeacher')));
+    await settleIo(tester);
+    expect(_c.settings.widgetShowTeacher, isFalse);
+    expect(text('示例教师'), findsNothing);
+    expect(text('单周'), findsWidgets);
+    // 外观关闭周六时默认没有周末列；单独打开后立即显示周末两列。
+    final saturday = find.byKey(const Key('tt_widget_preview_week_cell_6_3'));
+    expect(saturday, findsNothing);
+    final weekend = find.byKey(const Key('tt_settings_widgetWeekShowWeekend'));
+    expect(weekend, findsOneWidget);
+    expect(sw(tester, 'tt_settings_widgetWeekShowWeekend'), isFalse);
+    await tester.tap(weekend);
+    await settleIo(tester);
+    expect(_c.settings.widgetWeekShowWeekend, isTrue);
+    expectGridBounds();
+    expect(saturday, findsOneWidget);
+    expect(text('选修课'), findsOneWidget);
+    expect(
+      find.byKey(const Key('tt_widget_preview_week_header_7')),
+      findsOneWidget,
+    );
+    await tester.tap(weekend);
+    await settleIo(tester);
+    expect(_c.settings.widgetWeekShowWeekend, isFalse);
+    expectGridBounds();
+    expect(saturday, findsNothing);
+
+    await tester.tap(find.byKey(const Key('tt_settings_widgetShowPeriod')));
+    await settleIo(tester);
+    expect(_c.settings.widgetShowPeriod, isFalse);
+    expectGridBounds(showPeriod: false);
+    expect(
+      find.byKey(const Key('tt_widget_preview_week_number_1')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('tt_widget_preview_week_time_1')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const Key('tt_settings_widget_pin')));
+    await tester.pumpAndSettle();
+    expect(a.calls, ['pin:week']);
+    expect(find.text('添加「当周课表」'), findsOneWidget);
+  });
+
+  testWidgets('窄屏 4×5 预览保留完整地点和时间，教师放不下时不裁字', (tester) async {
+    const viewport = Size(320, 670);
+    addTearDown(tester.view.reset);
+    for (final (theme, dpr) in [
+      (appLightTheme(), 1.0),
+      (appDarkTheme(), 3.0),
+    ]) {
+      tester.view.devicePixelRatio = dpr;
+      tester.view.physicalSize = viewport * dpr;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: theme,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: TimetableWidgetSettingsPage(controller: _c),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ChoiceChip, '当周课表'));
+      await tester.pumpAndSettle();
+      final cellFinder = find.byKey(
+        const Key('tt_widget_preview_week_cell_1_1'),
+      );
+      final title = tester.widget<CourseNameText>(
+        find.descendant(of: cellFinder, matching: find.byType(CourseNameText)),
+      );
+      expect(title.name, '高等数学 A');
+      final preview = find.byKey(const Key('tt_widget_preview_4x5'));
+      final heading = find.descendant(of: preview, matching: find.text('当周课表'));
+      final week = find.descendant(of: preview, matching: find.text('第7周'));
+      expect(tester.widget<Text>(heading).style?.fontSize, 16);
+      expect(tester.widget<Text>(week).style?.fontSize, 11);
+      expect(title.style.fontSize, lessThanOrEqualTo(11));
+      final previewBounds = tester.getRect(preview);
+      final headingBounds = tester.getRect(heading);
+      expect(
+        (headingBounds.left - previewBounds.left) * dpr,
+        greaterThanOrEqualTo(18 * dpr - 1),
+      );
+      final headerCenter = previewBounds.top + previewBounds.width / 16 + 4;
+      for (final label in [
+        heading,
+        week,
+        for (final icon in [Icons.arrow_forward, Icons.settings])
+          find.descendant(of: preview, matching: find.byIcon(icon)),
+      ]) {
+        final textBounds = tester.getRect(label);
+        expect(textBounds.center.dy, closeTo(headerCenter, 1 / dpr));
+        expect(
+          (textBounds.top - previewBounds.top) * dpr,
+          greaterThanOrEqualTo(3 * dpr - 1),
+        );
+        expect(
+          (previewBounds.top + previewBounds.width / 8 - textBounds.bottom) *
+              dpr,
+          greaterThanOrEqualTo(3 * dpr - 1),
+        );
+      }
+      final frameColors = TimetableTheme.colorsOf(tester.element(preview));
+      final background =
+          tester
+                  .widget<DecoratedBox>(
+                    find.byKey(const Key('tt_widget_preview_week_background')),
+                  )
+                  .decoration
+              as BoxDecoration;
+      expect(background.color, frameColors.surface);
+      expect(
+        find.byKey(const Key('tt_widget_preview_week_grid')),
+        paints..path(
+          color: frameColors.isDark
+              ? const Color(0xFF454851)
+              : const Color(0xFFD9DDE3),
+        ),
+      );
+      expect(
+        tester.widget<Text>(week).style?.color,
+        theme.brightness == Brightness.dark
+            ? const Color(0xFFAAB1C1)
+            : const Color(0xFF5F6675),
+      );
+      final cell = tester.widget<Ink>(
+        find.descendant(of: cellFinder, matching: find.byType(Ink)),
+      );
+      expect(
+        (cell.decoration as BoxDecoration).color,
+        TimetableTheme.autoCoursePair(
+          0,
+          dark: theme.brightness == Brightness.dark,
+        ).bg,
+      );
+      final locations = {
+        cellLocationText('示例教室 A101'),
+        cellLocationText('示例教室 A101', showMarker: false),
+      };
+      final location = tester.widget<Text>(
+        find.descendant(
+          of: cellFinder,
+          matching: find.byWidgetPredicate(
+            (widget) => widget is Text && locations.contains(widget.data),
+          ),
+        ),
+      );
+      expect(location.style?.fontSize, lessThanOrEqualTo(10));
+      final teacher = find.descendant(
+        of: cellFinder,
+        matching: find.text('示例教师'),
+      );
+      if (teacher.evaluate().isNotEmpty) {
+        expect(
+          tester.getRect(teacher).bottom,
+          lessThan(tester.getRect(cellFinder).bottom),
+        );
+      }
+      expect(location.softWrap, isTrue);
+      expect(location.maxLines, isNull);
+      expect(location.overflow, TextOverflow.clip);
+      final boundsBefore = tester.getRect(preview);
+      expect(boundsBefore.left, greaterThan(0));
+      expect(boundsBefore.right, lessThan(viewport.width));
+      expect(
+        find.byKey(const Key('tt_widget_preview_week_number_11')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('tt_widget_preview_week_time_1')),
+        findsOneWidget,
+      );
+      final scrollState = tester.state<ScrollableState>(
+        find.byType(Scrollable).last,
+      );
+      final offsetBefore = scrollState.position.pixels;
+      await tester.drag(find.byType(ListView), const Offset(0, -450));
+      await tester.pumpAndSettle();
+      final bounds = tester.getRect(preview);
+      expect(
+        boundsBefore.top - bounds.top,
+        closeTo(scrollState.position.pixels - offsetBefore, 0.1),
+      );
+      expect(bounds.top, lessThan(tester.getRect(find.byType(AppBar)).bottom));
+      expect(heading.hitTestable(), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
   });
 
   testWidgets('两种小组件预览在窄屏与大字号下没有溢出', (tester) async {
@@ -562,7 +1012,7 @@ void main() {
             isNull,
             reason: '$size / $dark / $scale / 4×2 最后一节',
           );
-          await tester.tap(find.text('2×2 当前与下一节'));
+          await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
           await tester.pumpAndSettle();
           checkTimeBounds(true);
           expect(
@@ -599,7 +1049,7 @@ void main() {
       await tester.pumpAndSettle();
       for (final square in [false, true]) {
         if (square) {
-          await tester.tap(find.text('2×2 当前与下一节'));
+          await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
           await tester.pumpAndSettle();
         }
         final last = find.byKey(const Key('tt_widget_preview_last'));
@@ -689,7 +1139,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        await tester.tap(find.text('2×2 当前与下一节'));
+        await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
         await tester.pumpAndSettle();
         final baselines = [
           for (final key in [
@@ -719,12 +1169,12 @@ void main() {
     expect(a.calls, isEmpty);
     expect(find.byKey(const Key('tt_settings_widget_guide')), findsNothing);
     expect(find.text(TtSettingsText.pinWidgetGuideTitle), findsNothing);
-    await tester.tap(find.text('2×2 当前与下一节'));
+    await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
     await tester.pumpAndSettle();
     final pin = find.byKey(const Key('tt_settings_widget_pin'));
     await tester.tap(pin);
     await tester.tap(pin);
-    expect(a.calls, ['pin:true']);
+    expect(a.calls, ['pin:square']);
     a.pendingPin!.complete(WidgetPinResult.requested);
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsNothing);
@@ -741,7 +1191,7 @@ void main() {
     final pin = find.byKey(const Key('tt_settings_widget_pin'));
     await tester.tap(pin);
     await tester.pumpAndSettle();
-    expect(a.calls, ['pin:false']);
+    expect(a.calls, ['pin:wide']);
     expect(find.byType(AlertDialog), findsNothing);
     expect(find.byType(BottomSheet), findsOneWidget);
     expect(find.text('允许添加桌面快捷方式'), findsOneWidget);
@@ -749,7 +1199,7 @@ void main() {
     expect(find.text(TtSettingsText.pinWidgetPermissionHint), findsNothing);
     await tester.tap(find.text(TtSettingsText.pinWidgetOpenSettings));
     await tester.pumpAndSettle();
-    expect(a.calls, ['pin:false', 'shortcut-settings']);
+    expect(a.calls, ['pin:wide', 'shortcut-settings']);
     expect(find.byType(BottomSheet), findsNothing);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
@@ -758,7 +1208,7 @@ void main() {
     a.pinResult = WidgetPinResult.requested;
     await tester.tap(pin);
     await tester.pumpAndSettle();
-    expect(a.calls, ['pin:false', 'shortcut-settings', 'pin:false']);
+    expect(a.calls, ['pin:wide', 'shortcut-settings', 'pin:wide']);
   });
 
   testWidgets('取消权限说明不跳设置；跳转失败时改为手动权限步骤', (tester) async {
@@ -773,12 +1223,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('暂不开启'));
     await tester.pumpAndSettle();
-    expect(a.calls, ['pin:false']);
+    expect(a.calls, ['pin:wide']);
     await tester.tap(pin);
     await tester.pumpAndSettle();
     await tester.tap(find.text(TtSettingsText.pinWidgetOpenSettings));
     await tester.pumpAndSettle();
-    expect(a.calls, ['pin:false', 'pin:false', 'shortcut-settings']);
+    expect(a.calls, ['pin:wide', 'pin:wide', 'shortcut-settings']);
     expect(
       find.text(TtSettingsText.pinWidgetSettingsUnavailable),
       findsOneWidget,
@@ -848,7 +1298,7 @@ void main() {
           await tester.pumpAndSettle();
           await tester.tap(pin);
           await tester.pumpAndSettle();
-          expect(a.calls, ['pin:false']);
+          expect(a.calls, ['pin:wide']);
           expect(
             find.text(
               result == WidgetPinResult.permissionRequired
@@ -879,7 +1329,7 @@ void main() {
     await pump(tester, a);
     await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('2×2 当前与下一节'));
+    await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('tt_settings_widget_pin')));
     await tester.pumpAndSettle();

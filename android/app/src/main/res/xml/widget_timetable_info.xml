@@ -9,6 +9,7 @@
     android:resizeMode="none"
     android:updatePeriodMillis="0"
     android:initialLayout="@layout/glance_default_loading_layout"
+    android:previewImage="@drawable/wg_timetable_picker_preview"
     android:previewLayout="@layout/widget_timetable_preview"
     android:description="@string/wg_description"
     android:widgetCategory="home_screen"/>

@@ -134,7 +134,7 @@ internal object TimetableWidgetLayout {
             if (measure.height(data.statusTitle, 15f, innerWidth, statusLines, true) > body) statusLines = 1
         }
         val titleHeight = measure.height(data.statusTitle, 15f, innerWidth, statusLines, true)
-        val subHeight = measure.height("网络异常，请打开课表重试", 11f, innerWidth, 3) + 8f
+        val subHeight = measure.height(data.statusDetail, 11f, innerWidth, 3) + 8f
         return WidgetLayout(inset, header, blocks, tomorrow,
             if (pending.size == 1 && needed() + lastHeight <= body) lastHeight else 0f,
             titleHeight + subHeight + 56f <= body,

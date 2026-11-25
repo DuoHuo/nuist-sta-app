@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 桌面选择器的脱敏示意图，使用 App 周视图的尺寸和跨节色块。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="256dp"
+    android:height="320dp"
+    android:viewportWidth="256"
+    android:viewportHeight="320">
+    <path android:fillColor="#FFFFFF" android:pathData="M12,0h232q12,0 12,12v296q0,12 -12,12h-232q-12,0 -12,-12v-296q0,-12 12,-12z" />
+    <path android:fillColor="#1F0082EF" android:pathData="M133,58h24q6,0 6,6v32q0,6 -6,6h-24q-6,0 -6,-6v-32q0,-6 6,-6z" />
+    <path android:fillColor="#171A1F" android:pathData="M16,25h53v6h-53z M14,114h6v4h-6z M14,146h6v4h-6z M14,177h6v4h-6z M14,209h6v4h-6z M14,241h6v4h-6z M14,273h6v4h-6z" />
+    <path android:fillColor="#5F6675" android:pathData="M139,26h27v4h-27z M183,27h11l-4,-4l1,-1l6,6l-6,6l-1,-1l4,-4h-11z" />
+    <group android:scaleX="0.7" android:scaleY="0.7" android:translateX="220" android:translateY="19.6">
+      <path android:fillColor="#5F6675" android:fillType="evenOdd" android:pathData="M19,11l2,-2l-2,-3l-3,1l-2,-1l-1,-3h-3l-1,3l-2,1l-3,-1l-2,3l2,2v2l-2,2l2,3l3,-1l2,1l1,3h3l1,-3l2,-1l3,1l2,-3l-2,-2z M15,12a3,3 0,1 1,-6,0a3,3 0,1 1,6,0z" />
+    </group>
+    <path android:fillColor="#4A4F66" android:pathData="M51,70h10v3h-10z M96,70h10v3h-10z M184,70h10v3h-10z M228,70h10v3h-10z" />
+    <path android:fillColor="#9AA0B4" android:pathData="M10,78h14v3h-14z M52,85h8v3h-8z M97,85h8v3h-8z M185,85h8v3h-8z M229,85h8v3h-8z M9,121h16v2h-16z M9,153h16v2h-16z M9,184h16v2h-16z M9,216h16v2h-16z M9,248h16v2h-16z M9,280h16v2h-16z" />
+    <path android:fillColor="#0082EF" android:pathData="M140,70h10v3h-10z M141,85h8v3h-8z" />
+    <path android:strokeColor="#D9DDE3" android:strokeWidth="1" android:pathData="M34,104H256 M34,136H256 M34,167H256 M34,199H256 M34,231H256 M34,263H256 M34,294H256 M34,104V294 M78,104V294 M123,104V294 M167,104V294 M212,104V294" />
+    <path android:fillColor="#DCEBFF" android:pathData="M40,106h32q4,0 4,4v52q0,4 -4,4h-32q-4,0 -4,-4v-52q0,-4 4,-4z M218,169h32q4,0 4,4v52q0,4 -4,4h-32q-4,0 -4,-4v-52q0,-4 4,-4z" />
+    <path android:fillColor="#D7F5E6" android:pathData="M129,106h32q4,0 4,4v52q0,4 -4,4h-32q-4,0 -4,-4v-52q0,-4 4,-4z M173,233h32q4,0 4,4v52q0,4 -4,4h-32q-4,0 -4,-4v-52q0,-4 4,-4z" />
+    <path android:fillColor="#ECE3FF" android:pathData="M40,233h32q4,0 4,4v52q0,4 -4,4h-32q-4,0 -4,-4v-52q0,-4 4,-4z M218,106h32q4,0 4,4v52q0,4 -4,4h-32q-4,0 -4,-4v-52q0,-4 4,-4z" />
+    <path android:fillColor="#FFF0C7" android:pathData="M84,169h32q4,0 4,4v52q0,4 -4,4h-32q-4,0 -4,-4v-52q0,-4 4,-4z" />
+    <path android:fillColor="#154F96" android:pathData="M40,112h24v4h-24z M40,120h17v3h-17z M40,133h14v3h-14z M218,175h24v4h-24z M218,183h17v3h-17z M218,196h14v3h-14z" />
+    <path android:fillColor="#116341" android:pathData="M129,112h24v4h-24z M129,120h17v3h-17z M129,133h14v3h-14z M173,239h24v4h-24z M173,247h17v3h-17z M173,260h14v3h-14z" />
+    <path android:fillColor="#5730A8" android:pathData="M40,239h24v4h-24z M40,247h17v3h-17z M40,260h14v3h-14z M218,112h24v4h-24z M218,120h17v3h-17z M218,133h14v3h-14z" />
+    <path android:fillColor="#804E00" android:pathData="M84,175h24v4h-24z M84,183h17v3h-17z M84,196h14v3h-14z" />
+</vector>

@@ -55,6 +55,9 @@ enum WidgetPinResult {
   manual,
 }
 
+/// 可添加的小组件尺寸：4×2 今日课表、2×2 当前/下一节、4×5 当周课表。
+enum WidgetPinSize { wide, square, week }
+
 /// 课表提醒 / 桌面小组件的原生通道（`dev.duohuo.nuist_sta_app/notify_widget`）。
 ///
 /// 所有方法在非 Android 或通道缺失时安静降级，不抛异常。
@@ -183,11 +186,12 @@ class TimetableNotifyBridge {
   Future<bool> openNotificationSettings() async =>
       await _call<bool>('openNotificationSettings') ?? false;
 
-  /// 请求把小组件固定到桌面（[square] 为 2×2，否则 4×2）。
+  /// 请求把指定尺寸的小组件固定到桌面。
   ///
-  /// 原生侧先检查厂商权限，再请求添加或返回手动指引类型。
-  Future<WidgetPinResult> pinWidget({required bool square}) async {
-    final result = await _call<String>('pinWidget', {'square': square});
+  /// 原生侧先检查厂商权限，再请求添加或返回手动指引类型；新增尺寸时
+  /// 同时保留旧的 square 参数兼容。
+  Future<WidgetPinResult> pinWidget({required WidgetPinSize size}) async {
+    final result = await _call<String>('pinWidget', {'size': size.name});
     return WidgetPinResult.values.firstWhere(
       (value) => value.name == result,
       orElse: () => WidgetPinResult.manual,

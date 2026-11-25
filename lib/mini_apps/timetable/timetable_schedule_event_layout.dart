@@ -228,21 +228,34 @@ Color scheduleAccentOnWhite(TimetableController c, ScheduleEvent e) =>
 
 /// 与课程格「单周 / 非本周」相同样式的 Micro 胶囊（描边与文字同色、无填充）。
 class SchedulePill extends StatelessWidget {
-  const SchedulePill({super.key, required this.text, required this.color});
+  const SchedulePill({
+    super.key,
+    required this.text,
+    required this.color,
+    this.fontSize = TimetableTheme.badgeSize,
+    this.cornerRadius = 8,
+    this.singleLine = false,
+  });
 
   final String text;
   final Color color;
+  final double fontSize;
+  final double cornerRadius;
+  final bool singleLine;
 
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
     decoration: BoxDecoration(
       border: Border.all(color: color, width: 1),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(cornerRadius),
     ),
     child: Text(
       text,
-      style: TextStyle(fontSize: TimetableTheme.badgeSize, color: color),
+      style: TextStyle(fontSize: fontSize, color: color),
+      maxLines: singleLine ? 1 : null,
+      softWrap: singleLine ? false : null,
+      overflow: singleLine ? TextOverflow.ellipsis : null,
     ),
   );
 }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Glance 用 tint 染色；圆角由 drawable 负责，避免依赖桌面对 color 背景的裁切。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FFFFFFFF"/>
+    <corners android:radius="4dp"/>
+</shape>

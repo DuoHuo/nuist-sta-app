@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- updatePeriodMillis=0：不用系统轮询，刷新由 AlarmManager 在上下课和零点触发 -->
+<!-- 初始占 4×6 格；可缩至约 4×4，最大尺寸对应约 9×9，由 Launcher 网格进一步限制。 -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="@dimen/wg_week_min_width"
+    android:minHeight="@dimen/wg_week_min_height"
+    android:targetCellWidth="4"
+    android:targetCellHeight="6"
+    android:resizeMode="horizontal|vertical"
+    android:minResizeWidth="250dp"
+    android:minResizeHeight="250dp"
+    android:maxResizeWidth="900dp"
+    android:maxResizeHeight="1000dp"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_timetable_week"
+    android:previewLayout="@layout/widget_timetable_week_preview"
+    android:previewImage="@drawable/wg_week_picker_preview"
+    android:description="@string/wg_week_description"
+    android:widgetCategory="home_screen"/>

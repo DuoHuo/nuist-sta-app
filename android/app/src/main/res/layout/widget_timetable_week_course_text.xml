@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 固定课程块高度；地点自然换行，教师不足以完整显示时整段隐藏。 -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/wg_week_course_cell" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:clipChildren="true" android:clipToPadding="true" android:importantForAccessibility="yes">
+        <ImageView android:id="@+id/wg_week_course_background" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitXY"
+            android:importantForAccessibility="no" />
+        <LinearLayout android:id="@+id/wg_week_course_text" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical"
+            android:clipChildren="true" android:clipToPadding="true">
+            <TextView android:id="@+id/wg_week_course_name"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:breakStrategy="simple" android:ellipsize="end" android:fallbackLineSpacing="true"
+                android:fontFamily="sans-serif-medium" android:hyphenationFrequency="none"
+                android:includeFontPadding="false" android:textDirection="firstStrongLtr"
+                android:importantForAccessibility="no" />
+            <TextView android:id="@+id/wg_week_course_location"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:breakStrategy="simple" android:fallbackLineSpacing="true"
+                android:fontFamily="sans-serif-medium" android:hyphenationFrequency="none"
+                android:includeFontPadding="false" android:textDirection="firstStrongLtr"
+                android:importantForAccessibility="no" />
+            <TextView android:id="@+id/wg_week_course_teacher"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:breakStrategy="simple" android:fallbackLineSpacing="true"
+                android:fontFamily="sans-serif" android:hyphenationFrequency="none"
+                android:includeFontPadding="false" android:textDirection="firstStrongLtr"
+                android:importantForAccessibility="no" />
+        </LinearLayout>
+        <RelativeLayout android:id="@+id/wg_week_course_badge" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="3dp"
+            android:visibility="gone" android:importantForAccessibility="noHideDescendants">
+            <ImageView android:id="@+id/wg_week_course_badge_border" android:layout_width="0dp" android:layout_height="0dp"
+                android:layout_alignStart="@+id/wg_week_course_badge_label" android:layout_alignEnd="@id/wg_week_course_badge_label"
+                android:layout_alignTop="@id/wg_week_course_badge_label" android:layout_alignBottom="@id/wg_week_course_badge_label"
+                android:scaleType="fitXY" />
+            <TextView android:id="@id/wg_week_course_badge_label" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:paddingStart="6dp" android:paddingEnd="6dp" android:paddingTop="1dp" android:paddingBottom="1dp"
+                android:gravity="center" android:fontFamily="sans-serif" android:includeFontPadding="false"
+                android:fallbackLineSpacing="true" android:singleLine="true" android:ellipsize="end" android:textSize="8sp" />
+        </RelativeLayout>
+        <FrameLayout android:id="@+id/wg_week_course_conflict_box" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:layout_gravity="top|end"
+            android:importantForAccessibility="noHideDescendants" android:visibility="gone">
+            <ImageView android:id="@+id/wg_week_course_conflict" android:layout_width="6dp"
+                android:layout_height="6dp" android:scaleType="fitXY" />
+        </FrameLayout>
+</FrameLayout>

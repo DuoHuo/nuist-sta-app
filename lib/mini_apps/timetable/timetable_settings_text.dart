@@ -34,6 +34,10 @@ abstract final class TtSettingsText {
   static const showPeriod = '显示节次';
   static const courseCount = '最多显示课程数量';
   static String courses(int n) => '$n';
+  static const weekOpacity = '课程不透明度';
+  static const weekWidgetOpacity = '组件不透明度';
+  static const weekShowWeekend = '显示周末';
+  static const weekShowWeekendSubtitle = '显示周六、周日两列';
   static const pinWidget = '添加到桌面';
   static const pinWidgetGuideTitle = '手动添加小组件';
   static const pinWidgetPermissionTitle = '开启桌面快捷方式';
@@ -51,13 +55,14 @@ abstract final class TtSettingsText {
   /// 仅展示此次选中尺寸的操作步骤。
   static List<(String, String)> pinWidgetSteps(
     WidgetPinResult result, {
-    required bool square,
+    required WidgetPinSize size,
     bool settingsUnavailable = false,
   }) {
-    final add = (
-      '添加「${square ? '当前/下一节' : '今日课表'}」',
-      '选择 ${square ? '2×2' : '4×2'}，长按并拖到桌面空白处。',
-    );
+    final add = switch (size) {
+      WidgetPinSize.wide => ('添加「今日课表」', '选择 4×2，长按并拖到桌面空白处。'),
+      WidgetPinSize.square => ('添加「当前/下一节」', '选择 2×2，长按并拖到桌面空白处。'),
+      WidgetPinSize.week => ('添加「当周课表」', '选择 4×6，长按并拖到桌面空白处。'),
+    };
     return switch (result) {
       WidgetPinResult.permissionRequired => [
         (

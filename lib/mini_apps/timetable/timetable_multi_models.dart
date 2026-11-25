@@ -183,7 +183,9 @@ class ScheduleMetadata {
       sourceKind: sourceKind,
       termCode: termCode,
       createdAt: DateTime.tryParse('${raw['createdAt'] ?? ''}'),
-      syncedAt: DateTime.tryParse('${raw['syncedAt'] ?? ''}'),
+      syncedAt: sourceKind == TimetableSourceKind.jwxt
+          ? DateTime.tryParse('${raw['syncedAt'] ?? ''}')
+          : null,
       courseCount: raw['courseCount'] is int ? raw['courseCount'] as int : null,
     );
   }

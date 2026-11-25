@@ -5,4 +5,10 @@
     <string name="wg_last_course">今天最后一节</string>
     <string name="wg_2x2_label">当前/下一节</string>
     <string name="wg_2x2_description">显示当前或下一节的课名、地点、时间和之后课程</string>
+    <string name="wg_week_label">当周课表</string>
+    <string name="wg_week_next_label">下周课表</string>
+    <string name="wg_week_switch_current">显示本周课表</string>
+    <string name="wg_week_switch_next">显示下周课表</string>
+    <string name="wg_week_open_settings">打开小组件设置</string>
+    <string name="wg_week_description">按节次显示本周与下周课程</string>
 </resources>

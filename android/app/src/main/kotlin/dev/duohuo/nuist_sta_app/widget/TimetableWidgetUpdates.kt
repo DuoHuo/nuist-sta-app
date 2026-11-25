@@ -7,17 +7,22 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import dev.duohuo.nuist_sta_app.NotifyStore
+import dev.duohuo.nuist_sta_app.TimetableWeekWidgetProvider
 import dev.duohuo.nuist_sta_app.TimetableWidget2x2Provider
 import dev.duohuo.nuist_sta_app.TimetableWidgetProvider
 import java.util.Calendar
 
-/** 两种尺寸共用刷新闹钟，数据同步和系统事件统一交给 Glance 接收器。 */
+/** 三种尺寸共用刷新闹钟；周组件按自身渲染输入决定是否需要全量更新。 */
 internal object TimetableWidgetUpdates {
     const val ACTION_TICK = "dev.duohuo.nuist_sta_app.WIDGET_TICK"
     const val ACTION_REFRESH = "dev.duohuo.nuist_sta_app.WIDGET_REFRESH"
     const val MINUTE = 60_000L
     private const val HOUR = 60 * MINUTE
-    private val receivers = listOf(TimetableWidgetProvider::class.java, TimetableWidget2x2Provider::class.java)
+    private val receivers = listOf(
+        TimetableWidgetProvider::class.java,
+        TimetableWidget2x2Provider::class.java,
+        TimetableWeekWidgetProvider::class.java,
+    )
 
     fun refresh(context: Context) {
         TimetableWidgetData.invalidate(context)
@@ -50,6 +55,7 @@ internal object TimetableWidgetUpdates {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
+        snapshot.jwxtExpiresAt?.let { next = minOf(next, it) }
         if (!snapshot.usable) return next
         for (course in snapshot.days.flatMap { it.courses }) {
             for (boundary in listOf(course.start - HOUR, course.start, course.end - HOUR, course.end)) {

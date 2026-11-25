@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/wg_week_axis" android:layout_width="match_parent" android:layout_height="match_parent">
+    <ImageView android:id="@+id/wg_week_axis_today" android:layout_width="match_parent" android:layout_height="match_parent"
+        android:layout_marginHorizontal="4dp" android:layout_marginVertical="2dp"
+        android:importantForAccessibility="no" android:scaleType="fitXY" android:visibility="gone" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical"
+        android:gravity="center" android:padding="2dp">
+        <TextView android:id="@+id/wg_week_axis_label" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:gravity="center" android:maxLines="1"
+            android:fontFamily="sans-serif-medium" android:includeFontPadding="false" android:fallbackLineSpacing="true" />
+        <TextView android:id="@+id/wg_week_axis_detail" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:gravity="center" android:maxLines="2"
+            android:includeFontPadding="false" android:fallbackLineSpacing="true" android:visibility="gone" />
+        <ImageView android:id="@+id/wg_week_axis_dot" android:layout_width="4dp" android:layout_height="4dp"
+            android:layout_marginTop="1dp" android:scaleType="fitXY"
+            android:importantForAccessibility="no" android:visibility="gone" />
+    </LinearLayout>
+</FrameLayout>

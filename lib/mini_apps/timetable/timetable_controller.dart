@@ -724,11 +724,17 @@ class TimetableController extends ChangeNotifier {
   /// 下次同步成功时按 [staleOverrideIds] 删除。
   Set<String> get orphanedOverrideIds => _applied.orphanIds;
 
-  /// 教务快照（courses 仅含 JWXT 课程）。
+  /// 当前课表快照；导入课表的课程也保存在这里。
   TimetableSnapshot get snapshot => _snapshot;
 
-  /// 教务同步课程（只读）。
-  List<Course> get jwxtCourses => List.unmodifiable(_snapshot.courses);
+  /// 教务同步课程（只读，不含本地导入）。
+  List<Course> get jwxtCourses => isImportedSchedule
+      ? const []
+      : List.unmodifiable(
+          _snapshot.courses.where(
+            (course) => course.source == CourseSource.jwxt,
+          ),
+        );
 
   /// 用户手动课程（独立持久化，同步/退出登录不覆盖）。
   List<Course> get manualCourses => List.unmodifiable(_manualCourses);
@@ -1417,7 +1423,13 @@ class TimetableController extends ChangeNotifier {
     final cached = TimetableStore.parseSnapshot(bundle.snapshot);
     final storedSettings = TimetableStore.parseSettings(bundle.settings);
     if (cached != null) {
-      if (activeStorageId == kDefaultScheduleId) {
+      if (isImportedSchedule) {
+        // 旧版曾把导入时间存入 syncedAt，不能当作教务同步时间。
+        _snapshot = cached.copyWith(
+          settings: cached.settings.withDisplayPrefsFrom(storedSettings),
+          clearSyncedAt: true,
+        );
+      } else if (activeStorageId == kDefaultScheduleId) {
         _snapshot = cached.copyWith(
           settings: cached.settings.termCode.isEmpty
               ? storedSettings
@@ -1441,11 +1453,9 @@ class TimetableController extends ChangeNotifier {
             : const TimetableSettings().withDisplayPrefsFrom(storedSettings),
       );
     }
-    final isImported =
-        scheduleMetaOf(activeStorageId)?.isImportedSchedule == true;
     _snapshot = _snapshot.copyWith(
       settings: _withResolvedTermStart(
-        !isImported &&
+        !isImportedSchedule &&
                 activeStorageId == kDefaultScheduleId &&
                 _snapshot.settings.termCode.isEmpty
             ? _snapshot.settings.copyWith(termCode: '2026-2027-1')
@@ -1525,7 +1535,7 @@ class TimetableController extends ChangeNotifier {
   /// 「回到本周」（同 [goToCurrentWeek]；已在本周时不通知）。
   void jumpToCurrentWeek() => goToCurrentWeek();
 
-  /// 纯显示/外观偏好键：只写 settings.json，不重写 snapshot.json，不触发 ScheduleChangeReason.settings。
+  /// 纯显示/外观偏好键：只写 settings.json；仅当小组件的有效周末值变化时通知刷新。
   static const _pureAppearanceSettingKeys = <String>{
     'periodHeight',
     'cellRadius',
@@ -1556,6 +1566,11 @@ class TimetableController extends ChangeNotifier {
     'widgetShowCount',
     'widgetShowPeriod',
     'widgetCourseCount',
+    'widgetWeekCellHeight',
+    'widgetWeekFontSize',
+    'widgetWeekOpacity',
+    'widgetWeekCompactRows',
+    'widgetWeekShowWeekend',
   };
 
   /// 保存本次真正改动的设置；失败时恢复最后成功保存的状态。
@@ -1590,7 +1605,7 @@ class TimetableController extends ChangeNotifier {
             _pureAppearanceSettingKeys.contains(k) ||
             _widgetAffectingDisplayKeys.contains(k),
       );
-      final shouldFireScheduleChanged = !isPureAppearance;
+      late final bool shouldFireScheduleChanged;
       try {
         final previous = _snapshot.settings;
         final raw = previous.toJson();
@@ -1603,6 +1618,10 @@ class TimetableController extends ChangeNotifier {
           }
         }
         final applied = TimetableSettings.fromJson(raw);
+        // 未单独设置周末时，外观变化也可能改变桌面小组件的列。
+        shouldFireScheduleChanged =
+            !isPureAppearance ||
+            previous.widgetWeekShowWeekend != applied.widgetWeekShowWeekend;
         final snapshot = _snapshot.copyWith(settings: applied);
         final scheme = coursePaletteSchemeOf(applied.paletteScheme);
         Map<String, int>? colors;
@@ -2804,7 +2823,7 @@ class TimetableController extends ChangeNotifier {
     final snapshot = result.snapshot.copyWith(
       periods: periods,
       settings: snapSettings,
-      syncedAt: DateTime.now(),
+      clearSyncedAt: true,
     );
     final scheme = coursePaletteSchemeOf(host.settings.paletteScheme);
     final adaptedCourses = <Course>[
@@ -2837,7 +2856,6 @@ class TimetableController extends ChangeNotifier {
       customName: true,
       sourceKind: TimetableSourceKind.wakeupImport,
       createdAt: DateTime.now(),
-      syncedAt: snapshot.syncedAt,
       courseCount: snapshot.courses.length,
     );
     await host._upsertScheduleMetadata(meta, persist: true);
@@ -6071,8 +6089,12 @@ class TimetableController extends ChangeNotifier {
   }
 
   /// 指定日期的课程（用于明天预告）。
-  List<TodayCourseItem> coursesOnDate(DateTime date) {
-    if (settings.termStartDate == null) return const [];
+  /// [allowPendingWeek] 允许开学日未设定时沿用网格的第 1 周。
+  List<TodayCourseItem> coursesOnDate(
+    DateTime date, {
+    bool allowPendingWeek = false,
+  }) {
+    if (weekPending && !allowPendingWeek) return const [];
     final cells = _timedCellsOn(date);
     return [
       for (final cell in cells)

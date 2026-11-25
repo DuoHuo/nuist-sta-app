@@ -118,7 +118,7 @@ private fun HostMeasuredCard(data: WidgetSnapshot, square: Boolean, surface: Gla
                         align = TextAlign.Center)
                     if (!square && !largeHonorText) {
                         Spacer(GlanceModifier.height(4.dp))
-                        Label(if (data.state == "loadFailed") "网络异常，请打开课表重试" else "打开 App 登录并同步",
+                        Label(data.statusDetail,
                             11f, R.color.wg_t3, lines = 2, align = TextAlign.Center)
                     }
                 }
@@ -293,7 +293,7 @@ private fun TimetableCard(data: WidgetSnapshot, square: Boolean, modifier: Glanc
                 Label(data.statusTitle, 15f, R.color.wg_t1, medium = true, lines = plan.statusLines, align = TextAlign.Center)
                 if (plan.showEmptyDetail) {
                     Spacer(GlanceModifier.height(8.dp))
-                    Label(if (data.state == "loadFailed") "网络异常，请打开课表重试" else "打开 App 登录并同步",
+                    Label(data.statusDetail,
                         11f, R.color.wg_t3, lines = 3, align = TextAlign.Center)
                 }
                 if (plan.showEmptyButton) {

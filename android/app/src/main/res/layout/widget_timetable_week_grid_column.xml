@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 权重与课程列一致，不依赖 Launcher 上报的近似宽度。 -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="0dp"
+    android:layout_height="match_parent"
+    android:layout_weight="1">
+    <ImageView android:id="@+id/wg_week_grid_column_line"
+        android:layout_width="@dimen/wg_week_grid_stroke" android:layout_height="match_parent"
+        android:layout_gravity="start" />
+</FrameLayout>

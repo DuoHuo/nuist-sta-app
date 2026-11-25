@@ -10,6 +10,7 @@ import 'timetable_schedule_event.dart';
 import 'timetable_change_alert.dart';
 import 'timetable_controller.dart';
 import 'timetable_export_page.dart';
+import 'timetable_notify_bridge.dart' show WidgetPinSize;
 import 'timetable_import_page.dart';
 import 'timetable_perf.dart';
 import 'timetable_settings_page.dart';
@@ -24,6 +25,9 @@ class TimetablePage extends StatefulWidget {
     super.key,
     this.focusTomorrow = false,
     this.focusTomorrowToken,
+    this.focusNextWeek = false,
+    this.openWidgetSettings = false,
+    this.widgetLaunchRequest,
     this.focusEvent,
   });
 
@@ -32,6 +36,13 @@ class TimetablePage extends StatefulWidget {
 
   /// 重复点击明日通知时的去重令牌，变化后再次定位到明天所在周。
   final int? focusTomorrowToken;
+
+  /// 当周组件入口：定位下周或打开组件设置。
+  final bool focusNextWeek;
+  final bool openWidgetSettings;
+
+  /// 热启动的每次组件操作，即使 URI 相同也可重新处理。
+  final Object? widgetLaunchRequest;
 
   /// 从考试安排进入时，定位并短暂强调这一场考试。
   final ScheduleEvent? focusEvent;
@@ -54,6 +65,7 @@ class _TimetablePageState extends State<TimetablePage> {
   bool _syncAlertQueued = false;
   bool _syncAlertScheduled = false;
   bool _openingEntryDetail = true;
+  bool _pushingWidgetSettings = false;
   ScheduleEvent? _focusedEvent;
   bool _eventFocusRevealed = false;
   String? _focusUnavailableMessage;
@@ -155,12 +167,16 @@ class _TimetablePageState extends State<TimetablePage> {
     if (!_host.isInitialized ||
         widget.focusEvent != null ||
         widget.focusTomorrow ||
+        widget.focusNextWeek ||
+        widget.openWidgetSettings ||
         _controller.viewingWeek !=
             _controller.currentWeek.clamp(1, _totalWeeks)) {
       // 定位其他周会通知仍在栈底的页面，在首个挂载build中不能同步发通知。
       // 有课时读完本地数据即可显示；门户绑定只决定空课表的登录引导。
       await _host.ensureLocalReady();
-      if (!_controller.hasCourses && _controller.scheduleEvents.isEmpty) {
+      if (!widget.openWidgetSettings &&
+          !_controller.hasCourses &&
+          _controller.scheduleEvents.isEmpty) {
         await _host.ensureStarted();
       }
     }
@@ -169,6 +185,8 @@ class _TimetablePageState extends State<TimetablePage> {
     _controller.followCurrentWeekIfChanged();
     if (widget.focusEvent != null) {
       _prepareEventFocus();
+    } else if (widget.focusNextWeek) {
+      _controller.setViewingWeek(_controller.currentWeek + 1);
     } else if (widget.focusTomorrow) {
       final now = DateTime.now();
       final tomorrow = DateTime(now.year, now.month, now.day + 1);
@@ -185,7 +203,9 @@ class _TimetablePageState extends State<TimetablePage> {
       try {
         if (widget.focusEvent != null) {
           await _showUnavailableEventFocus();
-        } else {
+        } else if (widget.openWidgetSettings) {
+          await _openWidgetSettingsFromEntry();
+        } else if (!widget.focusNextWeek) {
           await _openPendingCourse();
         }
       } finally {
@@ -257,7 +277,20 @@ class _TimetablePageState extends State<TimetablePage> {
         }
       });
     }
-    if (widget.focusTomorrow &&
+    if (_ready &&
+        (widget.widgetLaunchRequest != oldWidget.widgetLaunchRequest ||
+            widget.focusNextWeek != oldWidget.focusNextWeek ||
+            widget.openWidgetSettings != oldWidget.openWidgetSettings) &&
+        (widget.focusNextWeek || widget.openWidgetSettings)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (widget.openWidgetSettings) {
+          unawaited(_openWidgetSettingsFromEntry());
+        } else if (widget.focusNextWeek) {
+          _controller.setViewingWeek(_controller.currentWeek + 1);
+        }
+      });
+    } else if (widget.focusTomorrow &&
         _ready &&
         (!oldWidget.focusTomorrow ||
             widget.focusTomorrowToken != oldWidget.focusTomorrowToken)) {
@@ -267,6 +300,23 @@ class _TimetablePageState extends State<TimetablePage> {
         final tomorrow = DateTime(now.year, now.month, now.day + 1);
         _controller.setViewingWeek(_controller.actualWeek(tomorrow) ?? 1);
       });
+    }
+  }
+
+  Future<void> _openWidgetSettingsFromEntry() async {
+    if (_pushingWidgetSettings) return;
+    _pushingWidgetSettings = true;
+    try {
+      await Navigator.of(context).push(
+        AppPageRoute<void>(
+          builder: (_) => TimetableWidgetSettingsPage(
+            controller: _controller,
+            initialSize: WidgetPinSize.week,
+          ),
+        ),
+      );
+    } finally {
+      _pushingWidgetSettings = false;
     }
   }
 

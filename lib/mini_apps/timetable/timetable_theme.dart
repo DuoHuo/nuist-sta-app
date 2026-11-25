@@ -614,22 +614,31 @@ abstract final class TimetableTheme {
     return sp.roundToDouble();
   }
 
-  /// 格内字号随用户设置和系统字号缩放，实际字号不小于 10sp。
-  static double cellFontSize(double base, double factor, TextScaler scaler) {
+  /// 格内字号随用户设置和系统字号缩放，实际字号不小于 [minSize]。
+  static double cellFontSize(
+    double base,
+    double factor,
+    TextScaler scaler, {
+    double minSize = 10,
+  }) {
     final scale = scaler.scale(1);
     final sized = base * factor;
     if (scale <= 0) return snapFontSp(sized);
-    final minUnscaled = (10 / scale).ceilToDouble();
+    final minUnscaled = (minSize / scale).ceilToDouble();
     final snapped = snapFontSp(sized);
     return snapped < minUnscaled ? minUnscaled : snapped;
   }
 
-  /// 窄格以每行三个汉字为锚点缩小字号；足够宽时保持用户设置，不放大。
-  /// 副文字按相同比例缩小，保留实际 10sp 下限。
+  /// 窄格以 [referenceText] 为一行的宽度锚点；足够宽时保持用户设置，不放大。
+  /// 副文字按相同比例缩小，保留实际 [minSize] 下限。
   static ({double nameSize, double subSize}) cellTextSizesForWidth({
     required double maxWidth,
     required TextStyle nameStyle,
     double factor = 1,
+    double nameBaseSize = cellSize,
+    double subBaseSize = cellSubSize,
+    double minSize = 10,
+    String referenceText = '课课课',
     TextScaler textScaler = TextScaler.noScaling,
     TextDirection textDirection = TextDirection.ltr,
   }) {
@@ -638,24 +647,39 @@ abstract final class TimetableTheme {
       _cellFontCacheStarted = true;
       PaintingBinding.instance.systemFonts.addListener(_cellFontSizes.clear);
     }
-    final key = (maxWidth, nameStyle, factor, textScaler, textDirection);
+    final key = (
+      maxWidth,
+      nameStyle,
+      factor,
+      nameBaseSize,
+      subBaseSize,
+      minSize,
+      referenceText,
+      textScaler,
+      textDirection,
+    );
     final cached = _cellFontSizes.remove(key);
     if (cached != null) {
       _cellFontSizes[key] = cached;
       return cached;
     }
-    final initialSize = cellFontSize(cellSize, factor, textScaler);
+    final initialSize = cellFontSize(
+      nameBaseSize,
+      factor,
+      textScaler,
+      minSize: minSize,
+    );
     var nameSize = initialSize;
     if (maxWidth.isFinite && maxWidth > 0) {
       final scale = textScaler.scale(1);
       final unit = scale > 0 ? 1 / scale : 1.0;
-      final minimum = scale > 0 ? (10 / scale).ceilToDouble() : 10.0;
+      final minimum = scale > 0 ? (minSize / scale).ceilToDouble() : minSize;
       for (var step = 0; ; step++) {
         final candidate = initialSize - step * unit;
         nameSize = snapFontSp(candidate < minimum ? minimum : candidate);
         final painter = TextPainter(
           text: TextSpan(
-            text: '课课课',
+            text: referenceText,
             style: nameStyle.copyWith(fontSize: nameSize),
           ),
           textDirection: textDirection,
@@ -669,9 +693,10 @@ abstract final class TimetableTheme {
     final sizes = (
       nameSize: nameSize,
       subSize: cellFontSize(
-        cellSubSize,
+        subBaseSize,
         factor * nameSize / initialSize,
         textScaler,
+        minSize: minSize,
       ),
     );
     // 课程与日程在同列使用相同字号，只保存有限的尺寸/样式组合。

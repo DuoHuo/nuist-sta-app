@@ -31,6 +31,37 @@ internal enum class WidgetItemKind(val label: String) {
     }
 }
 
+/** 两种数据窗口统一执行教务有效期校验，旧 payload 未标来源时按教务处理。 */
+internal class WidgetSourceStatus(root: JSONObject, now: Long) {
+    private val expiresAt = root.optLong("jwxtExpiresAt").takeIf { it > 0 }
+        ?: root.optLong("lastSyncedAt").takeIf { it > 0 }?.plus(JWXT_VALIDITY_MS)
+    private val expired = expiresAt != null && now >= expiresAt
+    private val rawReason = if (root.isNull("reason")) "" else root.optString("reason")
+    private val jwxtUnavailable = rawReason == "jwxtUnbound" || rawReason == "jwxtExpired"
+    private val hideJwxt = expired || jwxtUnavailable
+    val hasIndependentLocalData = root.optBoolean("hasIndependentLocalData", false)
+    val state = root.optString("state", "needsUpdate").let { rawState ->
+        when {
+            hideJwxt && !hasIndependentLocalData -> "needsUpdate"
+            hideJwxt && (rawState == "loadFailed" || jwxtUnavailable) -> "ok"
+            else -> rawState
+        }
+    }
+    val reason = when {
+        state != "needsUpdate" -> ""
+        rawReason.isNotEmpty() -> rawReason
+        expired -> "jwxtExpired"
+        else -> ""
+    }
+    val jwxtExpiresAt = expiresAt?.takeUnless { hideJwxt }
+
+    fun isVisible(item: JSONObject): Boolean = !hideJwxt || item.optString("origin") == "local"
+
+    private companion object {
+        const val JWXT_VALIDITY_MS = 7L * 24 * 60 * 60 * 1000
+    }
+}
+
 /** Flutter 数据窗口中的一项课程、考试或日程；墙上时间每次读取都按当前时区解析。 */
 internal data class WidgetCourse(
     val name: String,
@@ -78,6 +109,8 @@ internal data class WidgetSnapshot(
     val days: List<WidgetDay> = emptyList(),
     val state: String = "needsUpdate",
     val hasCache: Boolean = false,
+    val reason: String = "",
+    val jwxtExpiresAt: Long? = null,
 ) {
     val today: WidgetDay? get() = days.firstOrNull { it.date == NotifyStore.today(now) }
     val pending: List<WidgetCourse> get() = today?.courses.orEmpty().filter { it.end > now }
@@ -88,6 +121,11 @@ internal data class WidgetSnapshot(
             add(Calendar.DAY_OF_MONTH, 1)
         }.timeInMillis
         return today?.tomorrowFirst?.takeIf { NotifyStore.today(it.start) == NotifyStore.today(date) }
+    }
+    val statusDetail: String get() = when {
+        reason == "jwxtUnbound" -> "打开 App 登录并同步"
+        state == "loadFailed" -> "网络异常，请打开课表重试"
+        else -> "打开 App 查看课表"
     }
     val statusTitle: String get() = when {
         !usable && state == "loadFailed" -> "课表加载失败"
@@ -114,6 +152,7 @@ internal object TimetableWidgetData {
         if (json.isNullOrBlank()) return WidgetSnapshot(now)
         return try {
             val root = JSONObject(json)
+            val source = WidgetSourceStatus(root, now)
             val p = root.optJSONObject("prefs") ?: JSONObject()
             val preferences = WidgetPreferences(
                 courseCount = p.optInt("courseCount", 2).takeIf { it in 1..3 } ?: 2,
@@ -124,7 +163,7 @@ internal object TimetableWidgetData {
                 showPeriod = p.optBoolean("showPeriod", true),
             )
             fun course(o: JSONObject?): WidgetCourse? {
-                if (o == null) return null
+                if (o == null || !source.isVisible(o)) return null
                 val start = NotifyStore.parseLocal(o.optString("start")) ?: return null
                 val end = NotifyStore.parseLocal(o.optString("end")) ?: return null
                 if (end <= start) return null
@@ -153,11 +192,20 @@ internal object TimetableWidgetData {
                     // 显式 null 表示明天没有安排，不能回退到旧的顶层注入值。
                     val tomorrow = if (day.has("tomorrowFirst")) day.optJSONObject("tomorrowFirst")
                         else root.optJSONObject("tomorrowFirst")
-                    add(WidgetDay(day.optString("date"), courses, course(tomorrow)))
+                    val first = if (tomorrow != null && !source.isVisible(tomorrow))
+                        course(day.optJSONObject("localTomorrowFirst")) else course(tomorrow)
+                    add(WidgetDay(day.optString("date"), courses, first))
                 }
             }
-            WidgetSnapshot(now, preferences, days, root.optString("state", "needsUpdate"),
-                root.optBoolean("hasCache", false))
+            WidgetSnapshot(
+                now = now,
+                preferences = preferences,
+                days = days,
+                state = source.state,
+                hasCache = root.optBoolean("hasCache", false),
+                reason = source.reason,
+                jwxtExpiresAt = source.jwxtExpiresAt,
+            )
         } catch (_: Exception) {
             WidgetSnapshot(now)
         }

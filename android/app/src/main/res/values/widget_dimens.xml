@@ -4,4 +4,8 @@
     <dimen name="wg_2x2_min_width">120dp</dimen>
     <dimen name="wg_min_height">115dp</dimen>
     <dimen name="wg_4x2_min_width">256dp</dimen>
+    <!-- 4×6 当周课表：兼容按最小尺寸换算初始格数的桌面。 -->
+    <dimen name="wg_week_min_width">340dp</dimen>
+    <dimen name="wg_week_min_height">460dp</dimen>
+    <dimen name="wg_week_grid_stroke">0.75dp</dimen>
 </resources>

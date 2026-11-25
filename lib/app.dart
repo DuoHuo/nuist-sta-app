@@ -279,6 +279,10 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     _navigation.activate(0);
     final target = AppNavigation.locationInBranch(route, 0);
     final targetPath = Uri.parse(target).path;
+    // 旧版本箭头可能仍留在 Launcher 缓存里；新版在组件内切换周次。
+    final nextWeek = uri.queryParameters['week'] == 'next';
+    final widgetAction =
+        nextWeek || uri.queryParameters['open'] == 'widgetSettings';
     // 重复点击复用已打开的课表页，保留首页作为返回落点。
     final matches = _router.routerDelegate.currentConfiguration.matches;
     bool containsTimetable(List<RouteMatchBase> matches) => matches.any(
@@ -289,21 +293,37 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     );
     final hasTimetable = containsTimetable(matches);
     if (hasTimetable) {
-      while (_router.canPop() && _router.state.uri.path != targetPath) {
+      final navigator = _navigation.branchNavigatorKeys[0].currentState;
+      if (navigator == null) return;
+      while (mounted) {
+        final top = _navigation.topRouteInBranch(0);
+        final hasLocalRoute = top != null && top.settings is! Page<dynamic>;
+        if (_router.state.uri.path == targetPath &&
+            !(widgetAction && hasLocalRoute)) {
+          break;
+        }
         final before = _router.routerDelegate.currentConfiguration;
-        await _navigation.branchNavigatorKeys[0].currentState?.maybePop();
-        // 内容保护或内部返回没有退出页面时，保留当前页面，不能强制清栈。
-        if (!mounted || before == _router.routerDelegate.currentConfiguration) {
+        if (!await navigator.maybePop() || !mounted) return;
+        await WidgetsBinding.instance.endOfFrame;
+        // 本地子页不改 URI；用实际顶层路由判断是否退出，并尊重内容保护。
+        if (!mounted ||
+            (identical(top, _navigation.topRouteInBranch(0)) &&
+                before == _router.routerDelegate.currentConfiguration)) {
           return;
         }
       }
     }
     final focusTomorrow = uri.queryParameters['focus'] == 'tomorrow';
-    final launchExtra = focusTomorrow
-        ? TimetableLaunchExtra(focusToken: ++_timetableFocusToken)
+    final focusToken = focusTomorrow ? ++_timetableFocusToken : null;
+    final launchExtra = widgetAction
+        ? TimetableWidgetLaunchRequest(focusToken: focusToken)
+        : focusTomorrow
+        ? TimetableLaunchExtra(focusToken: focusToken)
         : timetableDirectLaunch;
     if (_router.state.uri.path == targetPath) {
-      if (_router.state.uri.toString() != target || focusTomorrow) {
+      if (_router.state.uri.toString() != target ||
+          focusTomorrow ||
+          widgetAction) {
         _router.replace(target, extra: launchExtra);
       }
       return;
