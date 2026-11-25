@@ -27,7 +27,7 @@ import kotlin.math.abs
 /** 课程布局在后台生成；发布完整布局和翻周只在主线程串行应用。 */
 internal object TimetableWeekWidgetRuntime {
     const val ACTION_FLIP = "dev.duohuo.nuist_sta_app.WIDGET_WEEK_FLIP"
-    private const val LAYOUT_VERSION = 6
+    private const val LAYOUT_VERSION = 7
     private const val PENDING_FLAGS = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     private val main = Handler(Looper.getMainLooper())
     // 只在主线程访问。应用进程死亡后的首次点击才从持久状态恢复。

@@ -5,6 +5,6 @@
     android:layout_height="match_parent"
     android:layout_weight="1">
     <ImageView android:id="@+id/wg_week_grid_column_line"
-        android:layout_width="1dp" android:layout_height="match_parent"
+        android:layout_width="@dimen/wg_week_grid_stroke" android:layout_height="match_parent"
         android:layout_gravity="start" />
 </FrameLayout>

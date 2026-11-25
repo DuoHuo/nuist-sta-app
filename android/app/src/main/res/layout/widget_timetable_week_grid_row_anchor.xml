@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- API 26-30 不支持 RemoteViews 动态边距；只给锚点留白，1dp 线条自身不拉伸。 -->
+<!-- API 26-30 不支持 RemoteViews 动态边距；只给锚点留白，线条自身不拉伸。 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/wg_week_grid_row_anchor"
     android:layout_width="match_parent"

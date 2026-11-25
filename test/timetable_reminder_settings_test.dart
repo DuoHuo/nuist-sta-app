@@ -585,10 +585,13 @@ void main() {
       paints..path(
         color: gridColor.withValues(alpha: 0.7),
         includes: [
-          Offset(gridSize.width / 10, 0.5),
-          Offset(gridSize.width / 5 + 0.5, 2),
+          Offset(gridSize.width / 10, 0.25),
+          Offset(gridSize.width / 5 + 0.25, 2),
         ],
-        excludes: [Offset(gridSize.width / 10, 2)],
+        excludes: [
+          Offset(gridSize.width / 10, 0.75),
+          Offset(gridSize.width / 5 + 0.75, 2),
+        ],
       ),
     );
     expect(

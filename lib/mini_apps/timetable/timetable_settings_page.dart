@@ -971,6 +971,7 @@ class _WeekWidgetPreviewGrid extends StatelessWidget {
                           painter: _WeekWidgetPreviewLines(
                             plan,
                             prefs.gridLine(colors),
+                            dpr,
                           ),
                         ),
                       for (final (column, weekday) in plan.weekdays.indexed)
@@ -1324,14 +1325,17 @@ class _WeekWidgetPreviewGrid extends StatelessWidget {
 }
 
 class _WeekWidgetPreviewLines extends CustomPainter {
-  _WeekWidgetPreviewLines(this.plan, this.color);
+  _WeekWidgetPreviewLines(this.plan, this.color, this.devicePixelRatio);
 
   final WeekWidgetPlan plan;
   final Color color;
+  final double devicePixelRatio;
 
   @override
   void paint(Canvas canvas, Size size) {
-    const strokeWidth = 1.0;
+    // 与 Android 尺寸资源取整方式一致，低密度也至少保留一个像素。
+    final strokeWidth =
+        math.max(1, (0.5 * devicePixelRatio).round()) / devicePixelRatio;
     final lines = Path();
     for (var i = 0; i <= plan.rows.length; i++) {
       final y = (i * plan.geometry.rowHeight - strokeWidth / 2)
@@ -1355,6 +1359,7 @@ class _WeekWidgetPreviewLines extends CustomPainter {
   @override
   bool shouldRepaint(_WeekWidgetPreviewLines old) =>
       color != old.color ||
+      devicePixelRatio != old.devicePixelRatio ||
       plan.geometry.cellWidth != old.plan.geometry.cellWidth ||
       plan.geometry.rowHeight != old.plan.geometry.rowHeight ||
       plan.rows.length != old.plan.rows.length ||

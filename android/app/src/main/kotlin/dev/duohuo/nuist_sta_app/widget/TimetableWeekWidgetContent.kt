@@ -107,7 +107,7 @@ internal class TimetableWeekWidgetContent(
                     gridLineColor(R.id.wg_week_grid_column_line)
                 })
             }
-            val stroke = pixels.dp(1f).coerceAtLeast(1)
+            val stroke = context.resources.getDimensionPixelSize(R.dimen.wg_week_grid_stroke)
             val lastTop = (height - stroke).coerceAtLeast(0)
             for (row in 0..current.rows.size) {
                 val top = (pixels.y(row) - stroke / 2).coerceIn(0, lastTop)
