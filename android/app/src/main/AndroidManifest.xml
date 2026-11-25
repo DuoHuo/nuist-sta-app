@@ -88,6 +88,20 @@
             <meta-data android:name="flutter_deeplinking_enabled" android:value="false"/>
         </activity-alias>
         <activity-alias
+            android:name="dev.duohuo.nuist_sta_app.AltIcon"
+            android:targetActivity="dev.duohuo.nuist_sta_app.MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            launcher:icon="@mipmap/ic_launcher_alt"
+            android:roundIcon="@mipmap/ic_launcher_alt"
+            android:label="NUIST++">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="false"/>
+        </activity-alias>
+        <activity-alias
             android:name="dev.duohuo.nuist_sta_app.MascotIcon"
             android:targetActivity="dev.duohuo.nuist_sta_app.MainActivity"
             android:enabled="false"

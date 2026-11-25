@@ -11,7 +11,7 @@ import 'app_icon_controller.dart';
 import 'app_icon_crop_page.dart';
 import 'app_icon_models.dart';
 
-/// 应用图标设置页：三款内置图标，以及相册图片生成的自定义桌面快捷方式。
+/// 应用图标设置页：内置图标，以及相册图片生成的自定义桌面快捷方式。
 class AppIconPage extends StatefulWidget {
   const AppIconPage({super.key, this.controller});
 
@@ -242,33 +242,32 @@ class _BuiltinGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final gap = 10.0;
-        final columns = constraints.maxWidth >= 300 ? 3 : 2;
-        final cardWidth =
-            ((constraints.maxWidth - gap * (columns - 1)) / columns).clamp(
-              0.0,
-              132.0,
-            );
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
-          children: [
-            for (final choice in appIconChoices)
-              SizedBox(
-                width: cardWidth,
-                child: _BuiltinCard(
-                  key: Key('app_icon_choice_${choice.id}'),
-                  choice: choice,
-                  selected: state.builtinId == choice.id,
-                  enabled: state.supported && !busy,
-                  onTap: () => onSelected(choice.id),
+    const gap = 8.0;
+    const maxCardWidth = 116.0;
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: maxCardWidth * 4 + gap * 3),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final (index, choice) in appIconChoices.indexed) ...[
+                if (index > 0) const SizedBox(width: gap),
+                Expanded(
+                  child: _BuiltinCard(
+                    key: Key('app_icon_choice_${choice.id}'),
+                    choice: choice,
+                    selected: state.builtinId == choice.id,
+                    enabled: state.supported && !busy,
+                    onTap: () => onSelected(choice.id),
+                  ),
                 ),
-              ),
-          ],
-        );
-      },
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -291,9 +290,11 @@ class _BuiltinCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     final border = selected ? palette.accent : palette.divider;
+    const iconSize = 56.0;
+    const cardRadius = BorderRadius.all(Radius.circular(8));
     final iconCacheSize = math.max(
       1,
-      (64 * MediaQuery.devicePixelRatioOf(context)).round(),
+      (iconSize * MediaQuery.devicePixelRatioOf(context)).round(),
     );
     return Semantics(
       selected: selected,
@@ -302,36 +303,39 @@ class _BuiltinCard extends StatelessWidget {
       label: '${choice.label}图标',
       child: Material(
         color: palette.surface,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: cardRadius,
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: enabled ? onTap : null,
           child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
+            padding: const EdgeInsets.all(8),
+            foregroundDecoration: BoxDecoration(
               border: Border.all(color: border, width: selected ? 2 : 1),
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: cardRadius,
             ),
             child: Column(
               children: [
                 Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    SizedBox.square(
-                      dimension: 64,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: Image.asset(
-                          choice.assetPath,
-                          cacheWidth: iconCacheSize,
-                          cacheHeight: iconCacheSize,
-                          fit: BoxFit.cover,
-                          filterQuality: FilterQuality.medium,
-                          errorBuilder: (_, _, _) => ColoredBox(
-                            color: palette.pageBg,
-                            child: Icon(
-                              Icons.apps_rounded,
-                              color: palette.hint,
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: iconSize),
+                      child: AspectRatio(
+                        aspectRatio: 1,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.asset(
+                            choice.assetPath,
+                            cacheWidth: iconCacheSize,
+                            cacheHeight: iconCacheSize,
+                            fit: BoxFit.cover,
+                            filterQuality: FilterQuality.medium,
+                            errorBuilder: (_, _, _) => ColoredBox(
+                              color: palette.pageBg,
+                              child: Icon(
+                                Icons.apps_rounded,
+                                color: palette.hint,
+                              ),
                             ),
                           ),
                         ),
@@ -360,14 +364,13 @@ class _BuiltinCard extends StatelessWidget {
                       ),
                   ],
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 6),
                 Text(
                   choice.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     color: enabled ? palette.titleText : palette.hint,
-                    fontSize: 14,
+                    fontSize: 13,
                     fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
                   ),
                 ),

@@ -95,6 +95,7 @@ flutter:
     - assets/js/vconsole.min.js
     # 默认图标由 flutter_launcher_icons 生成；其他内置图标另有对应的 Android 资源。
     - assets/images/app_icon.png
+    - assets/images/app_icon_alt.png
     - assets/images/app_icon_mascot.png
     - assets/images/app_icon_mascot_color.png
 
