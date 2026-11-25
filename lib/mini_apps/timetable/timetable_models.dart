@@ -575,8 +575,8 @@ class TimetableSettings {
     this.widgetWeekOpacity = 100,
     this.widgetWeekWidgetOpacity = 100,
     this.widgetWeekCompactRows = true,
-    this.widgetWeekShowWeekend = false,
-  });
+    bool? widgetWeekShowWeekend,
+  }) : _widgetWeekShowWeekendOverride = widgetWeekShowWeekend;
 
   final String scheduleName;
   final String termCode;
@@ -690,8 +690,11 @@ class TimetableSettings {
   /// v1 紧凑开关；v2 只支持完整作息。
   final bool widgetWeekCompactRows;
 
-  /// 4×5 当周课表显示周六、周日两列（默认关）。
-  final bool widgetWeekShowWeekend;
+  final bool? _widgetWeekShowWeekendOverride;
+
+  /// 4×5 当周课表显示周六、周日两列；未单独设置时，两项外观开关都开启才显示。
+  bool get widgetWeekShowWeekend =>
+      _widgetWeekShowWeekendOverride ?? (showSaturday && showSunday);
 
   /// 格子高度：数字四舍五入后钳到 24–64；非数字/非有限值 → 34。
   static int sanitizeWeekCellHeight(Object? raw) {
@@ -758,6 +761,7 @@ class TimetableSettings {
     int? widgetWeekWidgetOpacity,
     bool? widgetWeekCompactRows,
     bool? widgetWeekShowWeekend,
+    bool clearWidgetWeekShowWeekend = false,
   }) => TimetableSettings(
     scheduleName: scheduleName ?? this.scheduleName,
     termCode: termCode ?? this.termCode,
@@ -808,7 +812,9 @@ class TimetableSettings {
     widgetWeekWidgetOpacity:
         widgetWeekWidgetOpacity ?? this.widgetWeekWidgetOpacity,
     widgetWeekCompactRows: widgetWeekCompactRows ?? this.widgetWeekCompactRows,
-    widgetWeekShowWeekend: widgetWeekShowWeekend ?? this.widgetWeekShowWeekend,
+    widgetWeekShowWeekend: clearWidgetWeekShowWeekend
+        ? null
+        : widgetWeekShowWeekend ?? _widgetWeekShowWeekendOverride,
   );
 
   /// 用 [o] 的用户偏好（显示/外观/提醒/首页开关）覆盖本对象，学期字段不变。
@@ -848,7 +854,8 @@ class TimetableSettings {
     widgetWeekOpacity: o.widgetWeekOpacity,
     widgetWeekWidgetOpacity: o.widgetWeekWidgetOpacity,
     widgetWeekCompactRows: o.widgetWeekCompactRows,
-    widgetWeekShowWeekend: o.widgetWeekShowWeekend,
+    widgetWeekShowWeekend: o._widgetWeekShowWeekendOverride,
+    clearWidgetWeekShowWeekend: o._widgetWeekShowWeekendOverride == null,
   );
 
   Map<String, dynamic> toJson() => {
@@ -893,7 +900,7 @@ class TimetableSettings {
     'widgetWeekOpacity': widgetWeekOpacity,
     'widgetWeekWidgetOpacity': widgetWeekWidgetOpacity,
     'widgetWeekCompactRows': widgetWeekCompactRows,
-    'widgetWeekShowWeekend': widgetWeekShowWeekend,
+    'widgetWeekShowWeekend': ?_widgetWeekShowWeekendOverride,
   };
 
   // ---- 宽松读取（只在内存纠正，不回写磁盘）----
@@ -1007,7 +1014,10 @@ class TimetableSettings {
     widgetWeekOpacity: sanitizeOpacity(json['widgetWeekOpacity']),
     widgetWeekWidgetOpacity: sanitizeOpacity(json['widgetWeekWidgetOpacity']),
     widgetWeekCompactRows: _bool(json['widgetWeekCompactRows'], true),
-    widgetWeekShowWeekend: _bool(json['widgetWeekShowWeekend'], false),
+    widgetWeekShowWeekend: switch (json['widgetWeekShowWeekend']) {
+      final bool value => value,
+      _ => null,
+    },
   );
 }
 

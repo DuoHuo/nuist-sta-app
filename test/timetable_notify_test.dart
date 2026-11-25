@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -29,6 +30,7 @@ class _FakeBridge extends TimetableNotifyBridge {
   int cancels = 0;
   bool scheduleResult = true;
   bool widgetResult = true;
+  void Function(Map<String, Object?>)? onWidgetUpdate;
 
   @override
   Future<bool> scheduleReminders(List<Map<String, Object?>> alarms) async {
@@ -41,7 +43,9 @@ class _FakeBridge extends TimetableNotifyBridge {
 
   @override
   Future<bool> updateWidget(Map<String, Object?> payload) async {
-    widgets.add(jsonDecode(jsonEncode(payload)) as Map<String, Object?>);
+    final decoded = jsonDecode(jsonEncode(payload)) as Map<String, Object?>;
+    widgets.add(decoded);
+    onWidgetUpdate?.call(decoded);
     return widgetResult;
   }
 
@@ -1004,7 +1008,53 @@ void main() {
       expect(TimetableSettings.fromJson(json).widgetShowCountdown, isFalse);
     });
 
+    test('4×5 周末 payload 只在未单独设置时跟随外观', () async {
+      final b = _FakeBridge();
+      final s = svc(b);
+      Object? weekend(Map<String, Object?> payload) =>
+          ((payload['week'] as Map)['prefs'] as Map)['showWeekend'];
+
+      addTearDown(s.dispose);
+      await s.ensureStarted();
+      expect(weekend(b.widgets.single), isTrue);
+      final refresh = Completer<Map<String, Object?>>();
+      b.onWidgetUpdate = refresh.complete;
+      await c.updateSettings(c.settings.copyWith(showSaturday: false));
+      expect(
+        weekend(await refresh.future.timeout(const Duration(seconds: 5))),
+        isFalse,
+      );
+      b.onWidgetUpdate = null;
+      final savedDefault = await TimetableStore.readRawSettings();
+      expect(savedDefault.containsKey('widgetWeekShowWeekend'), isFalse);
+
+      await s.setWeekWidgetShowWeekend(true);
+      expect(weekend(b.widgets.last), isTrue);
+      final version = c.scheduleVersion;
+      await c.updateSettings(c.settings.copyWith(showSunday: false));
+      expect(c.scheduleVersion, version);
+      final savedOn = await TimetableStore.readSettings();
+      expect(savedOn.toJson()['widgetWeekShowWeekend'], isTrue);
+      expect(weekend(s.currentWidgetPayload()), isTrue);
+
+      await s.setWeekWidgetShowWeekend(false);
+      final versionAfterSwitch = c.scheduleVersion;
+      await c.updateSettings(
+        c.settings.copyWith(showSaturday: true, showSunday: true),
+      );
+      expect(c.scheduleVersion, versionAfterSwitch);
+      final savedOff = await TimetableStore.readSettings();
+      expect(savedOff.toJson()['widgetWeekShowWeekend'], isFalse);
+      expect(weekend(b.widgets.last), isFalse);
+
+      await s.dispose();
+      c.debugReset();
+      await c.ensureStarted();
+      expect(weekend(s.currentWidgetPayload()), isFalse);
+    });
+
     test('4×5 设置保存后立即刷新共享 payload 的 week 段', () async {
+      await c.updateSettings(c.settings.copyWith(showSunday: false));
       final b = _FakeBridge();
       final s = svc(b);
       final old = s.currentWidgetPayload();
@@ -1185,7 +1235,7 @@ void main() {
       final p = svc(_FakeBridge()).currentWidgetPayload();
       expect(p['version'], 1);
       final week = p['week'] as Map;
-      expect((week['prefs'] as Map)['showWeekend'], isFalse);
+      expect((week['prefs'] as Map)['showWeekend'], isTrue);
       expect(week['termStartMissing'], isFalse);
       expect(week['periods'], isNotEmpty);
       final weeks = week['weeks'] as List;

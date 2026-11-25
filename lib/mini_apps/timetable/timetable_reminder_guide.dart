@@ -131,6 +131,7 @@ class ReminderActions {
     );
   }
 
+  /// 保存独立于课表外观的周末选择。
   Future<void> setWeekWidgetShowWeekend(bool value) async {
     if (_useService) return _svc.setWeekWidgetShowWeekend(value);
     final c = controller!;

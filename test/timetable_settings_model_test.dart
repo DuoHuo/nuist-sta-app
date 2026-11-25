@@ -33,7 +33,7 @@ void main() {
       expect(s.widgetWeekOpacity, 100);
       expect(s.widgetWeekWidgetOpacity, 100);
       expect(s.widgetWeekCompactRows, isTrue);
-      expect(s.widgetWeekShowWeekend, isFalse);
+      expect(s.widgetWeekShowWeekend, isTrue);
       expect(TimetableSettings.sanitizeWeekCellHeight(20), 24);
       expect(TimetableSettings.sanitizeWeekCellHeight(80), 64);
       expect(TimetableSettings.sanitizeWeekCellHeight(34.6), 35);
@@ -92,6 +92,53 @@ void main() {
         TimetableSettings.fromJson({'widgetWeekOpacity': 5}).widgetWeekOpacity,
         30,
       );
+    });
+
+    test('4×5 周末：仅尚未单独设置时继承两项外观设置', () {
+      for (final (sat, sun, override, expected) in [
+        (true, true, null, true),
+        (true, false, null, false),
+        (false, true, null, false),
+        (false, false, null, false),
+        (true, true, false, false),
+        (false, false, true, true),
+      ]) {
+        final settings = TimetableSettings.fromJson({
+          'showSaturday': sat,
+          'showSunday': sun,
+          'widgetWeekShowWeekend': ?override,
+        });
+        expect(settings.widgetWeekShowWeekend, expected);
+        final json = settings.toJson();
+        expect(json.containsKey('widgetWeekShowWeekend'), override != null);
+        expect(json['widgetWeekShowWeekend'], override);
+        expect(
+          TimetableSettings.fromJson(json).widgetWeekShowWeekend,
+          expected,
+        );
+      }
+      expect(
+        TimetableSettings.fromJson({'widgetWeekShowWeekend': 'invalid'})
+            .widgetWeekShowWeekend,
+        isTrue,
+      );
+    });
+
+    test('4×5 周末：复制和跨课表合并保留未设置状态及显式值', () {
+      const inherited = TimetableSettings();
+      expect(
+        inherited.copyWith(showSaturday: false).widgetWeekShowWeekend,
+        isFalse,
+      );
+      final explicit = inherited.copyWith(widgetWeekShowWeekend: false);
+      expect(
+        inherited.withDisplayPrefsFrom(explicit).widgetWeekShowWeekend,
+        isFalse,
+      );
+      final merged = explicit.withDisplayPrefsFrom(inherited);
+      expect(merged.widgetWeekShowWeekend, isTrue);
+      expect(merged.toJson().containsKey('widgetWeekShowWeekend'), isFalse);
+      expect(merged.copyWith(showSunday: false).widgetWeekShowWeekend, isFalse);
     });
 
     test('不透明度钳到 30–100 并取整；类型不对 → 100', () {

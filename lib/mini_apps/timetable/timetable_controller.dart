@@ -1535,7 +1535,7 @@ class TimetableController extends ChangeNotifier {
   /// 「回到本周」（同 [goToCurrentWeek]；已在本周时不通知）。
   void jumpToCurrentWeek() => goToCurrentWeek();
 
-  /// 纯显示/外观偏好键：只写 settings.json，不重写 snapshot.json，不触发 ScheduleChangeReason.settings。
+  /// 纯显示/外观偏好键：只写 settings.json；仅当小组件的有效周末值变化时通知刷新。
   static const _pureAppearanceSettingKeys = <String>{
     'periodHeight',
     'cellRadius',
@@ -1605,7 +1605,7 @@ class TimetableController extends ChangeNotifier {
             _pureAppearanceSettingKeys.contains(k) ||
             _widgetAffectingDisplayKeys.contains(k),
       );
-      final shouldFireScheduleChanged = !isPureAppearance;
+      late final bool shouldFireScheduleChanged;
       try {
         final previous = _snapshot.settings;
         final raw = previous.toJson();
@@ -1618,6 +1618,10 @@ class TimetableController extends ChangeNotifier {
           }
         }
         final applied = TimetableSettings.fromJson(raw);
+        // 未单独设置周末时，外观变化也可能改变桌面小组件的列。
+        shouldFireScheduleChanged =
+            !isPureAppearance ||
+            previous.widgetWeekShowWeekend != applied.widgetWeekShowWeekend;
         final snapshot = _snapshot.copyWith(settings: applied);
         final scheme = coursePaletteSchemeOf(applied.paletteScheme);
         Map<String, int>? colors;

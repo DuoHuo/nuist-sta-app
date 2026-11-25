@@ -591,6 +591,9 @@ void main() {
   });
 
   testWidgets('4×5 当周课表：切换设置立即刷新预览，并仍传 week 添加尺寸', (tester) async {
+    await tester.runAsync(
+      () => _c.updateSettings(_c.settings.copyWith(showSaturday: false)),
+    );
     final a = _FakeActions(_perm())..pinResult = WidgetPinResult.manual;
     await pump(tester, a);
     await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
@@ -767,11 +770,12 @@ void main() {
     expect(_c.settings.widgetShowTeacher, isFalse);
     expect(text('示例教师'), findsNothing);
     expect(text('单周'), findsWidgets);
-    // 默认没有周末列；只点开关、不重新打开页面，立即出现周六的课程和周日表头。
+    // 外观关闭周六时默认没有周末列；单独打开后立即显示周末两列。
     final saturday = find.byKey(const Key('tt_widget_preview_week_cell_6_3'));
     expect(saturday, findsNothing);
     final weekend = find.byKey(const Key('tt_settings_widgetWeekShowWeekend'));
     expect(weekend, findsOneWidget);
+    expect(sw(tester, 'tt_settings_widgetWeekShowWeekend'), isFalse);
     await tester.tap(weekend);
     await settleIo(tester);
     expect(_c.settings.widgetWeekShowWeekend, isTrue);

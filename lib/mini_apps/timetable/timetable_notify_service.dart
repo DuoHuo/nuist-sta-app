@@ -185,6 +185,7 @@ class TimetableNotifyService {
     ),
   );
 
+  /// 将用户的周末选择保存为独立设置，即使它与当前外观默认值相同。
   Future<void> setWeekWidgetShowWeekend(bool value) => _setWidgetPref(
     _ctl.settingsForEditing.copyWith(widgetWeekShowWeekend: value),
   );
