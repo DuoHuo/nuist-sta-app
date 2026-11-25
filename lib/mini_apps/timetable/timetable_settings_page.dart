@@ -849,7 +849,11 @@ class _WeekWidgetSettingsPreview extends StatelessWidget {
                       color: prefs.background(colors),
                       borderRadius: radius,
                     ),
-                    child: _WeekWidgetPreviewGrid(plan: plan, prefs: prefs),
+                    child: _WeekWidgetPreviewGrid(
+                      plan: plan,
+                      prefs: prefs,
+                      examColor: Color(settings.examColor),
+                    ),
                   ),
                 ),
               ),
@@ -862,10 +866,15 @@ class _WeekWidgetSettingsPreview extends StatelessWidget {
 }
 
 class _WeekWidgetPreviewGrid extends StatelessWidget {
-  const _WeekWidgetPreviewGrid({required this.plan, required this.prefs});
+  const _WeekWidgetPreviewGrid({
+    required this.plan,
+    required this.prefs,
+    required this.examColor,
+  });
 
   final WeekWidgetPlan plan;
   final WeekWidgetPrefs prefs;
+  final Color examColor;
 
   @override
   Widget build(BuildContext context) {
@@ -1109,20 +1118,26 @@ class _WeekWidgetPreviewGrid extends StatelessWidget {
       _previewColorIndex(primary.name),
       dark: colors.isDark,
     );
-    final bg = TimetableTheme.blendCellBg(
-      pair.bg,
-      prefs.opacity,
-      dark: colors.isDark,
-    );
-    final fg = TimetableTheme.cellTextFor(
-      TimetableTheme.readableCellText(bg, pair.fg),
-      prefs.cellTextColor,
-    );
-    final badge = switch (block.courses.length) {
-      > 1 => '${block.courses.length} 门',
-      _ when primary.weekTag == '单周' || primary.weekTag == '双周' =>
-        primary.weekTag,
-      _ => '',
+    final isExam = primary.kind == WidgetItemKind.exam;
+    final bg = isExam
+        ? TimetableTheme.examCellBg(examColor, dark: colors.isDark)
+        : TimetableTheme.blendCellBg(
+            pair.bg,
+            prefs.opacity,
+            dark: colors.isDark,
+          );
+    final fg = isExam
+        ? TimetableTheme.readableCellText(bg, TimetableTheme.examText)
+        : TimetableTheme.cellTextFor(
+            TimetableTheme.readableCellText(bg, pair.fg),
+            prefs.cellTextColor,
+          );
+    final badge = switch ((block.courses.length, primary.kind)) {
+      (final count, _) when count > 1 =>
+        '$count ${block.courses.every((item) => item.kind == WidgetItemKind.course) ? '门' : '项'}',
+      (_, WidgetItemKind.exam) => '考试',
+      (_, WidgetItemKind.schedule) => '日程',
+      (_, WidgetItemKind.course) => primary.weekTag.trim(),
     };
     return Positioned(
       left: area.left,
@@ -1194,11 +1209,13 @@ class _WeekWidgetPreviewGrid extends StatelessWidget {
                   ? cellTeacherText(primary.teachers.join('，'))
                   : '';
               var badgeReserve = 0.0;
-              if (badge.isNotEmpty) {
+              // 与原生一致：标签超宽时单行省略，不按换行后的高度预留。
+              if (badge.isNotEmpty && area.width > 12) {
                 final badgeSize = TimetableTheme.cellBadgeSize(
                   context,
                   badge,
-                  maxWidth: area.width,
+                  maxWidth: double.infinity,
+                  fontSize: TimetableTheme.badgeSize - 1,
                 );
                 final reserve = math.max(
                   CourseCell.badgeReserve,
@@ -1220,9 +1237,8 @@ class _WeekWidgetPreviewGrid extends StatelessWidget {
                         direction: direction,
                       ).height
                     : 0.0;
-                if (badgeSize.width <= area.width &&
-                    reserve + minNameHeight + minLocationHeight <=
-                        actualHeight) {
+                if (reserve + minNameHeight + minLocationHeight <=
+                    actualHeight) {
                   badgeReserve = reserve;
                 }
               }
@@ -1303,7 +1319,15 @@ class _WeekWidgetPreviewGrid extends StatelessWidget {
                       right: 0,
                       bottom: 3,
                       child: Center(
-                        child: SchedulePill(text: badge, color: fg),
+                        child: SchedulePill(
+                          text: badge,
+                          color: TimetableTheme.cellTextFor(
+                            fg,
+                            prefs.cellTextColor,
+                          ),
+                          fontSize: TimetableTheme.badgeSize - 1,
+                          singleLine: true,
+                        ),
                       ),
                     ),
                   if (block.courses.length > 1)
@@ -1392,21 +1416,42 @@ List<WeekWidgetDay> _previewWeekDays(DateTime now) {
   final monday = weekWidgetMonday(now);
   final courses = <int, List<NotifyClass>>{
     1: [
-      _previewCourse(monday, 1, '高等数学 A', '示例教室 A101', 1, 2, '单周'),
+      _previewCourse(monday, 1, '高等数学 A', '示例教室 A101', 1, 2, weekTag: '单周'),
       _previewCourse(monday, 1, '大学物理', '示例教室 B203', 5, 6),
     ],
-    2: [_previewCourse(monday, 2, '大学英语', '示例教室 C102', 3, 4)],
+    2: [
+      _previewCourse(
+        monday,
+        2,
+        '小组讨论',
+        '示例教室 C102',
+        1,
+        2,
+        kind: WidgetItemKind.schedule,
+      ),
+      _previewCourse(monday, 2, '大学英语', '示例教室 C102', 3, 4, weekTag: '双周'),
+    ],
     3: [
       _previewCourse(monday, 3, '程序设计', '示例机房 D401', 1, 2),
-      _previewCourse(monday, 3, '体育', '示例操场', 7, 8),
+      _previewCourse(monday, 3, '体育', '示例操场', 3, 4, weekTag: '体育'),
     ],
     4: [
       _previewCourse(monday, 4, '大学物理', '示例教室 B203', 5, 6),
-      _previewCourse(monday, 4, '物理实验', '示例教室 A103', 6, 6),
+      _previewCourse(monday, 4, '大学物理 II', '示例教室 A103', 6, 6),
+      _previewCourse(monday, 4, '物理实验', '示例教室 A103', 1, 2, weekTag: '实验'),
     ],
     5: [
       _previewCourse(monday, 5, '高等数学 A', '示例教室 A101', 1, 2),
       _previewCourse(monday, 5, '大学英语', '示例教室 C102', 3, 4),
+      _previewCourse(
+        monday,
+        5,
+        '线性代数',
+        '示例教室 C102',
+        5,
+        6,
+        kind: WidgetItemKind.exam,
+      ),
     ],
     6: [_previewCourse(monday, 6, '选修课', '示例教室 E105', 3, 4)],
   };
@@ -1426,9 +1471,10 @@ NotifyClass _previewCourse(
   String name,
   String location,
   int startNode,
-  int endNode, [
+  int endNode, {
   String weekTag = '',
-]) {
+  WidgetItemKind kind = WidgetItemKind.course,
+}) {
   final startPeriod = _previewWeekPeriods.firstWhere(
     (period) => period.node == startNode,
   );
@@ -1439,11 +1485,12 @@ NotifyClass _previewCourse(
   return NotifyClass(
     name: name,
     location: location,
-    teachers: const ['示例教师'],
+    teachers: kind == WidgetItemKind.course ? const ['示例教师'] : const [],
     start: _previewClock(date, startPeriod.start),
     end: _previewClock(date, endPeriod.end),
     startNode: startNode,
     endNode: endNode,
+    kind: kind,
     weekTag: weekTag,
   );
 }

@@ -256,8 +256,7 @@ internal class TimetableWeekWidgetContent(
         val badge = when {
             block.courses.size > 1 -> "${block.courses.size} " + if (block.courses.all { it.kind == WidgetItemKind.COURSE }) "门" else "项"
             course.kind != WidgetItemKind.COURSE -> course.kind.label
-            course.weekTag == "单周" || course.weekTag == "双周" -> course.weekTag
-            else -> ""
+            else -> course.weekTag.trim()
         }
         val plan = context.planWeekText(name, location, course.teacher, badge, textWidth, textHeight, geometry.cellPadding, textSizes, geometry.compactText)
         return views(R.layout.widget_timetable_week_course_text).apply {
@@ -271,14 +270,10 @@ internal class TimetableWeekWidgetContent(
             text(R.id.wg_week_course_location, location, plan.subSize, colors.fg, opacity = 1f)
             text(R.id.wg_week_course_teacher, if (plan.showTeacher) course.teacher else "", plan.subSize, colors.fg, opacity = 1f)
             setViewPadding(R.id.wg_week_course_teacher, 0, plan.teacherGapPx, 0, 0)
-            if (plan.badgeHeight > 0f) {
+            if (plan.badgeReserve > 0f) {
                 visible(R.id.wg_week_course_badge, true)
-                if (Build.VERSION.SDK_INT >= 31) {
-                    setViewLayoutWidth(R.id.wg_week_course_badge, plan.badgeWidth, TypedValue.COMPLEX_UNIT_DIP)
-                    setViewLayoutHeight(R.id.wg_week_course_badge, plan.badgeHeight, TypedValue.COMPLEX_UNIT_DIP)
-                }
                 shape(R.id.wg_week_course_badge_border, R.drawable.wg_week_badge, colors.fg, opacity = 1f)
-                text(R.id.wg_week_course_badge_label, badge, plan.badgeSize, colors.fg, opacity = 1f)
+                text(R.id.wg_week_course_badge_label, badge, WEEK_BADGE_SIZE, colors.fg, opacity = 1f)
             }
             if (block.courses.size > 1) {
                 visible(R.id.wg_week_course_conflict_box, true)
@@ -400,6 +395,7 @@ private fun Context.spPx(size: Float): Float =
 
 private const val CELL_NAME_SIZE = 11f
 private const val CELL_SUB_SIZE = 10f
+private const val WEEK_BADGE_SIZE = 8f
 private const val TEXT_EPSILON = 0.01f
 
 private data class WeekTextSizes(val name: Float, val sub: Float, val step: Float, val minimum: Float)
@@ -483,9 +479,6 @@ private data class WeekTextPlan(
     val nameLines: Int,
     val showTeacher: Boolean,
     val teacherGapPx: Int,
-    val badgeSize: Float,
-    val badgeWidth: Float,
-    val badgeHeight: Float,
     val badgeReserve: Float,
 )
 
@@ -502,12 +495,10 @@ private fun Context.planWeekText(
     compact: Boolean,
 ): WeekTextPlan {
     val density = resources.displayMetrics.density
-    val width = widthPx / density
     val eps = TEXT_EPSILON * density
-    val badgeSize = 9f
-    val badgePaint = weekTextPaint(badgeSize)
-    val badgeWidth = badgePaint.measureText(badge) / density + 12f
-    val measuredBadgeHeight = weekTextLayout(badge, badgePaint, widthPx).height / density + 2f
+    val badgePaint = weekTextPaint(WEEK_BADGE_SIZE)
+    val badgeLineWidth = ceil(badgePaint.measureText(badge)).toInt() + 1
+    val measuredBadgeHeight = weekTextLayout(badge, badgePaint, badgeLineWidth).height / density + 2f
     val minNameHeight = weekTextLayout("课", weekTextPaint(sizes.minimum, medium = true), widthPx).height / density
     val minLocationHeight = if (location.isNotEmpty()) {
         weekTextLayout(location, weekTextPaint(sizes.minimum, medium = true), widthPx).height / density
@@ -515,9 +506,9 @@ private fun Context.planWeekText(
         0f
     }
     val reserve = max(14f, measuredBadgeHeight + 2f)
-    val showBadge = badge.isNotEmpty() && badgeWidth <= width + 2 * inset &&
+    // 标签在列宽内单行省略，只有课名和地点的垂直空间不足才隐藏。
+    val showBadge = badge.isNotEmpty() && widthPx / density + 2 * inset > 12f &&
         reserve + minNameHeight + minLocationHeight <= height
-    val badgeHeight = if (showBadge) measuredBadgeHeight else 0f
     val badgeReserve = if (showBadge) reserve else 0f
     val room = (height - badgeReserve) * density
     var showTeacher = teacher.isNotEmpty()
@@ -542,11 +533,11 @@ private fun Context.planWeekText(
         val nameBudget = room - locationHeight - teacherHeight - teacherGap - teacherClearance + eps
         val displayLines = (nameLayout.lineCount downTo 1).firstOrNull { nameLayout.getLineTop(it) <= nameBudget }
         if (displayLines != null) {
-            return WeekTextPlan(laidOutName, nameSize, subSize, displayLines, showTeacher, teacherGap, badgeSize, badgeWidth, badgeHeight, badgeReserve)
+            return WeekTextPlan(laidOutName, nameSize, subSize, displayLines, showTeacher, teacherGap, badgeReserve)
         }
         if (nameSize <= sizes.minimum && subSize <= sizes.minimum) {
             if (!showTeacher) {
-                return WeekTextPlan(laidOutName, nameSize, subSize, 1, false, 0, badgeSize, badgeWidth, badgeHeight, badgeReserve)
+                return WeekTextPlan(laidOutName, nameSize, subSize, 1, false, 0, badgeReserve)
             }
             // 取消教师后回到正常字号再排，地点从不截行，也不白留教师的间距。
             showTeacher = false

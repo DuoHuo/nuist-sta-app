@@ -1156,6 +1156,14 @@ void main() {
       }
     });
 
+    List<Map> weekItemsOn(Map<String, Object?> payload, String date) {
+      final weeks = (payload['week'] as Map)['weeks'] as List;
+      final day = weeks
+          .expand((week) => (week['days'] as List).cast<Map>())
+          .singleWhere((day) => day['date'] == date);
+      return (day['items'] as List).cast<Map>();
+    }
+
     test('小组件 payload 来自控制器', () {
       final p = svc(_FakeBridge()).currentWidgetPayload();
       final today = (p['days'] as List).first as Map;
@@ -1188,7 +1196,53 @@ void main() {
       expect(item['name'], '高数');
       expect(item['nodes'], '第1-2节');
       expect(item['start'], '2026-09-07T08:00');
-      expect(item['weekTag'], '第1–16周');
+      expect(item['weekTag'], isNull);
+    });
+
+    test('周组件标签按课程性质和单双周生成，不显示周段', () {
+      const cases = [
+        ('物理实验', CourseKind.standard, '0000011111111', null),
+        ('大学物理', CourseKind.lab, '1010101010101', '实验'),
+        ('通识课', CourseKind.pe, '0000011111111', '体育'),
+        ('线性代数', CourseKind.exam, '0000011111111', '考试'),
+        ('高数', CourseKind.standard, '1010101010101', '单周'),
+        ('大学英语', CourseKind.standard, '0101010101010', '双周'),
+      ];
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: [
+            for (final (i, (name, kind, weeks, _)) in cases.indexed)
+              Course(
+                id: 'course-$i',
+                name: name,
+                slots: [
+                  CourseSlot(
+                    day: 1,
+                    startNode: 1,
+                    endNode: 2,
+                    weeks: weeks,
+                    kind: kind,
+                  ),
+                ],
+              ),
+          ],
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(termStartDate: termStart),
+        ),
+      );
+      final service = TimetableNotifyService(
+        controller: c,
+        clock: () => DateTime(2026, 10, 12, 6), // 第 7 周周一
+      );
+      final payload = service.currentWidgetPayload();
+      final items = [
+        ...weekItemsOn(payload, '2026-10-12'),
+        ...weekItemsOn(payload, '2026-10-19'),
+      ];
+      for (final (name, _, _, tag) in cases) {
+        final item = items.firstWhere((item) => item['name'] == name);
+        expect(item['weekTag'], tag, reason: name);
+      }
     });
 
     test('无开学日不是无课：只在 week 段明确标记', () {
@@ -1278,6 +1332,36 @@ void main() {
         [0, 0],
       );
       expect([weekItems.last['startNode'], weekItems.last['endNode']], [3, 4]);
+      expect(weekItems.map((item) => item['kind']), [
+        'schedule',
+        'course',
+        'exam',
+      ]);
+      expect(weekItems.first['weekTag'], isNull);
+      expect(weekItems.last['weekTag'], isNull);
+    });
+
+    test('周组件落格日程携带节次与 schedule 类型，不依赖 weekTag', () async {
+      await c.addScheduleEvent(
+        ScheduleEvent(
+          id: 'study-group',
+          kind: ScheduleKind.other,
+          source: ScheduleSource.manual,
+          title: '小组讨论',
+          date: mon2,
+          start: const TimeOfDayMinutes(13, 45),
+          end: const TimeOfDayMinutes(15, 25),
+          location: '示例教室 C102',
+        ),
+      );
+      final payload = svc(_FakeBridge()).currentWidgetPayload();
+      final item = weekItemsOn(
+        payload,
+        formatDate(mon2),
+      ).singleWhere((item) => item['name'] == '小组讨论');
+      expect(item['kind'], 'schedule');
+      expect([item['startNode'], item['endNode']], [5, 6]);
+      expect(item['weekTag'], isNull);
     });
 
     test('关闭显示考试只隐藏考试，其他日程仍进入小组件', () async {

@@ -13,6 +13,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_bridge.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_layout.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_widgets.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
@@ -561,8 +562,13 @@ void main() {
         find.descendant(of: preview, matching: find.text(value));
     final cell = find.byKey(const Key('tt_widget_preview_week_cell_1_1'));
     final ink = find.descendant(of: cell, matching: find.byType(Ink));
-    Color cellColor() =>
-        (tester.widget<Ink>(ink).decoration as BoxDecoration).color!;
+    BoxDecoration cellDecoration() =>
+        tester.widget<Ink>(ink).decoration as BoxDecoration;
+    Color cellColor() => cellDecoration().color!;
+    expect(
+      cellDecoration().borderRadius,
+      BorderRadius.circular(TimetableTheme.cellRadius),
+    );
     Color surfaceColor() =>
         (tester
                     .widget<DecoratedBox>(
@@ -640,6 +646,57 @@ void main() {
     expect(text('示例教师'), findsWidgets);
     expect(text('单周'), findsWidgets);
     expect(text('2 门'), findsOneWidget);
+    for (final (key, label, paletteIndex) in [
+      ('1_1', '单周', 0),
+      ('2_3', '双周', 1),
+      ('4_1', '实验', 5),
+      ('3_3', '体育', 4),
+      ('5_5', '考试', null),
+      ('2_1', '日程', 5),
+      ('4_5', '2 门', 3),
+    ]) {
+      final sample = find.byKey(Key('tt_widget_preview_week_cell_$key'));
+      final pill = find.descendant(
+        of: sample,
+        matching: find.byType(SchedulePill),
+      );
+      expect(pill, findsOneWidget, reason: label);
+      final badge = find.descendant(of: pill, matching: find.text(label));
+      expect(badge, findsOneWidget, reason: label);
+      final outline = find.descendant(
+        of: pill,
+        matching: find.byType(Container),
+      );
+      final box = tester.widget<Container>(outline);
+      final decoration = box.decoration! as BoxDecoration;
+      final pair = paletteIndex == null
+          ? const CourseColorPair(
+              TimetableTheme.examDefault,
+              TimetableTheme.examText,
+            )
+          : TimetableTheme.autoCoursePair(paletteIndex);
+      final bg = paletteIndex == null
+          ? pair.bg
+          : TimetableTheme.blendCellBg(pair.bg, 60);
+      final color = TimetableTheme.readableCellText(bg, pair.fg);
+      expect(decoration.color, isNull);
+      expect(decoration.borderRadius, BorderRadius.circular(8));
+      expect(decoration.border, Border.all(color: color));
+      expect(
+        box.padding!.add(decoration.padding),
+        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      );
+      final labelWidget = tester.widget<Text>(badge);
+      expect(labelWidget.style!.color, color);
+      expect(labelWidget.style!.fontSize, 8);
+      expect(labelWidget.maxLines, 1);
+      expect(labelWidget.overflow, TextOverflow.ellipsis);
+      final sampleBounds = tester.getRect(sample);
+      final outlineBounds = tester.getRect(outline);
+      expect(sampleBounds.contains(outlineBounds.topLeft), isTrue);
+      expect(sampleBounds.contains(outlineBounds.bottomRight), isTrue);
+      expect(sampleBounds.bottom - outlineBounds.bottom, closeTo(3, 0.01));
+    }
     expect(
       find.byKey(const Key('tt_widget_preview_week_time_1')),
       findsOneWidget,

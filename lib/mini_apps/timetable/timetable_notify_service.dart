@@ -10,7 +10,6 @@ import 'timetable_notify_plan.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_layout.dart';
 import 'timetable_theme.dart';
-import 'timetable_week_format.dart';
 import 'timetable_week_widget_layout.dart';
 
 /// 上课提醒 + 桌面小组件的编排层：从 [TimetableController] 取课，算好后交给原生。
@@ -270,27 +269,22 @@ class TimetableNotifyService {
       teachers: widgetTeachers(item.slot.teacher),
       startNode: item.slot.startNode,
       endNode: item.slot.endNode,
-      weekTag: _widgetWeekTag(item.slot),
+      weekTag: switch (courseKindOf(course: item.course, slot: item.slot)) {
+        CourseKind.lab => '实验',
+        CourseKind.pe => '体育',
+        CourseKind.exam => '考试',
+        CourseKind.standard => _widgetWeekTag(item.slot),
+      },
       barColor: coursePairFor(_ctl, item.course).bg.toARGB32(),
       barColorDark: coursePairFor(_ctl, item.course, dark: true).bg.toARGB32(),
     );
   }
 
-  String _widgetWeekTag(CourseSlot slot) {
-    switch (slot.displayParity) {
-      case WeekParity.odd:
-        return '单周';
-      case WeekParity.even:
-        return '双周';
-      case WeekParity.all:
-        final weeks = weeksFromBits(slot.weeks);
-        if (weeks.isEmpty ||
-            (weeks.first == 1 && weeks.length >= _ctl.totalWeeks)) {
-          return '';
-        }
-        return formatWeeks(weeks, maxSegments: 1).replaceAll(' ', '');
-    }
-  }
+  String _widgetWeekTag(CourseSlot slot) => switch (slot.displayParity) {
+    WeekParity.odd => '单周',
+    WeekParity.even => '双周',
+    WeekParity.all => '',
+  };
 
   NotifyClass _widgetEvent(DateTime date, ScheduleEvent event) {
     final range = scheduleNodeRange(_ctl.periods, event.start, event.end);
