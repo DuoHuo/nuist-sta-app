@@ -26,7 +26,7 @@ void main() {
       expect(r.toJson(), s.toJson());
     });
 
-    test('4×5 设置保留 v1 值，v2 只应用有效偏好', () {
+    test('4×6 设置保留 v1 值，v2 只应用有效偏好', () {
       const s = TimetableSettings();
       expect(s.widgetWeekCellHeight, 34);
       expect(s.widgetWeekFontSize, 10);
@@ -94,7 +94,7 @@ void main() {
       );
     });
 
-    test('4×5 周末：仅尚未单独设置时继承两项外观设置', () {
+    test('4×6 周末：仅尚未单独设置时继承两项外观设置', () {
       for (final (sat, sun, override, expected) in [
         (true, true, null, true),
         (true, false, null, false),
@@ -124,7 +124,7 @@ void main() {
       );
     });
 
-    test('4×5 周末：复制和跨课表合并保留未设置状态及显式值', () {
+    test('4×6 周末：复制和跨课表合并保留未设置状态及显式值', () {
       const inherited = TimetableSettings();
       expect(
         inherited.copyWith(showSaturday: false).widgetWeekShowWeekend,

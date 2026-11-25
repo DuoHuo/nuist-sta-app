@@ -153,7 +153,7 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_timetable_2x2_info"/>
         </receiver>
-        <!-- 4×5 当周课表共用刷新广播，翻周只更新当前实例。 -->
+        <!-- 4×6 当周课表共用刷新广播，翻周只更新当前实例。 -->
         <receiver
             android:name=".TimetableWeekWidgetProvider"
             android:exported="true"

@@ -7,7 +7,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
-/** 4×5 当周课表的显示设置；越界值在解析时钳制。 */
+/** 4×6 当周课表的显示设置；越界值在解析时钳制。 */
 internal data class WeekPreferences(
     val opacity: Int = 100,
     val widgetOpacity: Int = 100,

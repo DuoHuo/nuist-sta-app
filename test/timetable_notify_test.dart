@@ -81,7 +81,7 @@ void main() {
       }
     });
 
-    test('4×5 当周课表传递 week 尺寸', () async {
+    test('4×6 当周课表传递 week 尺寸', () async {
       messenger.setMockMethodCallHandler(channel, (call) async {
         expect(call.method, 'pinWidget');
         expect(call.arguments, {'size': 'week'});
@@ -1008,7 +1008,7 @@ void main() {
       expect(TimetableSettings.fromJson(json).widgetShowCountdown, isFalse);
     });
 
-    test('4×5 周末 payload 只在未单独设置时跟随外观', () async {
+    test('4×6 周末 payload 只在未单独设置时跟随外观', () async {
       final b = _FakeBridge();
       final s = svc(b);
       Object? weekend(Map<String, Object?> payload) =>
@@ -1053,7 +1053,7 @@ void main() {
       expect(weekend(s.currentWidgetPayload()), isFalse);
     });
 
-    test('4×5 设置保存后立即刷新共享 payload 的 week 段', () async {
+    test('4×6 设置保存后立即刷新共享 payload 的 week 段', () async {
       await c.updateSettings(c.settings.copyWith(showSunday: false));
       final b = _FakeBridge();
       final s = svc(b);

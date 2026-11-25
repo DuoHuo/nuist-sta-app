@@ -55,7 +55,7 @@ enum WidgetPinResult {
   manual,
 }
 
-/// 可添加的小组件尺寸：4×2 今日课表、2×2 当前/下一节、4×5 当周课表。
+/// 可添加的小组件尺寸：4×2 今日课表、2×2 当前/下一节、4×6 当周课表。
 enum WidgetPinSize { wide, square, week }
 
 /// 课表提醒 / 桌面小组件的原生通道（`dev.duohuo.nuist_sta_app/notify_widget`）。

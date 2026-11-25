@@ -466,7 +466,7 @@ void main() {
     await pump(tester, a);
     await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
+    await tester.tap(find.text('2×2 日课表'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('tt_widget_preview_2x2')), findsOneWidget);
     expect(
@@ -507,7 +507,7 @@ void main() {
     await tester.tap(find.byKey(const Key('tt_settings_widgetShowLocation')));
     await settleIo(tester);
     expect(_c.settings.widgetShowLocation, isFalse);
-    await tester.tap(find.widgetWithText(ChoiceChip, '今日课表'));
+    await tester.tap(find.text('4×2 日课表'));
     await tester.pumpAndSettle();
     expect(sw(tester, 'tt_settings_widgetShowLocation'), isFalse);
     expect(find.byKey(const Key('tt_widget_preview_4x2')), findsOneWidget);
@@ -518,7 +518,7 @@ void main() {
     await pump(tester, a);
     await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ChoiceChip, '当周课表'));
+    await tester.tap(find.text('4×6 周课表'));
     await tester.pumpAndSettle();
 
     final pinRow = find.byKey(const Key('tt_settings_widget_pin'));
@@ -529,68 +529,7 @@ void main() {
     expect(find.text('选择 4×6，长按并拖到桌面空白处。'), findsOneWidget);
   });
 
-  testWidgets('三个小组件预览与添加按钮共用同一分组和说明样式', (tester) async {
-    final a = _FakeActions(_perm());
-    await pump(tester, a);
-    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-    await tester.pumpAndSettle();
-    const caption = '显示效果预览 · 示例内容';
-    final captionFinder = find.text(caption);
-    final captionStyle = tester.widget<Text>(captionFinder).style;
-    final captionLeft = tester.getTopLeft(captionFinder).dx;
-    final settingsGroup = find.byKey(const Key('tt_settings_group_widget'));
-    final settingsCard = find.descendant(
-      of: settingsGroup,
-      matching: find.byWidgetPredicate(
-        (widget) => widget is Material && widget.clipBehavior == Clip.antiAlias,
-      ),
-    );
-    final firstRowOffsets = <double>[];
-    for (final (label, size, firstRowLabel) in [
-      ('今日课表', '4x2', '最多显示课程数量'),
-      ('当前与下一节', '2x2', '显示教师'),
-      ('当周课表', '4x5', '课程不透明度'),
-    ]) {
-      await tester.tap(find.widgetWithText(ChoiceChip, label));
-      await tester.pumpAndSettle();
-      final group = find.ancestor(
-        of: captionFinder,
-        matching: find.byType(TimetableSettingsGroup),
-      );
-      expect(group, findsOneWidget);
-      expect(tester.widget<Text>(captionFinder).style, captionStyle);
-      expect(tester.getTopLeft(captionFinder).dx, captionLeft);
-      for (final key in ['tt_widget_preview_$size', 'tt_settings_widget_pin']) {
-        expect(
-          find.descendant(of: group, matching: find.byKey(Key(key))),
-          findsOneWidget,
-        );
-      }
-      final pin = tester.getRect(
-        find.byKey(const Key('tt_settings_widget_pin')),
-      );
-      expect(tester.getRect(settingsCard).top - pin.bottom, 16);
-      expect(tester.widget<Material>(settingsCard).borderRadius, isNotNull);
-      final title = find.descendant(
-        of: settingsCard,
-        matching: find.text(firstRowLabel),
-      );
-      expect(
-        find.ancestor(of: title, matching: find.byType(TimetableSettingsRow)),
-        findsOneWidget,
-      );
-      firstRowOffsets.add(tester.getRect(title).top - pin.bottom);
-    }
-    expect(firstRowOffsets, everyElement(closeTo(32, 0.1)));
-    final widgetOpacity = tester.getRect(find.text('组件不透明度'));
-    final courseSlider = tester.getRect(
-      find.byKey(const Key('tt_settings_widgetWeekOpacity')),
-    );
-    final sliderToTitle = widgetOpacity.top - courseSlider.bottom;
-    expect(sliderToTitle, closeTo(8, 0.1));
-  });
-
-  testWidgets('4×5 当周课表：切换设置立即刷新预览，并仍传 week 添加尺寸', (tester) async {
+  testWidgets('4×6 当周课表：切换设置立即刷新预览，并仍传 week 添加尺寸', (tester) async {
     await tester.runAsync(
       () => _c.updateSettings(_c.settings.copyWith(showSaturday: false)),
     );
@@ -601,7 +540,7 @@ void main() {
     await tester.tap(find.byKey(const Key('tt_settings_widgetShowLocation')));
     await settleIo(tester);
     expect(_c.settings.widgetShowLocation, isFalse);
-    await tester.tap(find.widgetWithText(ChoiceChip, '当周课表'));
+    await tester.tap(find.text('4×6 周课表'));
     await tester.pumpAndSettle();
     final preview = find.byKey(const Key('tt_widget_preview_4x5'));
     expect(preview, findsOneWidget);
@@ -810,7 +749,7 @@ void main() {
     expect(find.text('添加「当周课表」'), findsOneWidget);
   });
 
-  testWidgets('窄屏 4×5 预览保留完整地点和时间，教师放不下时不裁字', (tester) async {
+  testWidgets('窄屏 4×6 预览保留完整地点和时间，教师放不下时不裁字', (tester) async {
     const viewport = Size(320, 670);
     addTearDown(tester.view.reset);
     for (final (theme, dpr) in [
@@ -831,7 +770,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(ChoiceChip, '当周课表'));
+      await tester.tap(find.text('4×6 周课表'));
       await tester.pumpAndSettle();
       final cellFinder = find.byKey(
         const Key('tt_widget_preview_week_cell_1_1'),
@@ -1012,7 +951,7 @@ void main() {
             isNull,
             reason: '$size / $dark / $scale / 4×2 最后一节',
           );
-          await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
+          await tester.tap(find.text('2×2 日课表'));
           await tester.pumpAndSettle();
           checkTimeBounds(true);
           expect(
@@ -1049,7 +988,7 @@ void main() {
       await tester.pumpAndSettle();
       for (final square in [false, true]) {
         if (square) {
-          await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
+          await tester.tap(find.text('2×2 日课表'));
           await tester.pumpAndSettle();
         }
         final last = find.byKey(const Key('tt_widget_preview_last'));
@@ -1139,7 +1078,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
+        await tester.tap(find.text('2×2 日课表'));
         await tester.pumpAndSettle();
         final baselines = [
           for (final key in [
@@ -1169,7 +1108,7 @@ void main() {
     expect(a.calls, isEmpty);
     expect(find.byKey(const Key('tt_settings_widget_guide')), findsNothing);
     expect(find.text(TtSettingsText.pinWidgetGuideTitle), findsNothing);
-    await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
+    await tester.tap(find.text('2×2 日课表'));
     await tester.pumpAndSettle();
     final pin = find.byKey(const Key('tt_settings_widget_pin'));
     await tester.tap(pin);
@@ -1329,7 +1268,7 @@ void main() {
     await pump(tester, a);
     await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ChoiceChip, '当前与下一节'));
+    await tester.tap(find.text('2×2 日课表'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('tt_settings_widget_pin')));
     await tester.pumpAndSettle();

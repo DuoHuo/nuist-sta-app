@@ -620,23 +620,26 @@ class _TimetableWidgetSettingsPageState
             children: [
               Padding(
                 padding: const EdgeInsets.all(12),
-                child: Wrap(
+                child: SegmentedButton<WidgetPinSize>(
                   key: const Key('tt_settings_widget_size'),
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final (size, label) in [
-                      (WidgetPinSize.wide, '今日课表'),
-                      (WidgetPinSize.square, '当前与下一节'),
-                      (WidgetPinSize.week, '当周课表'),
-                    ])
-                      ChoiceChip(
-                        label: Text(label),
-                        showCheckmark: false,
-                        selected: _size == size,
-                        onSelected: (_) => setState(() => _size = size),
-                      ),
+                  segments: const [
+                    ButtonSegment(
+                      value: WidgetPinSize.square,
+                      label: Text('2×2 日课表'),
+                    ),
+                    ButtonSegment(
+                      value: WidgetPinSize.wide,
+                      label: Text('4×2 日课表'),
+                    ),
+                    ButtonSegment(
+                      value: WidgetPinSize.week,
+                      label: Text('4×6 周课表'),
+                    ),
                   ],
+                  selected: {_size},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (value) =>
+                      setState(() => _size = value.single),
                 ),
               ),
               if (!week)
@@ -789,7 +792,7 @@ class _WidgetSliderRow extends StatelessWidget {
   }
 }
 
-/// 4×5 当周课表预览：示例内容走同一布局和颜色规则，不读取真实课程。
+/// 4×6 当周课表预览：示例内容走同一布局和颜色规则，不读取真实课程。
 class _WeekWidgetSettingsPreview extends StatelessWidget {
   const _WeekWidgetSettingsPreview({required this.settings, required this.now});
 

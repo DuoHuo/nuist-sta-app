@@ -10,7 +10,7 @@ import android.os.Bundle
 import dev.duohuo.nuist_sta_app.widget.TimetableWeekWidgetRuntime
 import dev.duohuo.nuist_sta_app.widget.TimetableWidgetUpdates
 
-/** 4×5 当周课表；保留已固定组件的接收器名。 */
+/** 4×6 当周课表；保留已固定组件的接收器名。 */
 class TimetableWeekWidgetProvider : AppWidgetProvider() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != TimetableWidgetUpdates.ACTION_REFRESH) {

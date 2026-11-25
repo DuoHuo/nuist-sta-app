@@ -681,10 +681,10 @@ class TimetableSettings {
   /// v1 课程字号；v2 根据组件宽度计算。
   final int widgetWeekFontSize;
 
-  /// 4×5 当周课表的课程底色不透明度（30–100，默认 100）。
+  /// 4×6 当周课表的课程底色不透明度（30–100，默认 100）。
   final int widgetWeekOpacity;
 
-  /// 4×5 当周课表的组件框架不透明度（30–100，默认 100）。
+  /// 4×6 当周课表的组件框架不透明度（30–100，默认 100）。
   final int widgetWeekWidgetOpacity;
 
   /// v1 紧凑开关；v2 只支持完整作息。
@@ -692,7 +692,7 @@ class TimetableSettings {
 
   final bool? _widgetWeekShowWeekendOverride;
 
-  /// 4×5 当周课表显示周六、周日两列；未单独设置时，两项外观开关都开启才显示。
+  /// 4×6 当周课表显示周六、周日两列；未单独设置时，两项外观开关都开启才显示。
   bool get widgetWeekShowWeekend =>
       _widgetWeekShowWeekendOverride ?? (showSaturday && showSunday);
 

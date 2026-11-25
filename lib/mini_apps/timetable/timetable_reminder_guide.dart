@@ -108,7 +108,7 @@ class ReminderActions {
     );
   }
 
-  // ---- 4×5 当周课表设置 ----
+  // ---- 4×6 当周课表设置 ----
 
   bool get widgetWeekShowWeekend => _settings.widgetWeekShowWeekend;
 
