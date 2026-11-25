@@ -299,7 +299,8 @@ void main() {
       await c.ensureStarted();
 
       expect(c.primaryScheduleId, 'friend_1');
-      expect(c.jwxtCourses.single.name, '高等数学');
+      expect(c.snapshot.courses.single.name, '高等数学');
+      expect(c.jwxtCourses, isEmpty);
       expect(c.daySwaps, isEmpty);
       expect(File('${badSwaps.path}.corrupt').existsSync(), isTrue);
     });

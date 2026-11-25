@@ -42,7 +42,7 @@ internal object TimetableWeekWidgetRuntime {
         // 忽略本次读取的毫秒时刻：共享倒计时闹钟不应重建没有变动的周课表。
         val dataKey = renderKey(listOf(
             LAYOUT_VERSION, NotifyStore.today(snapshot.now), snapshot.state, snapshot.termStartMissing,
-            snapshot.preferences, snapshot.periods, current, next,
+            snapshot.reason, snapshot.hasIndependentLocalData, snapshot.preferences, snapshot.periods, current, next,
             config.uiMode and Configuration.UI_MODE_NIGHT_MASK, config.densityDpi, config.fontScale,
             config.locales.toLanguageTags(),
         ))

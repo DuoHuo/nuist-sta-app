@@ -55,6 +55,7 @@ internal object TimetableWidgetUpdates {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
+        snapshot.jwxtExpiresAt?.let { next = minOf(next, it) }
         if (!snapshot.usable) return next
         for (course in snapshot.days.flatMap { it.courses }) {
             for (boundary in listOf(course.start - HOUR, course.start, course.end - HOUR, course.end)) {

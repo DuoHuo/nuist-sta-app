@@ -554,6 +554,7 @@ Map<String, Object?> _weekItem(NotifyClass item, WeekWidgetPrefs prefs) {
     'courseId': item.courseId,
     'name': item.name,
     'kind': item.kind.name,
+    if (item.origin case final origin?) 'origin': origin.name,
     'location': item.location,
     'teacherFirst': prefs.showTeacher && item.teachers.isNotEmpty
         ? item.teachers.first

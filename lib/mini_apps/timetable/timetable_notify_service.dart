@@ -234,13 +234,19 @@ class TimetableNotifyService {
   ///
   /// 与 [classesOn] 分开，避免考试和普通日程进入“即将上课”提醒。同一开始
   /// 时刻课程排在日程前，与 App 首页的混排规则一致。
-  List<NotifyClass> widgetItemsOn(DateTime date) {
+  List<NotifyClass> widgetItemsOn(DateTime date, {bool includeJwxt = true}) {
     final indexed = <({int order, NotifyClass item})>[];
     var order = 0;
-    for (final course in classesOn(date)) {
-      indexed.add((order: order++, item: course));
+    for (final item in _ctl.coursesOnDate(date, allowPendingWeek: true)) {
+      if (_isJwxtCourse(item.course) && (!includeJwxt || _ctl.weekPending)) {
+        continue;
+      }
+      if (_notifyClass(date, item) case final course?) {
+        indexed.add((order: order++, item: course));
+      }
     }
     for (final event in _ctl.scheduleEventsOn(date)) {
+      if (_isJwxtEvent(event) && !includeJwxt) continue;
       indexed.add((order: order++, item: _widgetEvent(date, event)));
     }
     indexed.sort((a, b) {
@@ -253,6 +259,12 @@ class TimetableNotifyService {
     });
     return [for (final entry in indexed) entry.item];
   }
+
+  bool _isJwxtCourse(Course course) =>
+      !_ctl.isImportedSchedule && course.source == CourseSource.jwxt;
+
+  bool _isJwxtEvent(ScheduleEvent event) =>
+      !_ctl.isImportedSchedule && event.isFromJwxt;
 
   NotifyClass? _notifyClass(DateTime date, TodayCourseItem item) {
     // 与首页 / 周格同一入口，保证小组件 payload 的时刻与 UI 一致。
@@ -277,6 +289,9 @@ class TimetableNotifyService {
       },
       barColor: coursePairFor(_ctl, item.course).bg.toARGB32(),
       barColorDark: coursePairFor(_ctl, item.course, dark: true).bg.toARGB32(),
+      origin: _isJwxtCourse(item.course)
+          ? WidgetItemOrigin.jwxt
+          : WidgetItemOrigin.local,
     );
   }
 
@@ -319,6 +334,9 @@ class TimetableNotifyService {
       barColor: light.toARGB32(),
       barColorDark: dark.toARGB32(),
       kind: event.isExam ? WidgetItemKind.exam : WidgetItemKind.schedule,
+      origin: _isJwxtEvent(event)
+          ? WidgetItemOrigin.jwxt
+          : WidgetItemOrigin.local,
     );
   }
 
@@ -352,38 +370,63 @@ class TimetableNotifyService {
   /// 当前小组件 payload。
   Map<String, Object?> currentWidgetPayload() {
     final now = _clock();
-    final synced = _ctl.syncedAt;
-    final hasVisibleEvents = _ctl.scheduleEvents.any(
+    final synced = _widgetJwxtSyncedAt;
+    final expiresAt = synced?.add(_jwxtValidity);
+    final visibleEvents = _ctl.scheduleEvents.where(
       (event) => !event.isExam || _ctl.settings.showExams,
     );
-    final hasLocalItems = _ctl.hasCourses || hasVisibleEvents;
+    final hasIndependentLocalData =
+        _ctl.isImportedSchedule ||
+        _ctl.courses.any(
+          (course) =>
+              !_isJwxtCourse(course) &&
+              !course.hidden &&
+              course.slots.isNotEmpty,
+        ) ||
+        visibleEvents.any((event) => !_isJwxtEvent(event));
     final hasJwxtData =
+        synced != null ||
         _ctl.jwxtCourses.isNotEmpty ||
-        _ctl.scheduleEvents.any((event) => event.isFromJwxt);
-    final hasCache = hasLocalItems || synced != null;
-    final staleCache =
-        synced != null && now.difference(synced) > const Duration(days: 7);
-    final needsUpdate =
-        !hasCache || staleCache || (hasJwxtData && !_ctl.portalBound);
-    final state = needsUpdate
+        visibleEvents.any(_isJwxtEvent);
+    final usableJwxt =
+        _ctl.portalBound && expiresAt != null && now.isBefore(expiresAt);
+    final WidgetUpdateReason? reason = hasIndependentLocalData || usableJwxt
+        ? null
+        : !hasJwxtData
+        ? WidgetUpdateReason.noSchedule
+        : !_ctl.portalBound
+        ? WidgetUpdateReason.jwxtUnbound
+        : WidgetUpdateReason.jwxtExpired;
+    final state = reason != null
         ? WidgetDataState.needsUpdate
-        : (_lastSyncFailed ? WidgetDataState.loadFailed : WidgetDataState.ok);
-    // 每天的安排既用于当天列表，又作为前一天的“明天首节”；同一次生成只算一遍。
+        : usableJwxt && _lastSyncFailed
+        ? WidgetDataState.loadFailed
+        : WidgetDataState.ok;
+    // 每天的安排同时供今日列表、明日预告与周视图使用。
     final itemsByDate = <DateTime, List<NotifyClass>>{};
     List<NotifyClass> itemsOn(DateTime date) =>
-        itemsByDate[date] ??= widgetItemsOn(date);
+        itemsByDate[date] ??= widgetItemsOn(date, includeJwxt: usableJwxt);
+    List<NotifyClass> tomorrowItems(DateTime date) =>
+        itemsOn(DateTime(date.year, date.month, date.day + 1));
     NotifyClass? tomorrowFirst(DateTime date) =>
-        itemsOn(DateTime(date.year, date.month, date.day + 1)).firstOrNull;
+        tomorrowItems(date).firstOrNull;
     final payload = buildWidgetPayload(
       now: now,
       classesOn: itemsOn,
       weekOf: _ctl.actualWeek,
       state: state,
-      hasCache: hasCache,
+      hasCache: hasIndependentLocalData || hasJwxtData,
       lastSyncedAt: synced,
+      jwxtExpiresAt: expiresAt,
+      hasIndependentLocalData: hasIndependentLocalData,
+      reason: reason,
       prefs: widgetPrefs(),
       tomorrowFirst: tomorrowFirst(now),
       tomorrowFirstOn: tomorrowFirst,
+      localTomorrowFirstOn: (date) =>
+          tomorrowItems(date)
+              .where((item) => item.origin == WidgetItemOrigin.local)
+              .firstOrNull,
     );
     // 顶层 version 保持 1；周课表只新增 week 段，旧版原生忽略即可。
     payload['week'] = buildWeekWidgetPayload(
@@ -404,11 +447,16 @@ class TimetableNotifyService {
     return payload;
   }
 
+  static const _jwxtValidity = Duration(days: 7);
+
+  DateTime? get _widgetJwxtSyncedAt =>
+      _ctl.isImportedSchedule ? null : _ctl.syncedAt;
+
   Object _rescheduleFingerprint() {
     final now = _clock();
-    final synced = _ctl.syncedAt;
+    final synced = _widgetJwxtSyncedAt;
     final staleCache =
-        synced != null && now.difference(synced) > const Duration(days: 7);
+        synced != null && !now.isBefore(synced.add(_jwxtValidity));
     final s = _ctl.settings;
     return (
       DateTime(now.year, now.month, now.day),

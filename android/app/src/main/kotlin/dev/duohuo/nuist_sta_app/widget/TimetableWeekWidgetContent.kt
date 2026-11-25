@@ -285,9 +285,13 @@ internal class TimetableWeekWidgetContent(
 
     private fun RemoteViews.addEmptyState() {
         val (title, hint) = when {
-            snapshot.termStartMissing -> "请先设置开学日" to "打开 App，在课表设置中设置开学日"
+            snapshot.reason == "jwxtUnbound" -> "课表需要更新" to "打开 App 登录并同步"
+            snapshot.reason == "jwxtExpired" -> "教务课表已过期" to "打开 App 同步课表"
+            snapshot.reason == "noSchedule" -> "暂无课表" to "打开 App 查看课表"
+            snapshot.termStartMissing && !snapshot.hasIndependentLocalData ->
+                "请先设置开学日" to "打开 App，在课表设置中设置开学日"
             snapshot.state == "loadFailed" -> "课表加载失败" to "网络异常，请打开课表重试"
-            else -> "课表需要更新" to "打开 App 登录并同步"
+            else -> "课表需要更新" to "打开 App 查看课表"
         }
         visible(R.id.wg_week_empty, true)
         text(R.id.wg_week_empty_title, title, 17f, palette.heading)

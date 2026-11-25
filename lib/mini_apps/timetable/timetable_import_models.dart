@@ -432,7 +432,6 @@ class WakeupImportParser {
         courses: List.unmodifiable(courses),
         periods: periods,
         settings: settings,
-        syncedAt: DateTime.now(),
       ),
       courseCount: courses.length,
       slotCount: slotCount,

@@ -85,9 +85,13 @@ internal data class WeekSnapshot(
     val state: String = "needsUpdate",
     val hasCache: Boolean = false,
     val termStartMissing: Boolean = false,
+    val reason: String = "",
+    val hasIndependentLocalData: Boolean = false,
 ) {
     fun displayWeek(offset: Int = 0): WeekBlock? {
-        if (termStartMissing || (state != "ok" && !(state == "loadFailed" && hasCache))) {
+        // 本地课程在未设置开学日时沿用 App 网格的第 1 周。
+        if (termStartMissing && !hasIndependentLocalData) return null
+        if (state != "ok" && !(state == "loadFailed" && hasCache)) {
             return null
         }
         val today = NotifyStore.today(now)
@@ -98,8 +102,6 @@ internal data class WeekSnapshot(
 
 /** 只读取现有桥接存储；payload 缺少 week 段或解析失败时降级为空快照。 */
 internal object TimetableWeekWidgetData {
-    private const val MAX_CACHE_AGE = 7L * 24 * 60 * 60 * 1000
-
     fun read(context: Context, now: Long = System.currentTimeMillis()): WeekSnapshot = try {
         parse(NotifyStore.prefs(context).getString(NotifyStore.KEY_WIDGET, null), now)
     } catch (_: Exception) {
@@ -110,15 +112,15 @@ internal object TimetableWeekWidgetData {
         if (json.isNullOrBlank()) return WeekSnapshot(now)
         return try {
             val root = JSONObject(json)
-            val lastSyncedAt = root.optLong("lastSyncedAt", 0L)
-            val state = if (lastSyncedAt > 0 && now - lastSyncedAt > MAX_CACHE_AGE) {
-                "needsUpdate"
-            } else {
-                root.optString("state", "needsUpdate")
-            }
+            val source = WidgetSourceStatus(root, now)
             val hasCache = root.optBoolean("hasCache", false)
-            val week = root.optJSONObject("week")
-                ?: return WeekSnapshot(now, state = state, hasCache = hasCache)
+            val week = root.optJSONObject("week") ?: return WeekSnapshot(
+                now = now,
+                state = source.state,
+                hasCache = hasCache,
+                reason = source.reason,
+                hasIndependentLocalData = source.hasIndependentLocalData,
+            )
             val top = root.optJSONObject("prefs")
             val prefsJson = week.optJSONObject("prefs") ?: top
             fun bool(key: String, fallback: Boolean): Boolean {
@@ -170,8 +172,10 @@ internal object TimetableWeekWidgetData {
                             val itemsJson = day.optJSONArray("items")
                             val courses = buildList {
                                 for (itemIndex in 0 until (itemsJson?.length() ?: 0)) {
-                                    parseCourse(itemsJson?.optJSONObject(itemIndex), preferences)
-                                        ?.let { add(it) }
+                                    val item = itemsJson?.optJSONObject(itemIndex) ?: continue
+                                    if (source.isVisible(item)) {
+                                        parseCourse(item, preferences)?.let { add(it) }
+                                    }
                                 }
                             }.sortedBy { it.start }
                             val date = day.optString("date")
@@ -196,17 +200,18 @@ internal object TimetableWeekWidgetData {
                 preferences = preferences,
                 periods = periods,
                 weeks = weeks,
-                state = state,
+                state = source.state,
                 hasCache = hasCache,
                 termStartMissing = week.optBoolean("termStartMissing", false),
+                reason = source.reason,
+                hasIndependentLocalData = source.hasIndependentLocalData,
             )
         } catch (_: Exception) {
             WeekSnapshot(now)
         }
     }
 
-    private fun parseCourse(json: JSONObject?, preferences: WeekPreferences): WeekCourse? {
-        val item = json ?: return null
+    private fun parseCourse(item: JSONObject, preferences: WeekPreferences): WeekCourse? {
         val start = NotifyStore.parseLocal(item.optString("start")) ?: return null
         val end = NotifyStore.parseLocal(item.optString("end")) ?: return null
         if (end <= start) return null

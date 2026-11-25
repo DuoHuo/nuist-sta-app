@@ -1048,12 +1048,13 @@ class TimetableSnapshot {
     TimetableSettings? settings,
     DateTime? syncedAt,
     String? lastError,
+    bool clearSyncedAt = false,
     bool clearError = false,
   }) => TimetableSnapshot(
     courses: courses ?? this.courses,
     periods: periods ?? this.periods,
     settings: settings ?? this.settings,
-    syncedAt: syncedAt ?? this.syncedAt,
+    syncedAt: clearSyncedAt ? null : (syncedAt ?? this.syncedAt),
     lastError: clearError ? null : (lastError ?? this.lastError),
   );
 
