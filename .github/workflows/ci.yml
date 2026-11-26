@@ -22,7 +22,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-and-build:
+  rust-test:
+    if: "!startsWith(github.event.head_commit.message, 'chore(release)') && !startsWith(github.event.pull_request.title, 'chore(release)')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # 在 crate 目录执行，让 rustup 按 rust-toolchain.toml 安装固定工具链和 Android target。
+      - name: Set up Rust
+        working-directory: native/vpn
+        run: |
+          rustup show
+          cargo --version
+
+      - name: Test Rust VPN core
+        working-directory: native/vpn
+        run: cargo test --locked --target-dir ../../build/rust-host
+
+  flutter-test:
     if: "!startsWith(github.event.head_commit.message, 'chore(release)') && !startsWith(github.event.pull_request.title, 'chore(release)')"
     runs-on: ubuntu-latest
     steps:
@@ -97,6 +115,55 @@ jobs:
             '\b[0-9]{12}\b' \
             '202512340001'
 
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.4'
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # 启动图标必须由 assets/images/app_icon.png 经 flutter_launcher_icons 生成，且已提交。
+      - name: Check launcher icons
+        run: |
+          set -euo pipefail
+          dart run flutter_launcher_icons
+          if ! git diff --exit-code -- android/app/src/main/res \
+            || [ -n "$(git status --porcelain -- android/app/src/main/res)" ]; then
+            git status --porcelain -- android/app/src/main/res
+            echo "::error::启动图标与源图不一致，请运行 dart run flutter_launcher_icons 并提交 android/app/src/main/res 下的改动"
+            exit 1
+          fi
+
+      # FFI 测试需要宿主机版本的 libnuist_vpn.so，这里自行构建，不依赖 rust-test 任务。
+      - name: Set up Rust
+        working-directory: native/vpn
+        run: |
+          rustup show
+          cargo --version
+
+      - name: Build host VPN library for FFI tests
+        working-directory: native/vpn
+        run: cargo build --locked --target-dir ../../build/rust-host
+
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze Dart code
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test --dart-define=VPN_NATIVE_LIBRARY=${{ github.workspace }}/build/rust-host/debug/libnuist_vpn.so
+
+  build-debug-apk:
+    if: "!startsWith(github.event.head_commit.message, 'chore(release)') && !startsWith(github.event.pull_request.title, 'chore(release)')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
       - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:
@@ -141,17 +208,6 @@ jobs:
 
       - name: Install dependencies
         run: flutter pub get
-      # 启动图标必须由 assets/images/app_icon.png 经 flutter_launcher_icons 生成，且已提交。
-      - name: Check launcher icons
-        run: |
-          set -euo pipefail
-          dart run flutter_launcher_icons
-          if ! git diff --exit-code -- android/app/src/main/res \
-            || [ -n "$(git status --porcelain -- android/app/src/main/res)" ]; then
-            git status --porcelain -- android/app/src/main/res
-            echo "::error::启动图标与源图不一致，请运行 dart run flutter_launcher_icons 并提交 android/app/src/main/res 下的改动"
-            exit 1
-          fi
 
       # 在 crate 目录执行，让 rustup 按 rust-toolchain.toml 安装固定工具链和 Android target。
       - name: Set up Rust
@@ -159,23 +215,6 @@ jobs:
         run: |
           rustup show
           cargo --version
-
-      - name: Test Rust VPN core
-        working-directory: native/vpn
-        run: cargo test --locked --target-dir ../../build/rust-host
-
-      - name: Build host VPN library for FFI tests
-        working-directory: native/vpn
-        run: cargo build --locked --target-dir ../../build/rust-host
-
-      - name: Check formatting
-        run: dart format --output=none --set-exit-if-changed lib test
-
-      - name: Analyze Dart code
-        run: flutter analyze
-
-      - name: Run tests
-        run: flutter test --dart-define=VPN_NATIVE_LIBRARY=${{ github.workspace }}/build/rust-host/debug/libnuist_vpn.so
 
       - name: Build debug APK
         run: |

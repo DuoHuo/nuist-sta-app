@@ -161,10 +161,6 @@ jobs:
           rustup show
           cargo --version
 
-      - name: Test Rust VPN core
-        working-directory: native/vpn
-        run: cargo test --locked --target-dir ../../build/rust-host
-
       - name: Decode Keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.DH_SIGNING_KEY_BASE64 }}
