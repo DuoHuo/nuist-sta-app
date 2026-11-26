@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
@@ -144,4 +145,50 @@ void main() {
     await tester.pumpWidget(detailFor(CourseSource.manual));
     expect(find.byKey(const Key('course_detail_edit')), findsOneWidget);
   });
+
+  for (final dark in [false, true]) {
+    testWidgets('${dark ? '深色' : '浅色'}横屏矮窗下空课表不溢出且可滚动操作', (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(400, 280);
+      addTearDown(tester.view.reset);
+
+      final c = TimetableController.instance;
+      final binding = TimetableController.bindingCheck;
+      TimetableController.bindingCheck = () async => false;
+      addTearDown(() {
+        c.debugReset();
+        TimetableController.bindingCheck = binding;
+      });
+      c.debugReset();
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(termStartDate: DateTime(2026, 9, 7)),
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: dark ? appDarkTheme() : appLightTheme(),
+          home: const TimetablePage(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('还没有课程'), findsOneWidget);
+
+      final loginBtn = find.byKey(const Key('timetable_empty_login'));
+      await tester.ensureVisible(loginBtn);
+      await tester.pumpAndSettle();
+      expect(loginBtn.hitTestable(), findsOneWidget);
+
+      final importBtn = find.byKey(const Key('timetable_empty_import_wakeup'));
+      await tester.ensureVisible(importBtn);
+      await tester.pumpAndSettle();
+      expect(importBtn.hitTestable(), findsOneWidget);
+
+      expect(tester.takeException(), isNull);
+    });
+  }
 }
