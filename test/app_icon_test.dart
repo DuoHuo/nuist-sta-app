@@ -174,6 +174,69 @@ Future<void> _waitForImageWork(
 }
 
 void main() {
+  test('内置图标保持默认顺序并识别所有已保存的标识', () {
+    expect(appIconChoices.map((choice) => choice.id), [
+      AppIconIds.defaultIcon,
+      AppIconIds.alt,
+      AppIconIds.mascot,
+      AppIconIds.mascotColor,
+    ]);
+    for (final choice in appIconChoices) {
+      final state = AppIconState.fromPlatform({
+        'supported': true,
+        'builtinId': choice.id,
+      });
+      expect(state.choice, same(choice));
+    }
+    expect(
+      AppIconState.fromPlatform({'builtinId': 'unknown'}).builtinId,
+      AppIconIds.defaultIcon,
+    );
+  });
+
+  testWidgets('窄屏大字号仍能一排显示四款图标并切换新图标', (tester) async {
+    tester.view.physicalSize = const Size(640, 1280);
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.reset);
+    final bridge = _FakeBridge();
+    final controller = AppIconController(bridge: bridge);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery.withClampedTextScaling(
+          minScaleFactor: 2,
+          maxScaleFactor: 2,
+          child: child!,
+        ),
+        home: AppIconPage(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final cards = [
+      for (final choice in appIconChoices)
+        find.byKey(ValueKey('app_icon_choice_${choice.id}')),
+    ];
+    final first = tester.getRect(cards.first);
+    var previousRight = 0.0;
+    for (final card in cards) {
+      final rect = tester.getRect(card);
+      expect(rect.top, first.top);
+      expect(rect.bottom, first.bottom);
+      expect(rect.left, greaterThan(previousRight));
+      expect(rect.right, lessThanOrEqualTo(320));
+      previousRight = rect.right;
+    }
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(cards[1]);
+    await tester.pumpAndSettle();
+    expect(bridge.builtinIds, [AppIconIds.alt]);
+    expect(controller.state.builtinId, AppIconIds.alt);
+    expect(find.text('已切换为「海海」图标'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('切换内置图标失败可重试，且提交期间防重复', (tester) async {
     final bridge = _FakeBridge();
     final gate = Completer<AppIconState>();
@@ -738,10 +801,10 @@ void main() {
         expect(pickCalls, 2);
         expect(saveCalls, 1);
         await tester.ensureVisible(
-          find.byKey(const Key('app_icon_choice_mascot_color')),
+          find.byKey(const Key('app_icon_choice_alt')),
         );
         builtinGate = Completer<void>();
-        await tester.tap(find.byKey(const Key('app_icon_choice_mascot_color')));
+        await tester.tap(find.byKey(const Key('app_icon_choice_alt')));
         await tester.pump();
         expect(route.popGestureEnabled, isFalse);
         await tester.binding.handlePopRoute();
@@ -763,13 +826,13 @@ void main() {
         await gesture('commitBackGesture');
         expect(find.widgetWithText(AppBar, '应用图标'), findsNothing);
         expect(find.text('深色模式'), findsOneWidget);
-        expect(find.text('当前：派龙'), findsOneWidget);
+        expect(find.text('当前：海海'), findsOneWidget);
         expect(find.byType(SnackBarAction), findsNothing);
         expect(find.text('图标保存失败，请稍后重试'), findsNothing);
         oldRetry();
         await tester.pumpAndSettle();
         expect(builtinCalls, writesBeforeLeaving);
-        expect(find.text('当前：派龙'), findsOneWidget);
+        expect(find.text('当前：海海'), findsOneWidget);
         await tester.pumpWidget(const SizedBox.shrink());
         await tester.pumpAndSettle();
       }

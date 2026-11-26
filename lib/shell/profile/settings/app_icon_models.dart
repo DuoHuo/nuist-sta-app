@@ -3,6 +3,7 @@ import 'dart:typed_data';
 /// 内置应用图标的稳定标识；原生端按这个 id 启用对应的桌面入口。
 abstract final class AppIconIds {
   static const defaultIcon = 'default';
+  static const alt = 'alt';
   static const mascot = 'mascot';
   static const mascotColor = 'mascot_color';
 }
@@ -20,7 +21,7 @@ class AppIconChoice {
   final String assetPath;
 }
 
-/// 设置页展示的三款内置图标。
+/// 设置页展示的内置图标。
 const appIconChoices = <AppIconChoice>[
   AppIconChoice(
     id: AppIconIds.defaultIcon,
@@ -36,6 +37,11 @@ const appIconChoices = <AppIconChoice>[
     id: AppIconIds.mascotColor,
     label: '派龙',
     assetPath: 'assets/images/app_icon_mascot_color.png',
+  ),
+  AppIconChoice(
+    id: AppIconIds.alt,
+    label: '海海',
+    assetPath: 'assets/images/app_icon_alt.png',
   ),
 ];
 
@@ -70,6 +76,7 @@ class AppIconState {
 
   static const _builtinIds = {
     AppIconIds.defaultIcon,
+    AppIconIds.alt,
     AppIconIds.mascot,
     AppIconIds.mascotColor,
   };

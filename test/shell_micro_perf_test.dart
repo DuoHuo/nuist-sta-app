@@ -326,7 +326,7 @@ void main() {
           expect(settingsProvider.width, (44 * dpr).round());
           expect(settingsProvider.height, (44 * dpr).round());
 
-          // AppIconPage: 64dp (全部 3 款内置图标)
+          // AppIconPage: 56dp (全部 4 款内置图标)
           final iconController = AppIconController(
             bridge: _FakeAppIconBridge(),
           );
@@ -346,8 +346,8 @@ void main() {
               ),
             );
             final cardProvider = cardImage.image as ResizeImage;
-            expect(cardProvider.width, (64 * dpr).round());
-            expect(cardProvider.height, (64 * dpr).round());
+            expect(cardProvider.width, (56 * dpr).round());
+            expect(cardProvider.height, (56 * dpr).round());
             expect(
               (cardProvider.imageProvider as AssetImage).assetName,
               choice.assetPath,

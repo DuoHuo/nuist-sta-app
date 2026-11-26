@@ -382,6 +382,7 @@ internal object AppIconStore {
 
     private val aliases = linkedMapOf(
         "default" to "DefaultIcon",
+        "alt" to "AltIcon",
         "mascot" to "MascotIcon",
         "mascot_color" to "MascotColorIcon",
     )
