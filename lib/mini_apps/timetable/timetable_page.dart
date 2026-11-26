@@ -596,7 +596,7 @@ class _TimetablePageState extends State<TimetablePage> {
 
   void _openImport() {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      AppPageRoute<void>(
         builder: (_) => TimetableImportPage(controller: _host),
       ),
     );
@@ -1131,60 +1131,72 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.calendar_view_week_outlined,
-              size: 56,
-              color: colors.hint.withValues(alpha: 0.7),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '还没有课程',
-              style: TimetableTheme.titleStyle(color: colors.titleText),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              isImported
-                  ? '该导入课表暂无课程安排'
-                  : (loggedIn ? '点右上角同步图标，从教务同步本学期课表' : '登录统一门户后自动同步课表'),
-              textAlign: TextAlign.center,
-              style: TimetableTheme.captionStyle(color: colors.hint),
-            ),
-            if (!loggedIn && !isImported) ...[
-              const SizedBox(height: 20),
-              FilledButton(
-                key: const Key('timetable_empty_login'),
-                onPressed: loading ? null : onLogin,
-                style: FilledButton.styleFrom(backgroundColor: colors.accent),
-                child: const Text('去登录'),
-              ),
-            ],
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              alignment: WrapAlignment.center,
-              children: [
-                TextButton.icon(
-                  key: const Key('timetable_empty_import_wakeup'),
-                  onPressed: onImport,
-                  icon: const Icon(Icons.file_download_outlined, size: 18),
-                  label: const Text('从口令导入'),
-                ),
-                if (hasOtherSchedules)
-                  TextButton.icon(
-                    key: const Key('timetable_empty_switch'),
-                    onPressed: onSwitchSchedule,
-                    icon: const Icon(Icons.swap_horiz, size: 18),
-                    label: const Text('切换课表'),
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.calendar_view_week_outlined,
+                    size: 56,
+                    color: colors.hint.withValues(alpha: 0.7),
                   ),
-              ],
+                  const SizedBox(height: 12),
+                  Text(
+                    '还没有课程',
+                    style: TimetableTheme.titleStyle(color: colors.titleText),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    isImported
+                        ? '该导入课表暂无课程安排'
+                        : (loggedIn ? '点右上角同步图标，从教务同步本学期课表' : '登录统一门户后自动同步课表'),
+                    textAlign: TextAlign.center,
+                    style: TimetableTheme.captionStyle(color: colors.hint),
+                  ),
+                  if (!loggedIn && !isImported) ...[
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      key: const Key('timetable_empty_login'),
+                      onPressed: loading ? null : onLogin,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: colors.accent,
+                      ),
+                      child: const Text('去登录'),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      TextButton.icon(
+                        key: const Key('timetable_empty_import_wakeup'),
+                        onPressed: onImport,
+                        icon: const Icon(
+                          Icons.file_download_outlined,
+                          size: 18,
+                        ),
+                        label: const Text('从口令导入'),
+                      ),
+                      if (hasOtherSchedules)
+                        TextButton.icon(
+                          key: const Key('timetable_empty_switch'),
+                          onPressed: onSwitchSchedule,
+                          icon: const Icon(Icons.swap_horiz, size: 18),
+                          label: const Text('切换课表'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ],
+          ),
         ),
       ),
     );
