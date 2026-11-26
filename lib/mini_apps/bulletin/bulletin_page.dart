@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/navigation/app_page.dart';
 import '../../core/colors.dart';
+import '../../core/ui/app_bottom_sheet.dart';
 import 'bulletin_controller.dart';
 import 'bulletin_detail_page.dart';
 import 'bulletin_detail_repository.dart';
@@ -91,7 +92,7 @@ class _BulletinPageState extends State<BulletinPage> {
     var enabled = current.enabled;
     final selected = current.topics.toSet();
     final palette = AppPalette.of(context);
-    await showModalBottomSheet<void>(
+    await showAppModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,

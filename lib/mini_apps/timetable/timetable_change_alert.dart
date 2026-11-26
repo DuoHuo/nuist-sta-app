@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/ui/app_bottom_sheet.dart';
+
 import 'timetable_change_format.dart';
 import 'timetable_change_log_page.dart';
 import 'timetable_controller.dart';
@@ -31,7 +33,7 @@ Future<void> showTimetableChangeAlert(
     await c.acknowledgeChangeAlerts(fps, revision: revision);
   }
 
-  await showModalBottomSheet<void>(
+  await showAppModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: TimetableTheme.colorsOf(context).surface,

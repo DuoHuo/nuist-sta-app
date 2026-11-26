@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/app_snack_bar.dart';
+import '../../core/ui/app_bottom_sheet.dart';
 import '../../core/ui/miuix_dialog.dart';
 import 'timetable_day_swap_ui.dart';
 import 'timetable_edit_scope_sheet.dart';
@@ -1163,7 +1164,7 @@ class _WeekGridState extends State<WeekGrid> {
     final weeks = slot == null || slot.weeksLabel.trim().isEmpty
         ? '无固定时间'
         : slot.weeksLabel;
-    return showModalBottomSheet<void>(
+    return showAppModalBottomSheet<void>(
       context: context,
       backgroundColor: colors.surface,
       builder: (sheetContext) => SafeArea(
@@ -1208,7 +1209,7 @@ class _WeekGridState extends State<WeekGrid> {
     int day,
     List<ScheduleEvent> events,
   ) {
-    return showModalBottomSheet<void>(
+    return showAppModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) => SafeArea(
         child: Column(
@@ -1283,7 +1284,7 @@ class _WeekGridState extends State<WeekGrid> {
         ),
     ];
 
-    return showModalBottomSheet<void>(
+    return showAppModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) => SafeArea(
         child: Column(

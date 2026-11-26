@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/ui/app_bottom_sheet.dart';
+
 import 'timetable_theme.dart';
 import 'timetable_week_format.dart';
 
@@ -33,7 +35,7 @@ Future<List<int>?> showApplyWeeksSheet(
   required int totalWeeks,
   required Set<int> initial,
 }) {
-  return showModalBottomSheet<List<int>>(
+  return showAppModalBottomSheet<List<int>>(
     context: context,
     isScrollControlled: true,
     isDismissible: true,

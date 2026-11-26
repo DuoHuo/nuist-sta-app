@@ -373,10 +373,14 @@ class _MiuixDialogPageState<T> extends State<_MiuixDialogPage<T>> {
     // 每次都新建内容 widget 会让表单/列表跟着重建。需要随尺寸变化的部分
     // 由内容自己在内部按约束布局。
     _content ??= widget.builder(context, _controller);
-    // 不可关闭时同时拦住系统返回；用户点按钮后由 Navigator.pop 关闭，
-    // 程序化的 pop 不受 PopScope 影响，所以拦截在选择之后立即解除。
+    // 统一拦住系统返回：可关闭时走 _close 播放 Miuix 退场动画，避免
+    // showGeneralDialog(transitionDuration: Duration.zero) 直接 0ms 硬切消失；
+    // 不可关闭时保持拦截，按钮关闭由 onDismissFinished 程序化 pop 完成。
     return PopScope(
-      canPop: widget.dismissible,
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && widget.dismissible) _close(null);
+      },
       child: MiuixTheme(
         data: theme,
         child: MiuixPopupScope(
@@ -678,13 +682,11 @@ class _MiuixOptionMenuPageState<T> extends State<_MiuixOptionMenuPage<T>> {
   @override
   Widget build(BuildContext context) {
     final theme = MiuixThemeData.of(Theme.of(context).brightness);
-    final media = MediaQuery.of(context);
+    final height = MediaQuery.sizeOf(context).height;
+    final verticalPadding = MediaQuery.paddingOf(context).vertical;
     // 锚点靠近屏幕底部时下方放不下：菜单仍固定向下展开，但整体被定位器
     // 夹紧进窗口内，所以最大高度按整个窗口可用高度算，而不是锚点下方的余量。
-    final maxHeight = math.max(
-      120.0,
-      media.size.height - media.padding.vertical - 16,
-    );
+    final maxHeight = math.max(120.0, height - verticalPadding - 16);
     return PopScope(
       canPop: widget.dismissible,
       child: MiuixTheme(

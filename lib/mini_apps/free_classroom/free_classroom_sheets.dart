@@ -2,13 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../../core/app_select.dart';
 import '../../core/colors.dart';
+import '../../core/ui/app_bottom_sheet.dart';
 import 'free_classroom_controller.dart';
 import 'free_classroom_models.dart';
 import 'free_classroom_widgets.dart';
 
 /// 本小程序所有底部面板的统一外观。
 Future<T?> _present<T>(BuildContext context, WidgetBuilder builder) {
-  return showModalBottomSheet<T>(
+  return showAppModalBottomSheet<T>(
     context: context,
     backgroundColor: AppPalette.of(context).surface,
     showDragHandle: true,

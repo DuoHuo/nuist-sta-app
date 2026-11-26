@@ -3,6 +3,7 @@ import 'timetable_persistence_feedback.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/app_snack_bar.dart';
+import '../../core/ui/app_bottom_sheet.dart';
 import '../../core/ui/miuix_dialog.dart';
 import 'timetable_schedule_event.dart';
 import 'timetable_schedule_event_edit_page.dart';
@@ -64,7 +65,7 @@ Future<void> showScheduleEventDetailSheet(
     eventId: event.id,
     controller: controller,
   );
-  return showModalBottomSheet<void>(
+  return showAppModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
