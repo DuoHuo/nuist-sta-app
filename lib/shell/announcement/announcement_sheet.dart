@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../core/navigation/app_navigation.dart';
 import '../../core/navigation/app_page.dart';
 import '../../core/colors.dart';
 import 'announcement_models.dart';
@@ -13,9 +14,14 @@ Future<void> showAnnouncementDialog(
   List<Announcement> items, {
   Map<String, AnnouncementLocalAction> localActions = const {},
 }) {
+  // 宽窄屏统一走根导航器，确保遮罩覆盖底栏且跨宽窄旋屏后不会残留分支栈。
+  final scope = AppNavigationScope.readOf(context);
+  final rootNavigator =
+      scope?.navigation.rootNavigatorKey.currentState ??
+      Navigator.of(context, rootNavigator: true);
   return showDialog<void>(
-    context: context,
-    useRootNavigator: false,
+    context: rootNavigator.context,
+    useRootNavigator: true,
     builder: (_) =>
         AnnouncementDialog(items: items, localActions: localActions),
   );

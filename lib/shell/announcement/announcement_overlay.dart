@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/colors.dart';
+import '../../core/logging/app_log.dart';
 import '../../core/navigation/app_navigation.dart';
 import '../../core/privacy/privacy_consent.dart';
 import '../update/update_controller.dart';
@@ -15,6 +16,8 @@ import 'announcement_sheet.dart';
 
 /// 悬浮条自动收起的时长。
 const Duration kAnnouncementBannerDuration = Duration(seconds: 8);
+
+final _announcementOverlayLog = AppLog.logger('shell.announcement.overlay');
 
 /// 将根壳路由的可见性传给嵌套首页，包含普通对话框和公告网页的遮挡。
 class AnnouncementRouteScope extends InheritedWidget {
@@ -71,11 +74,31 @@ Future<void> openAnnouncements(
   AnnouncementController c, {
   UpdateController? updates,
 }) {
+  final scope = AppNavigationScope.readOf(context);
+  final rootNavigator =
+      scope?.navigation.rootNavigatorKey.currentState ??
+      Navigator.of(context, rootNavigator: true);
+  final dialogContext = rootNavigator.context;
+  Size? overlaySize;
+  final overlayRender = rootNavigator.overlay?.context.findRenderObject();
+  if (overlayRender is RenderBox && overlayRender.hasSize) {
+    overlaySize = overlayRender.size;
+  }
+  _announcementOverlayLog.debug(
+    'dialog.open',
+    fields: {
+      'has_scope': scope != null,
+      'wide': scope?.wide ?? false,
+      'target_navigator': rootNavigator.widget.key?.toString() ?? 'unknown',
+      'overlay_width': overlaySize?.width.round(),
+      'overlay_height': overlaySize?.height.round(),
+    },
+  );
   final shownAnnouncementIds = <String>{for (final item in c.visible) item.id};
   // 对话框持续订阅，更新撤回后同步移除对应条目。
   final dialog = showDialog<void>(
-    context: context,
-    useRootNavigator: false,
+    context: dialogContext,
+    useRootNavigator: true,
     builder: (_) => ListenableBuilder(
       listenable: Listenable.merge([c, updates]),
       builder: (_, _) {
@@ -94,7 +117,7 @@ Future<void> openAnnouncements(
               update.id: AnnouncementLocalAction(
                 label: '查看更新',
                 onPressed: () =>
-                    showUpdateDetails(context, controller: updates),
+                    showUpdateDetails(dialogContext, controller: updates),
               ),
           },
         );

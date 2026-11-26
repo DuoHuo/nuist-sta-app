@@ -466,7 +466,12 @@ void main() {
       expect(notices.hasUnread, isFalse);
       await tester.tap(find.byTooltip('公告'));
       await tester.pumpAndSettle();
-      expect(tester.getSize(find.byType(ModalBarrier).last).width, 390);
+      expect(
+        tester.getSize(find.byType(ModalBarrier).last),
+        const Size(390, 900),
+      );
+      expect(navigation.rootNavigatorKey.currentState!.canPop(), isTrue);
+      expect(find.text('学习').hitTestable(), findsNothing);
       expect(
         find.descendant(
           of: find.byType(AnnouncementDialog),
@@ -474,6 +479,10 @@ void main() {
         ),
         findsOneWidget,
       );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byType(AnnouncementDialog), findsNothing);
+      expect(find.text('学习').hitTestable(), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
@@ -1167,7 +1176,9 @@ void main() {
       expect(tester.takeException(), isNull);
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
-    testWidgets('${dark ? '深色' : '浅色'}学习操作时普通首页公告仍在本栏显示', (tester) async {
+    testWidgets('${dark ? '深色' : '浅色'}学习操作时普通首页公告走根导航器覆盖全屏，收窄仍遮罩底栏', (
+      tester,
+    ) async {
       final pending = Completer<AnnouncementFetchResult>();
       final announcements = AnnouncementController.test(
         fetch: ({etag, lastModified}) => pending.future,
@@ -1193,16 +1204,31 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('普通首页公告'), findsOneWidget);
-      expect(tester.getSize(find.byType(ModalBarrier).last).width, 392);
-      expect(navigation.rootNavigatorKey.currentState!.canPop(), isFalse);
+      expect(
+        tester.getSize(find.byType(ModalBarrier).last),
+        const Size(800, 900),
+      );
+      expect(navigation.rootNavigatorKey.currentState!.canPop(), isTrue);
       expect(find.text('详情1'), findsOneWidget);
+
+      tester.view.physicalSize = const Size(390, 900);
+      await tester.pumpAndSettle();
+      expect(find.text('普通首页公告'), findsOneWidget);
+      expect(
+        tester.getSize(find.byType(ModalBarrier).last),
+        const Size(390, 900),
+      );
+      expect(find.text('我的').hitTestable(), findsNothing);
+
+      tester.view.physicalSize = const Size(800, 900);
+      await tester.pumpAndSettle();
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('详情1'), findsOneWidget);
+      expect(find.text('普通首页公告'), findsNothing);
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       expect(find.text('详情1'), findsNothing);
-      expect(find.text('普通首页公告'), findsOneWidget);
-      await tester.binding.handlePopRoute();
-      await tester.pumpAndSettle();
-      expect(find.text('普通首页公告'), findsNothing);
     });
 
     testWidgets('${dark ? '深色' : '浅色'}阻断公告覆盖整个窗口，过期后恢复详情返回', (tester) async {
@@ -1284,5 +1310,168 @@ void main() {
       expect(find.text('内部详情0'), findsNothing);
       expect(find.text('详情1'), findsOneWidget);
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+    for (final width in [390.0, 800.0]) {
+      for (final cornerRadii in [BorderRadius.circular(42), null]) {
+        testWidgets('${dark ? '深色' : '浅色'} ${width >= 656 ? '宽屏' : '窄屏'}'
+            '(${cornerRadii == null ? '无' : '有'}物理圆角) 预测性返回全程不裁出顶栏圆角', (
+          tester,
+        ) async {
+          await _pump(
+            tester,
+            width: width,
+            dark: dark,
+            media: (media) => media
+                .copyWith(
+                  padding: const EdgeInsets.only(top: 43, bottom: 20),
+                  viewPadding: const EdgeInsets.only(top: 43, bottom: 20),
+                )
+                .applyDisplayCornerRadii(cornerRadii),
+          );
+          await tester.tap(find.text('首页入口'));
+          await tester.pumpAndSettle();
+          final input = find.byKey(const ValueKey('详情输入0'));
+          await tester.enterText(input, '手势取消保留内容');
+          FocusManager.instance.primaryFocus?.unfocus();
+          await tester.pumpAndSettle();
+          final route = ModalRoute.of(tester.element(input))! as PageRoute;
+          expect(await _gesture(tester, 'startBackGesture'), isTrue);
+          ClipRRect pageClip() => tester.widget<ClipRRect>(
+            find
+                .ancestor(
+                  of: find.byType(_ProbePage),
+                  matching: find.byType(ClipRRect),
+                )
+                .first,
+          );
+          expect(pageClip().borderRadius, BorderRadius.zero);
+          await _gesture(tester, 'updateBackGestureProgress', progress: 0.4);
+          expect(route.animation!.value, closeTo(0.6, 0.001));
+          expect(pageClip().borderRadius, BorderRadius.zero);
+          await _gesture(tester, 'cancelBackGesture');
+          expect(find.text('手势取消保留内容'), findsOneWidget);
+          expect(await _gesture(tester, 'startBackGesture'), isTrue);
+          await _gesture(tester, 'commitBackGesture');
+          expect(find.byType(_ProbePage), findsNothing);
+          expect(tester.takeException(), isNull);
+        }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+      }
+    }
   }
+
+  test('mediaForRect 仅在贴合完整窗口时保留物理屏幕圆角，其余设为 zero', () {
+    for (final cornerRadii in [BorderRadius.circular(42), null]) {
+      final media = const MediaQueryData(
+        size: Size(390, 844),
+        padding: EdgeInsets.only(top: 43, bottom: 20),
+        viewPadding: EdgeInsets.only(top: 43, bottom: 20),
+      ).applyDisplayCornerRadii(cornerRadii);
+      expect(
+        AppPaneLayout.mediaForRect(
+          media,
+          const Rect.fromLTRB(0, 43, 390, 824),
+        ).displayCornerRadii,
+        BorderRadius.zero,
+      );
+      expect(
+        AppPaneLayout.mediaForRect(
+          media,
+          const Rect.fromLTWH(0, 0, 190, 844),
+        ).displayCornerRadii,
+        BorderRadius.zero,
+      );
+      expect(
+        AppPaneLayout.mediaForRect(
+          media,
+          const Rect.fromLTWH(0, 0, 390, 844),
+        ).displayCornerRadii,
+        cornerRadii,
+      );
+    }
+  });
+
+  testWidgets('窄屏详情退场动画中途底栏不抢占高度，动画结束后恢复底栏', (tester) async {
+    await _pump(tester, width: 390);
+    await tester.tap(find.text('首页入口'));
+    await tester.pumpAndSettle();
+    expect(find.text('我的'), findsNothing);
+    final duringHeight = tester
+        .getSize(find.byKey(const ValueKey('app-pane-0')))
+        .height;
+
+    await tester.binding.handlePopRoute();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('我的'), findsNothing);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('app-pane-0'))).height,
+      duringHeight,
+    );
+
+    await tester.pumpAndSettle();
+    expect(find.text('我的'), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('app-pane-0'))).height,
+      lessThan(duringHeight),
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets('directLaunch 路由首次零时长入场，后续取消预测性返回平滑回弹', (tester) async {
+    final controller = TimetableController.instance;
+    final originalClock = TimetableController.clock;
+    final originalBinding = TimetableController.bindingCheck;
+    final directory = Directory.systemTemp.createTempSync(
+      'wide-direct-launch-',
+    );
+    TimetableStore.debugDirectory = directory;
+    TimetableController.clock = () => DateTime(2026, 11, 16, 8);
+    TimetableController.bindingCheck = () async => false;
+    controller.debugReset();
+    controller.debugSetSnapshot(
+      TimetableSnapshot(
+        periods: TimetableController.defaultPeriods(),
+        settings: TimetableSettings(termStartDate: DateTime(2026, 11, 2)),
+      ),
+    );
+    addTearDown(() {
+      TimetableStore.debugDirectory = null;
+      TimetableController.clock = originalClock;
+      TimetableController.bindingCheck = originalBinding;
+      controller.debugReset();
+      directory.deleteSync(recursive: true);
+    });
+
+    final (router, _) = await _pump(
+      tester,
+      width: 390,
+      registry: AppRegistry([timetableManifest]),
+    );
+    router.push('/home/apps/timetable', extra: timetableDirectLaunch);
+    await tester.pump();
+    expect(find.byType(TimetablePage), findsOneWidget);
+    final route =
+        ModalRoute.of(tester.element(find.byType(TimetablePage)))! as PageRoute;
+    expect(route.animation!.value, 1.0);
+
+    await _gesture(tester, 'startBackGesture');
+    await _gesture(tester, 'updateBackGestureProgress', progress: 0.4);
+    expect(route.animation!.value, closeTo(0.6, 0.001));
+
+    ByteData? cancelResponse;
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      'flutter/backgesture',
+      const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('cancelBackGesture', {
+          'touchOffset': [5.0, 300.0],
+          'progress': 0.4,
+          'swipeEdge': 0,
+        }),
+      ),
+      (data) => cancelResponse = data,
+    );
+    expect(cancelResponse, isNotNull);
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(route.animation!.value, lessThan(1.0));
+    await tester.pumpAndSettle();
+    expect(route.animation!.value, 1.0);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 }

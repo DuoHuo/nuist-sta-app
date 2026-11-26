@@ -5,8 +5,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nuist_sta_app/app.dart';
+import 'package:nuist_sta_app/core/colors.dart';
 import 'package:nuist_sta_app/core/theme_mode.dart';
 import 'package:nuist_sta_app/mini_apps/registry.dart';
+import 'package:nuist_sta_app/shell/announcement/announcement_sheet.dart';
 import 'package:nuist_sta_app/shell/home/app_grid_item.dart';
 
 Future<void> _pumpPhone(WidgetTester tester) async {
@@ -230,9 +232,13 @@ void main() {
       expect(settingsRoute.isCurrent, isTrue);
       expect(Theme.of(context).platform, TargetPlatform.android);
       expect(settingsRoute.navigator, same(navigator));
+      final builder = Theme.of(context)
+          .pageTransitionsTheme
+          .builders[TargetPlatform.android];
+      expect(builder, isA<PredictiveBackPageTransitionsBuilder>());
       expect(
-        Theme.of(context).pageTransitionsTheme.builders[TargetPlatform.android],
-        isA<PredictiveBackPageTransitionsBuilder>(),
+        (builder! as PredictiveBackPageTransitionsBuilder).fallbackColor,
+        AppPalette.of(context).pageBg,
       );
       Future<void> gesture(String method, {double progress = 0}) async {
         ByteData? response;
@@ -288,5 +294,38 @@ void main() {
       expect(find.text('统一门户'), findsOneWidget);
       expect(navigator.canPop(), isFalse);
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+  }
+
+  for (final mode in [ThemeMode.light, ThemeMode.dark]) {
+    testWidgets('${mode.name} 下窄屏直启点击首页铃铛遮罩覆盖底栏且不触发切换', (tester) async {
+      addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
+      AppThemeMode.instance.value = mode;
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.padding = const FakeViewPadding(top: 43, bottom: 24);
+      tester.view.viewPadding = const FakeViewPadding(top: 43, bottom: 24);
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(const NuistApp());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('公告'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AnnouncementDialog), findsOneWidget);
+      expect(
+        tester.getSize(find.byType(ModalBarrier).last),
+        const Size(390, 844),
+      );
+      expect(find.text('学习').hitTestable(), findsNothing);
+
+      await tester.tapAt(tester.getCenter(find.text('学习')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AnnouncementDialog), findsNothing);
+      expect(find.text('NUIST++'), findsOneWidget);
+      expect(find.text('本学期'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
   }
 }
