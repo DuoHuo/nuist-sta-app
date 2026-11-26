@@ -780,239 +780,264 @@ void main() {
     expect(campus.callbacks, {'jwxt.test': 1, 'icard.test': 1});
   });
 
-  test('VPN 控制器过期但 CAS 有效，只做 SSO', () async {
-    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
-    await campus.saveVpnSession();
-    await campus.cookies.openJar().saveFromResponse(
-      Uri.parse('${NuistLogin.authserverNormal}/authserver/login'),
-      [
-        Cookie('CASTGC', 'valid')
-          ..path = '/authserver'
-          ..secure = true,
-      ],
-    );
-    expect((await campus.vpn().obtain()).token, 'synthetic-token');
-    expect(campus.assertions, 0);
-    expect(campus.rulesRequests, 2);
-  });
+  test(
+    'VPN 控制器各类过期形态（1000/1001/401/403/HTML）清理旧 Cookie 经 CAS 恢复并脱敏记录',
+    () async {
+      final cases =
+          <
+            ({
+              String label,
+              ResponseBody Function() buildFailure,
+              int? expectedCode,
+              bool verifyCallbackAndPersistence,
+            })
+          >[
+            (
+              label: '1001 被踢下线',
+              buildFailure: () => _json({
+                'code': '1001',
+                'messages': 'Account was kicked offline by the administrator, please log in again!',
+                'data': null,
+              }),
+              expectedCode: 1001,
+              verifyCallbackAndPersistence: true,
+            ),
+            (
+              label: '1001 整型',
+              buildFailure: () =>
+                  _json({'code': 1001, 'messages': null, 'data': null}),
+              expectedCode: 1001,
+              verifyCallbackAndPersistence: false,
+            ),
+            (
+              label: '1000 中文超时',
+              buildFailure: () =>
+                  _json({'code': '1000', 'messages': '已超时，请重新登录!'}),
+              expectedCode: 1000,
+              verifyCallbackAndPersistence: false,
+            ),
+            (
+              label: '1000 英文超时',
+              buildFailure: () => _json({
+                'code': '1000',
+                'messages': 'Session expired, Please Log In Again!',
+                'data': null,
+              }),
+              expectedCode: 1000,
+              verifyCallbackAndPersistence: false,
+            ),
+            (
+              label: '1000 英文被踢',
+              buildFailure: () => _json({
+                'code': '1000',
+                'messages': 'Account was Kicked Offline',
+                'data': null,
+              }),
+              expectedCode: 1000,
+              verifyCallbackAndPersistence: false,
+            ),
+            (
+              label: '200 业务码 401',
+              buildFailure: () => _json({
+                'code': '401',
+                'messages': 'Unauthorized',
+                'data': null,
+              }),
+              expectedCode: 401,
+              verifyCallbackAndPersistence: false,
+            ),
+            (
+              label: 'HTTP 403',
+              buildFailure: () => _json({'code': 'denied'}, 403),
+              expectedCode: null,
+              verifyCallbackAndPersistence: false,
+            ),
+            (
+              label: 'HTML 会话页',
+              buildFailure: () =>
+                  ResponseBody.fromString('<html>会话页</html>', 200),
+              expectedCode: null,
+              verifyCallbackAndPersistence: false,
+            ),
+          ];
 
-  test('VPN HTTP 200 加业务码 1000 的真实超时形态会恢复会话', () async {
-    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
-    await campus.saveVpnSession();
-    var requests = 0;
-    final vpn = VpnAuth(
-      cas: campus.cas,
-      readCredential: () async => _bundle(),
-      createHttp: (jar) => _http(jar, (options) {
-        if (options.uri.path.contains('/terminal/rules/')) {
-          requests++;
-          if (!campus.vpnValid) {
-            return _json({'code': '1000', 'messages': '已超时，请重新登录!'});
-          }
-        }
-        return campus.controller(options);
-      }),
-    );
-    expect((await vpn.obtain()).token, 'synthetic-token');
-    expect(requests, 2);
-    expect(campus.assertions, 1);
-  });
+      for (final testCase in cases) {
+        final records = <Map<String, Object?>>[];
+        AppLog.recordListenerForTesting = records.add;
+        try {
+          final storage = _MemoryStorage();
+          final campus = _Campus(PortalCookieStore(storage: storage));
+          await campus.saveVpnSession(sessionId: 'kicked');
+          var rulesRequests = 0;
+          var callbacks = 0;
+          String? callbackCookieHeader;
+          final vpn = VpnAuth(
+            cas: campus.cas,
+            readCredential: () async => _bundle(),
+            createHttp: (jar) => _http(jar, (options) {
+              if (options.uri.path.contains('/callback/cas')) {
+                callbacks++;
+                callbackCookieHeader = options.headers[HttpHeaders.cookieHeader]
+                    ?.toString();
+              }
+              if (options.uri.path.contains('/terminal/rules/')) {
+                rulesRequests++;
+                if (!campus.vpnValid) return testCase.buildFailure();
+              }
+              return campus.controller(options);
+            }),
+          );
 
-  test('VPN 控制器返回 1001 被踢下线时清理旧 Cookie 并经 CAS 重登恢复', () async {
-    final records = <Map<String, Object?>>[];
-    AppLog.recordListenerForTesting = records.add;
-    addTearDown(() => AppLog.recordListenerForTesting = null);
-    final storage = _MemoryStorage();
-    final campus = _Campus(PortalCookieStore(storage: storage));
-    await campus.saveVpnSession(sessionId: 'kicked');
-    var rulesRequests = 0;
-    var callbacks = 0;
-    String? callbackCookieHeader;
-    final vpn = VpnAuth(
-      cas: campus.cas,
-      readCredential: () async => _bundle(),
-      createHttp: (jar) => _http(jar, (options) {
-        if (options.uri.path.contains('/callback/cas')) {
-          callbacks++;
-          callbackCookieHeader = options.headers[HttpHeaders.cookieHeader]
-              ?.toString();
-        }
-        if (options.uri.path.contains('/terminal/rules/')) {
-          rulesRequests++;
-          final cookie = '${options.headers[HttpHeaders.cookieHeader]}';
-          if (cookie.contains('ENSSESSIONID=kicked')) {
-            return _json({
-              'code': '1001',
-              'messages': 'Account was kicked offline by the administrator, please log in again!',
-              'data': null,
-            });
-          }
-        }
-        return campus.controller(options);
-      }),
-    );
+          expect(
+            (await vpn.obtain()).token,
+            'synthetic-token',
+            reason: testCase.label,
+          );
+          expect(rulesRequests, 2, reason: testCase.label);
+          expect(callbacks, 1, reason: testCase.label);
+          expect(campus.assertions, 1, reason: testCase.label);
+          expect(campus.vpnValid, isTrue, reason: testCase.label);
+          expect(
+            callbackCookieHeader ?? '',
+            isNot(contains('ENSSESSIONID')),
+            reason: '${testCase.label}: CAS 回调前必须已清理失效的控制器会话 Cookie',
+          );
+          expect(callbackCookieHeader ?? '', isNot(contains('clientInfo')));
 
-    final credentials = await vpn.obtain();
-    expect(credentials.token, 'synthetic-token');
-    expect(rulesRequests, 2);
-    expect(callbacks, 1);
-    expect(campus.assertions, 1);
-    expect(
-      callbackCookieHeader ?? '',
-      isNot(contains('ENSSESSIONID')),
-      reason: 'CAS 回调前必须已清理失效的控制器会话 Cookie',
-    );
-    expect(callbackCookieHeader ?? '', isNot(contains('clientInfo')));
-
-    final rejected = records
-        .where((record) => record['event'] == 'authentication.session_rejected')
-        .toList();
-    expect(rejected, hasLength(1));
-    final attrs = (rejected.single['attrs'] as Map).cast<String, Object?>();
-    expect(attrs['reason_code'], 'controller_session_expired');
-    expect(attrs['response_code'], 1001);
-    expect(attrs['attempt'], 1);
-    expect(attrs.containsKey('field_validation'), isFalse);
-    expect(
-      jsonEncode(rejected.single),
-      isNot(contains('Account was kicked offline')),
-      reason: '结构化会话失效事件不应把原始服务端文案直接写入摘要字段',
-    );
-
-    // 验证重启后磁盘已保存新会话，不再卡在被踢的旧 Cookie 上。
-    final restarted = _Campus(PortalCookieStore(storage: storage))
-      ..vpnValid = true;
-    expect((await restarted.vpn().obtain()).token, 'synthetic-token');
-    expect(restarted.authRequests, 0);
-    expect(restarted.assertions, 0);
-    expect(restarted.rulesRequests, 1);
-  });
-
-  test('VPN 控制器返回 1001 且 CASTGC 仍有效时清理控制器 Cookie 并仅走 SSO', () async {
-    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
-    await campus.saveVpnSession(sessionId: 'kicked');
-    await campus.cookies.openJar().saveFromResponse(
-      Uri.parse('${NuistLogin.authserverNormal}/authserver/login'),
-      [
-        Cookie('CASTGC', 'valid')
-          ..path = '/authserver'
-          ..secure = true,
-      ],
-    );
-    var rulesRequests = 0;
-    final vpn = VpnAuth(
-      cas: campus.cas,
-      readCredential: () async => _bundle(),
-      createHttp: (jar) => _http(jar, (options) {
-        if (options.uri.path.contains('/terminal/rules/')) {
-          rulesRequests++;
-          final cookie = '${options.headers[HttpHeaders.cookieHeader]}';
-          if (cookie.contains('ENSSESSIONID=kicked')) {
-            return _json({
-              'code': '1001',
-              'messages': 'Account was kicked offline by the administrator, please log in again!',
-              'data': null,
-            });
-          }
-        }
-        return campus.controller(options);
-      }),
-    );
-
-    expect((await vpn.obtain()).token, 'synthetic-token');
-    expect(rulesRequests, 2);
-    expect(campus.assertions, 0);
-    expect(campus.authRequests, 1);
-  });
-
-  test('VPN HTTP 200 业务码 401、1001 整型及 1000 英文失效提示均可恢复会话', () async {
-    final cases = <({Map<String, Object?> payload, int expectedCode})>[
-      (
-        payload: {'code': '401', 'messages': 'Unauthorized', 'data': null},
-        expectedCode: 401,
-      ),
-      (
-        payload: {
-          'code': '1000',
-          'messages': 'Session expired, Please Log In Again!',
-          'data': null,
-        },
-        expectedCode: 1000,
-      ),
-      (
-        payload: {
-          'code': '1000',
-          'messages': 'Account was Kicked Offline',
-          'data': null,
-        },
-        expectedCode: 1000,
-      ),
-      (
-        payload: {'code': 1001, 'messages': null, 'data': null},
-        expectedCode: 1001,
-      ),
-    ];
-    for (final testCase in cases) {
-      final records = <Map<String, Object?>>[];
-      AppLog.recordListenerForTesting = records.add;
-      try {
-        final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
-        await campus.saveVpnSession(sessionId: 'stale');
-        var rulesRequests = 0;
-        final vpn = VpnAuth(
-          cas: campus.cas,
-          readCredential: () async => _bundle(),
-          createHttp: (jar) => _http(jar, (options) {
-            if (options.uri.path.contains('/terminal/rules/')) {
-              rulesRequests++;
-              if (!campus.vpnValid) return _json(testCase.payload);
+          if (testCase.expectedCode case final expectedCode?) {
+            final rejected = records
+                .where(
+                  (record) =>
+                      record['event'] == 'authentication.session_rejected',
+                )
+                .toList();
+            expect(rejected, hasLength(1), reason: testCase.label);
+            final attrs = (rejected.single['attrs'] as Map)
+                .cast<String, Object?>();
+            expect(attrs['reason_code'], 'controller_session_expired');
+            expect(attrs['response_code'], expectedCode);
+            expect(attrs['attempt'], 1);
+            expect(attrs.containsKey('field_validation'), isFalse);
+            if (testCase.verifyCallbackAndPersistence) {
+              expect(
+                jsonEncode(rejected.single),
+                isNot(contains('Account was kicked offline')),
+                reason: '结构化会话失效事件不应把原始服务端文案直接写入摘要字段',
+              );
+              // 验证重启后磁盘已保存新会话，不再卡在被踢的旧 Cookie 上。
+              final restarted = _Campus(PortalCookieStore(storage: storage))
+                ..vpnValid = true;
+              expect((await restarted.vpn().obtain()).token, 'synthetic-token');
+              expect(restarted.authRequests, 0);
+              expect(restarted.assertions, 0);
+              expect(restarted.rulesRequests, 1);
             }
-            return campus.controller(options);
-          }),
-        );
-        expect((await vpn.obtain()).token, 'synthetic-token');
-        expect(rulesRequests, 2);
-        expect(campus.assertions, 1);
-        final rejected = records.singleWhere(
-          (record) => record['event'] == 'authentication.session_rejected',
-        );
-        final attrs = (rejected['attrs'] as Map).cast<String, Object?>();
-        expect(attrs['reason_code'], 'controller_session_expired');
-        expect(attrs['response_code'], testCase.expectedCode);
-        expect(attrs.containsKey('field_validation'), isFalse);
-      } finally {
-        AppLog.recordListenerForTesting = null;
+          }
+        } finally {
+          AppLog.recordListenerForTesting = null;
+        }
       }
+
+      // 控制器持续返回维护页 HTML 时：首次清旧 Cookie 并重登，二次仍维护页则抛错且清空控制器 Cookie。
+      final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+      await campus.saveVpnSession();
+      var requests = 0;
+      final vpn = VpnAuth(
+        cas: campus.cas,
+        readCredential: () async => _bundle(),
+        createHttp: (jar) => _http(jar, (_) {
+          requests++;
+          return ResponseBody.fromString('<html>维护中</html>', 200);
+        }),
+      );
+      await expectLater(vpn.obtain(), throwsA(isA<PortalLoginError>()));
+      expect(requests, 2);
+      expect(campus.assertions, 1);
+      expect(
+        (await campus.cookies.openJar().loadForRequest(
+          Uri.parse(VpnAuth.controller),
+        )).map((cookie) => cookie.name),
+        isEmpty,
+      );
+    },
+  );
+
+  test('VPN 控制器过期但 CASTGC 有效时（含 401/1001 与冷启动）仅走 SSO', () async {
+    // 1) HTTP 401 与业务码 1001 两种控制器失效形态，CASTGC 有效时均只走 SSO。
+    for (final kicked in [false, true]) {
+      final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+      await campus.saveVpnSession(sessionId: kicked ? 'kicked' : 'valid');
+      await campus.cookies.openJar().saveFromResponse(
+        Uri.parse('${NuistLogin.authserverNormal}/authserver/login'),
+        [
+          Cookie('CASTGC', 'valid')
+            ..path = '/authserver'
+            ..secure = true,
+        ],
+      );
+      var rulesRequests = 0;
+      final vpn = VpnAuth(
+        cas: campus.cas,
+        readCredential: () async => _bundle(),
+        createHttp: (jar) => _http(jar, (options) {
+          if (options.uri.path.contains('/terminal/rules/')) {
+            rulesRequests++;
+            final cookie = '${options.headers[HttpHeaders.cookieHeader]}';
+            if (kicked && cookie.contains('ENSSESSIONID=kicked')) {
+              return _json({
+                'code': '1001',
+                'messages': 'Account was kicked offline by the administrator, please log in again!',
+                'data': null,
+              });
+            }
+          }
+          return campus.controller(options);
+        }),
+      );
+      expect((await vpn.obtain()).token, 'synthetic-token');
+      expect(rulesRequests, 2);
+      expect(campus.assertions, 0);
+      expect(campus.authRequests, 1);
     }
+
+    // 2) 冷启动恢复 CASTGC 而 VPN 控制器端失效时仅走 SSO。
+    final storage = _MemoryStorage();
+    final first = _Campus(PortalCookieStore(storage: storage));
+    await first.vpn().obtain();
+    final restarted = _Campus(PortalCookieStore(storage: storage));
+    expect((await restarted.vpn().obtain()).token, 'synthetic-token');
+    expect(restarted.assertions, 0);
+    expect(restarted.authRequests, 1);
   });
 
-  test('VPN 刚 CAS 重登后仍持续返回 1001 时抛 PortalLoginError 且不死循环', () async {
+  test('VPN 重登后仍失败 1001 不死循环，未知 500 或非重登 1000 不触发 CAS', () async {
+    // 1) 重登后仍持续返回 1001：只重试一次后抛 PortalLoginError 并记录两次拒绝事件。
     final records = <Map<String, Object?>>[];
     AppLog.recordListenerForTesting = records.add;
     addTearDown(() => AppLog.recordListenerForTesting = null);
-    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
-    await campus.saveVpnSession(sessionId: 'kicked');
-    var rulesRequests = 0;
-    var callbacks = 0;
-    final vpn = VpnAuth(
-      cas: campus.cas,
+    final loopCampus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
+    await loopCampus.saveVpnSession(sessionId: 'kicked');
+    var loopRules = 0;
+    var loopCallbacks = 0;
+    final loopVpn = VpnAuth(
+      cas: loopCampus.cas,
       readCredential: () async => _bundle(),
       createHttp: (jar) => _http(jar, (options) {
-        if (options.uri.path.contains('/callback/cas')) callbacks++;
+        if (options.uri.path.contains('/callback/cas')) loopCallbacks++;
         if (options.uri.path.contains('/terminal/rules/')) {
-          rulesRequests++;
+          loopRules++;
           return _json({
             'code': '1001',
             'messages': 'Account was kicked offline by the administrator, please log in again!',
             'data': null,
           });
         }
-        return campus.controller(options);
+        return loopCampus.controller(options);
       }),
     );
 
     await expectLater(
-      vpn.obtain(),
+      loopVpn.obtain(),
       throwsA(
         isA<PortalLoginError>()
             .having((e) => e.code, 'code', 'vpn_controller_rules_rejected')
@@ -1031,9 +1056,9 @@ void main() {
             ),
       ),
     );
-    expect(rulesRequests, 2);
-    expect(callbacks, 1);
-    expect(campus.assertions, 1);
+    expect(loopRules, 2);
+    expect(loopCallbacks, 1);
+    expect(loopCampus.assertions, 1);
     final rejected = records
         .where((record) => record['event'] == 'authentication.session_rejected')
         .toList();
@@ -1044,10 +1069,8 @@ void main() {
       expect(attrs['response_code'], 1001);
       expect(attrs.containsKey('field_validation'), isFalse);
     }
-  });
 
-  test('VPN 控制器返回未知错误码 500 或非重登 1000 错误时直接抛 PortalLoginError', () async {
-    // 场景 1：复用旧会话遇到未知错误码 500 或非重登 1000 错误，不清 Cookie 也不触发 CAS。
+    // 2) 复用旧会话遇到未知错误码 500 或非重登 1000 错误，不清 Cookie 也不触发 CAS。
     for (final failure in [
       {'code': '500', 'messages': 'Internal server error', 'data': null},
       {'code': '1000', 'messages': '系统繁忙，请稍后再试', 'data': null},
@@ -1090,7 +1113,7 @@ void main() {
       );
     }
 
-    // 场景 2：旧会话 1001 触发 CAS 重登后，新会话遇到未知错误码 500 时抛异常且不重试。
+    // 3) 旧会话 1001 触发 CAS 重登后，新会话遇到未知错误码 500 时抛异常且不重试。
     final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
     await campus.saveVpnSession(sessionId: 'kicked');
     var rulesRequests = 0;
@@ -1223,7 +1246,10 @@ void main() {
     );
   });
 
-  test('持久化会话 Cookie，删除和过期的 Secure Cookie 不再发送', () async {
+  test('持久化会话 Cookie、删除与过期 Secure Cookie 清理并写回磁盘', () async {
+    final observed = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = observed.add;
+    addTearDown(() => AppLog.recordListenerForTesting = null);
     final storage = _MemoryStorage();
     final cookies = PortalCookieStore(storage: storage);
     final uri = Uri.parse('https://auth.test/authserver/login');
@@ -1244,6 +1270,35 @@ void main() {
         ..expires = DateTime.utc(2000),
     ]);
     expect(await jar.loadForRequest(uri), isEmpty);
+
+    // 磁盘中预置的过期 Secure Cookie（含 .domains）在读取时被清理且不报读盘失败。
+    final expiredStorage = _MemoryStorage();
+    final cookieUri = Uri.https('cookies.test', '/');
+    final expired = SerializableCookie(
+      Cookie('expired', 'synthetic')
+        ..path = '/'
+        ..secure = true
+        ..expires = DateTime.utc(2000),
+    );
+    expiredStorage.values['.index'] = jsonEncode([cookieUri.host]);
+    expiredStorage.values[cookieUri.host] = jsonEncode({
+      '/': {'expired': expired.toJson()},
+    });
+    expiredStorage.values['.domains'] = jsonEncode({
+      'cookies.test': {
+        '/': {'expired': expired.toJson()},
+      },
+    });
+    final store = PortalCookieStore(storage: expiredStorage);
+    expect(await store.openJar().loadForRequest(cookieUri), isEmpty);
+    expect(
+      observed.where(
+        (record) => record['event'] == 'persisted_cookie.read_failed',
+      ),
+      isEmpty,
+    );
+    expect(expiredStorage.values[cookieUri.host], isNot(contains('expired')));
+    expect(expiredStorage.values['.domains'], isNot(contains('expired')));
   });
 
   test('准备 VPN 后才装入 Cookie，首次请求使用更新后的 CAS 状态', () async {
@@ -1266,36 +1321,18 @@ void main() {
     expect((await http.get(uri)).data, '完成');
   });
 
-  test('控制器旧会话返回维护页时清 Cookie 并重新认证', () async {
-    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
-    await campus.saveVpnSession();
-    var requests = 0;
-    final vpn = VpnAuth(
-      cas: campus.cas,
-      readCredential: () async => _bundle(),
-      createHttp: (jar) => _http(jar, (_) {
-        requests++;
-        return ResponseBody.fromString('<html>维护中</html>', 200);
-      }),
-    );
-    await expectLater(vpn.obtain(), throwsA(isA<PortalLoginError>()));
-    expect(requests, 2);
-    expect(campus.assertions, 1);
-    expect(
-      (await campus.cookies.openJar().loadForRequest(
-        Uri.parse(VpnAuth.controller),
-      )).map((cookie) => cookie.name),
-      isEmpty,
-    );
-  });
-
-  test('CAS 普通提交失败不标记凭据失效，队列失败后仍可重试', () async {
+  test('CAS 普通提交与断言 JSON 错误不标记凭据失效，服务恢复后可继续认证', () async {
     final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
     var failSubmit = true;
+    Map<String, Object?>? assertionFailure;
     final cas = CasSession(
       cookies: campus.cookies,
       readCredential: () async => _bundle(),
       createHttp: (jar) => _http(jar, (options) {
+        if (assertionFailure != null &&
+            options.uri.path == NuistLogin.startAssertionPath) {
+          return _json(assertionFailure);
+        }
         if (failSubmit &&
             options.uri.path == NuistLogin.loginPath &&
             options.method == 'POST') {
@@ -1304,12 +1341,30 @@ void main() {
         return campus.auth(options);
       }),
     );
+
+    // 1) 普通表单提交返回维护页。
     await expectLater(
       cas.authenticate('https://jwxt.test/callback'),
       throwsA(isA<PortalLoginError>()),
     );
     expect(cas.credentialError.value, isNull);
     failSubmit = false;
+
+    // 2) startAssertion 返回普通 JSON 维护/繁忙错误。
+    for (final error in [
+      {'message': '系统维护中'},
+      {'success': false, 'message': '系统繁忙，请稍后再试'},
+    ]) {
+      assertionFailure = error;
+      await expectLater(
+        cas.authenticate('https://jwxt.test/callback'),
+        throwsA(isA<PortalLoginError>()),
+      );
+      expect(cas.credentialError.value, isNull);
+    }
+
+    // 3) 服务恢复后正常完成认证。
+    assertionFailure = null;
     expect(
       await cas.authenticate('https://jwxt.test/callback'),
       contains('synthetic-ticket'),
@@ -1317,69 +1372,71 @@ void main() {
     expect(campus.assertions, 2);
   });
 
-  test('CAS 凭据读取卡住时有界失败并释放队列，迟到任务不发送认证请求', () async {
+  test('CAS 队头凭据读取或 Cookie 写入超时只取消自身，清理后放行队列中第二个认证', () async {
+    // 1) 凭据读取卡住超时：有界失败、不误标凭据失效、迟到任务不发请求，后续排队认证正常完成。
     final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
-    final gate = Completer<void>();
-    var firstRead = true;
+    final blocked = Completer<void>();
+    var reads = 0;
     final cas = CasSession(
       cookies: campus.cookies,
-      authenticationTimeout: const Duration(milliseconds: 100),
+      authenticationTimeout: const Duration(milliseconds: 120),
       readCredential: () async {
-        if (firstRead) {
-          firstRead = false;
-          await gate.future;
-        }
+        if (++reads == 1) await blocked.future;
         return _bundle();
       },
       createHttp: (jar) => _http(jar, campus.auth),
     );
-    await expectLater(
-      cas.authenticate('https://jwxt.test/callback'),
-      throwsA(isA<PortalNetworkError>()),
-    );
+    final first = cas.authenticate('https://first.test/callback');
+    final rejection = expectLater(first, throwsA(isA<PortalNetworkError>()));
+    final second = cas.authenticate('https://second.test/callback');
+    await rejection;
     expect(cas.credentialError.value, isNull);
-    expect(campus.authRequests, 0);
-    expect(
-      await cas.authenticate('https://jwxt.test/callback'),
-      contains('synthetic-ticket'),
-    );
-    final requests = campus.authRequests;
-    gate.complete();
+    expect(await second, contains('second.test'));
+    final performed = campus.authRequests;
+    blocked.complete();
     await Future<void>.delayed(Duration.zero);
-    expect(campus.authRequests, requests);
-  });
+    expect(campus.authRequests, performed);
+    expect(reads, 2);
 
-  test('CAS 普通 JSON 错误不标记密钥失效，恢复服务后可继续认证', () async {
-    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
-    Map<String, Object?>? failure;
-    final cas = CasSession(
-      cookies: campus.cookies,
+    // 2) 队头 Cookie 写入超时：先清理 stale CASTGC 再放行第二个认证，防止投毒。
+    final storage = _BlockingCookieStorage();
+    final cookieCampus = _Campus(PortalCookieStore(storage: storage));
+    final cookieCas = CasSession(
+      cookies: cookieCampus.cookies,
       readCredential: () async => _bundle(),
+      authenticationTimeout: const Duration(milliseconds: 180),
       createHttp: (jar) => _http(jar, (options) {
-        if (failure != null &&
-            options.uri.path == NuistLogin.startAssertionPath) {
-          return _json(failure);
+        final service = options.uri.queryParameters['service'];
+        if (options.uri.path == NuistLogin.loginPath &&
+            service == 'https://first.test/callback') {
+          return _redirect(
+            'https://first.test/callback?ticket=stale',
+            cookies: ['CASTGC=stale; Path=/authserver; Secure'],
+          );
         }
-        return campus.auth(options);
+        if (service == 'https://second.test/callback' &&
+            '${options.headers[HttpHeaders.cookieHeader]}'.contains(
+              'CASTGC=stale',
+            )) {
+          return _redirect('https://second.test/callback?ticket=poisoned');
+        }
+        return cookieCampus.auth(options);
       }),
     );
-    for (final error in [
-      {'message': '系统维护中'},
-      {'success': false, 'message': '系统繁忙，请稍后再试'},
-    ]) {
-      failure = error;
-      await expectLater(
-        cas.authenticate('https://jwxt.test/callback'),
-        throwsA(isA<PortalLoginError>()),
-      );
-      expect(cas.credentialError.value, isNull);
-    }
-    failure = null;
+    final cookieFirst = cookieCas.authenticate('https://first.test/callback');
+    final failed = expectLater(cookieFirst, throwsA(isA<PortalNetworkError>()));
+    await storage.entered.future;
+    final cookieSecond = cookieCas.authenticate('https://second.test/callback');
+    await failed;
+    storage.release.complete();
+    expect(await cookieSecond, contains('synthetic-ticket'));
     expect(
-      await cas.authenticate('https://jwxt.test/callback'),
-      contains('synthetic-ticket'),
+      (await cookieCampus.cookies.openJar().loadForRequest(
+        Uri.parse('${NuistLogin.authserverNormal}/authserver/login'),
+      )).singleWhere((cookie) => cookie.name == 'CASTGC').value,
+      'valid',
     );
-    expect(campus.assertions, 1);
+    expect(cookieCampus.assertions, 1);
   });
 
   test('解绑等待 WebView 写入完成后再清空，不留下晚到的旧 Cookie', () async {
@@ -1411,29 +1468,64 @@ void main() {
     expect(platform.cookies, isEmpty);
   });
 
-  test('损坏的 Cookie 落盘按没有会话处理', () async {
+  test('损坏 host 与共享 .domains 自动清理恢复，解绑按顺序停隧道并清空持久存储', () async {
+    // 1) 损坏 host 恢复时同时删除共享 .domains，且不能再次读到子域 Cookie，之后可写入新会话。
     final storage = _MemoryStorage();
-    final uri = Uri.parse('https://auth.test/authserver/login');
-    await PortalCookieStore(storage: storage).openJar().saveFromResponse(uri, [
-      Cookie('CASTGC', 'synthetic')..path = '/authserver',
+    final host = Uri.https('broken.test', '/');
+    await PortalCookieStore(storage: storage).openJar().saveFromResponse(host, [
+      Cookie('host', 'ok')..path = '/',
+      Cookie('shared', 'dirty')
+        ..domain = '.broken.test'
+        ..path = '/',
     ]);
-    storage.values[uri.host] = '{broken';
-    final jar = PortalCookieStore(storage: storage).openJar();
-    expect(await jar.loadForRequest(uri), isEmpty);
-    await jar.saveFromResponse(uri, [
-      Cookie('CASTGC', 'new')..path = '/authserver',
+    storage.values[host.host] = '{broken';
+    final freshStore = PortalCookieStore(storage: storage);
+    expect(await freshStore.openJar().loadForRequest(host), isEmpty);
+    expect(storage.values.containsKey(host.host), isFalse);
+    expect(storage.values.containsKey('.domains'), isFalse);
+    expect(
+      await freshStore.openJar().loadForRequest(
+        Uri.https('sub.broken.test', '/'),
+      ),
+      isEmpty,
+    );
+    await freshStore.openJar().saveFromResponse(host, [
+      Cookie('CASTGC', 'new')..path = '/',
     ]);
-    expect((await jar.loadForRequest(uri)).single.value, 'new');
-  });
+    expect(
+      (await freshStore.openJar().loadForRequest(host)).single.value,
+      'new',
+    );
 
-  test('冷启动 CASTGC 有效而 VPN 控制器过期时只走 SSO', () async {
-    final storage = _MemoryStorage();
-    final first = _Campus(PortalCookieStore(storage: storage));
-    await first.vpn().obtain();
-    final restarted = _Campus(PortalCookieStore(storage: storage));
-    expect((await restarted.vpn().obtain()).token, 'synthetic-token');
-    expect(restarted.assertions, 0);
-    expect(restarted.authRequests, 1);
+    // 2) portal.clear() 先停止网络/隧道，再清缓存与持久存储，不残留 .domains 或内存会话。
+    final campus = _Campus(freshStore);
+    final order = <String>[];
+    var clearingPhase = false;
+    late final PortalSession portal;
+    late final SessionExecutor executor;
+    portal = PortalSession.forTesting(
+      cas: campus.cas,
+      createHttp: (jar) => _http(jar, campus.business),
+      readEstablished: () async => {},
+      resetNetwork: () async {
+        order.add('vpnStopped');
+        expect(freshStore.generation, 1);
+        expect(portal.debugEstablishedCount, 1);
+        expect(executor.debugSessionCount, 1);
+        expect(storage.values, isNotEmpty);
+      },
+      writeEstablished: (_) async {
+        if (clearingPhase) order.add('cacheCleared');
+      },
+    );
+    await portal.ensureLoggedIn('https://cookies.test/callback');
+    executor = portal.executor;
+    clearingPhase = true;
+    await portal.clear();
+    expect(order, ['vpnStopped', 'cacheCleared']);
+    expect(storage.values, isEmpty);
+    expect(portal.debugEstablishedCount, 0);
+    expect(executor.debugSessionCount, 0);
   });
 
   test('业务缓存超过原有 TTL 时确认会话，仍复用 CASTGC', () async {
@@ -1562,33 +1654,6 @@ void main() {
     expect(campus.assertions, 1);
   });
 
-  for (final shape in ['1001', '403', 'html']) {
-    test('VPN 旧控制器 Cookie 遇到 $shape 时清理并完整恢复', () async {
-      final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
-      await campus.saveVpnSession();
-      var rejected = false;
-      final vpn = VpnAuth(
-        cas: campus.cas,
-        readCredential: () async => _bundle(),
-        createHttp: (jar) => _http(jar, (options) {
-          if (!rejected && options.uri.path.contains('/terminal/rules/')) {
-            rejected = true;
-            return switch (shape) {
-              '1001' => _json({'code': '1001', 'messages': '文案已变化'}),
-              '403' => _json({'code': 'denied'}, 403),
-              _ => ResponseBody.fromString('<html>会话页</html>', 200),
-            };
-          }
-          return campus.controller(options);
-        }),
-      );
-      expect((await vpn.obtain()).token, 'synthetic-token');
-      expect(rejected, isTrue);
-      expect(campus.assertions, 1);
-      expect(campus.vpnValid, isTrue);
-    });
-  }
-
   test('全新控制器会话仅在业务码 200 但 token 未下发时短退避重试', () async {
     final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
     var rules = 0;
@@ -1616,31 +1681,6 @@ void main() {
     expect((await vpn.obtain()).token, 'synthetic-token');
     expect(rules, 6);
     expect(campus.assertions, 1);
-  });
-
-  test('CAS 队头超时只取消自身，已排队的第二个认证仍完成', () async {
-    final campus = _Campus(PortalCookieStore(storage: _MemoryStorage()));
-    final blocked = Completer<void>();
-    var reads = 0;
-    final cas = CasSession(
-      cookies: campus.cookies,
-      authenticationTimeout: const Duration(milliseconds: 150),
-      readCredential: () async {
-        if (++reads == 1) await blocked.future;
-        return _bundle();
-      },
-      createHttp: (jar) => _http(jar, campus.auth),
-    );
-    final first = cas.authenticate('https://first.test/callback');
-    final rejection = expectLater(first, throwsA(isA<PortalNetworkError>()));
-    final second = cas.authenticate('https://second.test/callback');
-    await rejection;
-    expect(await second, contains('second.test'));
-    final performed = campus.authRequests;
-    blocked.complete();
-    await Future<void>.delayed(Duration.zero);
-    expect(campus.authRequests, performed);
-    expect(reads, 2);
   });
 
   test('五个错峰403只刷新一次，清旧Cookie并先进入index与角色设置再重放', () async {
@@ -1792,73 +1832,8 @@ void main() {
     expect(freshFlags, [false, true]);
   });
 
-  test('过期Secure Cookie清理持久化，损坏域删除，解绑停止隧道后不留domains', () async {
-    final observed = <Map<String, Object?>>[];
-    AppLog.recordListenerForTesting = observed.add;
-    addTearDown(() => AppLog.recordListenerForTesting = null);
-    final storage = _MemoryStorage();
-    final uri = Uri.https('cookies.test', '/');
-    final expired = SerializableCookie(
-      Cookie('expired', 'synthetic')
-        ..path = '/'
-        ..secure = true
-        ..expires = DateTime.utc(2000),
-    );
-    storage.values['.index'] = jsonEncode([uri.host]);
-    storage.values[uri.host] = jsonEncode({
-      '/': {'expired': expired.toJson()},
-    });
-    storage.values['.domains'] = jsonEncode({
-      'cookies.test': {
-        '/': {'expired': expired.toJson()},
-      },
-    });
-    final store = PortalCookieStore(storage: storage);
-    expect(await store.openJar().loadForRequest(uri), isEmpty);
-    expect(
-      observed.where(
-        (record) => record['event'] == 'persisted_cookie.read_failed',
-      ),
-      isEmpty,
-    );
-    expect(storage.values[uri.host], isNot(contains('expired')));
-    expect(storage.values['.domains'], isNot(contains('expired')));
-    storage.values[uri.host] = '{broken';
-    final freshStore = PortalCookieStore(storage: storage);
-    expect(await freshStore.openJar().loadForRequest(uri), isEmpty);
-    expect(storage.values.containsKey(uri.host), isFalse);
-    final campus = _Campus(freshStore);
-    final order = <String>[];
-    var clearingPhase = false;
-    late final PortalSession portal;
-    late final SessionExecutor executor;
-    portal = PortalSession.forTesting(
-      cas: campus.cas,
-      createHttp: (jar) => _http(jar, campus.business),
-      readEstablished: () async => {},
-      resetNetwork: () async {
-        order.add('vpnStopped');
-        expect(freshStore.generation, 1);
-        expect(portal.debugEstablishedCount, 1);
-        expect(executor.debugSessionCount, 1);
-        expect(storage.values, isNotEmpty);
-      },
-      writeEstablished: (_) async {
-        if (clearingPhase) order.add('cacheCleared');
-      },
-    );
-    await portal.ensureLoggedIn('https://cookies.test/callback');
-    executor = portal.executor;
-    clearingPhase = true;
-    await portal.clear();
-    expect(order, ['vpnStopped', 'cacheCleared']);
-    expect(storage.values, isEmpty);
-    expect(portal.debugEstablishedCount, 0);
-    expect(executor.debugSessionCount, 0);
-  });
-
-  for (final ssoReused in [false, true]) {
-    test('一卡通落地缺token时清Cookie再认证一次，SSO=$ssoReused', () async {
+  test('一卡通落地缺token时清Cookie再认证一次（含非SSO与SSO）', () async {
+    for (final ssoReused in [false, true]) {
       final store = PortalCookieStore(storage: _MemoryStorage());
       final flags = <bool>[];
       var businessCalls = 0;
@@ -1880,45 +1855,51 @@ void main() {
             'data': {'ok': true},
           });
         });
-      addTearDown(() => dio.close(force: true));
-      final executor = SessionExecutor(
-        transport: CampusTransport.authenticated(dio: dio, cookieStore: store),
-        cookieStore: store,
-        authenticate: (service, {bool forceFreshWebAuthn = false}) async {
-          flags.add(forceFreshWebAuthn);
-          if (flags.length == 2) {
-            expect(
-              await store.openJar().loadForRequest(
-                Uri.https(CampusHosts.icard, '/'),
-              ),
-              isEmpty,
-            );
-          }
-          return CasAuthenticationResult(
-            landingUri: Uri.https(
-              CampusHosts.icard,
-              '/landing',
-              flags.length == 1 ? null : {'synjones-auth': 'fresh-token'},
-            ),
-            ssoReused: flags.length == 1 && ssoReused,
-          );
-        },
-      );
-      expect(
-        (await executor.execute(
-          const IcardSpec(),
-          () => RequestOptions(
-            path: 'https://${CampusHosts.icard}/query',
-            method: 'POST',
-            data: const {},
+      try {
+        final executor = SessionExecutor(
+          transport: CampusTransport.authenticated(
+            dio: dio,
+            cookieStore: store,
           ),
-        )).statusCode,
-        200,
-      );
-      expect(flags, [false, ssoReused]);
-      expect(businessCalls, 1);
-    });
-  }
+          cookieStore: store,
+          authenticate: (service, {bool forceFreshWebAuthn = false}) async {
+            flags.add(forceFreshWebAuthn);
+            if (flags.length == 2) {
+              expect(
+                await store.openJar().loadForRequest(
+                  Uri.https(CampusHosts.icard, '/'),
+                ),
+                isEmpty,
+              );
+            }
+            return CasAuthenticationResult(
+              landingUri: Uri.https(
+                CampusHosts.icard,
+                '/landing',
+                flags.length == 1 ? null : {'synjones-auth': 'fresh-token'},
+              ),
+              ssoReused: flags.length == 1 && ssoReused,
+            );
+          },
+        );
+        expect(
+          (await executor.execute(
+            const IcardSpec(),
+            () => RequestOptions(
+              path: 'https://${CampusHosts.icard}/query',
+              method: 'POST',
+              data: const {},
+            ),
+          )).statusCode,
+          200,
+        );
+        expect(flags, [false, ssoReused]);
+        expect(businessCalls, 1);
+      } finally {
+        dio.close(force: true);
+      }
+    }
+  });
 
   test('VPN复用坏CASTGC后控制器落地403或登录页时追加完整WebAuthn', () async {
     for (final shape in ['403', 'loginHtml']) {
@@ -1958,8 +1939,8 @@ void main() {
     }
   });
 
-  for (final callbackMode in [false, true]) {
-    test('刷新窗口拒绝旧entry晚进Cookie拦截器，callback=$callbackMode', () async {
+  test('刷新窗口拒绝旧 entry（execute/callback）及无快照普通响应覆盖建立中的 Cookie', () async {
+    for (final callbackMode in [false, true]) {
       final store = PortalCookieStore(storage: _MemoryStorage());
       final entered = Completer<void>();
       final releaseOldRequest = Completer<void>();
@@ -2004,88 +1985,90 @@ void main() {
           }
           return _json({'ok': true});
         });
-      addTearDown(() => dio.close(force: true));
-      final transport = CampusTransport.authenticated(
-        dio: dio,
-        cookieStore: store,
-      );
-      final executor = SessionExecutor(
-        transport: transport,
-        cookieStore: store,
-        authenticate: (service, {bool forceFreshWebAuthn = false}) async {
-          authCalls++;
-          return CasAuthenticationResult(
-            landingUri: Uri.https(host, '/landing'),
-          );
-        },
-      );
-      final wdkb = JwxtAppSpec(
-        appId: 'wdkb',
-        indexUrl: 'https://$host/wdkb/index',
-        refererUrl: 'https://$host/wdkb/index',
-      );
-      final exam = JwxtAppSpec(
-        appId: 'exam',
-        indexUrl: 'https://$host/exam/index',
-        refererUrl: 'https://$host/exam/index',
-      );
-      final wdkbEntry = await executor.ensureSession(wdkb);
-      await executor.ensureSession(exam);
-      dio.interceptors.insert(
-        0,
-        InterceptorsWrapper(
-          onRequest: (options, handler) async {
-            if (options.uri.path == '/exam/query' && holdOldRequest) {
-              holdOldRequest = false;
-              entered.complete();
-              await releaseOldRequest.future;
-            }
-            handler.next(options);
-          },
-        ),
-      );
-      final old = callbackMode
-          ? executor.executeCallback(
-              exam,
-              () => transport.get(Uri.https(host, '/exam/query')),
-            )
-          : executor.execute(
-              exam,
-              () => RequestOptions(path: 'https://$host/exam/query'),
+      try {
+        final transport = CampusTransport.authenticated(
+          dio: dio,
+          cookieStore: store,
+        );
+        final executor = SessionExecutor(
+          transport: transport,
+          cookieStore: store,
+          authenticate: (service, {bool forceFreshWebAuthn = false}) async {
+            authCalls++;
+            return CasAuthenticationResult(
+              landingUri: Uri.https(host, '/landing'),
             );
-      await entered.future;
-      final refreshing = executor.refreshIfNeeded(
-        wdkb,
-        failedRevision: wdkbEntry.revision,
-      );
-      await refreshIndexEntered.future;
-      releaseOldRequest.complete();
-      await Future<void>.delayed(Duration.zero);
-      await Future<void>.delayed(Duration.zero);
-      expect(examRequests, 0);
-      expect(
-        (await store.openJar().loadForRequest(Uri.https(host, '/')))
-            .single
-            .value,
-        'session-3',
-      );
-      releaseRefreshIndex.complete();
-      await refreshing;
-      expect((await old).statusCode, 200);
-      expect(examRequests, 1);
-      expect(store.hostRevision(host), 1);
-      expect(
-        (await store.openJar().loadForRequest(Uri.https(host, '/')))
-            .single
-            .value,
-        isNot('anonymous'),
-      );
-    });
-  }
+          },
+        );
+        final wdkb = JwxtAppSpec(
+          appId: 'wdkb',
+          indexUrl: 'https://$host/wdkb/index',
+          refererUrl: 'https://$host/wdkb/index',
+        );
+        final exam = JwxtAppSpec(
+          appId: 'exam',
+          indexUrl: 'https://$host/exam/index',
+          refererUrl: 'https://$host/exam/index',
+        );
+        final wdkbEntry = await executor.ensureSession(wdkb);
+        await executor.ensureSession(exam);
+        dio.interceptors.insert(
+          0,
+          InterceptorsWrapper(
+            onRequest: (options, handler) async {
+              if (options.uri.path == '/exam/query' && holdOldRequest) {
+                holdOldRequest = false;
+                entered.complete();
+                await releaseOldRequest.future;
+              }
+              handler.next(options);
+            },
+          ),
+        );
+        final old = callbackMode
+            ? executor.executeCallback(
+                exam,
+                () => transport.get(Uri.https(host, '/exam/query')),
+              )
+            : executor.execute(
+                exam,
+                () => RequestOptions(path: 'https://$host/exam/query'),
+              );
+        await entered.future;
+        final refreshing = executor.refreshIfNeeded(
+          wdkb,
+          failedRevision: wdkbEntry.revision,
+        );
+        await refreshIndexEntered.future;
+        releaseOldRequest.complete();
+        await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
+        expect(examRequests, 0);
+        expect(
+          (await store.openJar().loadForRequest(Uri.https(host, '/')))
+              .single
+              .value,
+          'session-3',
+        );
+        releaseRefreshIndex.complete();
+        await refreshing;
+        expect((await old).statusCode, 200);
+        expect(examRequests, 1);
+        expect(store.hostRevision(host), 1);
+        expect(
+          (await store.openJar().loadForRequest(Uri.https(host, '/')))
+              .single
+              .value,
+          isNot('anonymous'),
+        );
+      } finally {
+        dio.close(force: true);
+      }
+    }
 
-  test('刷新期间不带业务快照的普通响应也不能覆盖建立中的Cookie', () async {
+    // 刷新期间不带业务快照的普通响应也不能覆盖建立中的 Cookie。
     final store = PortalCookieStore(storage: _MemoryStorage());
-    final host = 'refresh.test';
+    const host = 'refresh.test';
     final dio = Dio()
       ..httpClientAdapter = _Adapter(
         (options) => ResponseBody.fromString(
@@ -2335,66 +2318,6 @@ void main() {
     await plainFailure;
     expect(await verifying, 'https://jwxt.test/home');
     expect(campus.assertions, 2);
-  });
-
-  test('CAS队头Cookie写入超时后先清理再放行第二个认证', () async {
-    final storage = _BlockingCookieStorage();
-    final campus = _Campus(PortalCookieStore(storage: storage));
-    final cas = CasSession(
-      cookies: campus.cookies,
-      readCredential: () async => _bundle(),
-      authenticationTimeout: const Duration(milliseconds: 200),
-      createHttp: (jar) => _http(jar, (options) {
-        final service = options.uri.queryParameters['service'];
-        if (options.uri.path == NuistLogin.loginPath &&
-            service == 'https://first.test/callback') {
-          return _redirect(
-            'https://first.test/callback?ticket=stale',
-            cookies: ['CASTGC=stale; Path=/authserver; Secure'],
-          );
-        }
-        if (service == 'https://second.test/callback' &&
-            '${options.headers[HttpHeaders.cookieHeader]}'.contains(
-              'CASTGC=stale',
-            )) {
-          return _redirect('https://second.test/callback?ticket=poisoned');
-        }
-        return campus.auth(options);
-      }),
-    );
-    final first = cas.authenticate('https://first.test/callback');
-    final failed = expectLater(first, throwsA(isA<PortalNetworkError>()));
-    await storage.entered.future;
-    final second = cas.authenticate('https://second.test/callback');
-    await failed;
-    storage.release.complete();
-    expect(await second, contains('synthetic-ticket'));
-    expect(
-      (await campus.cookies.openJar().loadForRequest(
-        Uri.parse('${NuistLogin.authserverNormal}/authserver/login'),
-      )).singleWhere((cookie) => cookie.name == 'CASTGC').value,
-      'valid',
-    );
-    expect(campus.assertions, 1);
-  });
-  test('损坏host恢复同时删除共享domains，不能再次读到内存域Cookie', () async {
-    final storage = _MemoryStorage();
-    final host = Uri.https('broken.test', '/');
-    final seeded = PortalCookieStore(storage: storage);
-    await seeded.openJar().saveFromResponse(host, [
-      Cookie('host', 'ok')..path = '/',
-      Cookie('shared', 'dirty')
-        ..domain = '.broken.test'
-        ..path = '/',
-    ]);
-    storage.values[host.host] = '{broken';
-    final store = PortalCookieStore(storage: storage);
-    expect(await store.openJar().loadForRequest(host), isEmpty);
-    expect(storage.values.containsKey('.domains'), isFalse);
-    expect(
-      await store.openJar().loadForRequest(Uri.https('sub.broken.test', '/')),
-      isEmpty,
-    );
   });
 
   test('一卡通200与图书馆0明确成功码不因消息文本误判会话过期', () {

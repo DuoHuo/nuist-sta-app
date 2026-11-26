@@ -1,8 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_plan.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_service.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_timing.dart';
 
 Map<String, dynamic> _row({
@@ -158,29 +162,25 @@ void main() {
       {..._row(name: '测试课程', code: 'TEST'), ...fields},
     ]).courses.single;
 
-    test('体育板块场地是主判断，无需体育课名或课程号', () {
-      final c = parse({'JXLDM_DISPLAY': '体育板块场地'});
-      expect(c.isPe, isTrue);
+    test('场地、课程号与课名兜底识别体育课', () {
+      final byBuilding = parse({'JXLDM_DISPLAY': '体育板块场地'});
+      expect(byBuilding.isPe, isTrue);
       expect(
-        timingKindOf(course: c, slot: c.slots.single),
+        timingKindOf(course: byBuilding, slot: byBuilding.slots.single),
         CourseTimingKind.pe,
       );
-    });
 
-    test('非空其他场地禁止课程号和课名兜底', () {
-      final c = parse({
+      final otherBuilding = parse({
         'JXLDM_DISPLAY': '测试教学楼',
         'KCH': '20000048',
         'KCM': '体育',
       });
-      expect(c.isPe, isFalse);
+      expect(otherBuilding.isPe, isFalse);
       expect(
-        timingKindOf(course: c, slot: c.slots.single),
+        timingKindOf(course: otherBuilding, slot: otherBuilding.slots.single),
         CourseTimingKind.standard,
       );
-    });
 
-    test('场地为空、null 或缺失才按课程号兜底', () {
       for (final fields in <Map<String, dynamic>>[
         {},
         {'JXLDM_DISPLAY': ''},
@@ -188,38 +188,25 @@ void main() {
       ]) {
         expect(parse({...fields, 'KCH': '20000048'}).isPe, isTrue);
       }
-    });
 
-    test('体育原名和只含数字括号序号的后缀可兜底', () {
       for (final name in ['体育', '体育2', '体育（3）', '体育(三)', '体育Ⅰ', '体育①']) {
         expect(parse({'KCM': name}).isPe, isTrue, reason: name);
       }
-    });
-
-    test('体育概论不命中', () {
-      expect(parse({'KCM': '体育概论'}).isPe, isFalse);
-    });
-
-    test('体育心理学、体育实验、大学体育均不命中', () {
-      for (final name in ['体育心理学', '体育实验', '大学体育']) {
+      for (final name in ['体育概论', '体育心理学', '体育实验', '大学体育']) {
         expect(parse({'KCM': name}).isPe, isFalse, reason: name);
       }
     });
 
-    test('KCXMMC 不能识别体育课，普通课不拼接项目名', () {
-      final c = parse({'KCM': '大学英语', 'KCXMMC': '六级'});
-      expect(c.isPe, isFalse);
-      expect(c.displayName, '大学英语');
-    });
+    test('体育项目名拼接、去序号显示与序列化保留', () {
+      final normal = parse({'KCM': '大学英语', 'KCXMMC': '六级'});
+      expect(normal.isPe, isFalse);
+      expect(normal.displayName, '大学英语');
 
-    test('体育课项目非空才拼接，空项目不带分隔符', () {
       expect(parse({'KCM': '体育（3）', 'KCXMMC': '射箭'}).displayName, '体育·射箭');
       for (final project in [null, '', '  ']) {
         expect(parse({'KCM': '体育（3）', 'KCXMMC': project}).displayName, '体育（3）');
       }
-    });
 
-    test('所有允许的序号均从体育项目显示名移除，原课名保留', () {
       for (final name in ['体育', '体育2', '体育（3）', '体育(三)', '体育Ⅰ', '体育①']) {
         final c = parse({'KCM': name, 'KCXMMC': '射箭'});
         expect(c.displayName, '体育·射箭', reason: name);
@@ -227,9 +214,7 @@ void main() {
         expect(Course.fromJson(c.toJson()).displayName, '体育·射箭');
         expect(c.copyWith(projectName: '').displayName, name);
       }
-    });
 
-    test('原始字段经过缓存和 copyWith 后保留主判断与显示名', () {
       final c = parse({'KCM': '体育', 'JXLDM_DISPLAY': '测试教学楼', 'KCXMMC': '六级'});
       final restored = Course.fromJson(jsonDecode(jsonEncode(c.toJson())))
           .copyWith(hidden: true);
@@ -241,13 +226,11 @@ void main() {
   });
 
   group('QA LAB：实验/体育连续段取消小课间', () {
-    test('学校作息共 11 节', () {
+    test('实验/体育连续段与大课间压缩规则、标准课与单节不变', () {
       expect(periods.map((p) => p.node).toList(), [
         for (var i = 1; i <= kNuistMaxPeriodNode; i++) i,
       ]);
-    });
 
-    test('1–2 节 → 08:00–09:30', () {
       for (final kind in [CourseTimingKind.lab, CourseTimingKind.pe]) {
         final segs = resolveTimingSegments(
           periods: periods,
@@ -256,25 +239,25 @@ void main() {
           kind: kind,
         );
         expect(segs, hasLength(1), reason: '$kind');
-        expect(segs.single.startNode, 1);
-        expect(segs.single.endNode, 2);
-        expect(segs.single.start, '08:00');
-        expect(segs.single.end, '09:30');
+        expect((segs.single.startNode, segs.single.endNode), (1, 2));
+        expect((segs.single.start, segs.single.end), ('08:00', '09:30'));
       }
-    });
 
-    test('1–3 节 → 08:00–09:30 + 大课间 + 10:10–10:55', () {
-      final segs = resolveTimingSegments(
+      final three = resolveTimingSegments(
         periods: periods,
         startNode: 1,
         endNode: 3,
         kind: CourseTimingKind.lab,
       );
-      expect(segs, hasLength(2));
-      expect((segs[0].start, segs[0].end), ('08:00', '09:30'));
-      expect((segs[0].startNode, segs[0].endNode), (1, 2));
-      expect((segs[1].start, segs[1].end), ('10:10', '10:55'));
-      expect((segs[1].startNode, segs[1].endNode), (3, 3));
+      expect(three, hasLength(2));
+      expect(
+        (three[0].start, three[0].end, three[0].startNode, three[0].endNode),
+        ('08:00', '09:30', 1, 2),
+      );
+      expect(
+        (three[1].start, three[1].end, three[1].startNode, three[1].endNode),
+        ('10:10', '10:55', 3, 3),
+      );
       final bounds = effectiveSlotBounds(
         periods: periods,
         startNode: 1,
@@ -282,44 +265,35 @@ void main() {
         kind: CourseTimingKind.lab,
       );
       expect((bounds.start, bounds.end), ('08:00', '10:55'));
-    });
 
-    test('9–11 节 → 18:45–21:00', () {
-      final segs = resolveTimingSegments(
+      final night = resolveTimingSegments(
         periods: periods,
         startNode: 9,
         endNode: 11,
         kind: CourseTimingKind.pe,
       );
-      expect(segs, hasLength(1));
-      expect(segs.single.start, '18:45');
-      expect(segs.single.end, '21:00');
-    });
+      expect((night.single.start, night.single.end), ('18:45', '21:00'));
 
-    test('标准课不压缩小课间', () {
-      final segs = resolveTimingSegments(
+      final std = resolveTimingSegments(
         periods: periods,
         startNode: 1,
         endNode: 2,
         kind: CourseTimingKind.standard,
       );
-      expect(segs, hasLength(1));
-      expect((segs.single.start, segs.single.end), ('08:00', '09:40'));
-    });
+      expect((std.single.start, std.single.end), ('08:00', '09:40'));
 
-    test('单节实验/体育与标准相同', () {
-      final segs = resolveTimingSegments(
+      final single = resolveTimingSegments(
         periods: periods,
         startNode: 3,
         endNode: 3,
         kind: CourseTimingKind.lab,
       );
-      expect(segs.single.label, '10:10-10:55');
+      expect(single.single.label, '10:10-10:55');
     });
   });
 
   group('JSON 往返', () {
-    test('isLab 为 true 时持久化并可还原', () {
+    test('isLab 持久化、旧数据缺省 false 与拆分保留实验标记', () {
       final snap = TimetableSnapshot(
         courses: [
           Course(
@@ -335,9 +309,7 @@ void main() {
           jsonDecode(jsonEncode(snap.toJson())) as Map<String, dynamic>;
       final restored = TimetableSnapshot.fromJson(json);
       expect(restored.courses.single.slots.single.isLab, isTrue);
-    });
 
-    test('旧数据没有 isLab 时缺省 false', () {
       final slot = CourseSlot.fromJson({
         'day': 1,
         'startNode': 5,
@@ -356,9 +328,7 @@ void main() {
         }).isLab,
         isTrue,
       );
-    });
 
-    test('拆分时段保留实验标记', () {
       final split = _slot(isLab: true)
           .withSplitFrom(const SlotRef(day: 1, startNode: 5, endNode: 6));
       expect(split.isLab, isTrue);
@@ -408,6 +378,80 @@ void main() {
       expect(merged.single.startNode, 1);
       expect(merged.single.endNode, 8);
       expect(merged.single.location, '长望楼S508 / 长望楼S302');
+    });
+
+    test('小组件数据导出：周二数据结构课程设计 payload 含四段实验时刻', () {
+      final samplePath = File(
+        'test/fixtures/timetable/kb_lab_tuesday_sample.json',
+      );
+      if (!samplePath.existsSync()) return;
+      final tmp = Directory.systemTemp.createTempSync('lab_time_render_');
+      final ctl = TimetableController.instance;
+      TimetableStore.debugDirectory = tmp;
+      ctl.debugReset();
+      addTearDown(() {
+        ctl.debugReset();
+        TimetableStore.debugDirectory = null;
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
+      final termStart = DateTime(2026, 8, 31);
+      final tuesday = DateTime(2026, 12, 29);
+      const courseName = '数据结构课程设计';
+      const payloadTimes = [
+        '08:00-09:30',
+        '10:10-11:40',
+        '13:45-15:15',
+        '15:55-17:25',
+      ];
+      final raw =
+          jsonDecode(samplePath.readAsStringSync()) as Map<String, dynamic>;
+      final rows = ((raw['datas'] as Map)['cxxszhxqkb'] as Map)['rows'] as List;
+      final courses = TimetableParser.parseKbRows(rows).courses;
+      ctl.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: courses,
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(
+            termStartDate: termStart,
+            homeMaxItems: 4,
+            widgetCourseCount: 3,
+            showLocation: false,
+            showTeacher: false,
+          ),
+          syncedAt: termStart,
+        ),
+        viewingWeek: 18,
+      );
+      final svc = TimetableNotifyService(controller: ctl);
+      final classes = svc.classesOn(tuesday).where((c) => c.name == courseName);
+      expect(classes.map((c) => c.timeRange), payloadTimes);
+
+      final payload = buildWidgetPayload(
+        now: DateTime(2026, 12, 29, 7),
+        classesOn: svc.classesOn,
+        prefs: const WidgetPrefs(courseCount: 3, showPeriod: true),
+        lastSyncedAt: termStart,
+      );
+      expect(payload['state'], 'ok');
+      final items = ((payload['days'] as List).first as Map)['items'] as List;
+      final labItems = items.where((e) => (e as Map)['name'] == courseName);
+      expect(labItems, hasLength(4));
+      expect([
+        for (final e in labItems)
+          ((e as Map)['periodTime'] as String).split(' ').last,
+      ], payloadTimes);
+
+      final bare = buildWidgetPayload(
+        now: DateTime(2026, 12, 29, 7),
+        classesOn: svc.classesOn,
+        prefs: const WidgetPrefs(courseCount: 3, showPeriod: false),
+        lastSyncedAt: termStart,
+      );
+      final bareItems = ((bare['days'] as List).first as Map)['items'] as List;
+      expect([
+        for (final e in bareItems)
+          if ((e as Map)['name'] == courseName) e['periodTime'],
+      ], payloadTimes);
     });
   });
 }

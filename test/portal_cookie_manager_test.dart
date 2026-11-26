@@ -4,9 +4,13 @@ import 'dart:typed_data';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/auth/nuist_login.dart';
 import 'package:nuist_sta_app/core/auth/portal_cookie_manager.dart';
 import 'package:nuist_sta_app/core/auth/portal_cookie_store.dart';
+import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
 import 'package:nuist_sta_app/core/auth/portal_http.dart';
+import 'package:nuist_sta_app/core/auth/safe_message.dart';
+import 'package:nuist_sta_app/core/auth/student_id_mask.dart';
 import 'package:nuist_sta_app/core/logging/diagnostic_error.dart';
 
 class _CookieAdapter implements HttpClientAdapter {
@@ -70,8 +74,8 @@ void main() {
   final auth = Uri.parse('https://auth.campus.test/auth/login');
   final business = Uri.parse('https://business.campus.test/app/index');
 
-  for (final status in PortalHttp.redirectCodes) {
-    test('HTTP $status 跨域跳转不覆盖另一域的同名会话 Cookie', () async {
+  test('各重定向状态码跨域跳转均不覆盖另一域的同名会话 Cookie', () async {
+    for (final status in PortalHttp.redirectCodes) {
       for (final (source, target) in [(auth, business), (business, auth)]) {
         final jar = CookieJar();
         await jar.saveFromResponse(target, [
@@ -104,8 +108,8 @@ void main() {
           'JSESSIONID=source-session; Path=/',
         ]);
       }
-    });
-  }
+    }
+  });
 
   test('同域跳转不把默认 Path 的 Cookie 复制到目标路径', () async {
     final jar = CookieJar();
@@ -445,5 +449,175 @@ void main() {
             .having((error) => error.causeStackTrace, 'stack', isNotNull),
       ),
     );
+  });
+
+  test('学号脱敏 maskStudentId 覆盖 12 位、10 位、短串与空串', () {
+    expect(maskStudentId('202512340001'), '2025******01');
+    expect(maskStudentId('2023123401'), '2023****01');
+    expect(maskStudentId('123456'), '1*****');
+    expect(maskStudentId('1'), '1');
+    expect(maskStudentId(''), '');
+  });
+
+  group('认证诊断与安全错误文案', () {
+    const forbidden = [
+      '{',
+      '<html',
+      '<!DOCTYPE',
+      'JSESSIONID',
+      'CASTGC',
+      'Set-Cookie',
+    ];
+
+    void expectSafe(Object? data) {
+      try {
+        NuistLogin.parseStartAssertion(data, statusCode: 502);
+        fail('should throw');
+      } on PortalException catch (e) {
+        final msg = e.message;
+        for (final f in forbidden) {
+          expect(
+            msg.toLowerCase().contains(f.toLowerCase()),
+            isFalse,
+            reason: 'leaked "$f": $msg',
+          );
+        }
+        expect(msg.length, lessThanOrEqualTo(100));
+      }
+    }
+
+    test('响应外壳错误与缺少 request 有不同原因码', () {
+      expect(
+        () => NuistLogin.parseStartAssertion([], statusCode: 200),
+        throwsA(
+          isA<PortalLoginError>()
+              .having((e) => e.code, 'code', 'assertion_response_not_object')
+              .having((e) => e.stage, 'stage', 'cas.asserting'),
+        ),
+      );
+      expect(
+        () =>
+            NuistLogin.parseStartAssertion({'success': true}, statusCode: 200),
+        throwsA(
+          isA<PortalLoginError>()
+              .having((e) => e.code, 'code', 'assertion_request_missing')
+              .having((e) => e.context['status_code'], 'status', 200),
+        ),
+      );
+    });
+
+    test('HTTP错误保留状态、Dio原因与原始栈，不误报门户登录失败', () async {
+      final dio = Dio();
+      addTearDown(() => dio.close(force: true));
+      final options = RequestOptions(path: 'https://campus.test/service');
+      final originalStack = StackTrace.fromString(
+        '#0 syntheticTransport (transport.dart:4:2)',
+      );
+      final original = DioException(
+        requestOptions: options,
+        type: DioExceptionType.badResponse,
+        response: Response<dynamic>(requestOptions: options, statusCode: 503),
+        stackTrace: originalStack,
+      );
+      try {
+        await PortalHttp(dio).send(() => Future.error(original, originalStack));
+        fail('应抛出服务响应错误');
+      } catch (error, stackTrace) {
+        expect(error, isA<DiagnosticException>());
+        final diagnostic = error as DiagnosticException;
+        expect(diagnostic.code, 'http_status_rejected');
+        expect(diagnostic.context['status_code'], 503);
+        expect(diagnostic.cause, same(original));
+        expect(diagnostic.causeStackTrace, same(originalStack));
+        expect(stackTrace.toString(), originalStack.toString());
+      }
+    });
+
+    test('Dio包裹的门户异常使用原始栈重新抛出', () async {
+      final dio = Dio();
+      addTearDown(() => dio.close(force: true));
+      const original = PortalCredentialError(
+        '合成凭据已失效',
+        code: 'credential_not_allowed',
+        stage: 'cas.signing',
+      );
+      final originalStack = StackTrace.fromString(
+        '#0 syntheticSign (signer.dart:8:2)',
+      );
+      final wrapped = DioException(
+        requestOptions: RequestOptions(path: 'https://campus.test/service'),
+        error: original,
+        stackTrace: originalStack,
+      );
+      try {
+        await PortalHttp(dio).send(() => Future.error(wrapped));
+        fail('应保留凭据错误');
+      } catch (error, stackTrace) {
+        expect(error, same(original));
+        expect(stackTrace.toString(), originalStack.toString());
+      }
+    });
+
+    test('startAssertion 异常 HTML/JSON/敏感文案响应均不泄漏原始响应', () {
+      for (final fixture in [
+        'test/fixtures/timetable/gateway_502.html',
+        'test/fixtures/timetable/login_redirect_mock.html',
+      ]) {
+        expectSafe(File(fixture).readAsStringSync());
+      }
+      const html = '<!DOCTYPE html><html><body>502 Bad Gateway</body></html>';
+      for (final payload in [
+        {
+          'code': 1,
+          'datas': {'x': 'JSESSIONID=abc'},
+        },
+        {
+          'success': false,
+          'data': {'CASTGC': 'TGT-1'},
+        },
+        '{"foo":"bar","Set-Cookie":"JSESSIONID=1"}',
+        {'success': false, 'message': html},
+        {'message': html},
+        {'success': false, 'message': 'Set-Cookie: CASTGC=TGT-x'},
+        {'message': '错' * 150},
+        {
+          'success': false,
+          'message': {'nested': 1},
+        },
+      ]) {
+        expectSafe(payload);
+      }
+    });
+
+    test('startAssertion 保留纯文本短提示，safeServerMessage 过滤非纯文本与敏感串', () {
+      expect(
+        () => NuistLogin.parseStartAssertion({'message': '未查询到设备信息'}),
+        throwsA(
+          isA<PortalCredentialError>().having(
+            (e) => e.message,
+            'message',
+            startsWith('未查询到设备信息'),
+          ),
+        ),
+      );
+      expect(
+        () => NuistLogin.parseStartAssertion({
+          'success': false,
+          'message': '<b>x</b>',
+        }),
+        throwsA(
+          isA<PortalLoginError>().having(
+            (e) => e.message,
+            'message',
+            kLoginFailedText,
+          ),
+        ),
+      );
+      expect(safeServerMessage('设备不存在'), '设备不存在');
+      expect(safeServerMessage(42), kLoginFailedText);
+      expect(safeServerMessage('{"a":1}'), kLoginFailedText);
+      expect(safeServerMessage('JSESSIONID=1'), kLoginFailedText);
+      expect(prefixedServerMessage('前缀：', '<html>'), kLoginFailedText);
+    });
   });
 }

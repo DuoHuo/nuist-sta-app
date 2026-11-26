@@ -457,27 +457,35 @@ void main() {
     });
   }
   for (final scenario in cases) {
-    for (final status in [401, 403]) {
-      test('${scenario.$1}首跳$status清Cookie并统一重登重试', () async {
+    test('${scenario.$1}首跳401/403清Cookie并统一重登重试', () async {
+      for (final status in [401, 403]) {
         final h = _Harness(scenario.$2, status);
-        addTearDown(() => h.dio.close(force: true));
-        await h.seed(scenario.$3);
-        _expectResult(await scenario.$4(h));
-        expect(h.logins, 2);
-        expect(h.rejected, 1);
-        expect(h.targetRequests, hasLength(2));
-        for (final host in scenario.$3) {
-          final cookies = await h.cookies.openJar().loadForRequest(
-            Uri.https(host, '/'),
+        try {
+          await h.seed(scenario.$3);
+          _expectResult(await scenario.$4(h));
+          expect(h.logins, 2, reason: 'status=$status');
+          expect(h.rejected, 1, reason: 'status=$status');
+          expect(h.targetRequests, hasLength(2), reason: 'status=$status');
+          for (final host in scenario.$3) {
+            final cookies = await h.cookies.openJar().loadForRequest(
+              Uri.https(host, '/'),
+            );
+            expect(
+              cookies.where((cookie) => cookie.name == 'dirty'),
+              isEmpty,
+              reason: 'status=$status host=$host',
+            );
+          }
+          expect(
+            h.business.every((options) => options.extra['idempotent'] == true),
+            isTrue,
+            reason: 'status=$status',
           );
-          expect(cookies.where((cookie) => cookie.name == 'dirty'), isEmpty);
+        } finally {
+          h.dio.close(force: true);
         }
-        expect(
-          h.business.every((options) => options.extra['idempotent'] == true),
-          isTrue,
-        );
-      });
-    }
+      }
+    });
     if (scenario.$1 != 'library') {
       test('${scenario.$1}成功形状的422正文不能当成业务成功', () async {
         final h = _Harness(scenario.$2, 422);

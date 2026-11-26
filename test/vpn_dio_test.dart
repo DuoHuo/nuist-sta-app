@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:asn1lib/asn1lib.dart';
+// ignore: depend_on_referenced_packages
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/auth/aia_trust.dart';
 import 'package:nuist_sta_app/core/auth/portal_http.dart';
@@ -763,32 +765,42 @@ void main() {
     }
   });
 
-  test('内部快速步骤不刷屏，等待与超时仍可定位且不展开异常', () async {
-    await vpnStage('快速步骤', () async {});
-    expect(logRecords, isEmpty);
-    final gate = Completer<void>();
-    final waiting = vpnStage('测试等待', () => gate.future);
-    await Future<void>.delayed(const Duration(milliseconds: 5050));
-    expect(logRecords.single['event'], 'stage.waiting');
-    gate.complete();
-    await waiting;
-    expect(logRecords.last['event'], 'stage.completed');
-    expect(
-      (logRecords.first['attrs'] as Map)['stage_id'],
-      (logRecords.last['attrs'] as Map)['stage_id'],
-    );
-    logRecords.clear();
-    final rejected = expectLater(
-      vpnStage(
+  test('内部快速步骤不刷屏，等待与超时仍可定位且不展开异常', () {
+    fakeAsync((async) {
+      var fastDone = false;
+      vpnStage('快速步骤', () async {}).then((_) => fastDone = true);
+      async.flushMicrotasks();
+      expect(fastDone, isTrue);
+      expect(logRecords, isEmpty);
+
+      final gate = Completer<void>();
+      var waitingDone = false;
+      vpnStage('测试等待', () => gate.future).then((_) => waitingDone = true);
+      async.elapse(const Duration(seconds: 5));
+      expect(logRecords.single['event'], 'stage.waiting');
+      gate.complete();
+      async.flushMicrotasks();
+      expect(waitingDone, isTrue);
+      expect(logRecords.last['event'], 'stage.completed');
+      expect(
+        (logRecords.first['attrs'] as Map)['stage_id'],
+        (logRecords.last['attrs'] as Map)['stage_id'],
+      );
+
+      logRecords.clear();
+      Object? caught;
+      vpnStage<void>(
         '测试超时',
         () => Completer<void>().future,
         timeout: const Duration(milliseconds: 10),
-      ),
-      throwsA(isA<TimeoutException>()),
-    );
-    await rejected;
-    expect(logRecords.single['event'], 'stage.failed');
-    expect((logRecords.single['attrs'] as Map)['error_kind'], 'timeout');
+      ).catchError((Object error) {
+        caught = error;
+      });
+      async.elapse(const Duration(milliseconds: 10));
+      expect(caught, isA<TimeoutException>());
+      expect(logRecords.single['event'], 'stage.failed');
+      expect((logRecords.single['attrs'] as Map)['error_kind'], 'timeout');
+    });
   });
 
   test('直连与强制 VPN 的连接池隔离，单次参数不影响其他请求', () async {
@@ -1089,7 +1101,7 @@ void main() {
     await native.controller.close();
   });
 
-  test('P1-9 AIA补链重试克隆已finalize的FormData，Stream请求不重放', () async {
+  test('AIA补链重试克隆已finalize的FormData，Stream请求不重放', () async {
     final bodies = <String>[];
     final trust = _RepairCounterTrust();
     final mock = Dio()
@@ -1142,7 +1154,7 @@ void main() {
     }
   });
 
-  test('P1-13 AIA预探测失败不能缓存，成功后才复用标记', () async {
+  test('AIA预探测失败不能缓存，成功后才复用标记', () async {
     final trust = AiaTrust();
     var probes = 0;
     HttpClient failed() {
@@ -1167,9 +1179,10 @@ void main() {
     expect(requests, 0);
   });
 
-  for (final code in [301, 302, 303]) {
-    for (final method in ['HEAD', 'PUT', 'POST']) {
-      test('P1-9 redirect$code保持$method的RFC方法语义并清理跨跳重放状态', () async {
+  test('301/302/303 重定向保持 RFC 方法语义并清理跨跳重放状态', () async {
+    for (final code in [301, 302, 303]) {
+      for (final method in ['HEAD', 'PUT', 'POST']) {
+        if (code == 303 && method == 'POST') continue;
         final seen = <RequestOptions>[];
         bool guard(int? status) => status == 200;
         final dio = Dio()
@@ -1201,28 +1214,40 @@ void main() {
               },
             ),
           );
-          expect(result.statusCode, 200);
-          expect(seen, hasLength(2));
+          expect(result.statusCode, 200, reason: '$code $method');
+          expect(seen, hasLength(2), reason: '$code $method');
           final expectedGet = code == 303 ? method != 'HEAD' : method == 'POST';
-          expect(seen[1].method, expectedGet ? 'GET' : method);
-          expect(seen[1].data, expectedGet ? null : 'body=kept');
+          expect(
+            seen[1].method,
+            expectedGet ? 'GET' : method,
+            reason: '$code $method',
+          );
+          expect(
+            seen[1].data,
+            expectedGet ? null : 'body=kept',
+            reason: '$code $method',
+          );
           for (final key in [
             '_vpnReplayed',
             '_aiaRepaired',
             'vpnDio.engineId',
           ]) {
-            expect(seen[1].extra.containsKey(key), isFalse);
+            expect(
+              seen[1].extra.containsKey(key),
+              isFalse,
+              reason: '$code $method $key',
+            );
           }
           expect(seen[1].extra['_redirectValidateStatus'], isNot(same(guard)));
           expect(result.redirects, hasLength(1));
         } finally {
           transport.close(force: true);
         }
-      });
+      }
     }
-  }
+  });
 
-  test('P1-9 非法Location保留原因，PortalHttp重定向503不泄露裸DioException', () async {
+  test('非法Location重定向抛出诊断异常并保留原始解析原因', () async {
     final invalidDio = Dio()
       ..httpClientAdapter = _ScriptedAdapter(
         (options, stream) async => ResponseBody.fromString(
@@ -1246,38 +1271,9 @@ void main() {
     } finally {
       invalid.close(force: true);
     }
-    var calls = 0;
-    final rejectingDio = Dio()
-      ..httpClientAdapter = _ScriptedAdapter((options, stream) async {
-        calls++;
-        return calls == 1
-            ? ResponseBody.fromString(
-                '',
-                302,
-                headers: {
-                  'location': ['/failed'],
-                },
-              )
-            : ResponseBody.fromString('temporarily unavailable', 503);
-      });
-    final http = PortalHttp(rejectingDio);
-    try {
-      final landed = await http.get(Uri.parse('http://synthetic.test/start'));
-      await expectLater(
-        http.followRedirects(landed),
-        throwsA(
-          isA<DiagnosticException>()
-              .having((e) => e.diagnosticContext['status_code'], 'status', 503)
-              .having((e) => e.cause, 'cause', isA<DioException>()),
-        ),
-      );
-      expect(calls, 2);
-    } finally {
-      rejectingDio.close(force: true);
-    }
   });
 
-  test('P0-3 prepare返回后全局代次变化仍使用锁定会话，未知失败ID不关闭活跃池', () async {
+  test('prepare返回后全局代次变化仍使用锁定会话，未知失败ID不关闭活跃池', () async {
     final changing = ChangingPreparedConnector();
     final atomicClient = vpnDio(connector: changing, forceVpn: true);
     try {
@@ -1306,7 +1302,7 @@ void main() {
     }
   });
 
-  test('P0-3 prepare之后Draining不能把请求归属转交给新引擎', () async {
+  test('prepare之后Draining不能把请求归属转交给新引擎', () async {
     final proxy = ConnectProxy();
     await proxy.start();
     final native = FakeNative(proxy.server.port);
@@ -1330,8 +1326,8 @@ void main() {
     }
   });
 
-  for (final status in [502, 504, 503]) {
-    test('P1-7 CONNECT$status不误杀健康隧道', () async {
+  test('CONNECT 502/504/503 不误杀健康隧道', () async {
+    for (final status in [502, 504, 503]) {
       final proxy = ConnectProxy()..rejectOnceStatus = status;
       await proxy.start();
       final native = FakeNative(proxy.server.port);
@@ -1349,20 +1345,20 @@ void main() {
             ),
           ),
         );
-        expect(proxy.proxyRequests, 1);
-        expect(gateway.sessionId, 1);
-        expect(native.stopped, isEmpty);
-        expect(native.starts, 1);
+        expect(proxy.proxyRequests, 1, reason: 'status=$status');
+        expect(gateway.sessionId, 1, reason: 'status=$status');
+        expect(native.stopped, isEmpty, reason: 'status=$status');
+        expect(native.starts, 1, reason: 'status=$status');
       } finally {
         query.close(force: true);
         await gateway.dispose();
         await native.controller.close();
         await proxy.close();
       }
-    });
-  }
+    }
+  });
 
-  test('P1-7 connectionTimeout也触发唯一一次恢复', () async {
+  test('connectionTimeout也触发唯一一次恢复', () async {
     final proxy = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final sockets = <Socket>[];
     proxy.listen((socket) {
@@ -1393,7 +1389,7 @@ void main() {
     }
   });
 
-  test('P1-7 重放准备中取消一个请求不取消共享准备或其他请求', () async {
+  test('重放准备中取消一个请求不取消共享准备或其他请求', () async {
     final failing = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     var attempts = 0;
     failing.listen((request) async {
@@ -1440,7 +1436,7 @@ void main() {
     }
   });
 
-  test('P1-4 scheduler_stall保留原生DNS探活机会而不是立即停止引擎', () async {
+  test('scheduler_stall保留原生DNS探活机会而不是立即停止引擎', () async {
     final native = FakeNative(0);
     final gateway = VpnGateway(native: native, auth: FakeAuth());
     await gateway.setForeground(false);

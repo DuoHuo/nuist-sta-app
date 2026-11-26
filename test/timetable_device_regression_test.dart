@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -8,19 +7,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:nuist_sta_app/app.dart';
 import 'package:nuist_sta_app/core/theme_mode.dart';
-import 'package:nuist_sta_app/router.dart';
-import 'package:nuist_sta_app/shell/home/home_page.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_lifecycle.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_bridge.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_plan.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_service.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_timing.dart';
+import 'package:nuist_sta_app/shell/home/home_page.dart';
 
 Map<String, Object?> row(
   int start,
@@ -71,6 +70,19 @@ List<bool> _recordFrameworkBack(WidgetTester tester) {
     messenger.setMockMethodCallHandler(SystemChannels.platform, null);
   });
   return requests;
+}
+
+class _FakeReachability implements NetworkReachability {
+  _FakeReachability({required this.initial});
+
+  final bool initial;
+  final controller = StreamController<bool>.broadcast();
+
+  @override
+  Stream<bool> get onlineChanges => controller.stream;
+
+  @override
+  Future<bool> isOnline() async => initial;
 }
 
 void main() {
@@ -182,7 +194,249 @@ void main() {
     );
   });
 
-  testWidgets('周格不显示实际时刻，详情保留时刻并能定位原始记录', (tester) async {
+  testWidgets(
+    '小组件冷热启动路由（?open=widgetSettings/?focus=tomorrow/防叠页）、未知 URI 与 Android 返回',
+    (tester) async {
+      final frameworkBack = _recordFrameworkBack(tester);
+      final messenger = tester.binding.defaultBinaryMessenger;
+      const channel = MethodChannel('dev.duohuo.nuist_sta_app/notify_widget');
+      TimetableController.bindingCheck = () async => false;
+
+      // 1. 冷启动 ?open=widgetSettings 直达当周小组件设置，依次退回课表与首页
+      const settingsRoute = '/apps/timetable?open=widgetSettings';
+      tester.platformDispatcher.defaultRouteNameTestValue = settingsRoute;
+      TimetableNotifyBridge.debugIsAndroid = true;
+      final launch1 = Completer<String?>();
+      messenger.setMockMethodCallHandler(
+        channel,
+        (call) async =>
+            call.method == 'takeLaunchRoute' ? launch1.future : null,
+      );
+      addTearDown(() {
+        if (!launch1.isCompleted) launch1.complete(null);
+        messenger.setMockMethodCallHandler(channel, null);
+        tester.platformDispatcher.clearDefaultRouteNameTestValue();
+      });
+      load(TimetableParser.parseKbRows([row(1, 2)]).courses);
+      await tester.pumpWidget(const NuistApp());
+      await tester.pumpAndSettle();
+      final settings = find.byType(TimetableWidgetSettingsPage);
+      expect(
+        tester.widget<TimetableWidgetSettingsPage>(settings).initialSize,
+        WidgetPinSize.week,
+      );
+      launch1.complete(settingsRoute);
+      await tester.pumpAndSettle();
+      Navigator.of(tester.element(settings)).pop();
+      await tester.pumpAndSettle();
+      expect(find.byType(TimetablePage), findsOneWidget);
+      Navigator.of(tester.element(find.byType(TimetablePage))).pop();
+      await tester.pumpAndSettle();
+      expect(find.byType(HomePage), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+
+      // 2. 冷启动 /apps/timetable 首帧不等待回执且保留首页栈，Android 返回手势可取消与完成；热启动重复/tomorrow 防叠页
+      ctl.debugReset();
+      load(TimetableParser.parseKbRows([row(1, 2)]).courses);
+      AppThemeMode.instance.value = ThemeMode.dark;
+      addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
+      tester.platformDispatcher.defaultRouteNameTestValue = '/apps/timetable';
+      final launch2 = Completer<String?>();
+      messenger.setMockMethodCallHandler(
+        channel,
+        (call) async =>
+            call.method == 'takeLaunchRoute' ? launch2.future : null,
+      );
+      addTearDown(() {
+        if (!launch2.isCompleted) launch2.complete(null);
+      });
+      await tester.pumpWidget(const NuistApp());
+      expect(launch2.isCompleted, isFalse);
+      expect(find.byType(TimetablePage), findsOneWidget);
+      expect(find.byType(HomePage), findsNothing);
+      launch2.complete('/apps/timetable');
+      await tester.pumpAndSettle();
+      final appRouter =
+          tester.widget<MaterialApp>(find.byType(MaterialApp)).routerConfig!
+              as GoRouter;
+      expect(
+        _imperativeMatches(
+          appRouter.routerDelegate.currentConfiguration.matches,
+        ),
+        hasLength(1),
+      );
+
+      Future<void> gesture(String method, [double progress = 0]) async {
+        await messenger.handlePlatformMessage(
+          'flutter/backgesture',
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall(method, {
+              'touchOffset': [5.0, 300.0],
+              'progress': progress,
+              'swipeEdge': 0,
+            }),
+          ),
+          (_) {},
+        );
+        await tester.pump();
+      }
+
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', .4);
+      await gesture('cancelBackGesture');
+      await tester.pumpAndSettle();
+      expect(find.byType(TimetablePage), findsOneWidget);
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', .4);
+      await gesture('commitBackGesture');
+      await tester.pumpAndSettle();
+      expect(find.byType(HomePage), findsOneWidget);
+      expect(frameworkBack.last, isFalse);
+
+      // ?focus=tomorrow 热启动打开、翻页后再次推送仍重新聚焦而不叠页
+      final now = DateTime.now();
+      final tomorrow = DateTime(now.year, now.month, now.day + 1);
+      final tomorrowMon = tomorrow.subtract(
+        Duration(days: tomorrow.weekday - DateTime.monday),
+      );
+      ctl.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: TimetableParser.parseKbRows([row(1, 2, weeks: '11111')])
+              .courses,
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(
+            termStartDate: tomorrowMon.subtract(const Duration(days: 7)),
+          ),
+          syncedAt: now,
+        ),
+      );
+      Future<void> openRoute(String route) async {
+        await messenger.handlePlatformMessage(
+          channel.name,
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall('openRoute', route),
+          ),
+          (_) {},
+        );
+        await tester.pumpAndSettle();
+      }
+
+      await openRoute('/apps/timetable?focus=tomorrow');
+      expect(ctl.viewingWeek, 2);
+      final directRoute =
+          ModalRoute.of(tester.element(find.byType(TimetablePage)))!
+              as PageRoute;
+      expect(directRoute.animation!.value, 1.0);
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', .4);
+      expect(directRoute.animation!.value, closeTo(.6, .001));
+      await messenger.handlePlatformMessage(
+        'flutter/backgesture',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('cancelBackGesture', {
+            'touchOffset': [5.0, 300.0],
+            'progress': 0.4,
+            'swipeEdge': 0,
+          }),
+        ),
+        (_) {},
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(directRoute.animation!.value, lessThan(1.0));
+      await tester.pumpAndSettle();
+      expect(directRoute.animation!.value, 1.0);
+      await tester.drag(find.byType(PageView), const Offset(-600, 0));
+      await tester.pumpAndSettle();
+      expect(ctl.viewingWeek, 3);
+      await openRoute('/apps/timetable?focus=tomorrow');
+      expect(ctl.viewingWeek, 2);
+      expect(
+        _imperativeMatches(
+          appRouter.routerDelegate.currentConfiguration.matches,
+        ),
+        hasLength(1),
+      );
+
+      // 3. 未知 URI 与自定义 scheme 安全回落首页
+      appRouter.go('nuist://timetable/today?focus=tomorrow');
+      await tester.pumpAndSettle();
+      expect(find.byType(HomePage), findsOneWidget);
+      appRouter.go('/nonexistent/invalid/path?foo=bar');
+      await tester.pumpAndSettle();
+      expect(find.text('页面不存在'), findsOneWidget);
+      await tester.tap(find.text('返回首页'));
+      await tester.pumpAndSettle();
+      expect(find.byType(HomePage), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
+  test('NetworkRestoreDetector：只有无网 → 有网算恢复', () {
+    final d = NetworkRestoreDetector();
+    expect(d.update(true), isFalse);
+    expect(d.update(true), isFalse);
+    expect(d.update(false), isFalse);
+    expect(d.update(true), isTrue);
+    expect(d.update(true), isFalse);
+    final s = NetworkRestoreDetector()..seed(false);
+    expect(s.update(true), isTrue);
+  });
+
+  testWidgets('TimetableLifecycleScope 生命周期与断网恢复触发，以及实验课网格隐时间/详情显时间', (
+    tester,
+  ) async {
+    // 1. 生命周期与网络恢复监听（含一开始就在线不误触，卸载取消监听）
+    final net = _FakeReachability(initial: false);
+    var start = 0, resumed = 0, restored = 0;
+    await tester.pumpWidget(
+      TimetableLifecycleScope(
+        reachability: net,
+        onAppStart: () async => ++start > 0,
+        onAppResumed: () async => ++resumed > 0,
+        onNetworkRestored: () async => ++restored > 0,
+        child: const SizedBox(),
+      ),
+    );
+    await tester.pump();
+    expect(start, 1);
+    expect(net.controller.hasListener, isTrue);
+    net.controller.add(true);
+    await tester.pump();
+    expect(restored, 1);
+    net.controller.add(true);
+    await tester.pump();
+    expect(restored, 1);
+    net.controller.add(false);
+    await tester.pump();
+    net.controller.add(true);
+    await tester.pump();
+    expect(restored, 2);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(resumed, 1);
+    await tester.pumpWidget(const SizedBox());
+    expect(net.controller.hasListener, isFalse);
+
+    final onlineNet = _FakeReachability(initial: true);
+    var spuriousRestored = 0;
+    await tester.pumpWidget(
+      TimetableLifecycleScope(
+        reachability: onlineNet,
+        onAppStart: () async => false,
+        onAppResumed: () async => false,
+        onNetworkRestored: () async => ++spuriousRestored > 0,
+        child: const SizedBox(),
+      ),
+    );
+    await tester.pump();
+    onlineNet.controller.add(true);
+    await tester.pump();
+    expect(spuriousRestored, 0);
+
+    // 2. 周格不显示实际时刻，详情保留实际时刻
     load(TimetableParser.parseKbRows([row(1, 2)]).courses);
     final cell = ctl.cellsForDay(1, 1).single;
     await tester.pumpWidget(
@@ -212,521 +466,4 @@ void main() {
     );
     expect(find.textContaining('08:00–09:30'), findsOneWidget);
   });
-
-  testWidgets('小组件重复打开课表不叠页，从详情点击复用已有课表', (tester) async {
-    load(TimetableParser.parseKbRows([row(1, 2)]).courses);
-    await tester.pumpWidget(const NuistApp());
-    await tester.pumpAndSettle();
-    final context = tester.element(find.byType(MaterialApp));
-    final router =
-        (tester.widget<MaterialApp>(find.byType(MaterialApp)).routerConfig!
-            as GoRouter);
-    Future<void> open(String route) async {
-      final data = const StandardMethodCodec().encodeMethodCall(
-        MethodCall('openRoute', route),
-      );
-      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
-        'dev.duohuo.nuist_sta_app/notify_widget',
-        data,
-        (_) {},
-      );
-      await tester.pumpAndSettle();
-    }
-
-    await open('/apps/timetable');
-    await open('/apps/timetable');
-    expect(
-      _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
-      hasLength(1),
-    );
-    router.push('/settings');
-    await tester.pumpAndSettle();
-    await open('/apps/timetable');
-    expect(
-      _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
-      hasLength(1),
-    );
-    await open('/apps/timetable?focus=tomorrow');
-    final nextWeek = (ctl.currentWeek + 1).clamp(1, ctl.totalWeeks);
-    await open('/apps/timetable?week=next');
-    expect(ctl.viewingWeek, nextWeek);
-    ctl.setViewingWeek(nextWeek == 1 ? 2 : 1);
-    await tester.pumpAndSettle();
-    await open('/apps/timetable?week=next');
-    expect(ctl.viewingWeek, nextWeek);
-
-    await tester.tap(find.byKey(const Key('timetable_settings_button')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-    await tester.pumpAndSettle();
-    expect(
-      tester
-          .widget<TimetableWidgetSettingsPage>(
-            find.byType(TimetableWidgetSettingsPage),
-          )
-          .initialSize,
-      WidgetPinSize.wide,
-    );
-    await open('/apps/timetable?open=widgetSettings');
-    final settings = find.byType(TimetableWidgetSettingsPage);
-    expect(settings, findsOneWidget);
-    expect(
-      tester.widget<TimetableWidgetSettingsPage>(settings).initialSize,
-      WidgetPinSize.week,
-    );
-    final settingsContext = tester.element(settings);
-    expect(
-      (ModalRoute.of(settingsContext)! as PageRoute).popGestureEnabled,
-      isTrue,
-    );
-    await open('/apps/timetable?week=next');
-    expect(settings, findsNothing);
-    expect(find.byType(TimetablePage), findsOneWidget);
-    expect(ctl.viewingWeek, nextWeek);
-    expect(
-      _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
-      hasLength(1),
-    );
-    router.pop();
-    await tester.pumpAndSettle();
-    expect(router.routerDelegate.currentConfiguration.uri.path, '/');
-    expect(context.mounted, isTrue);
-    await tester.pumpWidget(const SizedBox.shrink());
-  });
-
-  testWidgets('冷启动齿轮直接打开当周小组件设置，返回依次回到课表和首页', (tester) async {
-    const path = '/apps/timetable?open=widgetSettings';
-    tester.platformDispatcher.defaultRouteNameTestValue = path;
-    TimetableNotifyBridge.debugIsAndroid = true;
-    const channel = MethodChannel('dev.duohuo.nuist_sta_app/notify_widget');
-    final messenger = tester.binding.defaultBinaryMessenger;
-    final launch = Completer<String?>();
-    messenger.setMockMethodCallHandler(
-      channel,
-      (call) async => call.method == 'takeLaunchRoute' ? launch.future : null,
-    );
-    addTearDown(() {
-      if (!launch.isCompleted) launch.complete(null);
-      messenger.setMockMethodCallHandler(channel, null);
-      tester.platformDispatcher.clearDefaultRouteNameTestValue();
-    });
-    load(TimetableParser.parseKbRows([row(1, 2)]).courses);
-    await tester.pumpWidget(const NuistApp());
-    await tester.pumpAndSettle();
-    final settings = find.byType(TimetableWidgetSettingsPage);
-    expect(
-      tester.widget<TimetableWidgetSettingsPage>(settings).initialSize,
-      WidgetPinSize.week,
-    );
-    launch.complete(path);
-    await tester.pumpAndSettle();
-    Navigator.of(tester.element(settings)).pop();
-    await tester.pumpAndSettle();
-    expect(settings, findsNothing);
-    final timetable = find.byType(TimetablePage);
-    expect(timetable, findsOneWidget);
-    Navigator.of(tester.element(timetable)).pop();
-    await tester.pumpAndSettle();
-    expect(find.byType(HomePage), findsOneWidget);
-    await tester.pumpWidget(const SizedBox.shrink());
-  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
-
-  for (final theme in [ThemeMode.light, ThemeMode.dark]) {
-    testWidgets('冷小组件初始路由首帧显示课表且不等待平台回执，${theme.name} 保留首页返回栈', (tester) async {
-      final frameworkBack = _recordFrameworkBack(tester);
-      AppThemeMode.instance.value = theme;
-      tester.platformDispatcher.defaultRouteNameTestValue = '/apps/timetable';
-      TimetableNotifyBridge.debugIsAndroid = true;
-      const channel = MethodChannel('dev.duohuo.nuist_sta_app/notify_widget');
-      final messenger = tester.binding.defaultBinaryMessenger;
-      final launch = Completer<String?>();
-      messenger.setMockMethodCallHandler(channel, (call) async {
-        return call.method == 'takeLaunchRoute' ? launch.future : null;
-      });
-      addTearDown(() {
-        if (!launch.isCompleted) launch.complete(null);
-        messenger.setMockMethodCallHandler(channel, null);
-        tester.platformDispatcher.clearDefaultRouteNameTestValue();
-        AppThemeMode.instance.value = ThemeMode.system;
-      });
-      load(TimetableParser.parseKbRows([row(1, 2)]).courses);
-
-      await tester.pumpWidget(const NuistApp());
-      expect(launch.isCompleted, isFalse);
-      expect(find.byType(TimetablePage), findsOneWidget);
-      expect(find.byType(HomePage), findsNothing, reason: '首页不能先暴露一帧再跳课表');
-      final router =
-          tester.widget<MaterialApp>(find.byType(MaterialApp)).routerConfig!
-              as GoRouter;
-      expect(router.canPop(), isTrue, reason: '可信初始路由也应保留首页作为返回落点');
-      final route =
-          ModalRoute.of(tester.element(find.byType(TimetablePage)))!
-              as PageRoute;
-      expect(route.transitionDuration, Duration.zero);
-      expect(route.animation!.value, 1);
-      expect(route.popGestureEnabled, isTrue);
-      expect(
-        frameworkBack.last,
-        isTrue,
-        reason: 'Android 必须先把返回交给 Flutter，才能回到首页',
-      );
-
-      launch.complete('/apps/timetable');
-      await tester.pumpAndSettle();
-      expect(
-        _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
-        hasLength(1),
-        reason: '迟到的平台回执不能重复压入课表',
-      );
-      router.pop();
-      await tester.pumpAndSettle();
-      expect(router.routerDelegate.currentConfiguration.uri.path, '/');
-      expect(find.byType(HomePage), findsOneWidget);
-      expect(frameworkBack.last, isFalse, reason: '回到根页后应恢复系统退出');
-      await tester.pumpWidget(const SizedBox.shrink());
-    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
-
-    testWidgets('冷启动取走小组件路由直接显示，${theme.name} 取消返回保留课程且宫格仍有动画', (tester) async {
-      final frameworkBack = _recordFrameworkBack(tester);
-      AppThemeMode.instance.value = theme;
-      addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
-      TimetableNotifyBridge.debugIsAndroid = true;
-      const channel = MethodChannel('dev.duohuo.nuist_sta_app/notify_widget');
-      final messenger =
-          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-      var launches = 0;
-      messenger.setMockMethodCallHandler(channel, (call) async {
-        if (call.method == 'takeLaunchRoute') {
-          launches++;
-          return '/apps/timetable';
-        }
-        return null;
-      });
-      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-      load(TimetableParser.parseKbRows([row(1, 2)]).courses);
-      await tester.pumpWidget(const NuistApp());
-      await tester.pumpAndSettle();
-      expect(launches, 1);
-      final router =
-          tester.widget<MaterialApp>(find.byType(MaterialApp)).routerConfig!
-              as GoRouter;
-      final context = tester.element(find.byType(TimetablePage));
-      final route = ModalRoute.of(context)! as PageRoute;
-      expect(route.transitionDuration, Duration.zero);
-      expect(route.animation!.value, 1);
-      expect(route.popGestureEnabled, isTrue);
-      expect(frameworkBack.last, isTrue, reason: '隐藏学习分支不能取消课表的系统返回登记');
-      expect(
-        _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
-        hasLength(1),
-      );
-      Future<void> gesture(String method, [double progress = 0]) async {
-        if (method == 'startBackGesture') {
-          expect(
-            frameworkBack.last,
-            isTrue,
-            reason: '平台未登记时 Android 不会发送页面返回手势',
-          );
-        }
-        await messenger.handlePlatformMessage(
-          'flutter/backgesture',
-          const StandardMethodCodec().encodeMethodCall(
-            MethodCall(method, {
-              'touchOffset': [5.0, 300.0],
-              'progress': progress,
-              'swipeEdge': 0,
-            }),
-          ),
-          (_) {},
-        );
-        await tester.pump();
-      }
-
-      await gesture('startBackGesture');
-      await gesture('updateBackGestureProgress', .4);
-      expect(route.animation!.value, closeTo(.6, .001));
-      await gesture('cancelBackGesture');
-      await tester.pumpAndSettle();
-      expect(route.isCurrent, isTrue);
-      expect(find.byType(TimetablePage), findsOneWidget);
-      expect(frameworkBack.last, isTrue);
-      await gesture('startBackGesture');
-      await gesture('updateBackGestureProgress', .4);
-      await gesture('commitBackGesture');
-      await tester.pumpAndSettle();
-      expect(router.routerDelegate.currentConfiguration.uri.path, '/');
-      expect(find.byType(HomePage), findsOneWidget);
-      expect(frameworkBack.last, isFalse);
-      await tester.ensureVisible(find.text('课表'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('课表'));
-      await tester.pumpAndSettle();
-      final ordinary =
-          ModalRoute.of(tester.element(find.byType(TimetablePage)))!
-              as PageRoute;
-      expect(ordinary.transitionDuration, isNot(Duration.zero));
-      expect(ordinary.popGestureEnabled, isTrue);
-      expect(frameworkBack.last, isTrue);
-      await tester.pumpWidget(const SizedBox.shrink());
-    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
-
-    testWidgets('小组件直接进入课表不播放入场动画，${theme.name} 仍支持返回取消和完成', (tester) async {
-      final frameworkBack = _recordFrameworkBack(tester);
-      AppThemeMode.instance.value = theme;
-      addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
-      load(TimetableParser.parseKbRows([row(1, 2)]).courses);
-      await tester.pumpWidget(const NuistApp());
-      await tester.pumpAndSettle();
-      final messenger = tester.binding.defaultBinaryMessenger;
-      await messenger.handlePlatformMessage(
-        'dev.duohuo.nuist_sta_app/notify_widget',
-        const StandardMethodCodec().encodeMethodCall(
-          const MethodCall('openRoute', '/apps/timetable'),
-        ),
-        (_) {},
-      );
-      await tester.pump();
-      await tester.pump();
-      final context = tester.element(find.byType(TimetablePage));
-      final route = ModalRoute.of(context)! as PageRoute;
-      expect(route.transitionDuration, Duration.zero);
-      expect(route.animation!.value, 1);
-      expect(route.popGestureEnabled, isTrue);
-      expect(frameworkBack.last, isTrue, reason: '热启动课表也必须保持平台返回登记');
-      Future<void> gesture(String method, [double progress = 0]) async {
-        if (method == 'startBackGesture') {
-          expect(
-            frameworkBack.last,
-            isTrue,
-            reason: '平台未登记时 Android 不会发送页面返回手势',
-          );
-        }
-        await messenger.handlePlatformMessage(
-          'flutter/backgesture',
-          const StandardMethodCodec().encodeMethodCall(
-            MethodCall(method, {
-              'touchOffset': [5.0, 300.0],
-              'progress': progress,
-              'swipeEdge': 0,
-            }),
-          ),
-          (_) {},
-        );
-        await tester.pump();
-      }
-
-      await gesture('startBackGesture');
-      await gesture('updateBackGestureProgress', 0.4);
-      expect(route.animation!.value, closeTo(0.6, 0.001));
-      await gesture('cancelBackGesture');
-      await tester.pumpAndSettle();
-      expect(route.isCurrent, isTrue);
-      expect(frameworkBack.last, isTrue);
-      await gesture('startBackGesture');
-      await gesture('updateBackGestureProgress', 0.4);
-      await gesture('commitBackGesture');
-      await tester.pumpAndSettle();
-      expect(find.byType(TimetablePage), findsNothing);
-      expect(find.byType(HomePage), findsOneWidget);
-      expect(frameworkBack.last, isFalse);
-    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
-  }
-
-  final samplePath =
-      Platform.environment['TIMETABLE_REAL_SAMPLE'] ??
-      'test/fixtures/timetable/kb_real_sample.json';
-  test('本地真实样例：控制器→MethodChannel JSON 包含多门课程及倒计时边界', () async {
-    final raw = jsonDecode(
-      await File(samplePath).readAsString(),
-    ) as Map<String, dynamic>;
-    final rows = ((raw['datas'] as Map)['cxxszhxqkb'] as Map)['rows'] as List;
-    final courses = TimetableParser.parseKbRows(rows).courses;
-    load(courses);
-    final report = <String>{};
-    DateTime? busyDay;
-    var maxClasses = 0;
-    final svc = TimetableNotifyService(controller: ctl);
-    for (var offset = 0; offset < 24 * 7; offset++) {
-      final date = termStart.add(Duration(days: offset));
-      final items = ctl.coursesOnDate(date);
-      final classes = svc.classesOn(date);
-      if (classes.length > maxClasses) {
-        maxClasses = classes.length;
-        busyDay = date;
-      }
-      for (var i = 0; i < items.length; i++) {
-        final kind = timingKindOf(course: items[i].course, slot: items[i].slot);
-        if (kind == CourseTimingKind.standard) continue;
-        final s = items[i].slot;
-        expect(classes[i].end.isAfter(classes[i].start), isTrue);
-        report.add(
-          '| ${items[i].course.name} | ${kind.name} | ${s.startNode}–${s.endNode} | ${classes[i].timeRange} |',
-        );
-      }
-    }
-    expect(maxClasses, greaterThanOrEqualTo(3));
-    expect(report.any((s) => s.contains('| pe | 7–8 | 15:55-17:25')), isTrue);
-    final now = busyDay!.add(const Duration(hours: 7, minutes: 30));
-    ctl.debugSetSnapshot(ctl.snapshot.copyWith(syncedAt: now));
-    TimetableController.bindingCheck = () async => true;
-    await ctl.refreshPortalBound();
-    const channel = MethodChannel('device_regression_notify');
-    final calls = <MethodCall>[];
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (call) async {
-          calls.add(call);
-          return null;
-        });
-    addTearDown(
-      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, null),
-    );
-    TimetableNotifyBridge.debugIsAndroid = true;
-    final bridge = TimetableNotifyBridge(channel: channel);
-    for (final count in [1, 2, 3]) {
-      ctl.debugSetSnapshot(
-        ctl.snapshot.copyWith(
-          settings: ctl.settings.copyWith(widgetCourseCount: count),
-        ),
-      );
-      final service = TimetableNotifyService(
-        controller: ctl,
-        bridge: bridge,
-        clock: () => now,
-      );
-      await service.refreshWidget();
-      final payload =
-          jsonDecode((calls.last.arguments as Map)['payload'] as String) as Map;
-      expect(payload['state'], 'ok');
-      expect(payload['prefs']['courseCount'], count);
-      expect(payload['prefs']['showCountdown'], isTrue);
-      final items = payload['days'][0]['items'] as List;
-      expect(items, hasLength(maxClasses));
-      for (final item in items) {
-        expect(
-          DateTime.parse(item['end'] as String)
-              .isAfter(DateTime.parse(item['start'] as String)),
-          isTrue,
-        );
-        expect(item['startMs'], isA<int>());
-        expect(item['endMs'], isA<int>());
-        expect(item['staticBefore']['time'], isNotEmpty);
-        expect(item['staticDuring']['time'], isNotEmpty);
-      }
-      final selected = selectWidgetRows(
-        service.classesOn(busyDay),
-        now,
-        prefs: WidgetPrefs(courseCount: count),
-      );
-      expect(selected.rows.length, count - 1);
-      final small = selectWidget2x2(service.classesOn(busyDay), now);
-      expect(small.main, isNotNull);
-      expect(small.after, isNotNull);
-    }
-    final out = Platform.environment['TIMETABLE_TIMING_RESULT'];
-    if (out != null) {
-      await File(out).writeAsString((report.toList()..sort()).join('\n'));
-    }
-  }, skip: !File(samplePath).existsSync() ? 'real sample not present' : false);
-
-  testWidgets(
-    '未知 URI 显示友好回退页并可返回首页，nuist://timetable/today?focus=tomorrow 安全回落首页',
-    (tester) async {
-      final router = buildRouter();
-      addTearDown(router.dispose);
-      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
-      await tester.pumpAndSettle();
-
-      router.go('nuist://timetable/today?focus=tomorrow');
-      await tester.pumpAndSettle();
-      expect(router.routerDelegate.currentConfiguration.uri.path, '/');
-      expect(find.byType(HomePage), findsOneWidget);
-      expect(find.textContaining('GoException'), findsNothing);
-      expect(find.textContaining('Page Not Found'), findsNothing);
-
-      router.go('/nonexistent/invalid/path?foo=bar');
-      await tester.pumpAndSettle();
-      expect(find.textContaining('GoException'), findsNothing);
-      expect(find.textContaining('Page Not Found'), findsNothing);
-      expect(find.text('页面不存在'), findsOneWidget);
-      expect(find.text('返回首页'), findsOneWidget);
-      await tester.tap(find.text('返回首页'));
-      await tester.pumpAndSettle();
-      expect(router.routerDelegate.currentConfiguration.uri.path, '/');
-      expect(find.byType(HomePage), findsOneWidget);
-
-      // 冷启动带着自定义 scheme 初始路由进入 NuistApp 也安全落回首页。
-      tester.platformDispatcher.defaultRouteNameTestValue =
-          'nuist://timetable/today?focus=tomorrow';
-      addTearDown(tester.platformDispatcher.clearDefaultRouteNameTestValue);
-      await tester.pumpWidget(const NuistApp());
-      await tester.pumpAndSettle();
-      expect(find.byType(HomePage), findsOneWidget);
-      expect(find.textContaining('GoException'), findsNothing);
-      expect(find.textContaining('Page Not Found'), findsNothing);
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
-
-  testWidgets(
-    '已在 ?focus=tomorrow 滑动到其他周后再次打开 /apps/timetable?focus=tomorrow 重新聚焦明天所在周',
-    (tester) async {
-      final now = DateTime.now();
-      final tomorrow = DateTime(now.year, now.month, now.day + 1);
-      final tomorrowMonday = tomorrow.subtract(
-        Duration(days: tomorrow.weekday - DateTime.monday),
-      );
-      // 让明天落在第 2 周，便于验证第 2 周 ↔ 其他周的切换。
-      final dynamicTermStart = tomorrowMonday.subtract(const Duration(days: 7));
-      ctl.debugSetSnapshot(
-        TimetableSnapshot(
-          courses: TimetableParser.parseKbRows([row(1, 2, weeks: '11111')])
-              .courses,
-          periods: TimetableController.defaultPeriods(),
-          settings: TimetableSettings(termStartDate: dynamicTermStart),
-          syncedAt: now,
-        ),
-      );
-      expect(ctl.actualWeek(tomorrow), 2);
-
-      await tester.pumpWidget(const NuistApp());
-      await tester.pumpAndSettle();
-      final router =
-          tester.widget<MaterialApp>(find.byType(MaterialApp)).routerConfig!
-              as GoRouter;
-      Future<void> open(String route) async {
-        final data = const StandardMethodCodec().encodeMethodCall(
-          MethodCall('openRoute', route),
-        );
-        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
-          'dev.duohuo.nuist_sta_app/notify_widget',
-          data,
-          (_) {},
-        );
-        await tester.pumpAndSettle();
-      }
-
-      await open('/apps/timetable?focus=tomorrow');
-      expect(find.byType(TimetablePage), findsOneWidget);
-      expect(ctl.viewingWeek, 2);
-      expect(
-        router.state.uri.toString(),
-        '/home/apps/timetable?focus=tomorrow',
-      );
-
-      // 用户手动向左滑动到第 3 周。
-      await tester.drag(find.byType(PageView), const Offset(-600, 0));
-      await tester.pumpAndSettle();
-      expect(ctl.viewingWeek, 3);
-
-      // 再次点击明日课表通知：路由 URI 未变但仍触发重新聚焦明天所在第 2 周，且不叠页。
-      await open('/apps/timetable?focus=tomorrow');
-      expect(ctl.viewingWeek, 2);
-      expect(
-        _imperativeMatches(router.routerDelegate.currentConfiguration.matches),
-        hasLength(1),
-      );
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
 }

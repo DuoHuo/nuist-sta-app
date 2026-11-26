@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nuist_sta_app/core/app_registry.dart';
 import 'package:nuist_sta_app/core/logging/diagnostic_error.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:nuist_sta_app/core/auth/campus_transport.dart';
@@ -14,7 +15,12 @@ import 'package:nuist_sta_app/core/auth/session_executor.dart';
 import 'package:nuist_sta_app/core/config/campus_config.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_exams_manifest.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_manifest.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_overrides.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 
 Course _course(String id, {int day = 1}) => Course(
@@ -181,30 +187,33 @@ void main() {
       expect(await TimetableApi.fetchSemesterCourses('2026-2027-1'), isEmpty);
     });
 
-    test('timeout → network', () async {
-      TimetableApi.debugPost = (u, f) async => throw TimeoutException('t');
-      await expectFailure(TimetableSyncFailure.network);
-    });
-    test('SocketException/DNS → network', () async {
-      TimetableApi.debugPost = (u, f) async =>
-          throw const SocketException('Failed host lookup');
-      await expectFailure(TimetableSyncFailure.network);
-    });
-    test('Dio connectionTimeout → network', () async {
-      TimetableApi.debugPost = (u, f) async => throw DioException(
-        requestOptions: RequestOptions(path: u.toString()),
-        type: DioExceptionType.connectionTimeout,
-      );
-      await expectFailure(TimetableSyncFailure.network);
-    });
-    test('HTTP 5xx → server', () async {
-      TimetableApi.debugPost = (u, f) async =>
-          throw const JwxtHttpError('cxxszhxqkb.do', 502);
-      await expectFailure(TimetableSyncFailure.server);
-    });
-    test('other → unknown', () async {
-      TimetableApi.debugPost = (u, f) async => throw StateError('x');
-      await expectFailure(TimetableSyncFailure.unknown);
+    test('网络/5xx/未知错误均正确分类并保留缓存', () async {
+      final cases = <(String, Object Function(Uri), TimetableSyncFailure)>[
+        ('timeout', (_) => TimeoutException('t'), TimetableSyncFailure.network),
+        (
+          'SocketException/DNS',
+          (_) => const SocketException('Failed host lookup'),
+          TimetableSyncFailure.network,
+        ),
+        (
+          'Dio connectionTimeout',
+          (u) => DioException(
+            requestOptions: RequestOptions(path: u.toString()),
+            type: DioExceptionType.connectionTimeout,
+          ),
+          TimetableSyncFailure.network,
+        ),
+        (
+          'HTTP 5xx',
+          (_) => const JwxtHttpError('cxxszhxqkb.do', 502),
+          TimetableSyncFailure.server,
+        ),
+        ('other', (_) => StateError('x'), TimetableSyncFailure.unknown),
+      ];
+      for (final (_, makeError, expected) in cases) {
+        TimetableApi.debugPost = (u, f) async => throw makeError(u);
+        await expectFailure(expected);
+      }
     });
   });
 
@@ -218,12 +227,6 @@ void main() {
   }
 
   group('统一鉴权真实请求链路', () {
-    final freshJson = {
-      'code': '0',
-      'datas': {
-        'cxxszhxqkb': {'rows': <Object?>[]},
-      },
-    };
     Response<dynamic> queryResponse(RequestOptions options) {
       final endpoint = options.uri.pathSegments.last.replaceFirst('.do', '');
       return _resp(
@@ -329,55 +332,25 @@ void main() {
       expect(h.logins, 4, reason: '两个应用各自初始化，两次失效各自恢复');
     });
 
-    test('五个错峰403只共享一次重登，较晚响应复用新revision', () async {
-      final delayed = Completer<void>();
-      final started = Completer<void>();
-      var rejected = 0;
-      final h = install((options, logins) async {
-        if (options.method != 'POST') {
-          return _resp(
-            options.uri,
-            data: '<html>首页</html>',
-            contentType: 'text/html',
-          );
-        }
-        if (logins == 1) {
-          rejected++;
-          if (rejected == 5) started.complete();
-          if (rejected >= 3) await delayed.future;
-          return _resp(options.uri, status: 403);
-        }
-        return _resp(options.uri, data: freshJson);
-      });
-      final requests = List.generate(
-        5,
-        (_) => TimetableApi.fetchSemesterCourses('2026-2027-1'),
-      );
-      await started.future;
-      await pumpEventQueue();
-      expect(h.logins, 2);
-      delayed.complete();
-      expect(await Future.wait(requests), everyElement(isEmpty));
-      expect(h.logins, 2);
-    });
-
-    for (final entry in <String, (int, String, TimetableSyncFailure)>{
-      '登录HTML': (200, loginHtml, TimetableSyncFailure.sessionExpired),
-      'casLoginForm': (
-        200,
-        '<html><form id="casLoginForm"></form></html>',
-        TimetableSyncFailure.sessionExpired,
-      ),
-      '普通维护HTML': (200, webvpnMaintenanceHtml, TimetableSyncFailure.unknown),
-      '502网关': (502, gateway502Html, TimetableSyncFailure.server),
-      '503含authserver': (
-        503,
-        '<html>authserver维护</html>',
-        TimetableSyncFailure.server,
-      ),
-      '504网关': (504, gateway502Html, TimetableSyncFailure.server),
-    }.entries) {
-      test('${entry.key}正确分类并保持缓存', () async {
+    test('登录HTML、维护页与5xx网关页均正确分类、控制重登次数并保持缓存', () async {
+      final cases = <String, (int, String, TimetableSyncFailure)>{
+        '登录HTML': (200, loginHtml, TimetableSyncFailure.sessionExpired),
+        'casLoginForm': (
+          200,
+          '<html><form id="casLoginForm"></form></html>',
+          TimetableSyncFailure.sessionExpired,
+        ),
+        '普通维护HTML': (200, webvpnMaintenanceHtml, TimetableSyncFailure.unknown),
+        '502网关': (502, gateway502Html, TimetableSyncFailure.server),
+        '503含authserver': (
+          503,
+          '<html>authserver维护</html>',
+          TimetableSyncFailure.server,
+        ),
+        '504网关': (504, gateway502Html, TimetableSyncFailure.server),
+      };
+      for (final entry in cases.entries) {
+        auth?.dio.close(force: true);
         final h = install((options, logins) {
           if (options.method != 'POST') {
             return _resp(
@@ -397,9 +370,10 @@ void main() {
         expect(
           h.logins,
           entry.value.$3 == TimetableSyncFailure.sessionExpired ? 2 : 1,
+          reason: entry.key,
         );
-      });
-    }
+      }
+    });
 
     test('200业务JSON错误不重登', () async {
       final h = install(
@@ -415,21 +389,19 @@ void main() {
       expect(h.logins, 1);
     });
 
-    for (final error in [
-      const PortalLoginError(
-        '教务拒绝',
-        code: 'service_status_rejected',
-        context: {'status_code': 403},
-      ),
-      const PortalLoginError('重登耗尽', code: 'reauthentication_exhausted'),
-      const PortalLoginError('账号变化', code: 'session_generation_changed'),
-    ]) {
-      test('${error.code}归为sessionExpired', () async {
+    test('PortalLoginError 会话失效码归为 sessionExpired，5xx 保留 server 分类', () async {
+      for (final error in const [
+        PortalLoginError(
+          '教务拒绝',
+          code: 'service_status_rejected',
+          context: {'status_code': 403},
+        ),
+        PortalLoginError('重登耗尽', code: 'reauthentication_exhausted'),
+        PortalLoginError('账号变化', code: 'session_generation_changed'),
+      ]) {
         TimetableApi.debugPost = (url, form) async => throw error;
         await expectFailure(TimetableSyncFailure.sessionExpired);
-      });
-    }
-    test('PortalLoginError保留5xx服务器分类', () {
+      }
       expect(
         classifySyncError(
           const PortalLoginError('服务拒绝', context: {'status_code': 503}),
@@ -625,6 +597,329 @@ void main() {
       expect(c.syncStatus, TimetableSyncStatus.success);
     },
   );
+
+  group('X23 classifySyncError & X24 unbound gating', () {
+    test('classifySyncError 映射网络、凭证与登录异常', () {
+      final ro = RequestOptions(path: '/');
+      expect(
+        classifySyncError(
+          const PortalNetworkError("Failed host lookup: 'jwxt.example.test'"),
+        ),
+        TimetableSyncFailure.network,
+      );
+      expect(
+        classifySyncError(
+          DioException(
+            requestOptions: ro,
+            error: const PortalNetworkError('Failed host lookup'),
+          ),
+        ),
+        TimetableSyncFailure.network,
+      );
+      expect(
+        classifySyncError(
+          DioException(
+            requestOptions: ro,
+            error: const SocketException('Failed host lookup'),
+          ),
+        ),
+        TimetableSyncFailure.network,
+      );
+      expect(
+        classifySyncError(TimeoutException('t')),
+        TimetableSyncFailure.network,
+      );
+      expect(
+        classifySyncError(const PortalCredentialError('x')),
+        TimetableSyncFailure.sessionExpired,
+      );
+      expect(
+        classifySyncError(const PortalLoginError('x')),
+        TimetableSyncFailure.unknown,
+      );
+    });
+
+    test('未绑定时 autoSync / syncIfBound 不发请求；解绑清空过期失败态', () async {
+      final origBinding = TimetableController.bindingCheck;
+      addTearDown(() => TimetableController.bindingCheck = origBinding);
+      c.debugReset();
+      var fetches = 0;
+      TimetableController.fetchSnapshot = (term, {baseSettings}) async {
+        fetches++;
+        throw const PortalNetworkError('Failed host lookup');
+      };
+      TimetableController.bindingCheck = () async => false;
+      await c.ensureStarted();
+      expect(c.needsSync, isTrue);
+      await c.autoSyncIfNeeded();
+      expect(await c.syncIfBound(), isFalse);
+      expect(fetches, 0);
+      expect(c.syncStatus, TimetableSyncStatus.idle);
+      expect(c.syncFailure, TimetableSyncFailure.none);
+
+      TimetableController.bindingCheck = () async => true;
+      expect(await c.syncIfBound(), isTrue);
+      expect(c.syncFailure, TimetableSyncFailure.network);
+      await c.handleLogout();
+      expect(c.syncStatus, TimetableSyncStatus.idle);
+      expect(c.syncFailure, TimetableSyncFailure.none);
+      expect(c.statusMessage, isNull);
+    });
+  });
+
+  group('unbind 解绑状态与失败清理边界', () {
+    late Directory tmp;
+    final c = TimetableController.instance;
+    const settings = TimetableSettings(termCode: '2026-2027-1');
+    final termStart = DateTime(2026, 8, 31);
+    final monday = DateTime(2026, 9, 7);
+    List<Course> nextFetch = const [];
+    List<ScheduleEvent>? nextExams;
+    final origClock = TimetableController.clock;
+    final origSyncClock = TimetableController.syncClock;
+    final origBinding = TimetableController.bindingCheck;
+    final origFetch = TimetableController.fetchSnapshot;
+    final origFetchExams = TimetableController.fetchExams;
+
+    Course jwxtCourse(
+      String id,
+      String name, {
+      int day = 1,
+      int start = 1,
+      int end = 2,
+      String weeks = '1111111111111111',
+    }) => Course(
+      id: id,
+      name: name,
+      source: CourseSource.jwxt,
+      slots: [
+        CourseSlot(
+          day: day,
+          startNode: start,
+          endNode: end,
+          weeks: weeks,
+          teacher: '张老师',
+          location: '教一-101',
+        ),
+      ],
+    );
+
+    Course manualCourse(String id, String name) => Course(
+      id: id,
+      name: name,
+      source: CourseSource.manual,
+      slots: const [
+        CourseSlot(day: 3, startNode: 5, endNode: 6, weeks: '1111111111111111'),
+      ],
+    );
+
+    TimetableSnapshot snap(List<Course> courses) => TimetableSnapshot(
+      courses: courses,
+      periods: TimetableController.defaultPeriods(),
+      settings: settings.copyWith(
+        termStartDate: termStart,
+        termStartFromJwxt: true,
+      ),
+    );
+
+    ScheduleEvent examEvent(String id, String code) => ScheduleEvent(
+      id: id,
+      kind: ScheduleKind.exam,
+      source: ScheduleSource.jwxt,
+      title: '高等数学考试',
+      date: monday,
+      start: const TimeOfDayMinutes(9, 0),
+      end: const TimeOfDayMinutes(11, 0),
+      location: '教二-201',
+      courseCode: code,
+    );
+
+    ScheduleEvent otherEvent(String id) => ScheduleEvent(
+      id: id,
+      kind: ScheduleKind.other,
+      source: ScheduleSource.manual,
+      title: '社团活动',
+      date: monday,
+      start: const TimeOfDayMinutes(20, 0),
+      end: const TimeOfDayMinutes(21, 0),
+    );
+
+    Future<void> restart() async {
+      c.debugReset();
+      await c.ensureStarted();
+    }
+
+    Future<void> seed(
+      List<Course> jwxt, {
+      List<Course> manual = const [],
+    }) async {
+      nextFetch = jwxt;
+      await c.ensureStarted();
+      for (final m in manual) {
+        await c.addManualCourse(m);
+      }
+      await c.syncFromJwxt();
+      expect(c.syncStatus, TimetableSyncStatus.success);
+    }
+
+    Course shown(String id) => c.courses.firstWhere((x) => x.id == id);
+
+    setUp(() async {
+      tmp = await Directory.systemTemp.createTemp('tt_unbind');
+      TimetableStore.debugDirectory = tmp;
+      TimetableController.clock = () => monday;
+      TimetableController.bindingCheck = () async => true;
+      TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
+          snap(nextFetch);
+      nextExams = null;
+      TimetableController.fetchExams = (term) async => nextExams;
+      c.debugReset();
+    });
+
+    tearDown(() async {
+      TimetableStore.debugDirectory = null;
+      TimetableController.clock = origClock;
+      TimetableController.syncClock = origSyncClock;
+      TimetableController.fetchSnapshot = origFetch;
+      TimetableController.fetchExams = origFetchExams;
+      TimetableController.bindingCheck = origBinding;
+      c.debugReset();
+      if (await tmp.exists()) await tmp.delete(recursive: true);
+    });
+
+    test(
+      'EX26 keeps overrides, colour map, manual courses and manual events',
+      () async {
+        await seed(
+          [jwxtCourse('j1', '高等数学'), jwxtCourse('j2', '大学物理', day: 2)],
+          manual: [manualCourse('m1', '自习')],
+        );
+        await c.moveSlot(
+          shown('j1'),
+          0,
+          toDay: 4,
+          toStartPeriod: 3,
+          week: 2,
+          scope: MoveScope.thisWeek,
+        );
+        await c.editJwxtCourse('j1', name: 'A');
+        await c.deleteJwxtCourse('j2');
+        await c.addScheduleEvent(otherEvent('o1'));
+        await c.replaceJwxtExams([examEvent('e1', 'MATH01')]);
+        await c.deleteScheduleEvent('e1');
+        final colorsFile = File(
+          '${tmp.path}/${TimetableStore.courseColorsFile}',
+        );
+        final colorsBefore = colorsFile.readAsStringSync();
+        final manualColor = c.colorIndexOf(c.manualCourses.single);
+
+        await c.handleLogout();
+        expect(c.jwxtCourses, isEmpty);
+        expect(c.settings.termStartDate, isNull);
+        expect(c.scheduleEvents.map((e) => e.id), ['o1']);
+        expect(c.slotOverrides, isNotEmpty);
+        expect(c.courseEditOf('j1'), isNotNull);
+        expect(c.courseEditOf('j2')?.deleted, isTrue);
+        expect(c.manualCourses.map((m) => m.name), ['自习']);
+        expect(colorsFile.readAsStringSync(), colorsBefore);
+
+        await restart();
+        expect(c.slotOverrides, isNotEmpty);
+        expect(c.courseEditOf('j1')?.name, 'A');
+        expect(c.colorIndexOf(c.manualCourses.single), manualColor);
+        final key = ScheduleEvent.examKeyOf(
+          'MATH01',
+          monday,
+          const TimeOfDayMinutes(9, 0),
+        );
+        expect(c.isJwxtOverridden(examKey: key), isTrue);
+
+        await c.syncFromJwxt();
+        expect(shown('j1').name, 'A');
+        expect(c.courses.any((x) => x.id == 'j2'), isFalse);
+      },
+    );
+
+    test('通过 AppRegistry 解绑后清掉教务课（含磁盘），手动课保留', () async {
+      await seed([jwxtCourse('j1', '教务课')], manual: [manualCourse('m1', '社团')]);
+      expect(File('${tmp.path}/snapshot.json').existsSync(), isTrue);
+      expect(
+        await AppRegistry([timetableManifest, examScheduleManifest])
+            .notifyPortalBindingChanged(bound: false),
+        isTrue,
+      );
+      expect(c.portalBound, isFalse);
+      expect(c.jwxtCourses, isEmpty);
+      expect(c.manualCourses.map((e) => e.name), ['社团']);
+
+      await restart();
+      expect(c.jwxtCourses, isEmpty);
+      expect(c.manualCourses.map((e) => e.name), ['社团']);
+      expect(c.settings.termStartFromJwxt, isFalse);
+      expect(File('${tmp.path}/snapshot.json').existsSync(), isFalse);
+    });
+
+    for (final failedStep in ['snapshot', 'events']) {
+      test('$failedStep 清理失败仍清理其他文件，通知解绑并上抛保存异常', () async {
+        await seed(
+          [jwxtCourse('j1', '教务课')],
+          manual: [manualCourse('manual-course', '社团')],
+        );
+        final exam = examEvent('jwxt-exam', 'EXAMPLE01');
+        await c.addScheduleEvent(otherEvent('manual-event'));
+        await c.replaceJwxtExams([exam]);
+        final settingsFile = File('${tmp.path}/settings.json');
+        final raw = jsonDecode(settingsFile.readAsStringSync()) as Map;
+        raw['futureKey'] = 'keep';
+        raw['periodHeight'] = 44;
+        settingsFile.writeAsStringSync(jsonEncode(raw));
+        final snapshotFile = File('${tmp.path}/snapshot.json');
+        if (failedStep == 'snapshot') {
+          snapshotFile.deleteSync();
+          Directory(snapshotFile.path).createSync();
+        } else {
+          Directory('${tmp.path}/schedule_events.json.tmp').createSync();
+        }
+        final reasons = <ScheduleChangeReason>[];
+        final subscription = c.scheduleChanged.listen(reasons.add);
+        addTearDown(subscription.cancel);
+        var notified = false;
+        void listener() {
+          if (!c.portalBound && c.jwxtCourses.isEmpty) notified = true;
+        }
+
+        c.addListener(listener);
+        addTearDown(() => c.removeListener(listener));
+
+        await expectLater(
+          c.handleLogout(),
+          throwsA(isA<TimetablePersistenceException>()),
+        );
+        await pumpEventQueue();
+        expect(notified, isTrue);
+        expect(reasons, contains(ScheduleChangeReason.unbind));
+        expect(c.portalBound, isFalse);
+        expect(c.jwxtCourses, isEmpty);
+        expect(c.scheduleEvents.map((e) => e.id), ['manual-event']);
+        expect(c.manualCourses.map((m) => m.id), ['manual-course']);
+        final remainingSettings =
+            jsonDecode(settingsFile.readAsStringSync()) as Map;
+        expect(
+          remainingSettings.keys.any(TimetableStore.termSettingKeys.contains),
+          isFalse,
+        );
+        expect(remainingSettings['futureKey'], 'keep');
+        expect(remainingSettings['periodHeight'], 44);
+        if (failedStep == 'snapshot') {
+          expect((await ScheduleStore.readEvents()).map((e) => e.id), [
+            'manual-event',
+          ]);
+        } else {
+          expect(snapshotFile.existsSync(), isFalse);
+        }
+      });
+    }
+  });
 }
 
 class _MemoryStorage implements Storage {

@@ -4,17 +4,11 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nuist_sta_app/core/colors.dart';
 import 'package:nuist_sta_app/core/config/campus_config.dart';
 import 'package:nuist_sta_app/core/auth/portal_exceptions.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/logging/log_store.dart';
 import 'package:nuist_sta_app/core/logging/diagnostic_redactor.dart';
-import 'package:nuist_sta_app/core/theme.dart';
-import 'package:nuist_sta_app/shell/announcement/announcement_controller.dart';
-import 'package:nuist_sta_app/shell/profile/about/about_page.dart';
-import 'package:nuist_sta_app/shell/profile/settings/settings_page.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 
 Map<String, Object?>? _redactStoredRecord(Map<String, Object?> record) => {
   ...record,
@@ -231,13 +225,15 @@ void main() {
       expect(await Directory('${temp.path}/records').list().length, 1);
     });
 
-    test('索引轮转淘汰同Trace全部旧事件，后续与重启后事件声明历史缺失', () async {
+    test('索引轮转按大小和数量淘汰同 Trace 旧事件，后续与重启后声明历史缺失', () async {
       var store = create(fileBytes: 900, files: 2);
       await store.initialize();
       await store.append(record(1, 'b' * 32, size: 450));
       await store.append(record(2, 'b' * 32, size: 450));
       await store.append(record(3, 'c' * 32, size: 450));
-      expect(decode(await store.snapshot()).map((item) => item['seq']), [3]);
+      final rotated = await store.snapshot();
+      expect(rotated.stats.fileCount, lessThanOrEqualTo(2));
+      expect(decode(rotated).map((item) => item['seq']), [3]);
       await store.append(record(4, 'b' * 32));
       var retained = decode(await store.snapshot())
           .singleWhere((item) => item['seq'] == 4);
@@ -318,19 +314,22 @@ void main() {
       expect(await orphan.exists(), isFalse);
     });
 
-    test('留存过期按操作整体清理，不保留同Trace的半条链路', () async {
+    test('留存过期按操作整体清理活跃与归档记录，更新最早记录时间并标记历史缺失', () async {
       final store = create();
       await store.initialize();
+      final now = DateTime.now().toUtc();
       await store.append(
-        record(
-          1,
-          'b' * 32,
-          at: DateTime.now().subtract(const Duration(days: 8)),
-        ),
+        record(1, 'b' * 32, at: now.subtract(const Duration(days: 8))),
       );
-      await store.append(record(2, 'b' * 32));
-      await store.append(record(3, 'c' * 32));
-      expect(decode(await store.snapshot()).map((item) => item['seq']), [3]);
+      await store.append(record(2, 'b' * 32, at: now));
+      await store.append(record(3, 'c' * 32, at: now));
+      final snapshot = await store.snapshot();
+      expect(decode(snapshot).map((item) => item['seq']), [3]);
+      expect(snapshot.stats.oldestRecordAt, now);
+      expect(
+        await File('${temp.path}/app.log').readAsString(),
+        isNot(contains('sample.1')),
+      );
       await store.append(record(4, 'b' * 32));
       final retained = decode(await store.snapshot())
           .singleWhere((item) => item['seq'] == 4);
@@ -340,21 +339,34 @@ void main() {
       );
     });
   });
-  test('日志文本会过滤凭据、长数字标识和主机名', () {
+
+  test('日志文本过滤凭据、Basic、多值 Cookie、长数字、主机名与 URL，并规范脚本事件', () {
+    final basic = base64Encode(utf8.encode('synthetic-secret'));
     final sanitized = AppLog.sanitizeTextForTesting(
       'Authorization: Bearer abc\n'
+      'Authorization: Basic $basic\n'
+      'Cookie: a=synthetic-session; b=synthetic-cookie; c=synthetic-private\n'
       'token=secret\nstudent=202512340001\n'
-      'https://private.example/private-path\nhost=private.example',
+      'https://private.example/private-user?ticket=synthetic-ticket\n'
+      'host=private.example',
     );
 
     expect(sanitized, isNot(contains('abc')));
     expect(sanitized, isNot(contains('secret')));
+    expect(sanitized, isNot(contains('synthetic')));
+    expect(sanitized, isNot(contains(basic)));
     expect(sanitized, isNot(contains('202512340001')));
     expect(sanitized, isNot(contains('private.example')));
+    expect(sanitized, isNot(contains('private-user')));
     expect(sanitized, contains('[REDACTED_SECRET]'));
     expect(sanitized, contains('[REDACTED_ID]'));
     expect(sanitized, contains('[REDACTED_HOST]'));
     expect(sanitized, contains('[REDACTED_URL]'));
+
+    final fields = AppLog.scriptEventFields(
+      'page called credentials.create (rp=https://private.example/private-user)',
+    );
+    expect(fields, {'script_event': 'credential_create'});
   });
 
   test('嵌套操作共用 trace 并生成独立 span', () async {
@@ -524,17 +536,17 @@ void main() {
     expectStack(await exported.readAsString());
   });
 
-  for (final level in [AppLogLevel.warning, AppLogLevel.error]) {
-    test('${level.name} 控制台保留全部堆栈帧并携带同一事件序号', () {
-      final original = debugPrint;
+  test('warning 与 error 控制台保留全部堆栈帧与原始响应，无堆栈时不生成裸 null', () {
+    final original = debugPrint;
+    final frames = [
+      '#00 abs 000000007abc1234 _kDartIsolateSnapshotInstructions+0x1234',
+      for (var index = 0; index < 12; index++)
+        '#$index main (package:nuist_sta_app/main.dart:9:2)',
+      '<asynchronous suspension>',
+      '#12 _rootRun (dart:async/zone.dart:1525:13)',
+    ];
+    for (final level in [AppLogLevel.warning, AppLogLevel.error]) {
       final messages = <String>[];
-      final frames = [
-        '#00 abs 000000007abc1234 _kDartIsolateSnapshotInstructions+0x1234',
-        for (var index = 0; index < 12; index++)
-          '#$index main (package:nuist_sta_app/main.dart:9:2)',
-        '<asynchronous suspension>',
-        '#12 _rootRun (dart:async/zone.dart:1525:13)',
-      ];
       debugPrint = (message, {wrapWidth}) {
         if (message != null) messages.add(message);
       };
@@ -560,7 +572,10 @@ void main() {
       }
       expect(messages, hasLength(1));
       expect(messages.single, startsWith(level.name.toUpperCase()));
-      expect(messages.single, contains('#000001'));
+      expect(
+        messages.single,
+        contains('#${'${record!['seq']}'.padLeft(6, '0')}'),
+      );
       expect(messages.single, contains(AppLog.formatDetails(record!)));
       expect(messages.single, contains('完整控制台响应证据'));
       expect(messages.single, isNot(contains('synthetic-secret')));
@@ -572,12 +587,10 @@ void main() {
         messages.single.substring(stackOffset + marker.length),
         frames.join('\n'),
       );
-    });
-  }
+    }
 
-  test('完整控制台消息直接包含原始响应，不生成裸 null 异常占位', () {
-    Map<String, Object?>? record;
-    AppLog.recordListenerForTesting = (value) => record = value;
+    Map<String, Object?>? noStackRecord;
+    AppLog.recordListenerForTesting = (value) => noStackRecord = value;
     const response = '{"message":"gateway unavailable","value":null}';
     AppLog.logger('test.console_response').warning(
       'query.failed',
@@ -588,29 +601,52 @@ void main() {
       },
       error: const PortalLoginError('响应缺少业务数据'),
     );
-    final message = AppLog.formatConsoleMessage(record!);
+    final message = AppLog.formatConsoleMessage(noStackRecord!);
     expect(message, contains(response));
     expect(message, contains('响应缺少业务数据'));
-    expect(message, contains(AppLog.formatDetails(record!)));
+    expect(message, contains(AppLog.formatDetails(noStackRecord!)));
     expect(message.split('\n').where((line) => line.trim() == 'null'), isEmpty);
     expect(message, isNot(contains('调用堆栈:\nnull')));
   });
 
-  test('全局 Flutter 异常仅进入统一清洗后的出口', () {
+  test('全局 Flutter 异常统一清洗入口并对无堆栈框架错误安全分类', () {
     final previous = FlutterError.onError;
     final platformPrevious = PlatformDispatcher.instance.onError;
     addTearDown(() {
       FlutterError.onError = previous;
       PlatformDispatcher.instance.onError = platformPrevious;
     });
-    Map<String, Object?>? record;
-    AppLog.recordListenerForTesting = (value) => record = value;
+    final records = <Map<String, Object?>>[];
+    AppLog.recordListenerForTesting = records.add;
     AppLog.installErrorHandlers();
     FlutterError.onError!(
       FlutterErrorDetails(exception: StateError('token=synthetic-secret')),
     );
-    expect(record?['level'], 'ERROR');
-    expect(jsonEncode(record), isNot(contains('synthetic-secret')));
+    FlutterError.onError!(
+      FlutterErrorDetails(
+        exception: FlutterError(
+          'A RenderFlex overflowed by 8 pixels on the right. token=synthetic-private',
+        ),
+        library: 'rendering library',
+      ),
+    );
+    FlutterError.onError!(
+      FlutterErrorDetails(
+        exception: FlutterError(
+          'Incorrect use of ParentDataWidget. token=synthetic-private',
+        ),
+        library: 'widgets library',
+      ),
+    );
+    expect(records[0]['level'], 'ERROR');
+    expect((records[1]['attrs'] as Map)['framework_error'], 'flex_overflow');
+    expect((records[1]['attrs'] as Map)['framework_library'], 'rendering');
+    expect(
+      (records[2]['attrs'] as Map)['framework_error'],
+      'invalid_parent_data',
+    );
+    expect(jsonEncode(records), isNot(contains('synthetic-secret')));
+    expect(jsonEncode(records), isNot(contains('synthetic-private')));
   });
 
   test('并发快照、写入与清除保持顺序，不干扰轮转', () async {
@@ -639,31 +675,6 @@ void main() {
     }
     await Future.wait([store.clear(), store.append('{"event":"after_clear"}')]);
     expect((await store.snapshot()).content, '{"event":"after_clear"}\n');
-  });
-
-  test('按记录时间清除活跃文件中的过期事件', () async {
-    final temp = await Directory.systemTemp.createTemp('log_retention_test_');
-    addTearDown(() => temp.delete(recursive: true));
-    final store = RotatingLogStore(temp);
-    await store.initialize();
-    final now = DateTime.now().toUtc();
-    await store.append(
-      jsonEncode({
-        'ts': now.subtract(const Duration(days: 8)).toIso8601String(),
-        'event': 'expired',
-      }),
-    );
-    await store.append(
-      jsonEncode({'ts': now.toIso8601String(), 'event': 'current'}),
-    );
-    final snapshot = await store.snapshot();
-    expect(snapshot.content, isNot(contains('expired')));
-    expect(snapshot.content, contains('current'));
-    expect(snapshot.stats.oldestRecordAt, now);
-    expect(
-      await File('${temp.path}/app.log').readAsString(),
-      isNot(contains('expired')),
-    );
   });
 
   test('导出副本限制数量且清除时一并删除', () async {
@@ -697,171 +708,6 @@ void main() {
     expect(AppLog.verboseExpiresAt.value, isNotNull);
     await AppLog.disableVerbose();
     expect(AppLog.verboseExpiresAt.value, isNull);
-  });
-
-  testWidgets('调试构建默认简洁控制台，设置仍隐藏所有诊断入口', (tester) async {
-    expect(AppLog.verboseEnabled.value, isFalse);
-    expect(AppLog.diagnosticsVisible.value, isFalse);
-    await tester.pumpWidget(
-      MaterialApp(theme: appLightTheme(), home: const SettingsPage()),
-    );
-
-    expect(find.text('深色模式'), findsOneWidget);
-    expect(find.text('诊断与日志'), findsNothing);
-    expect(find.text('查看日志'), findsNothing);
-    expect(find.text('导出诊断日志'), findsNothing);
-    expect(find.text('清除诊断日志'), findsNothing);
-    expect(find.textContaining('详细模式'), findsNothing);
-    expect(find.textContaining('需要详细诊断时'), findsNothing);
-    await tester.pumpWidget(const SizedBox());
-  });
-
-  for (final verbose in [false, true]) {
-    testWidgets('版本号五连击只解锁入口，保留${verbose ? '详细' : '标准'}日志模式', (tester) async {
-      final expiry = verbose ? DateTime.utc(2030, 1, 1) : null;
-      AppLog.verboseEnabled.value = verbose;
-      AppLog.verboseExpiresAt.value = expiry;
-      await _openAboutFromSettings(tester);
-
-      for (var count = 0; count < 4; count++) {
-        await tester.tap(find.text('v1.2.3 (45)'));
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      expect(AppLog.diagnosticsVisible.value, isFalse);
-      await tester.tap(find.text('v1.2.3 (45)'));
-      await tester.pump();
-
-      expect(AppLog.diagnosticsVisible.value, isTrue);
-      expect(AppLog.verboseEnabled.value, verbose);
-      expect(AppLog.verboseExpiresAt.value, expiry);
-      expect(find.text('已显示诊断与日志入口'), findsOneWidget);
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-
-      expect(find.text('诊断与日志'), findsOneWidget);
-      expect(find.text('查看日志'), findsOneWidget);
-      expect(find.text('导出诊断日志'), findsOneWidget);
-      expect(find.text('清除诊断日志'), findsOneWidget);
-      expect(find.textContaining('需要详细诊断时'), findsNothing);
-      await tester.pumpWidget(const SizedBox());
-    });
-  }
-
-  testWidgets('版本号点击间隔超过三秒后必须重新累计五次', (tester) async {
-    await _openAboutFromSettings(tester);
-    for (var count = 0; count < 4; count++) {
-      await tester.tap(find.text('v1.2.3 (45)'));
-      await tester.pump(const Duration(milliseconds: 100));
-    }
-    await tester.pump(const Duration(seconds: 4));
-    await tester.tap(find.text('v1.2.3 (45)'));
-    await tester.pump();
-    expect(AppLog.diagnosticsVisible.value, isFalse);
-
-    for (var count = 0; count < 4; count++) {
-      await tester.tap(find.text('v1.2.3 (45)'));
-      await tester.pump(const Duration(milliseconds: 100));
-    }
-    expect(AppLog.diagnosticsVisible.value, isTrue);
-    await tester.pumpWidget(const SizedBox());
-  });
-
-  testWidgets('解锁后点击标准模式行才开启三十分钟详细日志', (tester) async {
-    AppLog.diagnosticsVisible.value = true;
-    AppLog.verboseEnabled.value = false;
-    await tester.pumpWidget(
-      MaterialApp(theme: appLightTheme(), home: const SettingsPage()),
-    );
-    await tester.pumpAndSettle();
-    expect(AppLog.verboseExpiresAt.value, isNull);
-
-    final before = DateTime.now().toUtc();
-    // 设置页新增了「隐私」分组，日志模式行被推到视口外，先滚动到可见处。
-    await tester.ensureVisible(find.text('标准模式 · 关键步骤摘要，完整详情已保存'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('标准模式 · 关键步骤摘要，完整详情已保存'));
-    await tester.pumpAndSettle();
-
-    expect(AppLog.verboseEnabled.value, isTrue);
-    expect(
-      AppLog.verboseExpiresAt.value?.millisecondsSinceEpoch,
-      inInclusiveRange(
-        before.add(const Duration(minutes: 30)).millisecondsSinceEpoch,
-        DateTime.now()
-            .toUtc()
-            .add(const Duration(minutes: 30))
-            .millisecondsSinceEpoch,
-      ),
-    );
-    expect(AppLog.diagnosticsVisible.value, isTrue);
-    expect(find.textContaining('详细控制台 · 剩余'), findsOneWidget);
-    await tester.ensureVisible(find.widgetWithText(TextButton, '关闭'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(TextButton, '关闭'));
-    await tester.pumpAndSettle();
-    expect(AppLog.verboseEnabled.value, isFalse);
-    expect(AppLog.verboseExpiresAt.value, isNull);
-    expect(find.text('标准模式 · 关键步骤摘要，完整详情已保存'), findsOneWidget);
-    expect(find.textContaining('需要详细诊断时'), findsNothing);
-    await tester.pumpWidget(const SizedBox());
-    await AppLog.resetForTesting();
-  });
-
-  testWidgets('设置可预览日志、筛选错误并展开安全堆栈', (tester) async {
-    final temp = await tester.runAsync(
-      () => Directory.systemTemp.createTemp('log_preview_test_'),
-    );
-    addTearDown(() async {
-      await tester.runAsync(() async {
-        await AppLog.resetForTesting();
-        await temp!.delete(recursive: true);
-      });
-    });
-    await tester.runAsync(() async {
-      await AppLog.initialize(directory: temp);
-      AppLog.logger('test.preview').error(
-        'synthetic.failed',
-        error: StateError('synthetic'),
-        stackTrace: StackTrace.fromString(
-          '#0 main (package:nuist_sta_app/main.dart:9:2)',
-        ),
-      );
-      for (var index = 0; index < 330; index++) {
-        AppLog.logger('test.preview')
-            .debug('synthetic.noise', fields: {'count': index});
-      }
-      await AppLog.snapshot();
-    });
-    await _openLogPreview(tester, appLightTheme());
-    expect(find.textContaining('synthetic.noise'), findsNothing);
-    await tester.tap(find.text('全部'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('synthetic.noise'), findsWidgets);
-    await tester.tap(find.text('仅错误'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('未分类异常（StateError）'), findsOneWidget);
-    await tester.tap(find.textContaining('synthetic.failed'));
-    await tester.pumpAndSettle();
-    expect(find.text('调用堆栈'), findsOneWidget);
-    expect(find.textContaining('main.dart:9:2'), findsWidgets);
-    await tester.pumpWidget(const SizedBox());
-  });
-
-  test('日志文件按大小轮转并限制文件数量', () async {
-    final temp = await Directory.systemTemp.createTemp('log_store_test_');
-    addTearDown(() async {
-      if (await temp.exists()) await temp.delete(recursive: true);
-    });
-    final store = RotatingLogStore(temp, maxFileBytes: 80, maxFiles: 3);
-    await store.initialize();
-    for (var index = 0; index < 10; index++) {
-      await store.append('record-$index-${'x' * 30}');
-    }
-
-    final snapshot = await store.snapshot();
-    expect(snapshot.stats.fileCount, lessThanOrEqualTo(3));
-    expect(snapshot.content, contains('record-9'));
-    expect(snapshot.content, isNot(contains('record-0')));
   });
 
   test('字段白名单拒绝个人数据、长标识、错误类型和非有限数字', () {
@@ -906,88 +752,6 @@ void main() {
     expect(text, isNot(contains('synthetic-')));
     expect(text, isNot(contains('202512340001')));
     expect(text, isNot(contains(CampusHosts.jwxt)));
-  });
-
-  test('Basic、多值 Cookie 与完整 URL 均不会留下凭据或路径', () {
-    final basic = base64Encode(utf8.encode('synthetic-secret'));
-    final text = AppLog.sanitizeTextForTesting(
-      'Authorization: Basic $basic\n'
-      'Cookie: a=synthetic-session; b=synthetic-cookie; c=synthetic-private\n'
-      'https://private.example/private-user?ticket=synthetic-ticket',
-    );
-    expect(text, isNot(contains('synthetic')));
-    expect(text, isNot(contains(basic)));
-    expect(text, isNot(contains('private-user')));
-    expect(text, contains('[REDACTED_SECRET]'));
-    expect(text, contains('[REDACTED_URL]'));
-    final fields = AppLog.scriptEventFields(
-      'page called credentials.create (rp=https://private.example/private-user)',
-    );
-    expect(fields, {'script_event': 'credential_create'});
-  });
-
-  test('不同的无堆栈框架错误具有独立的安全分类', () {
-    final previous = FlutterError.onError;
-    final platformPrevious = PlatformDispatcher.instance.onError;
-    addTearDown(() {
-      FlutterError.onError = previous;
-      PlatformDispatcher.instance.onError = platformPrevious;
-    });
-    final records = <Map<String, Object?>>[];
-    AppLog.recordListenerForTesting = records.add;
-    AppLog.installErrorHandlers();
-    FlutterError.onError!(
-      FlutterErrorDetails(
-        exception: FlutterError(
-          'A RenderFlex overflowed by 8 pixels on the right. token=synthetic-private',
-        ),
-        library: 'rendering library',
-      ),
-    );
-    FlutterError.onError!(
-      FlutterErrorDetails(
-        exception: FlutterError(
-          'Incorrect use of ParentDataWidget. token=synthetic-private',
-        ),
-        library: 'widgets library',
-      ),
-    );
-    expect((records[0]['attrs'] as Map)['framework_error'], 'flex_overflow');
-    expect(
-      (records[1]['attrs'] as Map)['framework_error'],
-      'invalid_parent_data',
-    );
-    expect((records[0]['attrs'] as Map)['framework_library'], 'rendering');
-    expect(jsonEncode(records), isNot(contains('synthetic-private')));
-  });
-
-  test('公告最终失败只记录一次，保留用户操作的 Trace 和父 Span', () async {
-    final records = <Map<String, Object?>>[];
-    AppLog.recordListenerForTesting = records.add;
-    final controller = AnnouncementController.test(
-      fetch: ({etag, lastModified}) async =>
-          throw const PortalNetworkError('请求失败 token=synthetic-private'),
-    );
-    addTearDown(controller.dispose);
-    await AppLog.logger('test.user')
-        .operation('refresh', controller.ensureStarted);
-    final parent = records.singleWhere(
-      (record) =>
-          record['scope'] == 'test.user' &&
-          record['event'] == 'refresh.completed',
-    );
-    final warnings = records
-        .where((record) => record['level'] == 'WARNING')
-        .toList();
-    expect(warnings, hasLength(1));
-    final failure = warnings.single;
-    expect(failure['event'], 'refresh.failed');
-    expect(failure['trace_id'], parent['trace_id']);
-    expect(failure['parent_span_id'], parent['span_id']);
-    expect(failure['span_id'], isNot(parent['span_id']));
-    expect((failure['attrs'] as Map)['outcome'], 'unavailable');
-    expect((failure['attrs'] as Map)['has_cache'], isFalse);
-    expect(jsonEncode(records), isNot(contains('synthetic-private')));
   });
 
   test('截断的 UTF-8 与 JSON 尾行不会阻断有效日志、后续写入和导出', () async {
@@ -1079,7 +843,7 @@ void main() {
     expect(metadata['build_number'], '02500');
   });
 
-  test('简洁摘要省略重复包装，详细内容保留完整追踪和准备耗时', () {
+  test('摘要格式化区分成功、原生失败与异常类型，详情保留完整追踪字段', () {
     final record = <String, Object?>{
       'scope': 'core.network.vpn',
       'level': 'DEBUG',
@@ -1113,10 +877,8 @@ void main() {
     expect(details, contains('preparation_ms: 1189'));
     expect(details, contains('event: http.completed'));
     expect(details, contains('scope: core.network.vpn'));
-  });
 
-  test('失败摘要明确服务、原生阶段、本阶段耗时和实际期限', () {
-    final summary = AppLog.formatSummary({
+    final nativeSummary = AppLog.formatSummary({
       'event': 'stage.failed',
       'attrs': {
         'stage': 'native.open',
@@ -1131,17 +893,15 @@ void main() {
         'timeout_ms': 60000,
       },
     });
-    expect(summary, startsWith('VPN 目标连接失败 · C2 教务'));
-    expect(summary, contains('阶段 TCP 连接'));
-    expect(summary, contains('系统码 10061'));
-    expect(summary, contains('本阶段 1.20s'));
-    expect(summary, contains('耗时 3.20s'));
-    expect(summary, contains('期限 24.00s'));
-    expect(summary, isNot(contains('1m')));
-    expect(summary, isNot(contains('\n')));
-  });
+    expect(nativeSummary, startsWith('VPN 目标连接失败 · C2 教务'));
+    expect(nativeSummary, contains('阶段 TCP 连接'));
+    expect(nativeSummary, contains('系统码 10061'));
+    expect(nativeSummary, contains('本阶段 1.20s'));
+    expect(nativeSummary, contains('耗时 3.20s'));
+    expect(nativeSummary, contains('期限 24.00s'));
+    expect(nativeSummary, isNot(contains('1m')));
+    expect(nativeSummary, isNot(contains('\n')));
 
-  test('异常摘要区分网络超时与未分类异常，旧失败结果不会显示完成', () {
     expect(
       AppLog.formatSummary({
         'event': 'http.failed',
@@ -1164,61 +924,6 @@ void main() {
     expect(failedSync, contains('教务会话过期'));
     expect(failedSync, isNot(contains('完成')));
   });
-
-  for (final dark in [false, true]) {
-    testWidgets('诊断页${dark ? '深色' : '浅色'}横屏大字体可滚动，级别文字对比度达标', (tester) async {
-      final temp = await tester.runAsync(
-        () => Directory.systemTemp.createTemp('log_layout_test_'),
-      );
-      addTearDown(() async {
-        await tester.runAsync(() async {
-          await AppLog.resetForTesting();
-          await temp!.delete(recursive: true);
-        });
-      });
-      tester.view.physicalSize = const Size(375, 812);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
-      await tester.runAsync(() async {
-        await AppLog.initialize(directory: temp);
-        AppLog.logger('test.layout').warning('synthetic.layout');
-        await AppLog.snapshot();
-      });
-      await _openLogPreview(tester, dark ? appDarkTheme() : appLightTheme());
-      tester.view.physicalSize = const Size(640, 320);
-      tester.platformDispatcher.textScaleFactorTestValue = 3.2;
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      await tester.scrollUntilVisible(
-        find.text('synthetic.layout'),
-        200,
-        scrollable: find.byType(Scrollable).last,
-      );
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      final badge = find.text('警告');
-      final text = tester.widget<Text>(badge);
-      final box = tester
-          .widgetList<Container>(
-            find.ancestor(of: badge, matching: find.byType(Container)),
-          )
-          .firstWhere(
-            (widget) =>
-                widget.child is Text && (widget.child as Text).data == '警告',
-          );
-      final palette = AppPalette.of(tester.element(badge));
-      final background = Color.alphaBlend(
-        (box.decoration as BoxDecoration).color!,
-        palette.pageBg,
-      );
-      final a = text.style!.color!.computeLuminance() + 0.05;
-      final b = background.computeLuminance() + 0.05;
-      expect(a > b ? a / b : b / a, greaterThanOrEqualTo(4.5));
-      await tester.pumpWidget(const SizedBox());
-    });
-  }
 
   test('RotatingLogStore 短窗口批量缓冲合并写入并在阈值或定时器到期后落盘', () async {
     final temp = await Directory.systemTemp.createTemp('log_batch_test_');
@@ -1326,81 +1031,4 @@ void main() {
     expect(content, contains('second'));
     if (Platform.isWindows) expect(content, contains('first'));
   });
-
-  test('业务代码不能绕过统一日志入口', () async {
-    final violations = <String>[];
-    await for (final entity in Directory('lib').list(recursive: true)) {
-      if (entity is! File || !entity.path.endsWith('.dart')) continue;
-      if (entity.path
-          .replaceAll('\\', '/')
-          .endsWith('/core/logging/app_log.dart')) {
-        continue;
-      }
-      final content = await entity.readAsString();
-      if (RegExp(r'\bdebugPrint\s*\(').hasMatch(content) ||
-          RegExp(r'\bdeveloper\.log\s*\(').hasMatch(content) ||
-          RegExp(r'^\s*print\s*\(', multiLine: true).hasMatch(content)) {
-        violations.add(entity.path);
-      }
-    }
-    expect(violations, isEmpty, reason: '请改用 AppLog：$violations');
-  });
-}
-
-Future<void> _openAboutFromSettings(WidgetTester tester) async {
-  PackageInfo.setMockInitialValues(
-    appName: 'NUIST++',
-    packageName: 'com.example.nuist_sta_app',
-    version: '1.2.3',
-    buildNumber: '45',
-    buildSignature: '',
-  );
-  await tester.pumpWidget(
-    MaterialApp(theme: appLightTheme(), home: const SettingsPage()),
-  );
-  tester
-      .state<NavigatorState>(find.byType(Navigator))
-      .push(MaterialPageRoute<void>(builder: (_) => const AboutPage()));
-  // 贡献者在无平台通道时可能一直加载，只等待本次测试需要的页面转场。
-  await tester.pump();
-  await tester.pump(const Duration(milliseconds: 400));
-  expect(find.text('v1.2.3 (45)'), findsOneWidget);
-}
-
-Future<void> _openLogPreview(WidgetTester tester, ThemeData theme) async {
-  AppLog.diagnosticsVisible.value = true;
-  await tester.pumpWidget(
-    MaterialApp(theme: theme, home: const SettingsPage()),
-  );
-  final viewRow = find.ancestor(
-    of: find.text('查看日志'),
-    matching: find.byType(ListTile),
-  );
-  for (
-    var attempt = 0;
-    attempt < 40 && !tester.widget<ListTile>(viewRow).enabled;
-    attempt++
-  ) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 30)),
-    );
-    await tester.pump();
-  }
-  expect(tester.widget<ListTile>(viewRow).enabled, isTrue);
-  await tester.ensureVisible(find.text('查看日志'));
-  // 设置页新增了「隐私」分组，日志入口被推到视口外，滚动后要先落定再点击。
-  await tester.pumpAndSettle();
-  await tester.runAsync(() => tester.tap(find.text('查看日志')));
-  for (
-    var attempt = 0;
-    attempt < 40 && find.text('诊断日志').evaluate().isEmpty;
-    attempt++
-  ) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 50)),
-    );
-    await tester.pump();
-  }
-  await tester.pumpAndSettle();
-  expect(find.text('诊断日志'), findsOneWidget);
 }

@@ -1,12 +1,26 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_date_edits.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_home_card.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_overrides.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_cell.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_store.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_grid.dart';
+import 'package:nuist_sta_app/router.dart';
 
 TimetableSnapshot _snap(
   DateTime? start, {
@@ -71,171 +85,434 @@ void main() {
     expect(c.cellsForDay(2, 1).single.activeThisWeek, isTrue);
   });
 
-  for (final dark in [false, true]) {
-    testWidgets('真实课表翻周途中复用网格，内容与布局变化立即生效（dark=$dark）', (tester) async {
-      c.debugReset();
-      addTearDown(c.debugReset);
-      tester.view.physicalSize = const Size(375, 812);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.reset);
-      final snapshot = _snap(DateTime(2026, 8, 31), withCourse: true);
-      c.debugSetSnapshot(snapshot);
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: dark ? appDarkTheme() : appLightTheme(),
-          home: const TimetablePage(),
-        ),
+  group('纯逻辑：周次位串 / 课程类型 / 单双周 / 无存储降级', () {
+    test('体育课即便带旧教务实验标记，courseKindOf 仍判为体育；显式设置仍优先', () {
+      final pe = Course(
+        id: 'pe',
+        name: '体育（1）',
+        buildingDisplay: '体育板块场地',
+        projectName: '篮球',
+        slots: [
+          CourseSlot(
+            day: 1,
+            startNode: 1,
+            endNode: 2,
+            weeks: weeksToBits([1, 2, 3], 20),
+            isLab: true,
+          ),
+        ],
       );
-      await tester.pumpAndSettle();
-      final pager = tester.widget<PageView>(find.byType(PageView));
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.byType(PageView)),
-      );
-      await gesture.moveBy(const Offset(-120, 0));
-      await tester.pump();
-      final grids = {
-        for (final grid in tester.widgetList<WeekGrid>(find.byType(WeekGrid)))
-          grid.week: grid,
-      };
-      expect(grids.keys, containsAll([6, 7]));
-      await gesture.moveBy(const Offset(-110, 0));
-      await tester.pump();
-      expect(c.viewingWeek, 7);
-      expect(tester.widget<PageView>(find.byType(PageView)), same(pager));
-      for (final grid in tester.widgetList<WeekGrid>(find.byType(WeekGrid))) {
-        expect(grid, same(grids[grid.week]));
-      }
-      await gesture.up();
-      await tester.pumpAndSettle();
-      expect(c.viewingWeek, 7);
-
-      c.debugSetSnapshot(
-        snapshot.copyWith(
-          courses: [snapshot.courses.single.copyWith(name: '更新后的课程')],
-          settings: snapshot.settings.copyWith(periodHeight: 80),
-        ),
-        viewingWeek: 7,
-      );
-      await tester.pumpAndSettle();
+      expect(courseKindOf(course: pe, slot: pe.slots.single), CourseKind.pe);
+      final explicitLab = pe.slots.single.copyWith(kind: CourseKind.lab);
       expect(
-        tester.widget<PageView>(find.byType(PageView)),
-        isNot(same(pager)),
+        courseKindOf(course: pe.forSlot(explicitLab), slot: explicitLab),
+        CourseKind.lab,
       );
-      final cell = tester.widget<CourseCell>(find.byType(CourseCell));
-      expect(cell.cell.course.name, '更新后的课程');
-      expect(cell.height, closeTo(157, 0.1));
-      expect(tester.takeException(), isNull);
     });
 
-    testWidgets('真实课表短拖翻周，小拖和反拖回弹且保留快甩与纵向滚动（dark=$dark）', (tester) async {
+    test('displayWeekParity 排除零散非连续周，保留法定节假日跳周的单双周', () {
+      expect(displayWeekParity(weeksToBits([3, 15], 20)), WeekParity.all);
+      expect(displayWeekParity(weeksToBits([1], 20)), WeekParity.all);
+      expect(displayWeekParity(weeksToBits([1, 3], 20)), WeekParity.odd);
+      expect(displayWeekParity(weeksToBits([2, 4], 20)), WeekParity.even);
+      expect(
+        displayWeekParity(weeksToBits([1, 3, 5, 9, 11, 13], 20)),
+        WeekParity.odd,
+      );
+      expect(displayWeekParity(weeksToBits([1, 2, 3], 20)), WeekParity.all);
+    });
+
+    test('hasClassInWeek 第 1 周 = 下标 0；第 length 周 = 最后一位（防差一）', () {
+      final s = CourseSlot(day: 1, startNode: 1, endNode: 1, weeks: '1001');
+      expect(s.hasClassInWeek(1), isTrue);
+      expect(s.hasClassInWeek(2), isFalse);
+      expect(s.hasClassInWeek(4), isTrue);
+      final tail = Course(
+        id: 'a',
+        name: 'A',
+        slots: [
+          CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '0${'0' * 18}1'),
+        ],
+      );
+      expect(tail.hasClassInWeek(20), isTrue);
+      expect(tail.hasClassInWeek(19), isFalse);
+      expect(tail.hasClassInWeek(1), isFalse);
+    });
+
+    test('hasClassInWeek 0 / 负数 / 超出位串长度 → false', () {
+      final full = Course(
+        id: 'a',
+        name: 'A',
+        slots: [CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1' * 20)],
+      );
+      for (final w in [0, -1, -100, 21, 25, 1000]) {
+        expect(full.hasClassInWeek(w), isFalse, reason: 'week $w');
+      }
+      expect(
+        const Course(
+          id: 'e',
+          name: 'E',
+          slots: [CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '')],
+        ).hasClassInWeek(1),
+        isFalse,
+      );
+    });
+
+    test('手动课程与教务课程同一周次判断；多节次任一有课即 true', () {
+      const manual = Course(
+        id: 'm',
+        name: '手动',
+        slots: [
+          CourseSlot(day: 1, startNode: 1, endNode: 1, weeks: '10'),
+          CourseSlot(day: 3, startNode: 1, endNode: 1, weeks: '0001'),
+        ],
+      );
+      expect(manual.isManual, isTrue);
+      expect(manual.hasClassInWeek(1), isTrue);
+      expect(manual.hasClassInWeek(2), isFalse);
+      expect(manual.hasClassInWeek(4), isTrue);
+      expect(manual.hasClassInWeek(5), isFalse);
+      const jwxt = Course(
+        id: 'j',
+        name: '教务',
+        source: CourseSource.jwxt,
+        slots: [CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '01')],
+      );
+      expect(jwxt.hasClassInWeek(2), isTrue);
+      expect(jwxt.hasClassInWeek(1), isFalse);
+    });
+
+    test('无存储时按空数据降级，本地阶段与完整启动依次完成', () async {
       c.debugReset();
       addTearDown(c.debugReset);
-      tester.view.physicalSize = const Size(375, 640);
-      tester.view.devicePixelRatio = 1;
+      TimetableStore.debugDirectory = null;
+      final origBinding = TimetableController.bindingCheck;
+      final binding = Completer<bool>();
+      TimetableController.bindingCheck = () => binding.future;
+      addTearDown(() => TimetableController.bindingCheck = origBinding);
+      await c.ensureLocalReady();
+      binding.complete(false);
+      await c.ensureStarted();
+      expect(c.isInitialized, isTrue);
+      expect(c.ensureLocalReady(), completes);
+    });
+  });
+
+  group('周网格与页面交互合并验证', () {
+    late Directory tmp;
+    final origClock = TimetableController.clock;
+    final origBinding = TimetableController.bindingCheck;
+    final origFetch = TimetableController.fetchSnapshot;
+    final termStart = DateTime(2026, 8, 31);
+
+    setUp(() {
+      tmp = Directory.systemTemp.createTempSync('tt_week_ui_');
+      TimetableStore.debugDirectory = tmp;
+      c.debugReset();
+      TimetableController.bindingCheck = () async => false;
+      TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
+          throw const SocketException('offline (test)');
+      TimetableController.clock = () => DateTime(2026, 10, 12, 9);
+    });
+
+    tearDown(() {
+      TimetableController.clock = origClock;
+      TimetableController.bindingCheck = origBinding;
+      TimetableController.fetchSnapshot = origFetch;
+      TimetableStore.debugDirectory = null;
+      c.debugReset();
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
+
+    Future<void> pumpUntil(WidgetTester tester, bool Function() done) async {
+      for (var i = 0; i < 50 && !done(); i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
+    }
+
+    testWidgets('本地快载与空课表登录引导、PageView 滑条回本周、真实路由返回与 20 周边界', (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 2.625;
       addTearDown(tester.view.reset);
-      c.debugSetSnapshot(_snap(DateTime(2026, 8, 31), withCourse: true));
+
+      // 1. 本地有课表不等待绑定读取立即展示首帧；空课表等待绑定完成再显示登录引导
+      final binding = Completer<bool>();
+      TimetableController.bindingCheck = () => binding.future;
+      await tester.runAsync(
+        () => TimetableStore.saveSnapshot(_snap(termStart, withCourse: true)),
+      );
       await tester.pumpWidget(
-        MaterialApp(
-          theme: dark ? appDarkTheme() : appLightTheme(),
-          home: const TimetablePage(),
-        ),
+        MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
+      );
+      await pumpUntil(
+        tester,
+        () => find.byType(WeekGrid).evaluate().isNotEmpty,
+      );
+      expect(find.text('数据结构'), findsWidgets);
+      expect(binding.isCompleted, isFalse);
+      binding.complete(false);
+      await pumpUntil(tester, () => c.isInitialized);
+
+      final emptyBinding = Completer<bool>();
+      TimetableController.bindingCheck = () => emptyBinding.future;
+      c.debugReset();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => TimetableStore.saveSnapshot(_snap(termStart)),
+      );
+      await tester.pumpWidget(
+        MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
+      );
+      await pumpUntil(tester, () => false);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.text('去登录'), findsNothing);
+      emptyBinding.complete(false);
+      await pumpUntil(tester, () => find.text('去登录').evaluate().isNotEmpty);
+      expect(find.text('还没有课程'), findsOneWidget);
+      TimetableController.bindingCheck = () async => false;
+
+      // 2. 无开学日顶栏提示；开学日变化后 PageView 跟随 viewingWeek
+      c.debugReset();
+      c.debugSetSnapshot(_snap(null), viewingWeek: 1);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const MaterialApp(home: TimetablePage()));
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text('周次待同步 · 点此选择'), findsOneWidget);
+
+      c.debugSetSnapshot(
+        _snap(DateTime(2026, 9, 7), withCourse: true),
+      ); // 第 6 周 -> 5
+      await tester.pump();
+      c.debugSetSnapshot(_snap(termStart, withCourse: true)); // 同步后 → 第 7 周
+      await tester.pumpAndSettle();
+      expect(c.viewingWeek, 7);
+
+      // 3. 真实路由下拖页、设置返回保留周次、滑条微调/回本周及 Android 手势取消/完成清除浏览周
+      final router = buildRouter()..go('/profile');
+      addTearDown(router.dispose);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        MaterialApp.router(theme: appDarkTheme(), routerConfig: router),
       );
       await tester.pumpAndSettle();
-      final pageController = tester
-          .widget<PageView>(find.byType(PageView))
-          .controller!;
-
-      Future<void> slowDrag(double delta, {double? reverse}) async {
-        final start = pageController.page!;
-        final gesture = await tester.startGesture(
-          tester.getCenter(find.byType(PageView)),
-        );
-        await gesture.moveBy(Offset(delta.sign * 25, 0));
-        await tester.pump(const Duration(milliseconds: 100));
-        await gesture.moveBy(Offset(delta - delta.sign * 25, 0));
-        await tester.pump(const Duration(milliseconds: 100));
-        if (reverse != null) {
-          await gesture.moveBy(Offset(reverse, 0));
-          await tester.pump(const Duration(milliseconds: 100));
-        }
-        // 手势结束前仍按原始距离跟手，没有放大位移或提前跳页。
-        final progress = (pageController.page! - start).abs();
-        if (delta.abs() == 135 && reverse == null && start > 0 && start < 19) {
-          expect(progress, greaterThan(0.25));
-          expect(progress, lessThan(0.5));
-        }
-        await tester.pump(const Duration(milliseconds: 250));
-        await gesture.up();
-        await tester.pumpAndSettle();
-      }
-
-      // 约三分之一屏即可慢速双向翻页，不需要拖过半屏。
-      await slowDrag(-135);
-      expect(c.viewingWeek, 7);
-      expect(pageController.page, closeTo(6, 0.001));
-      await slowDrag(135);
-      expect(c.viewingWeek, 6);
-
-      await slowDrag(-60);
-      expect(c.viewingWeek, 6);
-      // 已跨过半页也可反拖回原页，按松手时的净位移决定是否翻页。
-      await slowDrag(-245, reverse: 190);
-      expect(c.viewingWeek, 6);
-      expect(pageController.page, closeTo(5, 0.001));
-
-      // 快甩的距离小于四分之一屏，仍按速度进入相邻周。
-      await tester.fling(find.byType(PageView), const Offset(-70, 0), 1500);
+      router.push<void>('/apps/timetable');
       await tester.pumpAndSettle();
       expect(c.viewingWeek, 7);
-      await tester.fling(find.byType(PageView), const Offset(70, 0), 1500);
-      await tester.pumpAndSettle();
-      expect(c.viewingWeek, 6);
 
-      final vertical = tester
-          .state<ScrollableState>(
-            find.descendant(
-              of: find.byType(WeekGrid),
-              matching: find.byType(Scrollable),
-            ),
-          )
-          .position;
-      expect(vertical.maxScrollExtent, greaterThan(0));
-      await tester.drag(find.byType(WeekGrid), const Offset(0, -180));
+      await tester.drag(find.byType(PageView), const Offset(-600, 0));
       await tester.pumpAndSettle();
-      expect(vertical.pixels, greaterThan(0));
-      expect(c.viewingWeek, 6);
+      expect(c.viewingWeek, 8);
+      await tester.tap(find.byKey(const Key('timetable_settings_button')));
+      await tester.pumpAndSettle();
+      router.pop();
+      await tester.pumpAndSettle();
+      expect(c.viewingWeek, 8);
 
-      c.setViewingWeek(1);
+      await tester.tap(find.textContaining('第 8 周', findRichText: true));
       await tester.pumpAndSettle();
-      await slowDrag(135);
-      expect(c.viewingWeek, 1);
-      expect(pageController.page, closeTo(0, 0.001));
-      c.setViewingWeek(20);
-      await tester.pumpAndSettle();
-      await slowDrag(-135);
-      expect(c.viewingWeek, 20);
-      expect(pageController.page, closeTo(19, 0.001));
-
-      c.setViewingWeek(6);
-      await tester.pumpAndSettle();
-      await tester.fling(find.byType(PageView), const Offset(-70, 0), 1500);
-      await tester.pump(const Duration(milliseconds: 16));
-      expect(pageController.position.isScrollingNotifier.value, isTrue);
-      // 滑动中直接点顶栏打开周数与课表弹窗并选第 9 周，不会在结束后被旧起点拉回相邻周。
-      await tester.tap(find.textContaining('第 6 周', findRichText: true));
-      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('timetable_week_strip')), findsOneWidget);
       final slider = tester.widget<Slider>(
         find.byKey(const Key('timetable_week_slider')),
       );
-      slider.onChanged?.call(9);
+      slider.onChanged?.call(12);
       await tester.pump();
-      slider.onChangeEnd?.call(9);
+      slider.onChangeEnd?.call(12);
       await tester.pumpAndSettle();
-      expect(c.viewingWeek, 9);
-      expect(pageController.page, closeTo(8, 0.001));
-      expect(tester.takeException(), isNull);
+      expect(c.viewingWeek, 12);
+      await tester.tap(find.byKey(const Key('timetable_week_strip_current')));
+      await tester.pumpAndSettle();
+      expect(c.viewingWeek, 7);
+      await tester.tapAt(const Offset(200, 100));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('timetable_week_strip')), findsNothing);
+
+      Future<void> gesture(String method, {double progress = 0}) async {
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'flutter/backgesture',
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall(method, {
+              'touchOffset': [5.0, 300.0],
+              'progress': progress,
+              'swipeEdge': 0,
+            }),
+          ),
+          (_) {},
+        );
+        await tester.pumpAndSettle();
+      }
+
+      await tester.drag(find.byType(PageView), const Offset(-250, 0));
+      await tester.pumpAndSettle();
+      expect(c.viewingWeek, 8);
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', progress: 0.4);
+      await gesture('cancelBackGesture');
+      expect(find.byType(TimetablePage), findsOneWidget);
+      expect(c.viewingWeek, 8);
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', progress: 0.4);
+      await gesture('commitBackGesture');
+      expect(find.byType(TimetablePage), findsNothing);
+      expect(c.viewingWeek, 7);
+
+      // 4. 手动课表单周次选择器上限为第 20 周
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        MaterialApp(home: ManualCourseForm(controller: c)),
+      );
+      await tester.pump();
+      await tester.ensureVisible(find.byKey(const Key('course_form_weeks')));
+      await tester.tap(find.byKey(const Key('course_form_weeks')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('course_form_week_20'), skipOffstage: false),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('course_form_week_21'), skipOffstage: false),
+        findsNothing,
+      );
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+    testWidgets('网格列与行规则：无节次「其他」行显隐与详情、隐藏周末有本周手动课自动显露及切周更新', (tester) async {
+      // 1. 无节次教务课「其他」行（仅教务、按周过滤、空/中文描述每周显示、点开详情）
+      Course unscheduled(String id, String name, String weeksLabel) => Course(
+        id: id,
+        name: name,
+        source: CourseSource.jwxt,
+        slots: [
+          CourseSlot(
+            day: 0,
+            startNode: 0,
+            endNode: 0,
+            weeks: '',
+            weeksLabel: weeksLabel,
+            location: '测试楼 B202',
+            teacher: '张老师',
+          ),
+        ],
+      );
+      final rowFinder = find.byKey(const Key('week_grid_other_row'));
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: [
+            Course(
+              id: 'n',
+              name: '测试课甲',
+              source: CourseSource.jwxt,
+              slots: [
+                CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1' * 20),
+              ],
+            ),
+            unscheduled('o1', '测试实践课', '2-5周'),
+          ],
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(termStartDate: termStart),
+        ),
+        viewingWeek: 3,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: WeekGrid(key: const ValueKey(3), week: 3, controller: c),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(rowFinder, findsOneWidget);
+      await tester.drag(
+        find.byType(SingleChildScrollView),
+        const Offset(0, -2000),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('other_course_o1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('other_course_sheet')), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: WeekGrid(key: const ValueKey(7), week: 7, controller: c),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(rowFinder, findsNothing);
+
+      // 2. 设置隐藏周六日：周六有本周手动课 → 显示周六列；周日仅非本周（含显示非本周开）→ 仍隐藏
+      c.debugReset();
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(
+            termStartDate: termStart,
+            showSaturday: false,
+            showSunday: false,
+            showNonCurrentWeek: true,
+          ),
+        ),
+        viewingWeek: 2,
+        manualCourses: [
+          Course(
+            id: 'sat',
+            name: '周六手动课',
+            slots: [
+              CourseSlot(
+                day: 6,
+                startNode: 1,
+                endNode: 2,
+                weeks: weeksToBits([2], 20),
+              ),
+            ],
+          ),
+          Course(
+            id: 'sun',
+            name: '周日非本周',
+            slots: [
+              CourseSlot(
+                day: 7,
+                startNode: 1,
+                endNode: 2,
+                weeks: weeksToBits([1], 20),
+              ),
+            ],
+          ),
+        ],
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: WeekGrid(key: const ValueKey(2), week: 2, controller: c),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const Key('day_header_6')), findsOneWidget);
+      expect(find.byKey(const Key('day_header_7')), findsNothing);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: WeekGrid(key: const ValueKey(1), week: 1, controller: c),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const Key('day_header_6')), findsNothing);
+      expect(find.byKey(const Key('day_header_7')), findsOneWidget);
     });
-  }
+  });
 
   group('周次/日期对齐', () {
     test('mondayOfWeek: 周日归属前一个周一', () {
@@ -398,27 +675,450 @@ void main() {
     expect(paths.any((p) => p.contains('setJwCommonAppRole')), isFalse);
   });
 
-  testWidgets('开学日变化后 PageView 跟随 viewingWeek（顶栏与网格不错位）', (tester) async {
-    c.debugSetSnapshot(_snap(DateTime(2026, 9, 7), withCourse: true)); // 第 5 周
-    await tester.pumpWidget(const MaterialApp(home: TimetablePage()));
-    for (var i = 0; i < 10; i++) {
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-    PageController pc() =>
-        tester.widget<PageView>(find.byType(PageView)).controller!;
-    expect(pc().page!.round(), 4);
+  testWidgets('网格单双周/零误报幽灵/连通合并显示、详情调课来源与首页实验胶囊', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.625;
+    addTearDown(tester.view.reset);
+    final termStart = DateTime(2026, 8, 31);
 
+    // 1. 教务课改周次更新单双周胶囊；单日挪课不显示单双周胶囊
+    final jwxt = const Course(
+      id: 'k1',
+      name: '高等数学',
+      source: CourseSource.jwxt,
+      slots: [
+        CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1111111111111111'),
+      ],
+    );
+    final editedOddSlot = CourseSlot(
+      day: 1,
+      startNode: 1,
+      endNode: 2,
+      weeks: weeksToBits([1, 3, 5, 7, 9], 20),
+    );
+    tagSlotOrigin(
+      editedOddSlot,
+      SlotOrigin(
+        courseId: jwxt.id,
+        original: jwxt.slots.single,
+        moved: false,
+        weeksEdited: true,
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CourseCell(
+            controller: c,
+            cell: GridCell(
+              course: jwxt,
+              slot: editedOddSlot,
+              conflictCount: 0,
+              activeThisWeek: true,
+            ),
+            width: 120,
+            height: 120,
+            radius: 4,
+          ),
+        ),
+      ),
+    );
+    expect(find.byKey(const Key('course_cell_parity_pill')), findsOneWidget);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CourseCell(
+            controller: c,
+            cell: GridCell(
+              course: jwxt,
+              slot: editedOddSlot,
+              conflictCount: 0,
+              activeThisWeek: true,
+              dateEdit: CourseDateEdit(
+                id: 'de1',
+                courseId: jwxt.id,
+                date: termStart,
+                origStart: 1,
+                origEnd: 2,
+                toDate: DateTime(2026, 9, 1),
+                toStart: 3,
+                toEnd: 4,
+              ),
+            ),
+            width: 120,
+            height: 120,
+            radius: 4,
+          ),
+        ),
+      ),
+    );
+    expect(find.byKey(const Key('course_cell_parity_pill')), findsNothing);
+
+    // 2. 多门非本周课择最近、幽灵考试不制造伪冲突、考试跨两段连通合并「3 项」
+    c.debugReset();
     c.debugSetSnapshot(
-      _snap(DateTime(2026, 8, 31), withCourse: true),
-    ); // 同步后 → 第 6 周
+      TimetableSnapshot(
+        periods: TimetableController.defaultPeriods(),
+        settings: TimetableSettings(
+          termStartDate: termStart,
+          showNonCurrentWeek: true,
+          showExams: true,
+        ),
+      ),
+      viewingWeek: 1,
+      manualCourses: [
+        Course(
+          id: 'c1',
+          name: 'C语言',
+          slots: [
+            CourseSlot(
+              day: 1,
+              startNode: 1,
+              endNode: 2,
+              weeks: weeksToBits([9, 10], 20),
+            ),
+          ],
+        ),
+        Course(
+          id: 'c2',
+          name: '高等数学',
+          slots: [
+            CourseSlot(
+              day: 1,
+              startNode: 1,
+              endNode: 2,
+              weeks: weeksToBits([2, 3], 20),
+            ),
+          ],
+        ),
+        const Course(
+          id: 'a',
+          name: '早课甲',
+          slots: [
+            CourseSlot(
+              day: 2,
+              startNode: 1,
+              endNode: 2,
+              weeks: '1111111111111111',
+            ),
+          ],
+        ),
+        const Course(
+          id: 'b',
+          name: '早课乙',
+          slots: [
+            CourseSlot(
+              day: 2,
+              startNode: 3,
+              endNode: 4,
+              weeks: '1111111111111111',
+            ),
+          ],
+        ),
+      ],
+    );
+    await tester.runAsync(
+      () => c.addScheduleEvent(
+        ScheduleEvent(
+          id: 'bridge',
+          kind: ScheduleKind.exam,
+          source: ScheduleSource.manual,
+          title: '跨段期中考',
+          date: DateTime(2026, 9, 1),
+          start: const TimeOfDayMinutes(9, 0),
+          end: const TimeOfDayMinutes(10, 30),
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: WeekGrid(week: 1, controller: c)),
+      ),
+    );
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
-    expect(c.viewingWeek, 6);
-    expect(pc().page!.round(), 5);
-    final grid = tester.widget<WeekGrid>(find.byType(WeekGrid).first);
-    expect(grid.week, 6);
-    expect(c.datesOfWeek(grid.week).first, DateTime(2026, 10, 5));
-    expect(find.textContaining('第 6 周', findRichText: true), findsOneWidget);
-    expect(find.textContaining('非本周', findRichText: true), findsNothing);
+    expect(find.widgetWithText(CourseCell, '高等数学'), findsOneWidget);
+    expect(find.widgetWithText(CourseCell, 'C语言'), findsNothing);
+    expect(find.byKey(const Key('course_cell_off_week_pill')), findsOneWidget);
+    expect(find.byType(ScheduleEventCell), findsOneWidget);
+    expect(find.text('3 项'), findsOneWidget);
+
+    // 3. 详情显示整天调课来源「由 9月2日 调入」与首页实验课轻标「实验」胶囊
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CourseDetailSheet(
+            cell: GridCell(
+              course: const Course(
+                id: 'm1',
+                name: '数据结构',
+                slots: [
+                  CourseSlot(day: 7, startNode: 1, endNode: 2, weeks: '1111'),
+                ],
+              ),
+              slot: const CourseSlot(
+                day: 7,
+                startNode: 1,
+                endNode: 2,
+                weeks: '1111',
+              ),
+              conflictCount: 0,
+              activeThisWeek: true,
+              date: DateTime(2026, 9, 6),
+              swappedFrom: DateTime(2026, 9, 2),
+            ),
+            controller: c,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('course_detail_swapped_from')), findsOneWidget);
+    expect(find.text('由 9月2日 调入'), findsOneWidget);
+
+    c.debugReset();
+    c.debugSetSnapshot(
+      TimetableSnapshot(
+        periods: TimetableController.defaultPeriods(),
+        settings: TimetableSettings(termStartDate: termStart),
+      ),
+      viewingWeek: 1,
+      manualCourses: [
+        const Course(
+          id: 'lab1',
+          name: '物理实验',
+          slots: [
+            CourseSlot(
+              day: 1,
+              startNode: 1,
+              endNode: 2,
+              weeks: '1111',
+              isLab: true,
+            ),
+          ],
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TimetableHomeCard(now: () => DateTime(2026, 8, 31, 7, 30)),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('home_course_lab_pill')), findsOneWidget);
+    expect(find.text('实验'), findsOneWidget);
+  });
+
+  test('SlotCellGroup.primary 按排序确定主课且正确统计冲突计数', () {
+    Course makeCourse(String id, String name) => Course(
+      id: id,
+      name: name,
+      slots: const [
+        CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1111'),
+      ],
+    );
+    final courseB = makeCourse('b', '编译原理');
+    final courseA = makeCourse('a', '操作系统');
+    final group = SlotCellGroup([
+      GridCell(
+        course: courseB,
+        slot: courseB.slots.first,
+        conflictCount: 99,
+        activeThisWeek: true,
+      ),
+      GridCell(
+        course: courseA,
+        slot: courseA.slots.first,
+        conflictCount: 99,
+        activeThisWeek: true,
+      ),
+    ]);
+
+    expect(group.primary.course.id, 'a');
+    expect(group.primary.conflictCount, 1);
+
+    final offGroup = SlotCellGroup([
+      GridCell(
+        course: courseB,
+        slot: courseB.slots.first,
+        conflictCount: 5,
+        activeThisWeek: false,
+      ),
+    ]);
+    expect(offGroup.primary.conflictCount, 0);
+  });
+
+  group('viewingWeek 独立 ValueNotifier 隔离', () {
+    late Directory tmp;
+
+    setUp(() {
+      tmp = Directory.systemTemp.createTempSync('tt_viewing_week');
+      TimetableStore.debugDirectory = tmp;
+      c.debugReset();
+      TimetableController.bindingCheck = () async => false;
+      TimetableController.clock = () => DateTime(2026, 10, 12, 8, 30);
+      TimetableController.syncClock = () => DateTime(2026, 10, 12, 8, 30);
+    });
+
+    tearDown(() {
+      TimetableController.syncClock = DateTime.now;
+      TimetableController.bindingCheck = () async => false;
+      TimetableStore.debugDirectory = null;
+      c.debugReset();
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
+
+    test('setViewingWeek / goToCurrentWeek / jumpToCurrentWeek 仅通知周次监听', () {
+      c.debugSetSnapshot(_snap(DateTime(2026, 8, 31), withCourse: true));
+      expect(c.currentWeek, 7);
+      expect(c.viewingWeek, 7);
+      expect(c.viewingWeekListenable.value, 7);
+      expect(c.isViewingCurrentWeek, isTrue);
+
+      var controllerCalls = 0;
+      final weekValues = <int>[];
+      void onController() => controllerCalls++;
+      void onWeek() => weekValues.add(c.viewingWeekListenable.value);
+
+      c.addListener(onController);
+      c.viewingWeekListenable.addListener(onWeek);
+      addTearDown(() {
+        c.removeListener(onController);
+        c.viewingWeekListenable.removeListener(onWeek);
+      });
+
+      c.setViewingWeek(10);
+      expect(c.viewingWeek, 10);
+      expect(c.isViewingCurrentWeek, isFalse);
+      expect(weekValues, [10]);
+      expect(controllerCalls, 0);
+
+      c.setViewingWeek(10);
+      c.setViewingWeek(99);
+      c.setViewingWeek(25);
+      c.setViewingWeek(0);
+      expect(c.viewingWeek, 1);
+      expect(weekValues, [10, 20, 1]);
+      expect(controllerCalls, 0);
+
+      c.goToCurrentWeek();
+      expect(c.viewingWeek, 7);
+      expect(c.isViewingCurrentWeek, isTrue);
+      expect(weekValues, [10, 20, 1, 7]);
+      expect(controllerCalls, 0);
+
+      c.goToCurrentWeek();
+      c.jumpToCurrentWeek();
+      expect(weekValues, [10, 20, 1, 7]);
+      expect(controllerCalls, 0);
+
+      c.setViewingWeek(12);
+      c.jumpToCurrentWeek();
+      expect(c.viewingWeek, 7);
+      expect(c.isViewingCurrentWeek, isTrue);
+      expect(weekValues, [10, 20, 1, 7, 12, 7]);
+      expect(controllerCalls, 0);
+    });
+
+    test('clearViewingWeek 与 debugReset 静默复位且不触发监听', () {
+      c.debugSetSnapshot(
+        _snap(DateTime(2026, 8, 31), withCourse: true),
+        viewingWeek: 11,
+      );
+      expect(c.viewingWeek, 11);
+
+      var controllerCalls = 0;
+      var weekCalls = 0;
+      void onController() => controllerCalls++;
+      void onWeek() => weekCalls++;
+
+      c.addListener(onController);
+      c.viewingWeekListenable.addListener(onWeek);
+      addTearDown(() {
+        c.removeListener(onController);
+        c.viewingWeekListenable.removeListener(onWeek);
+      });
+
+      c.clearViewingWeek();
+      expect(c.viewingWeek, 7);
+      expect(c.viewingWeekListenable.value, 7);
+      expect(controllerCalls, 0);
+      expect(weekCalls, 0);
+
+      c.setViewingWeek(15);
+      weekCalls = 0;
+
+      c.debugReset();
+      expect(c.viewingWeek, 1);
+      expect(c.viewingWeekListenable.value, 1);
+      expect(controllerCalls, 0);
+      expect(weekCalls, 0);
+    });
+
+    test('跨周 onAppResumed 仍同时更新周次监听与主监听（保证首页跨周刷新）', () async {
+      final sunday = DateTime(2026, 10, 18, 22);
+      TimetableController.clock = () => sunday;
+      TimetableController.syncClock = () => sunday;
+      await TimetableStore.saveSnapshot(
+        _snap(
+          DateTime(2026, 8, 31),
+          withCourse: true,
+        ).copyWith(syncedAt: sunday),
+      );
+      await ScheduleStore.saveLastSyncSuccess(sunday);
+      await c.ensureStarted();
+      expect(c.viewingWeek, 7);
+
+      var controllerCalls = 0;
+      final weekValues = <int>[];
+      void onController() => controllerCalls++;
+      void onWeek() => weekValues.add(c.viewingWeekListenable.value);
+
+      c.addListener(onController);
+      c.viewingWeekListenable.addListener(onWeek);
+      addTearDown(() {
+        c.removeListener(onController);
+        c.viewingWeekListenable.removeListener(onWeek);
+      });
+
+      TimetableController.clock = () => DateTime(2026, 10, 19, 8);
+      expect(await c.onAppResumed(), isTrue);
+      await pumpEventQueue();
+      expect(c.viewingWeek, 8);
+      expect(weekValues, [8]);
+      expect(controllerCalls, 1);
+
+      expect(await c.onAppResumed(), isTrue);
+      await pumpEventQueue();
+      expect(weekValues, [8]);
+      expect(controllerCalls, 1);
+
+      TimetableController.clock = () => DateTime(2026, 10, 20, 8);
+      expect(await c.onAppResumed(), isTrue);
+      await pumpEventQueue();
+      expect(c.viewingWeek, 8);
+      expect(weekValues, [8]);
+      expect(controllerCalls, 2);
+    });
+
+    test('跨周时自动跟随最新本周，但同周内手动翻周后不再被拉回', () {
+      final termStart = DateTime(2026, 8, 31);
+      TimetableController.clock = () =>
+          termStart.add(const Duration(days: 13 * 7));
+      c.debugSetSnapshot(_snap(termStart, withCourse: true), viewingWeek: 14);
+      expect(c.currentWeek, 14);
+      expect(c.viewingWeek, 14);
+      expect(c.followCurrentWeekIfChanged(), isFalse);
+
+      TimetableController.clock = () => DateTime(2026, 12, 29); // 第 18 周
+      expect(c.currentWeek, 18);
+      expect(c.followCurrentWeekIfChanged(), isTrue);
+      expect(c.viewingWeek, 18);
+
+      c.setViewingWeek(10);
+      expect(c.followCurrentWeekIfChanged(), isFalse);
+      expect(c.viewingWeek, 10);
+    });
   });
 }

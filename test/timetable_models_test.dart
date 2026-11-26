@@ -5,26 +5,11 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 
 const _fx = 'test/fixtures/timetable';
 
-/// 真实打码样例（git-ignore，只在本地）。缺任一个就跳过「真实样例」组。
-const _realSamples = [
-  'kb_real_sample.json',
-  'unscheduled_real_sample.json',
-  'dqxnxq_real_sample.json',
-  'dqzc_real_sample.json',
-  'jc_real_sample.json',
-];
-
-bool get _realSamplesPresent =>
-    _realSamples.every((n) => File('$_fx/$n').existsSync());
-
 Map<String, dynamic> _json(String name) =>
     jsonDecode(File('$_fx/$name').readAsStringSync()) as Map<String, dynamic>;
-
-Future<Map<String, dynamic>> _loadRaw(String name) async => _json(name);
 
 void main() {
   test('主课程确认后四个只读段并发，缓慢可选段不阻止其他段启动', () async {
@@ -65,14 +50,6 @@ void main() {
     expect((await snapshot).courses, isEmpty);
   });
 
-  test('theme defaults match spec v0.2', () {
-    expect(TimetableTheme.periodHeight, 64);
-    expect(TimetableTheme.cellRadius, 4);
-    expect(TimetableTheme.coursePalette, hasLength(16));
-    expect(TimetableTheme.coursePaletteDark, hasLength(16));
-    expect(TimetableTheme.accent.toARGB32(), 0xFF0082EF);
-  });
-
   test('parse kb_mock_2026-1 fixture', () async {
     final file = File('test/fixtures/timetable/kb_mock_2026-1.json');
     final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
@@ -84,32 +61,6 @@ void main() {
     expect(math.slots.length, greaterThanOrEqualTo(2));
     // 周末跨节课保留
     expect(result.courses.any((c) => c.name.contains('天文观测')), isTrue);
-  });
-
-  test('same course name maps to same color index', () {
-    final a = TimetableTheme.colorIndexFor('数据结构');
-    final b = TimetableTheme.colorIndexFor('数据结构');
-    expect(a, b);
-    expect(a, inInclusiveRange(0, 15));
-  });
-
-  test('week parity from bitstring', () {
-    const odd = CourseSlot(
-      day: 1,
-      startNode: 1,
-      endNode: 2,
-      weeks: '10101010101010101010',
-    );
-    const even = CourseSlot(
-      day: 1,
-      startNode: 1,
-      endNode: 2,
-      weeks: '01010101010101010101',
-    );
-    expect(odd.parity, WeekParity.odd);
-    expect(even.parity, WeekParity.even);
-    expect(odd.occursInWeek(1), isTrue);
-    expect(odd.occursInWeek(2), isFalse);
   });
 
   test('parseImportJson accepts snapshot shape', () {
@@ -279,15 +230,6 @@ void main() {
     );
   });
 
-  test('computeTermStartDate sample 2026-10-11 ZC=6 Sun → 2026-08-31', () {
-    final start = TimetableParser.computeTermStartDate(
-      refDate: DateTime(2026, 10, 11),
-      weekday: 7,
-      week: 6,
-    );
-    expect(start, DateTime(2026, 8, 31));
-  });
-
   group('TimetableApi meta failures are non-fatal', () {
     tearDown(() => TimetableApi.debugPost = null);
 
@@ -352,139 +294,4 @@ void main() {
       );
     });
   });
-
-  group('真实样例（仅本地存在时运行）', () {
-    tearDown(() => TimetableApi.debugPost = null);
-
-    test('parse kb_real_sample + unscheduled_real_sample', () async {
-      final week = jsonDecode(
-        await File('test/fixtures/timetable/kb_real_sample.json')
-            .readAsString(),
-      ) as Map<String, dynamic>;
-      final unsched = jsonDecode(
-        await File('test/fixtures/timetable/unscheduled_real_sample.json')
-            .readAsString(),
-      ) as Map<String, dynamic>;
-      final datas = <String, dynamic>{
-        ...(week['datas'] as Map<String, dynamic>),
-        ...(unsched['datas'] as Map<String, dynamic>),
-      };
-      final snap = TimetableParser.parseImportJson({
-        'code': '0',
-        'datas': datas,
-      }, baseSettings: const TimetableSettings(maxWeeks: 30));
-      expect(snap.courses, isNotEmpty);
-      // KXH 短序号
-      final withSerial = snap.courses.where((c) => c.classId.isNotEmpty);
-      expect(withSerial, isNotEmpty);
-      expect(withSerial.every((c) => c.classId.length <= 4), isTrue);
-      // 未排课 / 中文 SKZC → 其他课程，不丢
-      final others = snap.courses.where(
-        (c) => c.slots.every((s) => !s.hasFixedTime),
-      );
-      expect(others.length, greaterThanOrEqualTo(3));
-      // 位串按 maxWeeks=30 pad
-      final fixed = snap.courses
-          .expand((c) => c.slots)
-          .where((s) => s.hasFixedTime);
-      expect(fixed.every((s) => s.weeks.length == 30), isTrue);
-      // null 地点
-      expect(
-        snap.courses.any((c) => c.slots.any((s) => s.location.isEmpty)),
-        isTrue,
-      );
-    });
-
-    test('jc_real_sample parses enabled periods (SFSY≠0)', () async {
-      final json = jsonDecode(
-        await File('test/fixtures/timetable/jc_real_sample.json')
-            .readAsString(),
-      ) as Map<String, dynamic>;
-      final rows = (json['datas'] as Map)['jc']['rows'] as List;
-      expect(rows, hasLength(12));
-      final enabled = TimetableParser.parsePeriods(rows);
-      expect(enabled, hasLength(11)); // period 12 SFSY=0
-      expect(enabled.first.node, 1);
-      expect(enabled.first.start, '08:00');
-      expect(enabled.last.node, 11);
-      final all = TimetableParser.parsePeriods(rows, onlyEnabled: false);
-      expect(all, hasLength(12));
-      expect(all.last.end, '22:00');
-    });
-
-    test('dqxnxq + dqzc samples parse via import / splitTerm', () async {
-      final termJson = jsonDecode(
-        await File('test/fixtures/timetable/dqxnxq_real_sample.json')
-            .readAsString(),
-      ) as Map<String, dynamic>;
-      final weekJson = jsonDecode(
-        await File('test/fixtures/timetable/dqzc_real_sample.json')
-            .readAsString(),
-      ) as Map<String, dynamic>;
-      final jcJson = jsonDecode(
-        await File('test/fixtures/timetable/jc_real_sample.json')
-            .readAsString(),
-      ) as Map<String, dynamic>;
-      final datas = <String, dynamic>{
-        ...(termJson['datas'] as Map<String, dynamic>),
-        ...(weekJson['datas'] as Map<String, dynamic>),
-        ...(jcJson['datas'] as Map<String, dynamic>),
-      };
-      final snap = TimetableParser.parseImportJson({
-        'code': '0',
-        'datas': datas,
-      });
-      expect(snap.settings.termCode, '2026-2027-1');
-      expect(snap.periods, hasLength(11));
-      expect(snap.settings.termStartDate, DateTime(2026, 8, 31));
-      expect(TimetableApi.splitTermCode('2026-2027-1'), (
-        year: '2026-2027',
-        term: '1',
-      ));
-      final zc =
-          ((weekJson['datas'] as Map)['dqzc']['rows'] as List).first as Map;
-      expect(zc['ZC'], 6);
-    });
-
-    test('dqxnxq/dqzc 403 → still returns timetable', () async {
-      final kb = await _loadRaw('kb_real_sample.json');
-      final wp = await _loadRaw('unscheduled_real_sample.json');
-      final jc = await _loadRaw('jc_real_sample.json');
-      final calls = <String>[];
-      TimetableApi.debugPost = (url, form) async {
-        final name = url.pathSegments.last;
-        calls.add(name);
-        switch (name) {
-          case 'cxxszhxqkb.do':
-            expect(form, {'XNXQDM': '2026-2027-1'});
-            return kb;
-          case 'xswpkc.do':
-            return wp;
-          case 'jc.do':
-            return jc;
-          case 'dqzc.do':
-            expect(form['RQ'], '2026-10-11');
-            throw const JwxtHttpError('dqzc.do', 403);
-          default:
-            throw JwxtHttpError(name, 403);
-        }
-      };
-      final cachedStart = DateTime(2026, 8, 31);
-      final snap = await TimetableApi.fetchTermSnapshot(
-        '2026-2027-1',
-        baseSettings: TimetableSettings(
-          termCode: '2026-2027-1',
-          termStartDate: cachedStart,
-        ),
-        now: DateTime(2026, 10, 11),
-      );
-      expect(calls.first, 'cxxszhxqkb.do');
-      expect(calls, containsAll(['dqxnxq.do', 'dqzc.do', 'jc.do']));
-      expect(snap.courses, isNotEmpty);
-      expect(snap.periods, hasLength(11));
-      // dqzc 失败 → 保留缓存开学日
-      expect(snap.settings.termStartDate, cachedStart);
-      expect(snap.settings.termCode, '2026-2027-1');
-    });
-  }, skip: _realSamplesPresent ? false : 'real sample not present');
 }

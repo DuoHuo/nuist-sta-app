@@ -6,10 +6,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/config/api_endpoints.dart';
+import 'package:nuist_sta_app/core/privacy/privacy_consent.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_colors.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_exam_parser.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_export_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_import_api.dart';
@@ -24,7 +24,6 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_layou
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_switcher_sheet.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_grid.dart';
 
 class _StubAdapter implements HttpClientAdapter {
@@ -668,505 +667,7 @@ void main() {
     });
   });
 
-  group('UI 交互：WakeUp 导入页、切换面板与课表管理', () {
-    testWidgets('WakeUp 口令导入支持 Mock 示例、自定义命名与独立区分展示', (tester) async {
-      await tester.runAsync(c.ensureStarted);
-      c.debugSetSnapshot(
-        TimetableSnapshot(
-          courses: [_jwxtCourse('OWN1', '我的高数')],
-          periods: TimetableController.defaultPeriods(),
-          settings: TimetableSettings(
-            termCode: '2026-2027-1',
-            termStartDate: DateTime(2026, 8, 31),
-            termStartFromJwxt: true,
-          ),
-        ),
-        viewingWeek: 1,
-      );
-
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: appDarkTheme(),
-          home: TimetableImportPage(controller: c),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byKey(const Key('tt_import_demo_chip')));
-      await tester.pump();
-      await tester.tap(find.byKey(const Key('tt_import_parse_btn')));
-      await tester.pumpAndSettle();
-
-      expect(find.byKey(const Key('tt_import_preview')), findsOneWidget);
-      await tester.enterText(
-        find.byKey(const Key('tt_import_name_input')),
-        '学霸同学课表',
-      );
-      await tester.ensureVisible(
-        find.byKey(const Key('tt_import_confirm_btn')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tt_import_confirm_btn')));
-      for (var i = 0; i < 10; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-
-      expect(c.importedSchedules.map((e) => e.name), ['学霸同学课表']);
-      expect(c.viewingScheduleId, c.importedSchedules.single.id);
-      expect(c.primaryScheduleId, kDefaultScheduleId);
-    });
-
-    testWidgets('TimetablePage 顶栏切换器无仅查看横幅并支持设为主课表', (tester) async {
-      tester.view.physicalSize = const Size(1080, 2400);
-      tester.view.devicePixelRatio = 2.625;
-      addTearDown(tester.view.reset);
-
-      await tester.runAsync(c.ensureStarted);
-      c.debugSetSnapshot(
-        TimetableSnapshot(
-          courses: [_jwxtCourse('OWN1', '我的高数')],
-          periods: TimetableController.defaultPeriods(),
-          settings: TimetableSettings(
-            termCode: '2026-2027-1',
-            termStartDate: DateTime(2026, 8, 31),
-            termStartFromJwxt: true,
-          ),
-        ),
-        viewingWeek: 1,
-      );
-      final api = TimetableImportApi();
-      final wk = await tester.runAsync(
-        () => api.fetchByShareText(TimetableImportApi.demoShareText),
-      );
-      api.close();
-      final imported = (await tester.runAsync(
-        () => c.importWakeupSchedule(wk!, name: '同学课表'),
-      ))!;
-      await tester.runAsync(() => c.switchViewingSchedule(kDefaultScheduleId));
-
-      await tester.pumpWidget(
-        MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
-      );
-      for (var i = 0; i < 10; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-
-      await tester.tap(
-        find.byKey(const Key('timetable_schedule_switcher_button')),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.byKey(const Key('tt_switcher_sheet')), findsOneWidget);
-      expect(find.text('我的课表'), findsOneWidget);
-      expect(find.text('导入的课表'), findsOneWidget);
-      expect(find.text('同学课表'), findsOneWidget);
-
-      await tester.tap(find.text('同学课表'));
-      for (var i = 0; i < 10; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      expect(find.byKey(const Key('timetable_viewing_banner')), findsNothing);
-      expect(find.text('操作系统'), findsOneWidget);
-
-      await tester.runAsync(() => c.setPrimarySchedule(imported.id));
-      await tester.pumpAndSettle();
-      expect(c.primaryScheduleId, imported.id);
-    });
-
-    testWidgets('已结束课表顶栏显示简洁结束文案，且纯考试周与其他周不被跨周单节大课锁死行高', (tester) async {
-      tester.view.physicalSize = const Size(1080, 2400);
-      tester.view.devicePixelRatio = 2.625;
-      addTearDown(tester.view.reset);
-
-      await tester.runAsync(c.ensureStarted);
-      c.debugSetSnapshot(
-        TimetableSnapshot(
-          courses: [
-            const Course(
-              id: 'TALL',
-              name: '超长实验课程名称测试对齐高度（一）',
-              source: CourseSource.jwxt,
-              slots: [
-                CourseSlot(
-                  day: 1,
-                  startNode: 1,
-                  endNode: 1,
-                  weeks: '1000000000000000',
-                  location: '长望楼 N101',
-                  teacher: '张老师、李老师',
-                ),
-              ],
-            ),
-            const Course(
-              id: 'EXAM_COURSE',
-              name: '【考试】超长思想政治理论课期中测试安排',
-              source: CourseSource.manual,
-              slots: [
-                CourseSlot(
-                  day: 3,
-                  startNode: 1,
-                  endNode: 1,
-                  weeks: '0000000000001000',
-                  location: '长望楼 N502',
-                ),
-              ],
-            ),
-            const Course(
-              id: 'TWO',
-              name: '对比课程',
-              source: CourseSource.jwxt,
-              slots: [
-                CourseSlot(
-                  day: 1,
-                  startNode: 2,
-                  endNode: 3,
-                  weeks: '1111111111111111',
-                ),
-              ],
-            ),
-          ],
-          periods: TimetableController.defaultPeriods(),
-          settings: TimetableSettings(
-            termCode: '2025-2026-1',
-            scheduleName: '25秋',
-            termStartDate: DateTime(2025, 9, 1),
-            termStartFromJwxt: true,
-            periodHeight: 52,
-            showExams: true,
-          ),
-        ),
-        viewingWeek: 13,
-      );
-      await tester.runAsync(
-        () => c.addScheduleEvent(
-          ScheduleEvent(
-            id: 'exam_w19',
-            kind: ScheduleKind.exam,
-            source: ScheduleSource.jwxt,
-            title: '高等数学期末考试',
-            date: DateTime(2026, 1, 7),
-            start: const TimeOfDayMinutes(9, 0),
-            end: const TimeOfDayMinutes(11, 0),
-            location: '明德 N503',
-            courseCode: 'MATH1',
-          ),
-        ),
-      );
-
-      // 第 13 周没有第 1 周的超长单节课，且「【考试】」导入项不撑大整周行高，应遵循 settings.periodHeight=52。
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: appDarkTheme(),
-          home: Scaffold(body: WeekGrid(week: 13, controller: c)),
-        ),
-      );
-      await tester.pumpAndSettle();
-      final w13RectAt52 = tester.getRect(
-        find.byWidgetPredicate(
-          (w) => w is CourseCell && w.cell.course.id == 'TWO',
-        ),
-      );
-      expect(
-        (w13RectAt52.height + TimetableTheme.cellMargin * 2) / 2,
-        closeTo(52, 0.5),
-      );
-
-      // 调高 settings.periodHeight 到 78 后，第 13 周和纯考试第 19 周都应随设置同步变化到 78。
-      await tester.runAsync(
-        () => c.updateSettings(c.settings.copyWith(periodHeight: 78)),
-      );
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: appDarkTheme(),
-          home: Scaffold(body: WeekGrid(week: 13, controller: c)),
-        ),
-      );
-      await tester.pumpAndSettle();
-      final w13RectAt78 = tester.getRect(
-        find.byWidgetPredicate(
-          (w) => w is CourseCell && w.cell.course.id == 'TWO',
-        ),
-      );
-      expect(
-        (w13RectAt78.height + TimetableTheme.cellMargin * 2) / 2,
-        closeTo(78, 0.5),
-      );
-
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: appDarkTheme(),
-          home: Scaffold(body: WeekGrid(week: 19, controller: c)),
-        ),
-      );
-      await tester.pumpAndSettle();
-      final examRect = tester.getRect(find.byType(ScheduleEventCell));
-      expect(
-        (examRect.height + TimetableTheme.cellMargin * 2) / 2,
-        closeTo(78, 0.5),
-      );
-
-      // TimetablePage 顶栏已结束文案不含「本周第 X 周」，只展示简洁的「课程已结束」。
-      await tester.pumpWidget(
-        MaterialApp(theme: appDarkTheme(), home: const TimetablePage()),
-      );
-      for (var i = 0; i < 10; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      expect(find.byKey(const Key('timetable_term_ended')), findsOneWidget);
-      expect(find.textContaining('课程已结束'), findsOneWidget);
-      expect(find.textContaining('本周第'), findsNothing);
-    });
-
-    testWidgets('TimetableManagementPage 已精简导入与多课表项；切换面板支持确认删除与重命名', (
-      tester,
-    ) async {
-      await tester.runAsync(c.ensureStarted);
-      final api = TimetableImportApi();
-      final wk = await tester.runAsync(
-        () => api.fetchByShareText(TimetableImportApi.demoShareText),
-      );
-      api.close();
-      final meta = (await tester.runAsync(
-        () => c.importWakeupSchedule(wk!, name: '待改名课表'),
-      ))!;
-
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: appLightTheme(),
-          home: TimetableManagementPage(controller: c),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      expect(
-        find.byKey(const Key('tt_settings_group_own_schedules')),
-        findsNothing,
-      );
-      expect(
-        find.byKey(const Key('tt_settings_group_imported_schedules')),
-        findsNothing,
-      );
-      expect(find.byKey(const Key('tt_mgmt_import_wakeup')), findsNothing);
-      expect(find.byKey(const Key('tt_mgmt_fetch_history')), findsNothing);
-      expect(find.byKey(const Key('tt_settings_day_swaps')), findsOneWidget);
-      expect(find.byKey(const Key('tt_settings_change_log')), findsOneWidget);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: appLightTheme(),
-          home: Scaffold(
-            body: Builder(
-              builder: (context) => TextButton(
-                onPressed: () =>
-                    showTimetableSwitcherSheet(context, controller: c),
-                child: const Text('open'),
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.tap(find.text('open'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('待改名课表'), findsOneWidget);
-      await tester.tap(find.byKey(Key('tt_schedule_menu_${meta.id}')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('重命名'));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('tt_rename_schedule_input')),
-        '改名后课表',
-      );
-      await tester.tap(find.byKey(const Key('tt_rename_schedule_confirm')));
-      for (var i = 0; i < 10; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      expect(find.text('改名后课表'), findsOneWidget);
-
-      await tester.tap(find.byKey(Key('tt_schedule_menu_${meta.id}')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('删除'));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const Key('tt_delete_schedule_dialog')),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const Key('tt_delete_schedule_confirm')));
-      for (var i = 0; i < 10; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      expect(find.text('改名后课表'), findsNothing);
-    });
-
-    testWidgets('单节考试周格子高度随格子高度设置变化，不被考试卡片撑死', (tester) async {
-      tester.view.physicalSize = const Size(1080, 2400);
-      tester.view.devicePixelRatio = 2.625;
-      addTearDown(tester.view.reset);
-
-      await tester.runAsync(c.ensureStarted);
-      c.debugSetSnapshot(
-        TimetableSnapshot(
-          courses: [
-            const Course(
-              id: 'SHORT',
-              name: '高数',
-              source: CourseSource.jwxt,
-              slots: [
-                CourseSlot(
-                  day: 1,
-                  startNode: 1,
-                  endNode: 2,
-                  weeks: '1111111111111111',
-                  location: 'N101',
-                ),
-              ],
-            ),
-          ],
-          periods: TimetableController.defaultPeriods(),
-          settings: TimetableSettings(
-            termCode: '2025-2026-1',
-            scheduleName: '25秋',
-            termStartDate: DateTime(2025, 9, 1),
-            termStartFromJwxt: true,
-            periodHeight: 52,
-            showExams: true,
-          ),
-        ),
-        viewingWeek: 19,
-      );
-      await tester.runAsync(
-        () => c.addScheduleEvent(
-          ScheduleEvent(
-            id: 'exam_1p',
-            kind: ScheduleKind.exam,
-            source: ScheduleSource.jwxt,
-            title: '思想道德与法治期末考试',
-            date: DateTime(2026, 1, 7),
-            start: const TimeOfDayMinutes(13, 30),
-            end: const TimeOfDayMinutes(14, 15),
-            location: '长望楼S204',
-            courseCode: 'ETHIC1',
-          ),
-        ),
-      );
-
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: appDarkTheme(),
-          home: Scaffold(body: WeekGrid(week: 19, controller: c)),
-        ),
-      );
-      await tester.pumpAndSettle();
-      final rectAt52 = tester.getRect(find.byType(ScheduleEventCell));
-      final heightAt52 = rectAt52.height + TimetableTheme.cellMargin * 2;
-      expect(heightAt52, closeTo(52, 0.5));
-
-      await tester.runAsync(
-        () => c.updateSettings(c.settings.copyWith(periodHeight: 80)),
-      );
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: appDarkTheme(),
-          home: Scaffold(body: WeekGrid(week: 19, controller: c)),
-        ),
-      );
-      await tester.pumpAndSettle();
-      final rectAt80 = tester.getRect(find.byType(ScheduleEventCell));
-      final heightAt80 = rectAt80.height + TimetableTheme.cellMargin * 2;
-      expect(heightAt80, closeTo(80, 0.5));
-    });
-
-    testWidgets('切换面板中往期课表无删除项，支持单学期与批量重新拉取', (tester) async {
-      var resyncCalls = 0;
-      TimetableController.bindingCheck = () async => true;
-      TimetableController.enrollmentYearCheck = () async => 2025;
-      TimetableController.fetchAvailableTerms = () async => const [
-        JwxtTermOption(termCode: '2025-2026-1'),
-      ];
-      TimetableController.fetchHistoricalSnapshot =
-          (term, {baseSettings}) async {
-            resyncCalls++;
-            return TimetableSnapshot(
-              courses: [_jwxtCourse('H_$term', '高数_$resyncCalls')],
-              periods: TimetableController.defaultPeriods(),
-              settings: (baseSettings ?? const TimetableSettings()).copyWith(
-                termCode: term,
-                termStartDate: DateTime(2025, 9, 1),
-                termStartFromJwxt: true,
-              ),
-            );
-          };
-
-      await tester.runAsync(c.ensureStarted);
-      final histMeta = await tester.runAsync(
-        () => c.syncHistoricalTerm('2025-2026-1'),
-      );
-      expect(histMeta, isNotNull);
-      expect(resyncCalls, 1);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: appLightTheme(),
-          home: Scaffold(
-            body: Builder(
-              builder: (context) => TextButton(
-                onPressed: () =>
-                    showTimetableSwitcherSheet(context, controller: c),
-                child: const Text('open'),
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.tap(find.text('open'));
-      await tester.pumpAndSettle();
-
-      expect(find.byKey(const Key('tt_switcher_fetch_history')), findsNothing);
-      expect(find.byKey(const Key('tt_switcher_resync_own')), findsOneWidget);
-
-      await tester.tap(find.byKey(Key('tt_schedule_menu_${histMeta!.id}')));
-      await tester.pumpAndSettle();
-      expect(find.text('重新拉取'), findsAtLeastNWidgets(2));
-      expect(find.text('重命名'), findsOneWidget);
-      expect(find.text('删除'), findsNothing);
-
-      await tester.tap(find.text('重新拉取').last);
-      for (var i = 0; i < 10; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      expect(resyncCalls, 2);
-
-      await tester.tap(find.byKey(const Key('tt_switcher_resync_own')));
-      for (var i = 0; i < 10; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      expect(resyncCalls, 3);
-    });
-
+  group('WakeUp shareData 解析与配色适配', () {
     test('支持解析 WakeUp share_schedule/getv2 返回的 shareData 五段换行格式并合并拆分周次', () {
       final line0 = jsonEncode({
         'courseLen': 45,
@@ -1280,92 +781,6 @@ void main() {
       expect(quiz.note, '考试申请审核通过生成');
     });
 
-    testWidgets('点击顶栏周数直接展示周数与课表切换，三个点菜单支持默认 WakeUp 导出指定课表', (tester) async {
-      tester.view.physicalSize = const Size(1080, 2400);
-      tester.view.devicePixelRatio = 2.625;
-      addTearDown(tester.view.reset);
-
-      await tester.runAsync(c.ensureStarted);
-      c.debugSetSnapshot(
-        TimetableSnapshot(
-          courses: [_jwxtCourse('MAIN', '当前主课表课程')],
-          periods: TimetableController.defaultPeriods(),
-          settings: TimetableSettings(
-            termCode: '2026-2027-1',
-            scheduleName: '26秋',
-            termStartDate: DateTime(2026, 8, 31),
-            termStartFromJwxt: true,
-          ),
-        ),
-        viewingWeek: 1,
-      );
-      final api = TimetableImportApi();
-      final wk = await tester.runAsync(
-        () => api.fetchByShareText(TimetableImportApi.demoShareText),
-      );
-      api.close();
-      final imported = (await tester.runAsync(
-        () => c.importWakeupSchedule(wk!, name: '室友导出的课表'),
-      ))!;
-      await tester.runAsync(() => c.switchViewingSchedule(kDefaultScheduleId));
-
-      await tester.pumpWidget(
-        MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
-      );
-      for (var i = 0; i < 10; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-
-      // 直接点顶栏周数即弹出包含「切换周数」与「我的课表 / 导入的课表」的底部弹窗。
-      await tester.tap(find.textContaining('第 1 周'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(BottomSheet), findsOneWidget);
-      expect(find.byKey(const Key('timetable_week_strip')), findsOneWidget);
-      expect(find.byKey(const Key('tt_switcher_sheet')), findsOneWidget);
-      expect(find.text('切换周数与课表'), findsOneWidget);
-      expect(find.text('切换周数'), findsOneWidget);
-      expect(find.byKey(const Key('timetable_week_slider')), findsOneWidget);
-      expect(find.text('我的课表'), findsOneWidget);
-      expect(find.text('导入的课表'), findsOneWidget);
-      expect(find.text('室友导出的课表'), findsOneWidget);
-      expect(find.textContaining('来自 WakeUp'), findsNothing);
-      expect(find.text('从口令导入'), findsOneWidget);
-
-      // 当前在浏览「26秋」时，点非当前查看的「室友导出的课表」⋮ 菜单中的「导出到 WakeUp」，
-      // 应打开导出页并导出「室友导出的课表」。
-      await tester.ensureVisible(
-        find.byKey(Key('tt_schedule_menu_${imported.id}')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(Key('tt_schedule_menu_${imported.id}')));
-      await tester.pumpAndSettle();
-      expect(find.text('导出到 WakeUp'), findsOneWidget);
-      await tester.tap(find.text('导出到 WakeUp'));
-      for (var i = 0; i < 10; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-
-      expect(find.byType(TimetableExportPage), findsOneWidget);
-      expect(
-        find.descendant(
-          of: find.byType(TimetableExportPage),
-          matching: find.text('室友导出的课表'),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('timetable_export_generate')),
-        findsOneWidget,
-      );
-    });
-
     test('导入课表根据原颜色自动适配为 16 色配色方案', () async {
       expect(adaptedPaletteIndexForArgb(0xFF3B82F6), 0); // 蓝色 → 晴空蓝 0
       expect(adaptedPaletteIndexForArgb(0xFFC62828), 12); // 深红 → 莓果红 12
@@ -1412,72 +827,255 @@ void main() {
       expect(viewing.colorIndexOf(lab), 12);
       expect(viewing.colorIndexOf(plain), isNot(anyOf(0, 12)));
     });
+  });
 
-    testWidgets('导入课表的「【考试】」与考试日程以主课表 ScheduleEventCell 一致样式渲染', (
-      tester,
-    ) async {
+  group('UI 交互：WakeUp 导入、切换面板与课表管理', () {
+    Future<void> pumpIo(WidgetTester tester) async {
+      for (var i = 0; i < 10; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
+    testWidgets('WakeUp 口令导入、顶栏周数与课表切换、设为主课表及导出指定课表', (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 2.625;
+      addTearDown(tester.view.reset);
+
       await tester.runAsync(c.ensureStarted);
-      final line0 = jsonEncode({'courseLen': 45, 'id': 1, 'name': '作息'});
-      final line1 = jsonEncode([
-        {'node': 1, 'startTime': '08:00', 'endTime': '08:45', 'timeTable': 1},
-        {'node': 2, 'startTime': '08:55', 'endTime': '09:40', 'timeTable': 1},
-        {'node': 3, 'startTime': '10:10', 'endTime': '10:55', 'timeTable': 1},
-        {'node': 4, 'startTime': '11:05', 'endTime': '11:50', 'timeTable': 1},
-      ]);
-      final line2 = jsonEncode({
-        'id': 1,
-        'tableName': '导入含考试课表',
-        'startDate': '2026-03-02',
-        'maxWeek': 20,
-        'nodes': 11,
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: [_jwxtCourse('OWN1', '我的高数')],
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(
+            termCode: '2026-2027-1',
+            scheduleName: '26秋',
+            termStartDate: DateTime(2026, 8, 31),
+            termStartFromJwxt: true,
+          ),
+        ),
+        viewingWeek: 1,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: appDarkTheme(),
+          home: TimetableImportPage(controller: c),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('tt_import_demo_chip')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('tt_import_parse_btn')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tt_import_preview')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('tt_import_name_input')),
+        '学霸同学课表',
+      );
+      await tester.ensureVisible(
+        find.byKey(const Key('tt_import_confirm_btn')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tt_import_confirm_btn')));
+      await pumpIo(tester);
+
+      final imported = c.importedSchedules.single;
+      expect(imported.name, '学霸同学课表');
+      expect(c.viewingScheduleId, imported.id);
+      expect(c.primaryScheduleId, kDefaultScheduleId);
+
+      // 切回主课表并在 TimetablePage 顶栏打开周数与课表切换面板
+      await tester.runAsync(() => c.switchViewingSchedule(kDefaultScheduleId));
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
+      );
+      await pumpIo(tester);
+
+      await tester.tap(
+        find.byKey(const Key('timetable_schedule_switcher_button')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tt_switcher_sheet')), findsOneWidget);
+      expect(find.text('我的课表'), findsOneWidget);
+      expect(find.text('导入的课表'), findsOneWidget);
+      expect(find.text('学霸同学课表'), findsOneWidget);
+
+      await tester.tap(find.text('学霸同学课表'));
+      await pumpIo(tester);
+      expect(find.byKey(const Key('timetable_viewing_banner')), findsNothing);
+      expect(find.text('操作系统'), findsOneWidget);
+
+      // 点顶栏周数直接弹出周数与课表切换面板，并通过菜单导出非当前课表
+      await tester.runAsync(() => c.setPrimarySchedule(imported.id));
+      expect(c.primaryScheduleId, imported.id);
+      await tester.runAsync(() => c.switchViewingSchedule(kDefaultScheduleId));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.textContaining('第 ${c.viewingWeek} 周'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('timetable_week_strip')), findsOneWidget);
+      expect(find.byKey(const Key('timetable_week_slider')), findsOneWidget);
+
+      await tester.ensureVisible(
+        find.byKey(Key('tt_schedule_menu_${imported.id}')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Key('tt_schedule_menu_${imported.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('导出到 WakeUp'));
+      await pumpIo(tester);
+
+      expect(find.byType(TimetableExportPage), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(TimetableExportPage),
+          matching: find.text('学霸同学课表'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('timetable_export_generate')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('切换面板支持重命名与确认删除、往期课表无删除支持重拉及导入考试渲染', (tester) async {
+      var resyncCalls = 0;
+      TimetableController.bindingCheck = () async => true;
+      TimetableController.enrollmentYearCheck = () async => 2025;
+      TimetableController.fetchAvailableTerms = () async => const [
+        JwxtTermOption(termCode: '2025-2026-1'),
+      ];
+      TimetableController.fetchHistoricalSnapshot =
+          (term, {baseSettings}) async {
+            resyncCalls++;
+            return TimetableSnapshot(
+              courses: [_jwxtCourse('H_$term', '高数_$resyncCalls')],
+              periods: TimetableController.defaultPeriods(),
+              settings: (baseSettings ?? const TimetableSettings()).copyWith(
+                termCode: term,
+                termStartDate: DateTime(2025, 9, 1),
+                termStartFromJwxt: true,
+              ),
+            );
+          };
+
+      await tester.runAsync(c.ensureStarted);
+      final histMeta = (await tester.runAsync(
+        () => c.syncHistoricalTerm('2025-2026-1'),
+      ))!;
+      expect(resyncCalls, 1);
+
+      final wkExam = WakeupImportParser.parsePayload({
+        'shareData':
+            '${jsonEncode({'courseLen': 45, 'id': 1, 'name': '作息'})}\n'
+            '${jsonEncode([
+              {'node': 1, 'startTime': '08:00', 'endTime': '08:45', 'timeTable': 1},
+              {'node': 2, 'startTime': '08:55', 'endTime': '09:40', 'timeTable': 1},
+              {'node': 3, 'startTime': '10:10', 'endTime': '10:55', 'timeTable': 1},
+              {'node': 4, 'startTime': '11:05', 'endTime': '11:50', 'timeTable': 1},
+            ])}\n'
+            '${jsonEncode({'id': 1, 'tableName': '导入含考试课表', 'startDate': '2026-03-02', 'maxWeek': 20, 'nodes': 11})}\n'
+            '${jsonEncode([
+              {'id': 1, 'courseName': '高等数学Ⅰ(2)', 'credit': 4.0, 'color': '#fff0c7'},
+              {'id': 2, 'courseName': '【考试】中国近现代史纲要', 'credit': 0, 'color': '#c62828'},
+            ])}\n'
+            '${jsonEncode([
+              {'id': 1, 'day': 1, 'startWeek': 1, 'endWeek': 16, 'type': 0, 'startNode': 1, 'step': 2, 'room': '明德S206', 'teacher': '刘老师'},
+              {'id': 2, 'day': 3, 'startWeek': 15, 'endWeek': 15, 'type': 0, 'ownTime': false, 'startNode': 3, 'step': 2, 'room': '长望楼S402', 'teacher': ''},
+            ])}',
       });
-      final line3 = jsonEncode([
-        {'id': 1, 'courseName': '高等数学Ⅰ(2)', 'credit': 4.0, 'color': '#fff0c7'},
-        {
-          'id': 2,
-          'courseName': '【考试】中国近现代史纲要',
-          'credit': 0,
-          'color': '#c62828',
-        },
-      ]);
-      final line4 = jsonEncode([
-        {
-          'id': 1,
-          'day': 1,
-          'startWeek': 1,
-          'endWeek': 16,
-          'type': 0,
-          'startNode': 1,
-          'step': 2,
-          'room': '明德S206',
-          'teacher': '刘老师',
-        },
-        {
-          'id': 2,
-          'day': 3,
-          'startWeek': 15,
-          'endWeek': 15,
-          'type': 0,
-          'ownTime': false,
-          'startNode': 3,
-          'step': 2,
-          'room': '长望楼S402',
-          'teacher': '',
-        },
-      ]);
-      final wk = WakeupImportParser.parsePayload({
-        'shareData': '$line0\n$line1\n$line2\n$line3\n$line4',
-      });
-      expect(wk.courseCount, 1);
-      expect(wk.examCount, 1);
-      await tester.runAsync(() => c.importWakeupSchedule(wk, name: '导入含考试课表'));
+      final imported = (await tester.runAsync(
+        () => c.importWakeupSchedule(wkExam, name: '待改名课表'),
+      ))!;
+
+      // 管理页已精简掉多课表分组
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: appLightTheme(),
+          home: TimetableManagementPage(controller: c),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('tt_settings_group_own_schedules')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('tt_mgmt_import_wakeup')), findsNothing);
+      expect(find.byKey(const Key('tt_settings_day_swaps')), findsOneWidget);
+
+      // 切换面板中导入课表重命名与确认删除、往期课表无删除且支持单学期/批量重拉
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: appLightTheme(),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () =>
+                    showTimetableSwitcherSheet(context, controller: c),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(Key('tt_schedule_menu_${imported.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('重命名'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('tt_rename_schedule_input')),
+        '改名后课表',
+      );
+      await tester.tap(find.byKey(const Key('tt_rename_schedule_confirm')));
+      await pumpIo(tester);
+      expect(find.text('改名后课表'), findsOneWidget);
+
+      await tester.ensureVisible(
+        find.byKey(Key('tt_schedule_menu_${histMeta.id}')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Key('tt_schedule_menu_${histMeta.id}')));
+      await tester.pumpAndSettle();
+      expect(find.text('重新拉取'), findsAtLeastNWidgets(2));
+      expect(find.text('重命名'), findsOneWidget);
+      expect(find.text('删除'), findsNothing);
+      await tester.tap(find.text('重新拉取').last);
+      await pumpIo(tester);
+      expect(resyncCalls, 2);
+
+      await tester.tap(find.byKey(const Key('tt_switcher_resync_own')));
+      await pumpIo(tester);
+      expect(resyncCalls, 3);
+
+      // 导入课表重入并验证「【考试】」在不同周次下的一致渲染，然后确认删除
+      await tester.tap(find.byKey(Key('tt_schedule_menu_${imported.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('删除'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('tt_delete_schedule_dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('tt_delete_schedule_confirm')));
+      await pumpIo(tester);
+      expect(find.text('改名后课表'), findsNothing);
+
+      await tester.runAsync(() => c.importWakeupSchedule(wkExam, name: '考试课表'));
       await tester.runAsync(
         () => c.viewingController.updateSettings(
           c.viewingController.settings.copyWith(showNonCurrentWeek: true),
         ),
       );
-
-      // 更早的第 13 周应与主课表一致显示「考试」+「非本周」幽灵考；第 15 周显示正式红底考格。
       await tester.pumpWidget(
         MaterialApp(
           theme: appDarkTheme(),
@@ -1489,23 +1087,112 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(ScheduleEventCell), findsOneWidget);
       expect(find.text('中国近现代史纲要'), findsOneWidget);
-      expect(find.text('考试'), findsOneWidget);
       expect(find.text('非本周'), findsOneWidget);
       expect(find.textContaining('【考试】'), findsNothing);
+    });
+  });
 
+  group('WakeUp 导入隐私政策门禁', () {
+    const realKey = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+
+    tearDown(() => PrivacyConsent.instance.value = PrivacyDecision.undecided);
+
+    Future<TimetableImportApi> openImport(
+      WidgetTester tester,
+      PrivacyDecision decision, {
+      TimetableImportApi? real,
+    }) async {
+      PrivacyConsent.instance.value = decision;
+      final api = real ?? _CountingImportApi();
+      await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpWidget(
         MaterialApp(
-          theme: appDarkTheme(),
-          home: Scaffold(
-            body: WeekGrid(week: 15, controller: c.viewingController),
+          theme: appLightTheme(),
+          home: TimetableImportPage(
+            controller: TimetableController.instance,
+            api: api,
           ),
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(ScheduleEventCell), findsOneWidget);
-      expect(find.text('中国近现代史纲要'), findsOneWidget);
-      expect(find.text('考试'), findsOneWidget);
-      expect(find.text('非本周'), findsNothing);
+      return api;
+    }
+
+    testWidgets('未同意或已拒绝导入真实口令需弹窗确认，同意后继续，已同意直接解析', (tester) async {
+      for (final decision in [
+        PrivacyDecision.undecided,
+        PrivacyDecision.declined,
+      ]) {
+        final api = await openImport(tester, decision) as _CountingImportApi;
+        await tester.enterText(
+          find.byKey(const Key('tt_import_input')),
+          realKey,
+        );
+        await tester.tap(find.byKey(const Key('tt_import_parse_btn')));
+        await tester.pumpAndSettle();
+        expect(find.text('需要同意隐私政策'), findsOneWidget);
+        await tester.tap(find.text('取消'));
+        await tester.pumpAndSettle();
+        expect(api.calls, 0);
+        expect(PrivacyConsent.instance.value, decision);
+      }
+
+      final agreeApi = await openImport(
+        tester,
+        PrivacyDecision.declined,
+      ) as _CountingImportApi;
+      await tester.enterText(find.byKey(const Key('tt_import_input')), realKey);
+      await tester.tap(find.byKey(const Key('tt_import_parse_btn')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('同意并继续'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pumpAndSettle();
+      expect(PrivacyConsent.instance.accepted, isTrue);
+      expect(agreeApi.calls, 1);
+
+      final directApi = await openImport(
+        tester,
+        PrivacyDecision.accepted,
+      ) as _CountingImportApi;
+      await tester.enterText(find.byKey(const Key('tt_import_input')), realKey);
+      await tester.tap(find.byKey(const Key('tt_import_parse_btn')));
+      await tester.pumpAndSettle();
+      expect(find.text('需要同意隐私政策'), findsNothing);
+      expect(directApi.calls, 1);
+    });
+
+    testWidgets('内置演示口令只在本地解析，不要求同意', (tester) async {
+      final real = TimetableImportApi();
+      addTearDown(real.close);
+      await openImport(tester, PrivacyDecision.undecided, real: real);
+      await tester.tap(find.byKey(const Key('tt_import_demo_chip')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('tt_import_parse_btn')));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('需要同意隐私政策'), findsNothing);
+      expect(find.byKey(const Key('tt_import_preview')), findsOneWidget);
     });
   });
+}
+
+class _CountingImportApi extends TimetableImportApi {
+  int calls = 0;
+
+  @override
+  Future<WakeupImportResult> fetchByShareText(
+    String rawInput, {
+    CancelToken? cancelToken,
+  }) async {
+    calls++;
+    throw TimetableImportException('测试中止', code: 'test');
+  }
+
+  @override
+  void close() {}
 }

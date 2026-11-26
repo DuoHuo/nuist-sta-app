@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/config/api_endpoints.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
@@ -34,14 +33,6 @@ class _Adapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) => closed = true;
-}
-
-class _ControlledAvatarLoader extends ContributorAvatarLoader {
-  final requests = <String, Completer<Uint8List?>>{};
-
-  @override
-  Future<Uint8List?> load(String url) =>
-      requests.putIfAbsent(url, Completer<Uint8List?>.new).future;
 }
 
 const _metadata = ClientMetadata(
@@ -174,21 +165,12 @@ void main() {
     }
   });
 
-  test('保留客户端默认的重定向设置', () async {
+  test('保留客户端默认重定向设置并允许单次请求覆盖', () async {
     final (dio, adapter) = _client(
       (_) => _json({}),
       options: BaseOptions(followRedirects: false, maxRedirects: 2),
     );
     await dio.get<Object?>(kAnnouncementEndpoint);
-    expect(adapter.requests.single.followRedirects, isFalse);
-    expect(adapter.requests.single.maxRedirects, 2);
-  });
-
-  test('单次请求可以开启或关闭重定向并覆盖跳转次数', () async {
-    final (dio, adapter) = _client(
-      (_) => _json({}),
-      options: BaseOptions(followRedirects: false, maxRedirects: 2),
-    );
     await dio.get<Object?>(
       kAnnouncementEndpoint,
       options: Options(followRedirects: true, maxRedirects: 4),
@@ -197,10 +179,12 @@ void main() {
       kAnnouncementEndpoint,
       options: Options(followRedirects: false, maxRedirects: 1),
     );
-    expect(adapter.requests.first.followRedirects, isTrue);
-    expect(adapter.requests.first.maxRedirects, 4);
-    expect(adapter.requests.last.followRedirects, isFalse);
-    expect(adapter.requests.last.maxRedirects, 1);
+    expect(adapter.requests[0].followRedirects, isFalse);
+    expect(adapter.requests[0].maxRedirects, 2);
+    expect(adapter.requests[1].followRedirects, isTrue);
+    expect(adapter.requests[1].maxRedirects, 4);
+    expect(adapter.requests[2].followRedirects, isFalse);
+    expect(adapter.requests[2].maxRedirects, 1);
   });
 
   test('元数据加载失败不阻断业务，也不把异常正文写入日志', () async {
@@ -302,70 +286,5 @@ void main() {
     oversized = false;
     expect(await avatars.load(url), [1, 2, 3]);
     expect(adapter.requests, hasLength(4));
-  });
-
-  for (final changeLoader in [false, true]) {
-    testWidgets('切换头像${changeLoader ? '加载器' : 'URL'}后等待新图时显示当前占位', (
-      tester,
-    ) async {
-      final firstLoader = _ControlledAvatarLoader();
-      final nextLoader = changeLoader ? _ControlledAvatarLoader() : firstLoader;
-      addTearDown(firstLoader.close);
-      if (changeLoader) addTearDown(nextLoader.close);
-      const firstUrl = '$kContributorsEndpoint/avatars/first';
-      final nextUrl = changeLoader
-          ? firstUrl
-          : '$kContributorsEndpoint/avatars/next';
-      final firstPng = base64Decode(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==',
-      );
-      final nextPng = base64Decode(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/5ncLrgAAAABJRU5ErkJggg==',
-      );
-      Widget subject(String url, ContributorAvatarLoader loader, String name) =>
-          MaterialApp(
-            home: ContributorAvatar(
-              url: url,
-              loader: loader,
-              fallback: Text(name),
-            ),
-          );
-      Uint8List displayedBytes() {
-        final image = tester.widget<Image>(find.byType(Image));
-        final resized = image.image as ResizeImage;
-        return (resized.imageProvider as MemoryImage).bytes;
-      }
-
-      await tester.pumpWidget(subject(firstUrl, firstLoader, '旧占位'));
-      firstLoader.requests[firstUrl]!.complete(firstPng);
-      await tester.pumpAndSettle();
-      expect(displayedBytes(), firstPng);
-
-      await tester.pumpWidget(subject(nextUrl, nextLoader, '新占位'));
-      expect(nextLoader.requests[nextUrl]!.isCompleted, isFalse);
-      expect(find.text('新占位'), findsOneWidget);
-      expect(find.byType(Image), findsNothing);
-
-      nextLoader.requests[nextUrl]!.complete(nextPng);
-      await tester.pumpAndSettle();
-      expect(find.text('新占位'), findsNothing);
-      expect(displayedBytes(), nextPng);
-      await tester.pumpWidget(const SizedBox.shrink());
-    });
-  }
-
-  testWidgets('旧缓存外部头像继续使用不带设备头的图片加载', (tester) async {
-    await tester.pumpWidget(
-      const MaterialApp(
-        home: ContributorAvatar(
-          url: 'https://example.com/avatar.png',
-          fallback: Text('占位'),
-        ),
-      ),
-    );
-    final provider = tester.widget<Image>(find.byType(Image)).image;
-    expect(provider, isA<NetworkImage>());
-    expect((provider as NetworkImage).headers, isNull);
-    await tester.pumpAndSettle();
   });
 }

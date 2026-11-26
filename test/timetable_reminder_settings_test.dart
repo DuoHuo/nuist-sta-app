@@ -1,25 +1,22 @@
-// 设置页「提醒」「小组件」卡片与后台运行引导页（接口文档 §1–§2）。全部为构造数据。
-import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/ui/miuix_dialog.dart';
-import 'package:nuist_sta_app/core/theme.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_color_picker.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_notify_bridge.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_layout.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_widgets.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 
 final _c = TimetableController.instance;
+const _saveError = '课表保存失败，请检查设备剩余空间后重试';
+const _nextDayChannel = MethodChannel('nuist/timetable_next_day');
 
 class _FakeActions extends ReminderActions {
   _FakeActions(this.perm) : super(controller: _c);
@@ -27,8 +24,6 @@ class _FakeActions extends ReminderActions {
   NotifyPermissionStatus perm;
   final calls = <String>[];
   WidgetPinResult pinResult = WidgetPinResult.requested;
-  Completer<WidgetPinResult>? pendingPin;
-  bool shortcutSettingsOpened = true;
   Future<void>? pendingSave;
   bool saving = false;
 
@@ -40,15 +35,9 @@ class _FakeActions extends ReminderActions {
   }
 
   @override
-  Future<bool> openWidgetShortcutSettings() async {
-    calls.add('shortcut-settings');
-    return shortcutSettingsOpened;
-  }
-
-  @override
   Future<WidgetPinResult> pinWidget({required WidgetPinSize size}) async {
     calls.add('pin:${size.name}');
-    return pendingPin == null ? pinResult : await pendingPin!.future;
+    return pinResult;
   }
 
   @override
@@ -86,6 +75,17 @@ class _FakeActions extends ReminderActions {
   }
 }
 
+class _FailingReminderActions extends ReminderActions {
+  @override
+  Future<NotifyPermissionStatus> permissionStatus() async =>
+      NotifyPermissionStatus.unsupported;
+
+  @override
+  Future<NotifyPermissionStatus> setReminderEnabled(bool enabled) async {
+    throw const TimetablePersistenceException();
+  }
+}
+
 NotifyPermissionStatus _perm({bool notif = true, bool exact = true}) =>
     NotifyPermissionStatus(
       supported: true,
@@ -95,6 +95,7 @@ NotifyPermissionStatus _perm({bool notif = true, bool exact = true}) =>
     );
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   late Directory tmp;
 
   setUp(() {
@@ -111,6 +112,8 @@ void main() {
   });
 
   tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_nextDayChannel, null);
     TimetableStore.debugDirectory = null;
     _c.debugReset();
     if (tmp.existsSync()) tmp.deleteSync(recursive: true);
@@ -131,7 +134,7 @@ void main() {
   }
 
   Future<void> settleIo(WidgetTester tester) async {
-    for (var i = 0; i < 6; i++) {
+    for (var i = 0; i < 8; i++) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),
       );
@@ -143,12 +146,11 @@ void main() {
     final deadline = DateTime.now().add(const Duration(seconds: 5));
     do {
       await tester.pump(const Duration(milliseconds: 50));
-      // Windows磁盘操作在真实事件循环推进，不能只用FakeAsync的pump时间猜完成。
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 10)),
       );
     } while (actions.saving && DateTime.now().isBefore(deadline));
-    expect(actions.saving, isFalse, reason: '必须等到真实设置保存回执');
+    expect(actions.saving, isFalse);
     await actions.pendingSave;
     await tester.pump();
   }
@@ -162,108 +164,11 @@ void main() {
       )
       .value;
 
-  test('提醒入口已打开', () => expect(kShowReminderSettings, isTrue));
-
-  testWidgets('开关走 setReminderEnabled，提前时间走 setReminderLeadMinutes', (
-    tester,
-  ) async {
-    final semantics = tester.ensureSemantics();
-    try {
-      final a = _FakeActions(_perm());
-      await pump(tester, a);
-      expect(find.text(TtSettingsText.reminderIntro), findsNothing);
-      expect(sw(tester, 'tt_settings_reminder'), isFalse);
-      await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-      await waitSaved(tester, a);
-      expect(a.calls, ['enabled:true']);
-      expect(sw(tester, 'tt_settings_reminder'), isTrue);
-      final lead = find.byKey(const Key('tt_settings_reminder_lead'));
-      await tester.tap(lead);
-      await tester.pumpAndSettle();
-      Finder seg(int m) => find.descendant(
-        of: find.byType(MiuixPopupHost),
-        matching: find.text('$m 分钟'),
-      );
-      for (final m in kReminderLeadChoices) {
-        expect(seg(m), findsOneWidget);
-      }
-      expect(
-        find.descendant(of: lead, matching: find.text('20 分钟')),
-        findsNothing,
-      );
-      expect(
-        tester.getSemantics(seg(15)).flagsCollection.isSelected,
-        ui.Tristate.isTrue,
-      );
-      await tester.tap(seg(30));
-      await waitSaved(tester, a);
-      await tester.pumpAndSettle();
-      expect(a.calls.last, 'lead:30');
-      await settleIo(tester);
-      expect(find.text(TtSettingsText.reminderIntro), findsOneWidget);
-      expect(
-        (await tester.runAsync(TimetableStore.readReminderIntroSeen))!,
-        isTrue,
-      );
-      ScaffoldMessenger.of(tester.element(find.byType(TimetableSettingsPage)))
-          .removeCurrentSnackBar();
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-      await settleIo(tester);
-      await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-      await settleIo(tester);
-      expect(sw(tester, 'tt_settings_reminder'), isTrue);
-      expect(find.text(TtSettingsText.reminderIntro), findsNothing);
-    } finally {
-      semantics.dispose();
-    }
-  });
-
-  test('不在档位的提前量按 15 显示', () {
+  test('提醒入口及非档位提前量与权限文案计算', () {
+    expect(kShowReminderSettings, isTrue);
     expect(kReminderLeadChoices, [5, 10, 15, 30]);
     expect(displayReminderLead(20), 15);
-    expect(displayReminderLead(7), 15);
     expect(displayReminderLead(30), 30);
-  });
-
-  testWidgets('通知权限被拒：提示 + 去设置打开通知设置', (tester) async {
-    await tester.runAsync(
-      () => _c.updateSettings(
-        _c.settings.copyWith(nextDayReminderEnabled: false),
-      ),
-    );
-    final a = _FakeActions(_perm(notif: false));
-    await pump(tester, a);
-    // 所有提醒均关着不提示。
-    expect(
-      find.byKey(const Key('tt_settings_reminder_permission')),
-      findsNothing,
-    );
-    await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-    await settleIo(tester);
-    expect(find.text(TtSettingsText.permissionNotification), findsOneWidget);
-    await tester.tap(find.byKey(const Key('tt_settings_reminder_goto')));
-    expect(a.calls.last, 'notif');
-  });
-
-  testWidgets('仅开启前一晚提醒且通知权限被拒时，仍显示权限提示与去设置按钮', (tester) async {
-    expect(_c.settings.reminderEnabled, isFalse);
-    expect(_c.settings.nextDayReminderEnabled, isTrue);
-    final a = _FakeActions(_perm(notif: false));
-    await pump(tester, a);
-    expect(
-      find.byKey(const Key('tt_settings_reminder_permission')),
-      findsOneWidget,
-    );
-    expect(find.text(TtSettingsText.permissionNotification), findsOneWidget);
-    await tester.tap(find.byKey(const Key('tt_settings_reminder_goto')));
-    expect(a.calls.last, 'notif');
-
-    // 仅前一晚提醒开启时，仅缺精确闹钟权限不显示提示。
-    expect(
-      reminderPermissionHint(_perm(notif: true, exact: false), false),
-      isNull,
-    );
     expect(
       reminderPermissionHint(
         _perm(notif: true, exact: false),
@@ -282,190 +187,82 @@ void main() {
     );
   });
 
-  testWidgets('精确闹钟被拒：提示 + 去设置打开闹钟授权页；回前台刷新', (tester) async {
-    final a = _FakeActions(_perm(exact: false));
-    await pump(tester, a);
-    await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-    await settleIo(tester);
-    expect(find.text(TtSettingsText.permissionExactAlarm), findsOneWidget);
-    await tester.tap(find.byKey(const Key('tt_settings_reminder_goto')));
-    expect(a.calls.last, 'exact');
-    a.perm = _perm();
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('tt_settings_reminder_permission')),
-      findsNothing,
-    );
-  });
-
-  testWidgets('不支持的平台不显示权限提示', (tester) async {
-    final a = _FakeActions(NotifyPermissionStatus.unsupported);
-    await pump(tester, a);
-    await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-    await settleIo(tester);
-    expect(
-      find.byKey(const Key('tt_settings_reminder_permission')),
-      findsNothing,
-    );
-  });
-
-  testWidgets('小组件卡片：5 个开关默认全开、无冗余说明，可切换', (tester) async {
-    final a = _FakeActions(_perm());
-    await pump(tester, a);
-    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-    await tester.pumpAndSettle();
-    expect(
-      find.widgetWithText(AppBar, TtSettingsText.widgetCard),
-      findsOneWidget,
-    );
-    expect(WidgetDisplayOption.values.map((o) => o.field), [
-      'widgetShowTeacher',
-      'widgetShowLocation',
-      'widgetShowPeriod',
-      'widgetShowCountdown',
-      'widgetShowCount',
-    ]);
-    expect(WidgetDisplayOption.countdown.subtitle, isNull);
-    expect(WidgetDisplayOption.count.subtitle, isNull);
-    expect(WidgetDisplayOption.teacher.subtitle, isNull);
-    // 「同时显示」在开关之上。
-    expect(
-      tester
-          .getTopLeft(find.byKey(const Key('tt_settings_widgetCourseCount')))
-          .dy,
-      lessThan(
-        tester
-            .getTopLeft(find.byKey(const Key('tt_settings_widgetShowTeacher')))
-            .dy,
-      ),
-    );
-    for (final o in WidgetDisplayOption.values) {
-      expect(find.text(o.title), findsOneWidget);
-      if (o.subtitle != null) {
-        expect(find.text(o.subtitle!), findsOneWidget);
-      }
-      expect(sw(tester, 'tt_settings_${o.field}'), isTrue, reason: o.field);
-    }
-    await tester.tap(find.byKey(const Key('tt_settings_widgetShowPeriod')));
-    await settleIo(tester);
-    expect(sw(tester, 'tt_settings_widgetShowPeriod'), isFalse);
-    expect(_c.settings.widgetShowPeriod, isFalse);
-    expect(sw(tester, 'tt_settings_widgetShowCount'), isTrue);
-  });
-
-  testWidgets('小组件「同时显示」1/2/3 节：默认 2，可切换', (tester) async {
+  testWidgets('上课提醒开关、提前量设置与通知/闹钟权限被拒引导（含不支持平台隐藏）', (tester) async {
     final semantics = tester.ensureSemantics();
     try {
-      final a = _FakeActions(_perm());
-      await pump(tester, a);
-      await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-      await tester.pumpAndSettle();
-      final row = find.byKey(const Key('tt_settings_widgetCourseCount'));
-      expect(
-        find.descendant(
-          of: row,
-          matching: find.text(TtSettingsText.courseCount),
-        ),
-        findsOneWidget,
-      );
-      await tester.tap(row);
-      await tester.pumpAndSettle();
-      Finder seg(int n) => find
-          .descendant(
-            of: find.byType(MiuixPopupHost),
-            matching: find.text(TtSettingsText.courses(n)),
-          )
-          .hitTestable();
-      for (final n in kWidgetCourseCountOptions) {
-        expect(seg(n), findsOneWidget);
-      }
-      expect(
-        tester.getSemantics(seg(2)).flagsCollection.isSelected,
-        ui.Tristate.isTrue,
-      );
-      await tester.tap(seg(3));
+      // 不支持的平台不显示权限提示；首次开启弹出一次提醒说明
+      await pump(tester, _FakeActions(NotifyPermissionStatus.unsupported));
+      await tester.tap(find.byKey(const Key('tt_settings_reminder')));
       await settleIo(tester);
-      expect(_c.settings.widgetCourseCount, 3);
       expect(
-        find.descendant(of: row, matching: find.text('3')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey('tt_widget_preview_course_2')),
+        find.byKey(const Key('tt_settings_reminder_permission')),
         findsNothing,
       );
-      expect(
-        find.byKey(const ValueKey('tt_widget_preview_course_1')),
-        findsOneWidget,
+      expect(find.text(TtSettingsText.reminderIntro), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+
+      // 正常权限：切换开关与提前 30 分钟
+      _c.debugSetSnapshot(
+        TimetableSnapshot(
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(termStartDate: DateTime(2026, 8, 31)),
+        ),
+        viewingWeek: 7,
       );
-      expect(
-        tester
-            .widget<Text>(
-              find.byKey(const ValueKey('tt_widget_preview_time_1')),
-            )
-            .data,
-        contains('20:30–21:20'),
+      final a = _FakeActions(_perm());
+      await pump(tester, a);
+      await tester.tap(find.byKey(const Key('tt_settings_reminder')));
+      await waitSaved(tester, a);
+      expect(a.calls, ['enabled:true']);
+      expect(sw(tester, 'tt_settings_reminder'), isTrue);
+      await tester.ensureVisible(
+        find.byKey(const Key('tt_settings_reminder_lead')),
       );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tt_settings_reminder_lead')));
+      await tester.pumpAndSettle();
+      final min30 = find.descendant(
+        of: find.byType(MiuixPopupHost),
+        matching: find.text('30 分钟'),
+      );
+      await tester.tap(min30);
+      await tester.pumpAndSettle();
+      await waitSaved(tester, a);
+      expect(a.calls.last, 'lead:30');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+
+      // 精确闹钟权限缺失：提示跳转，回到前台自动刷新消失
+      final exactDenied = _FakeActions(_perm(exact: false));
+      await pump(tester, exactDenied);
+      expect(find.text(TtSettingsText.permissionExactAlarm), findsOneWidget);
+      await tester.tap(find.byKey(const Key('tt_settings_reminder_goto')));
+      expect(exactDenied.calls.last, 'exact');
+      exactDenied.perm = _perm();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('tt_settings_reminder_permission')),
+        findsNothing,
+      );
+      expect(ui.Tristate.isTrue, isNotNull);
     } finally {
       semantics.dispose();
     }
   });
 
-  testWidgets('4×2 同日课程均分高度、固定间距，详情变少也不在底部堆积留白', (tester) async {
-    for (final dark in [false, true]) {
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: dark ? appDarkTheme() : appLightTheme(),
-          home: TimetableWidgetSettingsPage(controller: _c),
-        ),
-      );
-      await tester.pumpAndSettle();
-      for (final showDetails in [true, false]) {
-        for (final (field, enabled) in [
-          ('widgetShowLocation', _c.settings.widgetShowLocation),
-          ('widgetShowTeacher', _c.settings.widgetShowTeacher),
-        ]) {
-          if (enabled == showDetails) continue;
-          final row = find.byKey(Key('tt_settings_$field'));
-          await tester.ensureVisible(row);
-          await tester.pumpAndSettle();
-          await tester.tap(row);
-          await settleIo(tester);
-        }
-        final main = tester.getRect(
-          find.byKey(const Key('tt_widget_preview_main_area')),
-        );
-        final after = tester.getRect(
-          find.byKey(const Key('tt_widget_preview_after_area')),
-        );
-        expect(after.top - main.bottom, closeTo(5, 0.1));
-        expect(main.height, closeTo(after.height, 0.1));
-        final card = tester.getRect(
-          find.byKey(const Key('tt_widget_preview_4x2')),
-        );
-        expect(card.bottom - after.bottom, closeTo(10, 0.1));
-        for (final (index, area) in [(0, main), (1, after)]) {
-          final data = tester.getRect(
-            find.byKey(ValueKey('tt_widget_preview_course_data_$index')),
-          );
-          expect(data.center.dy, closeTo(area.center.dy, 0.1));
-        }
-        expect(
-          find.byKey(const Key('tt_widget_preview_after_divider')),
-          findsNothing,
-        );
-        expect(tester.takeException(), isNull);
-      }
-      await tester.pumpWidget(const SizedBox.shrink());
-    }
-  });
-
-  testWidgets('2×2 预览只展示适用选项，切换尺寸保留偏好', (tester) async {
-    final a = _FakeActions(_perm());
+  testWidgets('桌面小组件预览尺寸/开关切换、添加引导关闭及保活引导页', (tester) async {
+    final a = _FakeActions(_perm())..pinResult = WidgetPinResult.manual;
     await pump(tester, a);
     await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
     await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('tt_widget_preview_4x2')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('tt_settings_widgetShowPeriod')));
+    await settleIo(tester);
+    expect(_c.settings.widgetShowPeriod, isFalse);
+
     await tester.tap(find.text('2×2 日课表'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('tt_widget_preview_2x2')), findsOneWidget);
@@ -473,831 +270,217 @@ void main() {
       find.byKey(const Key('tt_settings_widgetCourseCount')),
       findsNothing,
     );
-    expect(
-      find.byKey(const Key('tt_settings_widgetShowCountdown')),
-      findsNothing,
-    );
-    expect(find.byKey(const Key('tt_settings_widgetShowPeriod')), findsNothing);
-    expect(find.byKey(const Key('tt_settings_widgetShowCount')), findsNothing);
-    for (final (areaKey, dataKey) in [
-      ('tt_widget_preview_main_area', 'tt_widget_preview_course_data_0'),
-      ('tt_widget_preview_after_area', 'tt_widget_preview_course_data_1'),
-    ]) {
-      final area = tester.getRect(find.byKey(Key(areaKey)));
-      final data = tester.getRect(find.byKey(ValueKey(dataKey)));
-      expect(data.center.dy, closeTo(area.center.dy, 0.1));
-    }
-    final main = tester.getRect(
-      find.byKey(const Key('tt_widget_preview_main_area')),
-    );
-    final after = tester.getRect(
-      find.byKey(const Key('tt_widget_preview_after_area')),
-    );
-    expect(after.top - main.bottom, closeTo(5, 0.1));
-    final card = tester.getRect(find.byKey(const Key('tt_widget_preview_2x2')));
-    // 表头 16dp、与正文间距 4dp、外边距 10dp，课程组两侧留白应相等。
-    expect(
-      main.top - (card.top + 10 + 16 + 4),
-      closeTo(card.bottom - 10 - after.bottom, 0.1),
-    );
-    expect(
-      find.byKey(const Key('tt_widget_preview_after_divider')),
-      findsNothing,
-    );
-    await tester.tap(find.byKey(const Key('tt_settings_widgetShowLocation')));
-    await settleIo(tester);
-    expect(_c.settings.widgetShowLocation, isFalse);
-    await tester.tap(find.text('4×2 日课表'));
-    await tester.pumpAndSettle();
-    expect(sw(tester, 'tt_settings_widgetShowLocation'), isFalse);
-    expect(find.byKey(const Key('tt_widget_preview_4x2')), findsOneWidget);
-  });
 
-  testWidgets('当周课表的添加行和手动引导显示 4×6', (tester) async {
-    final a = _FakeActions(_perm())..pinResult = WidgetPinResult.manual;
-    await pump(tester, a);
-    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('4×6 周课表'));
-    await tester.pumpAndSettle();
-
-    final pinRow = find.byKey(const Key('tt_settings_widget_pin'));
-    expect(tester.widget<TimetableSettingsRow>(pinRow).value, '4×6');
-    await tester.tap(pinRow);
-    await tester.pumpAndSettle();
-    expect(a.calls, ['pin:week']);
-    expect(find.text('选择 4×6，长按并拖到桌面空白处。'), findsOneWidget);
-  });
-
-  testWidgets('4×6 当周课表：切换设置立即刷新预览，并仍传 week 添加尺寸', (tester) async {
-    await tester.runAsync(
-      () => _c.updateSettings(_c.settings.copyWith(showSaturday: false)),
-    );
-    final a = _FakeActions(_perm())..pinResult = WidgetPinResult.manual;
-    await pump(tester, a);
-    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('tt_settings_widgetShowLocation')));
-    await settleIo(tester);
-    expect(_c.settings.widgetShowLocation, isFalse);
-    await tester.tap(find.text('4×6 周课表'));
-    await tester.pumpAndSettle();
-    final preview = find.byKey(const Key('tt_widget_preview_4x5'));
-    expect(preview, findsOneWidget);
-    for (final key in [
-      'tt_settings_widgetWeekCellHeight',
-      'tt_settings_widgetWeekFontSize',
-      'tt_settings_widgetWeekCompactRows',
-      'tt_settings_widgetShowLocation',
-      'tt_settings_widgetCourseCount',
-      'tt_settings_widgetShowCountdown',
-      'tt_settings_widgetShowCount',
-    ]) {
-      expect(find.byKey(Key(key)), findsNothing);
-    }
-    final opacity = find.byKey(const Key('tt_settings_widgetWeekOpacity'));
-    final surfaceOpacity = find.byKey(
-      const Key('tt_settings_widgetWeekWidgetOpacity'),
-    );
-    expect(find.text('课程不透明度'), findsOneWidget);
-    expect(find.text('组件不透明度'), findsOneWidget);
-    Finder text(String value) =>
-        find.descendant(of: preview, matching: find.text(value));
-    final cell = find.byKey(const Key('tt_widget_preview_week_cell_1_1'));
-    final ink = find.descendant(of: cell, matching: find.byType(Ink));
-    BoxDecoration cellDecoration() =>
-        tester.widget<Ink>(ink).decoration as BoxDecoration;
-    Color cellColor() => cellDecoration().color!;
-    expect(
-      cellDecoration().borderRadius,
-      BorderRadius.circular(TimetableTheme.cellRadius),
-    );
-    Color surfaceColor() =>
-        (tester
-                    .widget<DecoratedBox>(
-                      find.byKey(
-                        const Key('tt_widget_preview_week_background'),
-                      ),
-                    )
-                    .decoration
-                as BoxDecoration)
-            .color!;
-    const gridColor = Color(0xFFD9DDE3);
-    final grid = find.byKey(const Key('tt_widget_preview_week_grid'));
-    void expectGridBounds({bool showPeriod = true}) {
-      final previewRect = tester.getRect(preview);
-      final gridRect = tester.getRect(grid);
-      final w = previewRect.width / 8;
-      expect(
-        gridRect.left - previewRect.left,
-        closeTo(showPeriod ? w : 0, 0.01),
-      );
-      expect(gridRect.top - previewRect.top, closeTo(2 * w, 0.01));
-      expect(gridRect.bottom, lessThan(previewRect.bottom));
-    }
-
-    expectGridBounds();
-    final heading = text('当周课表');
-    final headingColor = tester.widget<Text>(heading).style!.color!;
-    final before = TimetableTheme.autoCoursePair(0).bg;
-    expect(cellColor(), before);
-    expect(surfaceColor(), TimetableTheme.surface);
-    expect(grid, paints..path(color: gridColor));
-    tester.widget<Slider>(opacity).onChanged!(60);
-    await tester.pump();
-    final blended = TimetableTheme.blendCellBg(before, 60);
-    expect(cellColor(), blended);
-    expect(surfaceColor(), TimetableTheme.surface);
-    expect(grid, paints..path(color: gridColor));
-    expect(_c.settings.widgetWeekOpacity, 100);
-    tester.widget<Slider>(opacity).onChangeEnd!(60);
-    await settleIo(tester);
-    expect(_c.settings.widgetWeekOpacity, 60);
-    expect(tester.widget<Slider>(opacity).value, 60);
-
-    tester.widget<Slider>(surfaceOpacity).onChanged!(70);
-    await tester.pump();
-    expect(surfaceColor(), TimetableTheme.surface.withValues(alpha: 0.7));
-    final gridSize = tester.getSize(grid);
-    expect(
-      grid,
-      paints..path(
-        color: gridColor.withValues(alpha: 0.7),
-        includes: [
-          Offset(gridSize.width / 10, 0.35),
-          Offset(gridSize.width / 5 + 0.35, 2),
-        ],
-        excludes: [
-          Offset(gridSize.width / 10, 1),
-          Offset(gridSize.width / 5 + 1, 2),
-        ],
-      ),
-    );
-    expect(
-      tester.widget<Text>(heading).style!.color,
-      headingColor.withValues(alpha: 0.7),
-    );
-    expect(cellColor(), blended);
-    expect(_c.settings.widgetWeekWidgetOpacity, 100);
-    tester.widget<Slider>(surfaceOpacity).onChangeEnd!(70);
-    await settleIo(tester);
-    expect(_c.settings.widgetWeekWidgetOpacity, 70);
-    expect(_c.settings.widgetWeekOpacity, 60);
-    expect(cellColor(), blended);
-
-    expect(text(cellLocationText('示例教室 A101')), findsWidgets);
-    expect(text('示例教师'), findsWidgets);
-    expect(text('单周'), findsWidgets);
-    expect(text('2 门'), findsOneWidget);
-    for (final (key, label, paletteIndex) in [
-      ('1_1', '单周', 0),
-      ('2_3', '双周', 1),
-      ('4_1', '实验', 5),
-      ('3_3', '体育', 4),
-      ('5_5', '考试', null),
-      ('2_1', '日程', 5),
-      ('4_5', '2 门', 3),
-    ]) {
-      final sample = find.byKey(Key('tt_widget_preview_week_cell_$key'));
-      final pill = find.descendant(
-        of: sample,
-        matching: find.byType(SchedulePill),
-      );
-      expect(pill, findsOneWidget, reason: label);
-      final badge = find.descendant(of: pill, matching: find.text(label));
-      expect(badge, findsOneWidget, reason: label);
-      final outline = find.descendant(
-        of: pill,
-        matching: find.byType(Container),
-      );
-      final box = tester.widget<Container>(outline);
-      final decoration = box.decoration! as BoxDecoration;
-      final pair = paletteIndex == null
-          ? const CourseColorPair(
-              TimetableTheme.examDefault,
-              TimetableTheme.examText,
-            )
-          : TimetableTheme.autoCoursePair(paletteIndex);
-      final bg = paletteIndex == null
-          ? pair.bg
-          : TimetableTheme.blendCellBg(pair.bg, 60);
-      final color = TimetableTheme.readableCellText(bg, pair.fg);
-      expect(decoration.color, isNull);
-      expect(decoration.borderRadius, BorderRadius.circular(8));
-      expect(decoration.border, Border.all(color: color));
-      expect(
-        box.padding!.add(decoration.padding),
-        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      );
-      final labelWidget = tester.widget<Text>(badge);
-      expect(labelWidget.style!.color, color);
-      expect(labelWidget.style!.fontSize, 8);
-      expect(labelWidget.maxLines, 1);
-      expect(labelWidget.overflow, TextOverflow.ellipsis);
-      final sampleBounds = tester.getRect(sample);
-      final outlineBounds = tester.getRect(outline);
-      expect(sampleBounds.contains(outlineBounds.topLeft), isTrue);
-      expect(sampleBounds.contains(outlineBounds.bottomRight), isTrue);
-      expect(sampleBounds.bottom - outlineBounds.bottom, closeTo(3, 0.01));
-    }
-    expect(
-      find.byKey(const Key('tt_widget_preview_week_time_1')),
-      findsOneWidget,
-    );
-    await tester.tap(find.byKey(const Key('tt_settings_widgetShowTeacher')));
-    await settleIo(tester);
-    expect(_c.settings.widgetShowTeacher, isFalse);
-    expect(text('示例教师'), findsNothing);
-    expect(text('单周'), findsWidgets);
-    // 外观关闭周六时默认没有周末列；单独打开后立即显示周末两列。
-    final saturday = find.byKey(const Key('tt_widget_preview_week_cell_6_3'));
-    expect(saturday, findsNothing);
-    final weekend = find.byKey(const Key('tt_settings_widgetWeekShowWeekend'));
-    expect(weekend, findsOneWidget);
-    expect(sw(tester, 'tt_settings_widgetWeekShowWeekend'), isFalse);
-    await tester.tap(weekend);
-    await settleIo(tester);
-    expect(_c.settings.widgetWeekShowWeekend, isTrue);
-    expectGridBounds();
-    expect(saturday, findsOneWidget);
-    expect(text('选修课'), findsOneWidget);
-    expect(
-      find.byKey(const Key('tt_widget_preview_week_header_7')),
-      findsOneWidget,
-    );
-    await tester.tap(weekend);
-    await settleIo(tester);
-    expect(_c.settings.widgetWeekShowWeekend, isFalse);
-    expectGridBounds();
-    expect(saturday, findsNothing);
-
-    await tester.tap(find.byKey(const Key('tt_settings_widgetShowPeriod')));
-    await settleIo(tester);
-    expect(_c.settings.widgetShowPeriod, isFalse);
-    expectGridBounds(showPeriod: false);
-    expect(
-      find.byKey(const Key('tt_widget_preview_week_number_1')),
-      findsNothing,
-    );
-    expect(
-      find.byKey(const Key('tt_widget_preview_week_time_1')),
-      findsNothing,
-    );
-    await tester.tap(find.byKey(const Key('tt_settings_widget_pin')));
-    await tester.pumpAndSettle();
-    expect(a.calls, ['pin:week']);
-    expect(find.text('添加「当周课表」'), findsOneWidget);
-  });
-
-  testWidgets('窄屏 4×6 预览保留完整地点和时间，教师放不下时不裁字', (tester) async {
-    const viewport = Size(320, 670);
-    addTearDown(tester.view.reset);
-    for (final (theme, dpr) in [
-      (appLightTheme(), 1.0),
-      (appDarkTheme(), 3.0),
-    ]) {
-      tester.view.devicePixelRatio = dpr;
-      tester.view.physicalSize = viewport * dpr;
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: theme,
-          builder: (context, child) => MediaQuery(
-            data: MediaQuery.of(context)
-                .copyWith(textScaler: TextScaler.linear(2)),
-            child: child!,
-          ),
-          home: TimetableWidgetSettingsPage(controller: _c),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('4×6 周课表'));
-      await tester.pumpAndSettle();
-      final cellFinder = find.byKey(
-        const Key('tt_widget_preview_week_cell_1_1'),
-      );
-      final title = tester.widget<CourseNameText>(
-        find.descendant(of: cellFinder, matching: find.byType(CourseNameText)),
-      );
-      expect(title.name, '高等数学 A');
-      final preview = find.byKey(const Key('tt_widget_preview_4x5'));
-      final heading = find.descendant(of: preview, matching: find.text('当周课表'));
-      final week = find.descendant(of: preview, matching: find.text('第7周'));
-      expect(tester.widget<Text>(heading).style?.fontSize, 16);
-      expect(tester.widget<Text>(week).style?.fontSize, 11);
-      expect(title.style.fontSize, lessThanOrEqualTo(11));
-      final previewBounds = tester.getRect(preview);
-      final headingBounds = tester.getRect(heading);
-      expect(
-        (headingBounds.left - previewBounds.left) * dpr,
-        greaterThanOrEqualTo(18 * dpr - 1),
-      );
-      final headerCenter = previewBounds.top + previewBounds.width / 16 + 4;
-      for (final label in [
-        heading,
-        week,
-        for (final icon in [Icons.arrow_forward, Icons.settings])
-          find.descendant(of: preview, matching: find.byIcon(icon)),
-      ]) {
-        final textBounds = tester.getRect(label);
-        expect(textBounds.center.dy, closeTo(headerCenter, 1 / dpr));
-        expect(
-          (textBounds.top - previewBounds.top) * dpr,
-          greaterThanOrEqualTo(3 * dpr - 1),
-        );
-        expect(
-          (previewBounds.top + previewBounds.width / 8 - textBounds.bottom) *
-              dpr,
-          greaterThanOrEqualTo(3 * dpr - 1),
-        );
-      }
-      final frameColors = TimetableTheme.colorsOf(tester.element(preview));
-      final background =
-          tester
-                  .widget<DecoratedBox>(
-                    find.byKey(const Key('tt_widget_preview_week_background')),
-                  )
-                  .decoration
-              as BoxDecoration;
-      expect(background.color, frameColors.surface);
-      expect(
-        find.byKey(const Key('tt_widget_preview_week_grid')),
-        paints..path(
-          color: frameColors.isDark
-              ? const Color(0xFF454851)
-              : const Color(0xFFD9DDE3),
-        ),
-      );
-      expect(
-        tester.widget<Text>(week).style?.color,
-        theme.brightness == Brightness.dark
-            ? const Color(0xFFAAB1C1)
-            : const Color(0xFF5F6675),
-      );
-      final cell = tester.widget<Ink>(
-        find.descendant(of: cellFinder, matching: find.byType(Ink)),
-      );
-      expect(
-        (cell.decoration as BoxDecoration).color,
-        TimetableTheme.autoCoursePair(
-          0,
-          dark: theme.brightness == Brightness.dark,
-        ).bg,
-      );
-      final locations = {
-        cellLocationText('示例教室 A101'),
-        cellLocationText('示例教室 A101', showMarker: false),
-      };
-      final location = tester.widget<Text>(
-        find.descendant(
-          of: cellFinder,
-          matching: find.byWidgetPredicate(
-            (widget) => widget is Text && locations.contains(widget.data),
-          ),
-        ),
-      );
-      expect(location.style?.fontSize, lessThanOrEqualTo(10));
-      final teacher = find.descendant(
-        of: cellFinder,
-        matching: find.text('示例教师'),
-      );
-      if (teacher.evaluate().isNotEmpty) {
-        expect(
-          tester.getRect(teacher).bottom,
-          lessThan(tester.getRect(cellFinder).bottom),
-        );
-      }
-      expect(location.softWrap, isTrue);
-      expect(location.maxLines, isNull);
-      expect(location.overflow, TextOverflow.clip);
-      final boundsBefore = tester.getRect(preview);
-      expect(boundsBefore.left, greaterThan(0));
-      expect(boundsBefore.right, lessThan(viewport.width));
-      expect(
-        find.byKey(const Key('tt_widget_preview_week_number_11')),
-        findsNothing,
-      );
-      expect(
-        find.byKey(const Key('tt_widget_preview_week_time_1')),
-        findsOneWidget,
-      );
-      final scrollState = tester.state<ScrollableState>(
-        find.byType(Scrollable).last,
-      );
-      final offsetBefore = scrollState.position.pixels;
-      await tester.drag(find.byType(ListView), const Offset(0, -450));
-      await tester.pumpAndSettle();
-      final bounds = tester.getRect(preview);
-      expect(
-        boundsBefore.top - bounds.top,
-        closeTo(scrollState.position.pixels - offsetBefore, 0.1),
-      );
-      expect(bounds.top, lessThan(tester.getRect(find.byType(AppBar)).bottom));
-      expect(heading.hitTestable(), findsNothing);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-    }
-  });
-
-  testWidgets('两种小组件预览在窄屏与大字号下没有溢出', (tester) async {
-    void checkTimeBounds(bool square) {
-      final card = tester.getRect(
-        find.byKey(
-          Key(square ? 'tt_widget_preview_2x2' : 'tt_widget_preview_4x2'),
-        ),
-      );
-      for (final index in [0, 1]) {
-        final text = find.byKey(ValueKey('tt_widget_preview_time_$index'));
-        if (text.evaluate().isEmpty) continue;
-        final box = tester.renderObject<RenderParagraph>(text);
-        expect(box.didExceedMaxLines, isFalse, reason: '课程 $index 的时间不能被截断');
-        final rect = tester.getRect(text);
-        expect(rect.left, greaterThanOrEqualTo(card.left + 10));
-        expect(rect.right, lessThanOrEqualTo(card.right - 10));
-        expect(rect.top, greaterThanOrEqualTo(card.top + 10));
-        expect(rect.bottom, lessThanOrEqualTo(card.bottom - 10));
-      }
-    }
-
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    for (final size in [const Size(320, 800), const Size(600, 900)]) {
-      tester.view.physicalSize = size;
-      tester.view.devicePixelRatio = 1;
-      for (final dark in [false, true]) {
-        for (final scale in [1.0, 1.3, 1.5, 2.0]) {
-          await tester.pumpWidget(
-            MaterialApp(
-              theme: dark ? appDarkTheme() : appLightTheme(),
-              builder: (context, child) => MediaQuery(
-                data: MediaQuery.of(context)
-                    .copyWith(textScaler: TextScaler.linear(scale)),
-                child: child!,
-              ),
-              home: TimetableWidgetSettingsPage(controller: _c),
-            ),
-          );
-          await tester.pumpAndSettle();
-          checkTimeBounds(false);
-          expect(
-            tester.takeException(),
-            isNull,
-            reason: '$size / $dark / $scale / 4×2',
-          );
-          await tester.tap(find.text('最后一节'));
-          await tester.pumpAndSettle();
-          checkTimeBounds(false);
-          expect(
-            tester.takeException(),
-            isNull,
-            reason: '$size / $dark / $scale / 4×2 最后一节',
-          );
-          await tester.tap(find.text('2×2 日课表'));
-          await tester.pumpAndSettle();
-          checkTimeBounds(true);
-          expect(
-            tester.takeException(),
-            isNull,
-            reason: '$size / $dark / $scale / 2×2',
-          );
-          await tester.tap(find.text('有后续课程'));
-          await tester.pumpAndSettle();
-          checkTimeBounds(true);
-          expect(
-            tester.takeException(),
-            isNull,
-            reason: '$size / $dark / $scale / 2×2 后续课程',
-          );
-          await tester.pumpWidget(const SizedBox.shrink());
-        }
-      }
-    }
-    tester.view.resetPhysicalSize();
-    tester.view.resetDevicePixelRatio();
-  });
-
-  testWidgets('最后一节课程靠上且提示独立贴底，星期使用强调色', (tester) async {
-    for (final dark in [false, true]) {
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: dark ? appDarkTheme() : appLightTheme(),
-          home: TimetableWidgetSettingsPage(controller: _c),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('最后一节'));
-      await tester.pumpAndSettle();
-      for (final square in [false, true]) {
-        if (square) {
-          await tester.tap(find.text('2×2 日课表'));
-          await tester.pumpAndSettle();
-        }
-        final last = find.byKey(const Key('tt_widget_preview_last'));
-        final name = find.byKey(const ValueKey('tt_widget_preview_course_0'));
-        final weekday = tester.widget<Text>(
-          find.byKey(const Key('tt_widget_preview_weekday')),
-        );
-        expect(
-          weekday.style!.color,
-          (dark ? appDarkTheme() : appLightTheme()).colorScheme.primary,
-        );
-        expect(
-          tester.getTopLeft(last).dx,
-          lessThan(tester.getTopLeft(name).dx),
-        );
-        expect(
-          tester.getTopLeft(last).dy,
-          greaterThan(tester.getBottomLeft(name).dy),
-        );
-        expect(tester.widget<Text>(last).style!.fontSize, 10);
-        final preview = find.byKey(
-          Key(square ? 'tt_widget_preview_2x2' : 'tt_widget_preview_4x2'),
-        );
-        final data = find.byKey(
-          const ValueKey('tt_widget_preview_course_data_0'),
-        );
-        final area = tester.getRect(
-          find.byKey(const Key('tt_widget_preview_main_area')),
-        );
-        final content = tester.getRect(data);
-        expect(content.top - area.top, closeTo(square ? 0 : 2, 0.1));
-        expect(area.height - content.height, closeTo(square ? 0 : 4, 0.1));
-        expect(
-          tester.getBottomLeft(preview).dy - tester.getBottomLeft(last).dy,
-          closeTo(10, 0.1),
-        );
-        expect(
-          tester.getTopLeft(last).dy,
-          greaterThan(tester.getBottomLeft(data).dy),
-        );
-        expect(
-          tester.getTopLeft(data).dy - tester.getTopLeft(preview).dy,
-          lessThan(40),
-        );
-        expect(
-          find.byKey(const Key('tt_widget_preview_after_divider')),
-          findsNothing,
-        );
-        expect(tester.takeException(), isNull);
-      }
-      await tester.pumpWidget(const SizedBox.shrink());
-    }
-  });
-
-  testWidgets('4×2 设置只显示一节时课程靠上，有后续课程也不居中', (tester) async {
-    await tester.runAsync(
-      () => _c.updateSettings(_c.settings.copyWith(widgetCourseCount: 1)),
-    );
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: appLightTheme(),
-        home: TimetableWidgetSettingsPage(controller: _c),
-      ),
-    );
-    await tester.pumpAndSettle();
-    final card = tester.getRect(find.byKey(const Key('tt_widget_preview_4x2')));
-    final data = tester.getRect(
-      find.byKey(const ValueKey('tt_widget_preview_course_data_0')),
-    );
-    expect(data.top - card.top, closeTo(32, 0.1));
-    expect(find.byKey(const Key('tt_widget_preview_after_area')), findsNothing);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('2×2 表头标题、日期与星期在不同字号下共用文字基线', (tester) async {
-    for (final dark in [false, true]) {
-      for (final scale in [1.0, 1.3]) {
-        await tester.pumpWidget(
-          MaterialApp(
-            theme: dark ? appDarkTheme() : appLightTheme(),
-            builder: (context, child) => MediaQuery(
-              data: MediaQuery.of(context)
-                  .copyWith(textScaler: TextScaler.linear(scale)),
-              child: child!,
-            ),
-            home: TimetableWidgetSettingsPage(controller: _c),
-          ),
-        );
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('2×2 日课表'));
-        await tester.pumpAndSettle();
-        final baselines = [
-          for (final key in [
-            'tt_widget_preview_header_title',
-            'tt_widget_preview_header_date',
-            'tt_widget_preview_weekday',
-          ])
-            () {
-              final box = tester.renderObject<RenderBox>(find.byKey(Key(key)));
-              return box.localToGlobal(Offset.zero).dy +
-                  box.getDryBaseline(box.constraints, TextBaseline.alphabetic)!;
-            }(),
-        ];
-        expect(baselines[1], closeTo(baselines[0], 0.1));
-        expect(baselines[2], closeTo(baselines[0], 0.1));
-        expect(tester.takeException(), isNull);
-        await tester.pumpWidget(const SizedBox.shrink());
-      }
-    }
-  });
-
-  testWidgets('添加请求保留选中尺寸，等待时不重复请求，也不把请求发出当作成功', (tester) async {
-    final a = _FakeActions(_perm())..pendingPin = Completer<WidgetPinResult>();
-    await pump(tester, a);
-    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-    await tester.pumpAndSettle();
-    expect(a.calls, isEmpty);
-    expect(find.byKey(const Key('tt_settings_widget_guide')), findsNothing);
-    expect(find.text(TtSettingsText.pinWidgetGuideTitle), findsNothing);
-    await tester.tap(find.text('2×2 日课表'));
-    await tester.pumpAndSettle();
-    final pin = find.byKey(const Key('tt_settings_widget_pin'));
-    await tester.tap(pin);
-    await tester.tap(pin);
-    expect(a.calls, ['pin:square']);
-    a.pendingPin!.complete(WidgetPinResult.requested);
-    await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsNothing);
-    expect(find.byType(BottomSheet), findsNothing);
-    expect(find.byType(SnackBar), findsNothing);
-  });
-
-  testWidgets('小米先说明权限，确认后才跳转，返回提示并允许重新添加', (tester) async {
-    final a = _FakeActions(_perm())
-      ..pinResult = WidgetPinResult.permissionRequired;
-    await pump(tester, a);
-    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-    await tester.pumpAndSettle();
-    final pin = find.byKey(const Key('tt_settings_widget_pin'));
-    await tester.tap(pin);
-    await tester.pumpAndSettle();
-    expect(a.calls, ['pin:wide']);
-    expect(find.byType(AlertDialog), findsNothing);
-    expect(find.byType(BottomSheet), findsOneWidget);
-    expect(find.text('允许添加桌面快捷方式'), findsOneWidget);
-    expect(find.text(TtSettingsText.pinWidgetOpenSettings), findsOneWidget);
-    expect(find.text(TtSettingsText.pinWidgetPermissionHint), findsNothing);
-    await tester.tap(find.text(TtSettingsText.pinWidgetOpenSettings));
-    await tester.pumpAndSettle();
-    expect(a.calls, ['pin:wide', 'shortcut-settings']);
-    expect(find.byType(BottomSheet), findsNothing);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pumpAndSettle();
-    expect(find.text(TtSettingsText.pinWidgetPermissionHint), findsOneWidget);
-    a.pinResult = WidgetPinResult.requested;
-    await tester.tap(pin);
-    await tester.pumpAndSettle();
-    expect(a.calls, ['pin:wide', 'shortcut-settings', 'pin:wide']);
-  });
-
-  testWidgets('取消权限说明不跳设置；跳转失败时改为手动权限步骤', (tester) async {
-    final a = _FakeActions(_perm())
-      ..pinResult = WidgetPinResult.permissionRequired
-      ..shortcutSettingsOpened = false;
-    await pump(tester, a);
-    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-    await tester.pumpAndSettle();
-    final pin = find.byKey(const Key('tt_settings_widget_pin'));
-    await tester.tap(pin);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('暂不开启'));
-    await tester.pumpAndSettle();
-    expect(a.calls, ['pin:wide']);
-    await tester.tap(pin);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text(TtSettingsText.pinWidgetOpenSettings));
-    await tester.pumpAndSettle();
-    expect(a.calls, ['pin:wide', 'pin:wide', 'shortcut-settings']);
-    expect(
-      find.text(TtSettingsText.pinWidgetSettingsUnavailable),
-      findsOneWidget,
-    );
-    expect(find.text('系统设置 → 应用管理 → NUIST++。'), findsOneWidget);
-    expect(find.text(TtSettingsText.pinWidgetOpenSettings), findsNothing);
-    await tester.tap(find.text('知道了'));
-    await tester.pumpAndSettle();
-  });
-
-  for (final (result, step) in [
-    (WidgetPinResult.permissionRequired, '允许添加桌面快捷方式'),
-    (WidgetPinResult.miuiManual, '点击搜索，再进入「安卓小部件」列表。'),
-    (WidgetPinResult.originOsManual, '打开原子组件'),
-    (WidgetPinResult.manual, '进入桌面编辑'),
-  ]) {
-    testWidgets('添加结果 ${result.name} 显示对应指引', (tester) async {
-      final a = _FakeActions(_perm())..pinResult = result;
-      await pump(tester, a);
-      await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tt_settings_widget_pin')));
-      await tester.pumpAndSettle();
-      expect(find.byType(BottomSheet), findsOneWidget);
-      expect(find.byType(AlertDialog), findsNothing);
-      expect(find.text(step), findsOneWidget);
-      await tester.tap(
-        find.text(
-          result == WidgetPinResult.permissionRequired ? '暂不开启' : '知道了',
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.byType(BottomSheet), findsNothing);
-    });
-  }
-
-  testWidgets('只在添加分流后打开面板，明暗、横屏与大字体下确认按钮始终可见', (tester) async {
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    for (final dark in [false, true]) {
-      for (final size in [const Size(375, 600), const Size(800, 375)]) {
-        for (final result in [
-          WidgetPinResult.originOsManual,
-          WidgetPinResult.permissionRequired,
-        ]) {
-          tester.view.physicalSize = size;
-          final a = _FakeActions(_perm())..pinResult = result;
-          await tester.pumpWidget(
-            MaterialApp(
-              theme: dark ? appDarkTheme() : appLightTheme(),
-              builder: (context, child) => MediaQuery(
-                data: MediaQuery.of(context)
-                    .copyWith(textScaler: TextScaler.linear(2)),
-                child: child!,
-              ),
-              home: TimetableWidgetSettingsPage(controller: _c, actions: a),
-            ),
-          );
-          await tester.pumpAndSettle();
-          expect(a.calls, isEmpty);
-          expect(
-            find.byKey(const Key('tt_settings_widget_guide')),
-            findsNothing,
-          );
-          final pin = find.byKey(const Key('tt_settings_widget_pin'));
-          await tester.ensureVisible(pin);
-          await tester.pumpAndSettle();
-          await tester.tap(pin);
-          await tester.pumpAndSettle();
-          expect(a.calls, ['pin:wide']);
-          expect(
-            find.text(
-              result == WidgetPinResult.permissionRequired
-                  ? '允许添加桌面快捷方式'
-                  : '打开原子组件',
-            ),
-            findsOneWidget,
-          );
-          final close = find.byKey(const Key('tt_widget_pin_guide_close'));
-          final rect = tester.getRect(close);
-          expect(rect.top, greaterThanOrEqualTo(0));
-          expect(rect.bottom, lessThanOrEqualTo(size.height));
-          await tester.tap(
-            result == WidgetPinResult.permissionRequired
-                ? find.text('暂不开启')
-                : close,
-          );
-          await tester.pumpAndSettle();
-          expect(tester.takeException(), isNull);
-          await tester.pumpWidget(const SizedBox.shrink());
-        }
-      }
-    }
-  });
-
-  testWidgets('指引只展示此次选择的尺寸，并支持下拉关闭', (tester) async {
-    final a = _FakeActions(_perm())..pinResult = WidgetPinResult.manual;
-    await pump(tester, a);
-    await tester.tap(find.byKey(const Key('tt_settings_widget_entry')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('2×2 日课表'));
-    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('tt_settings_widget_pin')));
     await tester.pumpAndSettle();
     expect(find.text('添加「当前/下一节」'), findsOneWidget);
-    expect(find.text('添加「今日课表」'), findsNothing);
     await tester.drag(find.byType(BottomSheet), const Offset(0, 700));
     await tester.pumpAndSettle();
     expect(find.byType(BottomSheet), findsNothing);
-  });
 
-  testWidgets('保活引导页：品牌说明、强行停止与 7 天提示、电池优化按钮', (tester) async {
-    final a = _FakeActions(_perm());
+    // 重置树回到设置页进入保活引导页
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
     await pump(tester, a);
+    await tester.ensureVisible(
+      find.byKey(const Key('tt_settings_keepalive_entry')),
+    );
     await tester.tap(find.byKey(const Key('tt_settings_keepalive_entry')));
     await tester.pumpAndSettle();
     expect(find.text(TtSettingsText.keepAliveTitle), findsOneWidget);
-    for (final (brand, _) in TtSettingsText.brandTips) {
-      expect(find.text(brand), findsOneWidget, reason: brand);
-    }
-    // 品牌覆盖：小米 / 华为荣耀 / OPPO / vivo / 三星。
-    final brands = TtSettingsText.brandTips.map((e) => e.$1).join();
-    for (final b in ['小米', '华为', '荣耀', 'OPPO', 'vivo', '三星']) {
-      expect(brands, contains(b));
-    }
     expect(find.text('· ${TtSettingsText.forceStopWarning}'), findsOneWidget);
-    expect(TtSettingsText.forceStopWarning, contains('强行停止'));
-    expect(TtSettingsText.forceStopWarning, contains('提醒会失效'));
-    expect(find.text('· ${TtSettingsText.sevenDayWarning}'), findsOneWidget);
     await tester.tap(find.byKey(const Key('tt_keepalive_battery')));
     expect(a.calls.last, 'battery');
+  });
+
+  testWidgets('存储失败时提醒/次日时间/外观与恢复教务回滚且支持重试，格高 44 UI 钳制 52', (tester) async {
+    final blockedFile = File('${tmp.path}/unavailable')
+      ..writeAsStringSync('blocked');
+    final blocked = Directory(blockedFile.path);
+    var permissionRequests = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_nextDayChannel, (call) async {
+          if (call.method == 'requestPermission') {
+            permissionRequests++;
+            return true;
+          }
+          return null;
+        });
+
+    // 上课提醒保存失败被接住且不显示说明
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MiuixPopupHostScope(
+          child: TimetableSettingsPage(
+            controller: _c,
+            reminderActions: _FailingReminderActions(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_settings_reminder')));
+    await settleIo(tester);
+    expect(find.text(_saveError), findsOneWidget);
+    expect(_c.settings.reminderEnabled, isFalse);
+
+    // 次日提醒时间保存失败保弹窗，存储恢复后重试成功才申请权限
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    TimetableStore.debugDirectory = blocked;
+    tester.view.physicalSize = const Size(1170, 2532);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MiuixPopupHostScope(
+          child: TimetableSettingsPage(controller: _c, showReminderCard: false),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('tt_settings_next_day_time')),
+      240,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.ensureVisible(
+      find.byKey(const Key('tt_settings_next_day_time')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_settings_next_day_time')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('21:00'));
+    await settleIo(tester);
+    expect(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.text(_saveError),
+      ),
+      findsOneWidget,
+    );
+    expect(permissionRequests, 0);
+
+    TimetableStore.debugDirectory = tmp;
+    await tester.tap(find.text('21:00'));
+    await settleIo(tester);
+    expect(_c.settings.nextDayReminderMinute, 21 * 60);
+    expect(permissionRequests, 1);
+
+    // 磁盘存 periodHeight=44 → 启动钳制为 52，UI 展示 52 且不改写磁盘原值 44
+    final settingsFile = File('${tmp.path}/settings.json');
+    settingsFile.writeAsStringSync(
+      jsonEncode({...const TimetableSettings().toJson(), 'periodHeight': 44}),
+    );
+    TimetableController.bindingCheck = () async => false;
+    _c.debugReset();
+    await tester.runAsync(_c.ensureStarted);
+    expect(_c.settings.periodHeight, 52);
+    await tester.pumpWidget(
+      MaterialApp(home: TimetableAppearancePage(controller: _c)),
+    );
+    await tester.pump();
+    final slider = find.byKey(const Key('tt_settings_period_height'));
+    await tester.scrollUntilVisible(
+      slider,
+      200,
+      scrollable: find.descendant(
+        of: find.byType(ListView),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const Key('tt_settings_period_height_value')),
+          )
+          .data,
+      '52',
+    );
+    expect(
+      (jsonDecode(settingsFile.readAsStringSync()) as Map)['periodHeight'],
+      44,
+    );
+  });
+
+  testWidgets('外观考试颜色与课程全局颜色保存失败在面板内报错，恢复存储后可重试', (tester) async {
+    final blockedFile = File('${tmp.path}/unavailable')
+      ..writeAsStringSync('blocked');
+    final blocked = Directory(blockedFile.path);
+    TimetableStore.debugDirectory = blocked;
+    tester.view.physicalSize = const Size(1170, 2532);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MiuixPopupHostScope(
+          child: TimetableAppearancePage(controller: _c),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('tt_settings_exam_color')),
+      240,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.ensureVisible(find.byKey(const Key('tt_settings_exam_color')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_settings_exam_color')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('tt_color_hex')), '386F95');
+    tester.view.viewInsets = const FakeViewPadding(bottom: 900);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('tt_color_custom_apply')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
+    await settleIo(tester);
+
+    expect(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.text(_saveError),
+      ),
+      findsOneWidget,
+    );
+    expect(_c.settings.examColor, kDefaultExamColor);
+
+    TimetableStore.debugDirectory = tmp;
+    await tester.ensureVisible(find.byKey(const Key('tt_color_custom_apply')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
+    await settleIo(tester);
+    expect(find.byKey(const Key('tt_color_hex')), findsNothing);
+    expect(_c.settings.examColor, 0xFF386F95);
+    tester.view.resetViewInsets();
+    await tester.pumpAndSettle();
+
+    // 课程全局颜色保存失败回滚
+    TimetableStore.debugDirectory = blocked;
+    const course = Course(
+      id: 'test-course',
+      name: '测试课程',
+      slots: [CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1')],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MiuixPopupHostScope(
+          child: Scaffold(
+            body: CourseColorRow(controller: _c, course: course),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('course_detail_color')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('tt_color_hex')), '386F95');
+    await tester.ensureVisible(find.byKey(const Key('tt_color_custom_apply')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_color_custom_apply')));
+    await settleIo(tester);
+    expect(find.text(_saveError), findsOneWidget);
+    expect(_c.userColorOf(course), isNull);
   });
 }

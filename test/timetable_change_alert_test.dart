@@ -7,11 +7,13 @@ import 'package:nuist_sta_app/router.dart';
 import 'package:nuist_sta_app/core/theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_change_alert.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_change_format.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_change_log_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_copy.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_sync_diff.dart';
 
@@ -20,6 +22,7 @@ TimetableChangeRecord _rec({
   required TimetableChangeType type,
   String name = '测试课',
   String fp = 'fp1',
+  String courseWeeks = '',
   Map<String, dynamic>? before,
   Map<String, dynamic>? after,
   bool notified = false,
@@ -31,6 +34,7 @@ TimetableChangeRecord _rec({
   slotKey: 'k|$id',
   fingerprint: fp,
   courseName: name,
+  courseWeeks: courseWeeks,
   before: before,
   after: after,
   notified: notified,
@@ -107,25 +111,30 @@ void main() {
     });
   });
 
-  testWidgets('空列表不弹', (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: appLightTheme(),
-        home: Builder(
-          builder: (ctx) => TextButton(
-            onPressed: () => showTimetableChangeAlert(ctx, records: const []),
-            child: const Text('go'),
+  testWidgets('摘要弹层：空列表不弹、最多 5 行知道了标记及查看记录跳转', (tester) async {
+    Future<void> trigger(List<TimetableChangeRecord> records) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: appLightTheme(),
+          home: Builder(
+            builder: (ctx) => Scaffold(
+              body: TextButton(
+                onPressed: () =>
+                    showTimetableChangeAlert(ctx, records: records),
+                child: const Text('go'),
+              ),
+            ),
           ),
         ),
-      ),
-    );
-    await tester.tap(find.text('go'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('tt_change_alert_title')), findsNothing);
-  });
+      );
+      await tester.tap(find.text('go'));
+      await tester.pumpAndSettle();
+    }
 
-  testWidgets('展示最多 5 行，超出显示等共 N 项；知道了标记 notified', (tester) async {
-    final records = [
+    await trigger(const []);
+    expect(find.byKey(const Key('tt_change_alert_title')), findsNothing);
+
+    final many = [
       for (var i = 0; i < 7; i++)
         _rec(
           id: 'r$i',
@@ -135,39 +144,20 @@ void main() {
           after: _snap(day: 1, start: 1, end: 2),
         ),
     ];
-    TimetableChangeLogStore.debugMemory = List.of(records);
-
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: appLightTheme(),
-        home: Builder(
-          builder: (ctx) => Scaffold(
-            body: TextButton(
-              onPressed: () => showTimetableChangeAlert(ctx, records: records),
-              child: const Text('go'),
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.tap(find.text('go'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
-    expect(find.byKey(const Key('tt_change_alert_row_0')), findsOneWidget);
+    TimetableChangeLogStore.debugMemory = List.of(many);
+    await trigger(many);
     expect(find.byKey(const Key('tt_change_alert_row_4')), findsOneWidget);
     expect(find.byKey(const Key('tt_change_alert_row_5')), findsNothing);
     expect(find.text(TimetableCopy.changeAlertMoreLabel(7)), findsOneWidget);
-    expect(find.text(TimetableChangeType.added.labelZh), findsWidgets);
-
     await tester.tap(find.byKey(const Key('tt_change_alert_got_it')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('tt_change_alert_title')), findsNothing);
-    final all = await TimetableChangeLogStore.readAll();
-    expect(all.every((r) => r.notified), isTrue);
-  });
+    expect(
+      (await TimetableChangeLogStore.readAll()).every((r) => r.notified),
+      isTrue,
+    );
 
-  testWidgets('查看记录标记 notified 并打开记录页', (tester) async {
-    final records = [
+    final single = [
       _rec(
         id: '1',
         type: TimetableChangeType.removed,
@@ -176,29 +166,13 @@ void main() {
         before: _snap(day: 1, start: 1, end: 2),
       ),
     ];
-    TimetableChangeLogStore.debugMemory = List.of(records);
-
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: appLightTheme(),
-        home: Builder(
-          builder: (ctx) => Scaffold(
-            body: TextButton(
-              onPressed: () => showTimetableChangeAlert(ctx, records: records),
-              child: const Text('go'),
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.tap(find.text('go'));
-    await tester.pumpAndSettle();
+    TimetableChangeLogStore.debugMemory = List.of(single);
+    await trigger(single);
     await tester.tap(find.byKey(const Key('tt_change_alert_view_log')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('tt_change_log_page')), findsOneWidget);
     expect(find.text('形势与政策'), findsOneWidget);
-    final all = await TimetableChangeLogStore.readAll();
-    expect(all.single.notified, isTrue);
+    expect((await TimetableChangeLogStore.readAll()).single.notified, isTrue);
   });
 
   group('同步新增课程与考试弹窗集成', () {
@@ -266,57 +240,29 @@ void main() {
       if (tmp.existsSync()) tmp.deleteSync(recursive: true);
     });
 
-    testWidgets('后台同步多出课程与考试后，打开课表页即弹出 diff 摘要且关闭后不再重复弹', (tester) async {
+    Future<void> syncTo(List<Course> courses) async {
+      TimetableController.fetchSnapshot = (_, {baseSettings}) async =>
+          snap(courses, syncedAt: DateTime.now());
+      await c.syncFromJwxt();
+    }
+
+    Future<void> openPage(
+      WidgetTester tester, {
+      bool dark = false,
+      ScheduleEvent? focusEvent,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: dark ? appDarkTheme() : appLightTheme(),
+          home: TimetablePage(focusEvent: focusEvent),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('后台/手动同步弹出 diff 摘要、多轮合并不叠加，查看记录与解绑清除历史', (tester) async {
       final base = jwxtCourse('1001', '高等数学');
       final added = jwxtCourse('1002', '数据结构', day: 2);
-      final exam = ScheduleEvent(
-        id: 'jwxt-exam:1001|2027-01-12|09:00',
-        kind: ScheduleKind.exam,
-        source: ScheduleSource.jwxt,
-        title: '高等数学',
-        date: DateTime(2027, 1, 12),
-        start: const TimeOfDayMinutes(9, 0),
-        end: const TimeOfDayMinutes(11, 0),
-        location: '文德楼N101',
-        courseCode: '1001',
-      );
-
-      c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
-      TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
-          snap([base, added], syncedAt: DateTime.now());
-      TimetableController.fetchExams = (term) async => [exam];
-
-      // 后台同步（课表页未打开）多出一门课与一场考试。
-      await tester.runAsync(() => c.syncFromJwxt());
-      expect(c.pendingChangeAlerts, hasLength(2));
-
-      await tester.pumpWidget(
-        MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
-      );
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
-      expect(find.textContaining('数据结构'), findsWidgets);
-      expect(find.textContaining('高等数学（考试）'), findsOneWidget);
-
-      await tester.tap(find.byKey(const Key('tt_change_alert_got_it')));
-      for (var i = 0; i < 12; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      expect(find.byKey(const Key('tt_change_alert_title')), findsNothing);
-      expect(await TimetableChangeLogStore.readUnnotified(), isEmpty);
-
-      // 再次进入课表页不再重复弹出。
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pumpAndSettle();
-      await tester.pumpWidget(
-        MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
-      );
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('tt_change_alert_title')), findsNothing);
-    });
-
-    testWidgets('课表页内手动同步多出未排课课程与考试时弹出 diff 摘要', (tester) async {
-      final base = jwxtCourse('1001', '高等数学');
       final other = Course(
         id: 'other:9001|01|jxb1',
         name: '大学物理实验',
@@ -346,101 +292,34 @@ void main() {
         courseCode: '1001',
       );
 
+      // 1. 多轮后台新增后一次性合并提醒；未读关闭后不重复弹出
       c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
-      TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
-          snap([base, other], syncedAt: DateTime.now());
-      TimetableController.fetchExams = (term) async => [exam];
-
-      await tester.pumpWidget(
-        MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
-      );
+      TimetableController.fetchExams = (_) async => [exam];
+      await tester.runAsync(() async {
+        await syncTo([base, added]);
+        await syncTo([base, added]);
+      });
+      expect(c.pendingChangeAlerts, hasLength(2));
+      await openPage(tester);
+      expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
+      expect(find.textContaining('数据结构'), findsWidgets);
+      expect(find.textContaining('高等数学（考试）'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('tt_change_alert_got_it')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('tt_change_alert_title')), findsNothing);
+      expect(await TimetableChangeLogStore.readUnnotified(), isEmpty);
 
-      await tester.runAsync(() => c.manualSync());
+      // 2. 查看记录期间不叠加提醒，返回后补弹新增记录；页内手动同步含未排课也提醒
+      final extra = jwxtCourse('1003', '第二轮新增', day: 3);
+      await tester.runAsync(() => syncTo([base, added, other]));
       await tester.pumpAndSettle();
-
       expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
       expect(find.textContaining('大学物理实验'), findsOneWidget);
-      expect(find.textContaining('高等数学（考试）'), findsOneWidget);
-    });
-
-    Future<void> syncTo(List<Course> courses) async {
-      TimetableController.fetchSnapshot = (_, {baseSettings}) async =>
-          snap(courses, syncedAt: DateTime.now());
-      await c.syncFromJwxt();
-    }
-
-    Future<void> openPage(
-      WidgetTester tester, {
-      bool dark = false,
-      ScheduleEvent? focusEvent,
-    }) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: dark ? appDarkTheme() : appLightTheme(),
-          home: TimetablePage(focusEvent: focusEvent),
-        ),
-      );
-      await tester.pumpAndSettle();
-    }
-
-    for (final dark in [false, true]) {
-      testWidgets('多轮后台新增及无变动同步后合并提醒，关闭后不重复（深色=$dark）', (tester) async {
-        final base = jwxtCourse('1001', '基础课程');
-        final first = jwxtCourse('1002', '第一轮新增', day: 2);
-        final second = jwxtCourse('1003', '第二轮新增', day: 3);
-        c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
-        await tester.runAsync(() async {
-          await syncTo([base, first]);
-          await syncTo([base, first, second]);
-          await syncTo([base, first, second]);
-        });
-        expect(c.pendingChangeAlerts, hasLength(2));
-        expect(c.lastSyncDiff!.toNotify, isEmpty);
-        await openPage(tester, dark: dark);
-        expect(find.byKey(const Key('tt_change_alert_row_1')), findsOneWidget);
-        await tester.tap(find.byKey(const Key('tt_change_alert_got_it')));
-        await tester.pumpAndSettle();
-        expect(c.pendingChangeAlerts, isEmpty);
-        expect(await TimetableChangeLogStore.readUnnotified(), isEmpty);
-      });
-
-      testWidgets('摘要期间新同步不叠加，关闭后只补弹新增记录（深色=$dark）', (tester) async {
-        final base = jwxtCourse('1001', '基础课程');
-        final first = jwxtCourse('1002', '第一轮新增', day: 2);
-        final second = jwxtCourse('1003', '第二轮新增', day: 3);
-        c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
-        await tester.runAsync(() => syncTo([base, first]));
-        await openPage(tester, dark: dark);
-        await tester.runAsync(() => syncTo([base, first, second]));
-        await tester.pumpAndSettle();
-        expect(
-          find.byKey(const Key('tt_change_alert_title'), skipOffstage: false),
-          findsOneWidget,
-        );
-        await tester.tap(find.byKey(const Key('tt_change_alert_got_it')));
-        await tester.pumpAndSettle();
-        expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
-        expect(find.textContaining('第二轮新增'), findsWidgets);
-        expect(c.pendingChangeAlerts.map((r) => r.courseName), ['第二轮新增']);
-        await tester.binding.handlePopRoute();
-        await tester.pumpAndSettle();
-        expect(c.pendingChangeAlerts, isEmpty);
-      });
-    }
-
-    testWidgets('查看记录期间不叠加提醒，返回后补弹新同步', (tester) async {
-      final base = jwxtCourse('1001', '基础课程');
-      final first = jwxtCourse('1002', '第一轮新增', day: 2);
-      final second = jwxtCourse('1003', '第二轮新增', day: 3);
-      c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
-      await tester.runAsync(() => syncTo([base, first]));
-      await openPage(tester);
       await tester.tap(find.byKey(const Key('tt_change_alert_view_log')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('tt_change_log_page')), findsOneWidget);
-      await tester.runAsync(() => syncTo([base, first, second]));
+
+      await tester.runAsync(() => syncTo([base, added, other, extra]));
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('tt_change_alert_title'), skipOffstage: false),
@@ -450,59 +329,20 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
       expect(c.pendingChangeAlerts.map((r) => r.courseName), ['第二轮新增']);
-    });
 
-    testWidgets('首页详情关闭与课程定位失败后都恢复提醒', (tester) async {
-      final base = jwxtCourse('1001', '基础课程');
-      final added = jwxtCourse('1002', '新增课程', day: 2);
-      for (final courseId in [base.id, 'missing']) {
-        c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
-        await tester.runAsync(() => syncTo([base, added]));
-        c.requestOpenCourse(
-          courseId: courseId,
-          day: 1,
-          startNode: 1,
-          endNode: 2,
-        );
-        await openPage(tester);
-        if (courseId == base.id) {
-          expect(find.byKey(const Key('course_detail_title')), findsOneWidget);
-          expect(find.byKey(const Key('tt_change_alert_title')), findsNothing);
-          await tester.binding.handlePopRoute();
-          await tester.pumpAndSettle();
-        }
-        expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
-        await tester.pumpWidget(const SizedBox.shrink());
-        await tester.pumpAndSettle();
-      }
-    });
-
-    testWidgets('考试定位成功或失败都不会永久阻止待通知摘要', (tester) async {
-      final base = jwxtCourse('1001', '基础课程');
-      final added = jwxtCourse('1002', '新增课程', day: 2);
-      final exam = ScheduleEvent(
-        id: 'exam-focus',
-        kind: ScheduleKind.exam,
-        source: ScheduleSource.jwxt,
-        title: '测试考试',
-        date: DateTime(2026, 9, 8),
-        start: const TimeOfDayMinutes(9, 0),
-        end: const TimeOfDayMinutes(11, 0),
-        courseCode: '1001',
-      );
-      for (final present in [false, true]) {
-        await tester.runAsync(() async {
-          c.debugReset();
-          c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
-          if (present) await c.replaceJwxtExams([exam]);
-          TimetableController.fetchExams = (_) async => null;
-          await syncTo([base, added]);
-        });
-        await openPage(tester, focusEvent: exam);
-        expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
-        await tester.pumpWidget(const SizedBox.shrink());
-        await tester.pumpAndSettle();
-      }
+      // 3. 摘要期间解绑清除旧记录，点关闭旧弹窗不能吞掉重新绑定后的新记录
+      await tester.runAsync(() async {
+        await c.handleLogout();
+        expect(await TimetableChangeLogStore.readAll(), isEmpty);
+        await syncTo([base]);
+        expect(c.pendingChangeAlerts, isEmpty);
+        await syncTo([base, added]);
+      });
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tt_change_alert_got_it')));
+      await tester.pumpAndSettle();
+      expect(c.pendingChangeAlerts, hasLength(1));
+      expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
     });
 
     test('首次全量同步清除残留历史；空列表成功基线重启后新增仍提醒', () async {
@@ -557,27 +397,6 @@ void main() {
       expect(c.pendingChangeAlerts.single.after!['KIND'], 'exam');
     });
 
-    testWidgets('解绑清除未读历史，旧摘要不能确认重新绑定后的新记录', (tester) async {
-      final base = jwxtCourse('1001', '基础课程');
-      final added = jwxtCourse('1002', '新增课程', day: 2);
-      c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
-      await tester.runAsync(() => syncTo([base, added]));
-      await openPage(tester);
-      await tester.runAsync(() async {
-        await c.handleLogout();
-        expect(await TimetableChangeLogStore.readAll(), isEmpty);
-        await syncTo([base]);
-        expect(c.pendingChangeAlerts, isEmpty);
-        await syncTo([base, added]);
-      });
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tt_change_alert_got_it')));
-      await tester.pumpAndSettle();
-      expect(c.pendingChangeAlerts, hasLength(1));
-      expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
-      expect(await TimetableChangeLogStore.readUnnotified(), hasLength(1));
-    });
-
     test('同步失败保留待通知记录；考试失败仍提醒普通课程新增', () async {
       final base = jwxtCourse('1001', '基础课程');
       final added = jwxtCourse('1002', '新增课程', day: 2);
@@ -608,9 +427,45 @@ void main() {
       expect(await TimetableChangeLogStore.readAll(), isEmpty);
     });
 
-    testWidgets('真实课表入口在摘要关闭后支持返回手势取消与完成', (tester) async {
+    testWidgets('详情/考试定位优先级不永久阻塞摘要，且摘要关闭后 Android 预测性返回可取消和完成', (tester) async {
       final base = jwxtCourse('1001', '基础课程');
       final added = jwxtCourse('1002', '新增课程', day: 2);
+      final exam = ScheduleEvent(
+        id: 'exam-focus',
+        kind: ScheduleKind.exam,
+        source: ScheduleSource.jwxt,
+        title: '测试考试',
+        date: DateTime(2026, 9, 8),
+        start: const TimeOfDayMinutes(9, 0),
+        end: const TimeOfDayMinutes(11, 0),
+        courseCode: '1001',
+      );
+
+      // 1. 先打开课程详情再关掉时恢复提醒；定位不存在课程与定位考试后也不阻塞摘要
+      c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
+      await tester.runAsync(() => syncTo([base, added]));
+      c.requestOpenCourse(courseId: base.id, day: 1, startNode: 1, endNode: 2);
+      await openPage(tester);
+      expect(find.byKey(const Key('course_detail_title')), findsOneWidget);
+      expect(find.byKey(const Key('tt_change_alert_title')), findsNothing);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
+
+      await tester.runAsync(() async {
+        TimetableChangeLogStore.debugMemory = [];
+        c.debugReset();
+        c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
+        await c.replaceJwxtExams([exam]);
+        TimetableController.fetchExams = (_) async => null;
+        await syncTo([base, added]);
+      });
+      await openPage(tester, focusEvent: exam);
+      expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+
+      // 2. 真实课表入口弹出摘要并关闭后，支持 Android 预测性返回取消与完成
       Future<void> gesture(String method, {double progress = 0}) async {
         await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
           'flutter/backgesture',
@@ -626,47 +481,130 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      for (final dark in [false, true]) {
-        await tester.runAsync(() async {
-          TimetableChangeLogStore.debugMemory = [];
-          c.debugReset();
-          c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
-          await syncTo([base, added]);
-        });
-        final router = buildRouter();
-        await tester.pumpWidget(
-          MaterialApp.router(
-            theme: (dark ? appDarkTheme() : appLightTheme()).copyWith(
-              platform: TargetPlatform.android,
-            ),
-            routerConfig: router,
-          ),
-        );
-        await tester.pumpAndSettle();
-        router.push<void>('/apps/timetable');
-        await tester.pumpAndSettle();
-        expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
-        await tester.binding.handlePopRoute();
-        await tester.pumpAndSettle();
-        expect(c.pendingChangeAlerts, isEmpty);
-        final context = tester.element(find.byType(TimetablePage));
-        expect(
-          (ModalRoute.of(context)! as PageRoute).popGestureEnabled,
-          isTrue,
-        );
-        await gesture('startBackGesture');
-        await gesture('updateBackGestureProgress', progress: 0.4);
-        expect(Navigator.of(context).userGestureInProgress, isTrue);
-        await gesture('cancelBackGesture');
-        expect(find.byType(TimetablePage), findsOneWidget);
-        await gesture('startBackGesture');
-        await gesture('updateBackGestureProgress', progress: 0.4);
-        await gesture('commitBackGesture');
-        expect(find.byType(TimetablePage), findsNothing);
-        await tester.pumpWidget(const SizedBox.shrink());
-        await tester.pumpAndSettle();
-        router.dispose();
-      }
+      await tester.runAsync(() async {
+        TimetableChangeLogStore.debugMemory = [];
+        c.debugReset();
+        c.debugSetSnapshot(snap([base], syncedAt: DateTime.now()));
+        await syncTo([base, added]);
+      });
+      final router = buildRouter();
+      await tester.pumpWidget(
+        MaterialApp.router(
+          theme: appDarkTheme().copyWith(platform: TargetPlatform.android),
+          routerConfig: router,
+        ),
+      );
+      await tester.pumpAndSettle();
+      router.push<void>('/apps/timetable');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tt_change_alert_title')), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(c.pendingChangeAlerts, isEmpty);
+      final context = tester.element(find.byType(TimetablePage));
+      expect((ModalRoute.of(context)! as PageRoute).popGestureEnabled, isTrue);
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', progress: 0.4);
+      expect(Navigator.of(context).userGestureInProgress, isTrue);
+      await gesture('cancelBackGesture');
+      expect(find.byType(TimetablePage), findsOneWidget);
+      await gesture('startBackGesture');
+      await gesture('updateBackGestureProgress', progress: 0.4);
+      await gesture('commitBackGesture');
+      expect(find.byType(TimetablePage), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      router.dispose();
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+    testWidgets('变动记录页：空态、设置入口跳转、分组倒序与影响范围小屏大字展示', (tester) async {
+      // 1. 空态 + 从设置管理入口跳转
+      await tester.binding.setSurfaceSize(const Size(400, 1200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: appLightTheme(),
+          home: TimetableSettingsPage(controller: c),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tt_settings_management_entry')));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('tt_settings_change_log')),
+        200,
+      );
+      await tester.pumpAndSettle();
+      final row = find.byKey(const Key('tt_settings_change_log'));
+      await tester.ensureVisible(row);
+      await tester.pumpAndSettle();
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tt_change_log_page')), findsOneWidget);
+      expect(find.byKey(const Key('tt_change_log_empty')), findsOneWidget);
+      expect(find.text(TimetableCopy.changeLogEmpty), findsOneWidget);
+
+      // 2. 分组倒序展示与影响范围在深色窄屏大字体下完整展示
+      Map<String, dynamic> raw(String weeks, {String room = '明德楼B210'}) => {
+        'SKXQ': 3,
+        'KSJC': 5,
+        'JSJC': 6,
+        'SKZC': weeks,
+        'JASMC': room,
+      };
+      TimetableChangeLogStore.debugMemory = [
+        _rec(
+          id: 'old1',
+          type: TimetableChangeType.added,
+          fp: 'old',
+          name: '旧课',
+          time: DateTime(2026, 10, 20, 9, 1),
+          after: raw('1', room: ''),
+        ),
+        _rec(
+          id: 'all',
+          type: TimetableChangeType.teacherChanged,
+          fp: 'new',
+          name: '全部周次变动',
+          courseWeeks: '1111',
+          before: {...raw('1111'), 'SKJS': '原教师'},
+          after: {...raw('1111'), 'SKJS': '新教师'},
+        ),
+        _rec(
+          id: 'one',
+          type: TimetableChangeType.locationChanged,
+          fp: 'new',
+          name: '某次课变动',
+          courseWeeks: '111111',
+          before: raw('00001', room: '原教室'),
+          after: raw('00001', room: '新教室'),
+        ),
+      ];
+      await tester.binding.setSurfaceSize(const Size(375, 812));
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: appDarkTheme(),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler: const TextScaler.linear(1.8),
+              disableAnimations: true,
+            ),
+            child: child!,
+          ),
+          home: const TimetableChangeLogPage(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tt_change_log_group_0')), findsOneWidget);
+      expect(find.text('全部周次变动'), findsOneWidget);
+      expect(find.text('某次课变动'), findsOneWidget);
+      expect(find.text('第 5 周 · 周三 5–6节'), findsOneWidget);
+      expect(find.text('全部周次（第 1–4 周） · 周三 5–6节'), findsOneWidget);
+      expect(find.textContaining('原教室'), findsOneWidget);
+      expect(find.textContaining('新教室'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   });
 }

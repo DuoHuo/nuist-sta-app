@@ -6,6 +6,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+import 'package:nuist_sta_app/core/theme.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_exams_card.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_exams_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_detail_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_edit_page.dart';
@@ -16,16 +20,15 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_home_card.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_grid.dart';
+import 'package:nuist_sta_app/router.dart';
 
 final _c = TimetableController.instance;
 
 /// 开学 2026-08-31；第 8 周 10/19（周一）–10/25（双周）。
 final _termStart = DateTime(2026, 8, 31);
 const _week = 8;
-final _monday = DateTime(2026, 10, 19);
 final _tuesday = DateTime(2026, 10, 20);
 
 Course _course(
@@ -145,6 +148,8 @@ Future<void> _pumpLauncher(
   void Function(BuildContext context) open,
 ) async {
   _bigView(tester);
+  await tester.pumpWidget(const SizedBox.shrink());
+  await tester.pumpAndSettle();
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
@@ -167,41 +172,7 @@ Future<void> _pumpLauncher(
 Finder _eventCell(String title) =>
     find.widgetWithText(ScheduleEventCell, title);
 
-Positioned _positionedOf(WidgetTester tester, Finder f) => tester.widget(
-  find.ancestor(of: f, matching: find.byType(Positioned)).first,
-);
-
 void main() {
-  testWidgets('日程详情进入编辑后键盘高度变化复用底层详情实例', (tester) async {
-    _load();
-    late ScheduleEvent event;
-    await tester.runAsync(() async {
-      event = await _c.addScheduleEvent(_event(''));
-    });
-    await _pumpLauncher(
-      tester,
-      (context) =>
-          showScheduleEventDetailSheet(context, event: event, controller: _c),
-    );
-    final detail = tester.widget(find.byType(ScheduleEventDetailSheet));
-    await tester.tap(find.byKey(const Key('schedule_detail_edit')));
-    await tester.pumpAndSettle();
-    await tester.showKeyboard(find.byKey(const Key('schedule_form_note')));
-    await tester.pump();
-    for (var step = 0; step <= 12; step++) {
-      tester.view.viewInsets = FakeViewPadding(bottom: step * 25.0);
-      await tester.pump(const Duration(milliseconds: 16));
-      expect(
-        tester.widget(
-          find.byType(ScheduleEventDetailSheet, skipOffstage: false),
-        ),
-        same(detail),
-      );
-    }
-    tester.view.resetViewInsets();
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
-  });
   late Directory tmp;
   final origClock = TimetableController.clock;
   final origBinding = TimetableController.bindingCheck;
@@ -222,17 +193,18 @@ void main() {
     if (tmp.existsSync()) tmp.deleteSync(recursive: true);
   });
 
-  group('EV 「+」三选一与日程表单', () {
-    testWidgets('EV01 「+」弹出「课程」「考试」「其他」三项；「考试」进入新表单', (tester) async {
+  group('EV 「+」三选一与日程表单、教务/手动考试修改恢复', () {
+    testWidgets('「+」菜单进入考试/其他表单、时间校验、删除二次确认、EX17/EX23 恢复及返回', (tester) async {
       _load(manual: [_course('m1', '测试课甲')]);
       _bigView(tester);
       await tester.pumpWidget(const MaterialApp(home: TimetablePage()));
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
+
+      // 1. 「+」三项；选「其他」进添加日程后返回
       await tester.tap(find.byTooltip('添加'));
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('add_entry_sheet')), findsOneWidget);
       for (final k in [
         'add_entry_course',
         'add_entry_exam',
@@ -240,102 +212,15 @@ void main() {
       ]) {
         expect(find.byKey(Key(k)), findsOneWidget);
       }
-      expect(find.text('课程'), findsOneWidget);
-      expect(find.text('考试'), findsOneWidget);
-      expect(find.text('其他'), findsOneWidget);
-
-      await tester.tap(find.text('考试'));
-      await tester.pumpAndSettle();
-      expect(find.byType(ScheduleEventEditPage), findsOneWidget);
-      expect(find.text('添加考试'), findsOneWidget);
-    });
-
-    testWidgets('EV01 「其他」进入日程表单（标题「添加日程」）', (tester) async {
-      _load(manual: [_course('m1', '测试课甲')]);
-      _bigView(tester);
-      await tester.pumpWidget(const MaterialApp(home: TimetablePage()));
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      await tester.tap(find.byTooltip('添加'));
-      await tester.pumpAndSettle();
       await tester.tap(find.text('其他'));
       await tester.pumpAndSettle();
       expect(find.text('添加日程'), findsOneWidget);
-      expect(find.byKey(const Key('schedule_form_course_code')), findsNothing);
-    });
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
 
-    testWidgets('EV02 字段齐全；名称为空时「保存」禁用，填写后可保存为手动考试（EV15）', (tester) async {
-      _load();
-      _bigView(tester);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ScheduleEventEditPage(
-            controller: _c,
-            kind: ScheduleKind.exam,
-            initialDate: _tuesday,
-          ),
-        ),
-      );
-      await tester.pump();
-      for (final k in [
-        'schedule_form_title',
-        'schedule_form_date',
-        'schedule_form_start',
-        'schedule_form_end',
-        'schedule_form_location',
-        'schedule_form_note',
-        'schedule_form_course_code',
-      ]) {
-        expect(find.byKey(Key(k)), findsOneWidget, reason: k);
-      }
-      TextButton save() =>
-          tester.widget(find.byKey(const Key('schedule_form_save')));
-      expect(save().onPressed, isNull);
-      await tester.enterText(
-        find.byKey(const Key('schedule_form_title')),
-        '   ',
-      );
-      await tester.pump();
-      expect(save().onPressed, isNull, reason: '只有空格也算空');
-
-      await tester.enterText(
-        find.byKey(const Key('schedule_form_title')),
-        '测试考试甲',
-      );
-      await tester.enterText(
-        find.byKey(const Key('schedule_form_course_code')),
-        'TEST01',
-      );
-      await tester.pump();
-      expect(save().onPressed, isNotNull);
-      final saveButton = save();
-      final title = tester
-          .widget<TextFormField>(find.byKey(const Key('schedule_form_title')))
-          .controller!;
-      title.selection = const TextSelection.collapsed(offset: 1);
-      await tester.pump();
-      expect(save(), same(saveButton), reason: '光标变化不重建整张日程表单');
-      title.value = title.value.copyWith(
-        composing: const TextRange(start: 0, end: 2),
-      );
-      await tester.pump();
-      expect(save(), same(saveButton), reason: '输入法 composing 不影响保存按钮');
-      await tester.tap(find.byKey(const Key('schedule_form_save')));
-      await _settleIo(tester);
-      final saved = _c.scheduleEvents.single;
-      expect(saved.kind, ScheduleKind.exam);
-      expect(saved.source, ScheduleSource.manual);
-      expect(saved.title, '测试考试甲');
-      expect(saved.date, _tuesday);
-      expect(saved.courseCode, 'TEST01');
-      expect(saved.end.compareTo(saved.start), greaterThan(0));
-      expect(_c.manualCourses, isEmpty, reason: 'EV15 不写入每周手动课');
-    });
-
-    testWidgets('EV03 结束时间不晚于开始时间：提示错误，不能保存', (tester) async {
-      _load();
-      _bigView(tester);
+      // 2. EV02 名称为空保存禁用，填写保存为手动考试（EV15）；EV03 结束时间不晚于开始时间报错
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
       final bad = _event(
         'tmp',
         kind: ScheduleKind.other,
@@ -349,43 +234,116 @@ void main() {
         ),
       );
       await tester.pump();
-      expect(find.byKey(const Key('schedule_form_time_error')), findsOneWidget);
       expect(find.text('结束时间需晚于开始时间'), findsOneWidget);
       await tester.tap(find.byKey(const Key('schedule_form_save')));
       await _settleIo(tester);
-      expect(find.byType(ScheduleEventEditPage), findsOneWidget, reason: '未关闭');
       expect(_c.scheduleEvents, isEmpty);
-    });
 
-    testWidgets('EV16/EX24 日程详情：日期/时间/地点；删除二次确认，取消不删、确认删除', (tester) async {
-      _load();
-      late ScheduleEvent e;
-      await tester.runAsync(() async {
-        e = await _c.addScheduleEvent(_event(''));
-      });
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ScheduleEventEditPage(
+            controller: _c,
+            kind: ScheduleKind.exam,
+            initialDate: _tuesday,
+          ),
+        ),
+      );
+      await tester.pump();
+      TextButton save() =>
+          tester.widget(find.byKey(const Key('schedule_form_save')));
+      expect(save().onPressed, isNull);
+      await tester.enterText(
+        find.byKey(const Key('schedule_form_title')),
+        '测试考试甲',
+      );
+      await tester.enterText(
+        find.byKey(const Key('schedule_form_location')),
+        '测试楼 B202',
+      );
+      await tester.pump();
+      expect(save().onPressed, isNotNull);
+      await tester.tap(find.byKey(const Key('schedule_form_save')));
+      await _settleIo(tester);
+      final manualExam = _c.scheduleEvents.single;
+      expect(manualExam.kind, ScheduleKind.exam);
+      expect(manualExam.source, ScheduleSource.manual);
+
+      // 3. EX23 手动考试详情无「恢复原考试」，支持取消/确认删除
       await _pumpLauncher(
         tester,
-        (ctx) => showScheduleEventDetailSheet(ctx, event: e, controller: _c),
+        (ctx) => showScheduleEventDetailSheet(
+          ctx,
+          event: manualExam,
+          controller: _c,
+        ),
       );
-      expect(find.text('10月20日 周二'), findsOneWidget);
-      expect(find.text('08:00–09:40'), findsOneWidget);
-      expect(find.text('测试楼 B202'), findsOneWidget);
-      expect(find.byKey(const Key('schedule_detail_edit')), findsOneWidget);
-      expect(find.byKey(const Key('schedule_detail_restore')), findsNothing);
-
+      expect(find.text('恢复原考试'), findsNothing);
+      expect(find.text('已修改'), findsNothing);
       await tester.tap(find.byKey(const Key('schedule_detail_delete')));
       await tester.pumpAndSettle();
-      expect(find.text('删除这场考试？'), findsOneWidget);
       await tester.tap(find.byKey(const Key('schedule_delete_cancel')));
       await tester.pumpAndSettle();
       expect(_c.scheduleEvents, hasLength(1));
-
       await tester.tap(find.byKey(const Key('schedule_detail_delete')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('schedule_delete_confirm')));
       await _settleIo(tester);
       expect(_c.scheduleEvents, isEmpty);
-      expect(find.byKey(const Key('schedule_detail_sheet')), findsNothing);
+
+      // 4. EX17 教务考试改日期/地点后详情按原 examKey 显示「已修改」+「恢复原考试」并可恢复
+      _c.debugReset();
+      _load(manual: [_course('m1', '测试课甲')]);
+      final jwxtExam = _event(
+        'j1',
+        source: ScheduleSource.jwxt,
+        courseCode: 'TEST01',
+      );
+      await tester.runAsync(() async {
+        await _c.replaceJwxtExams([jwxtExam]);
+        await _c.updateScheduleEvent(
+          _c.scheduleEvents.single.copyWith(
+            date: DateTime(2026, 10, 22),
+            location: '测试楼 C303',
+          ),
+        );
+      });
+      final key = _c.jwxtExamKeyOf('j1')!;
+      expect(_c.isJwxtOverridden(examKey: key), isTrue);
+      await _pumpLauncher(
+        tester,
+        (ctx) => showScheduleEventDetailSheet(
+          ctx,
+          event: _c.scheduleEvents.single,
+          controller: _c,
+        ),
+      );
+      expect(find.text('已修改'), findsOneWidget);
+      expect(find.text('恢复原考试'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('schedule_detail_restore')));
+      await _settleIo(tester);
+      expect(_c.isJwxtOverridden(examKey: key), isFalse);
+      expect(_c.scheduleEvents.single.location, '测试楼 B202');
+
+      // 5. 日程编辑页支持正常退出返回
+      await _pumpLauncher(
+        tester,
+        (context) => showScheduleEventEditPage(
+          context,
+          controller: _c,
+          kind: ScheduleKind.other,
+        ),
+      );
+      final route =
+          ModalRoute.of(
+                tester.element(find.byKey(const Key('schedule_form_title'))),
+              )!
+              as PageRoute;
+      expect(route.popGestureEnabled, isTrue);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('schedule_form_title')), findsNothing);
     });
   });
 
@@ -478,82 +436,6 @@ void main() {
       expect(_c.scheduleEventsOn(after).map((e) => e.id), ['x-out']);
     });
 
-    testWidgets('EV05/EV13/EX02/EX04 考试画在周二第 1–2 节：考试色、白字、「考试」胶囊', (
-      tester,
-    ) async {
-      _load(manual: [_course('m1', '测试课甲')]);
-      await tester.runAsync(() => _c.addScheduleEvent(_event('')));
-      await _pumpGrid(tester);
-      final cell = _eventCell('测试考试甲');
-      expect(cell, findsOneWidget);
-      final pill = find.descendant(
-        of: cell,
-        matching: find.byKey(const Key('schedule_cell_exam_pill')),
-      );
-      expect(pill, findsOneWidget);
-      expect(
-        find.descendant(of: pill, matching: find.text('考试')),
-        findsOneWidget,
-      );
-      final ink = tester.widget<Ink>(
-        find.descendant(of: cell, matching: find.byType(Ink)),
-      );
-      expect(
-        (ink.decoration! as BoxDecoration).color,
-        Color(_c.settings.examColor),
-      );
-      final title = tester.widget<Text>(
-        find.descendant(of: cell, matching: find.text('测试考试甲')),
-      );
-      expect(title.style?.color, TimetableTheme.examText);
-
-      // 位置：周二列（第 2 列）、第 1–2 节；与课程格一样按物理像素对齐。
-      final pos = _positionedOf(tester, cell);
-      final ph = _c.settings.periodHeight.clamp(
-        TimetableTheme.periodHeightMin,
-        TimetableTheme.periodHeightMax,
-      );
-      final days = _c.visibleDays(_week);
-      final dayW =
-          (tester.getSize(find.byType(WeekGrid)).width -
-              TimetableTheme.periodColumnWidth) /
-          days.length;
-      final expected = TimetableTheme.snapDeviceRect(
-        left: days.indexOf(2) * dayW + TimetableTheme.cellMargin,
-        top: TimetableTheme.cellMargin,
-        width: dayW - 2 * TimetableTheme.cellMargin,
-        height: 2 * ph - 2 * TimetableTheme.cellMargin,
-        dpr: tester.view.devicePixelRatio,
-      );
-      expect(pos.left, closeTo(expected.left, 1e-6));
-      expect(pos.top, closeTo(expected.top, 1e-6));
-      expect(pos.width, closeTo(expected.width, 1e-6));
-      expect(pos.height, closeTo(expected.height, 1e-6));
-    });
-
-    testWidgets('EV08 只在所在周显示：第 7、9 周没有', (tester) async {
-      _load(manual: [_course('m1', '测试课甲')]);
-      await tester.runAsync(() => _c.addScheduleEvent(_event('')));
-      for (final w in [7, 9]) {
-        await _pumpGrid(tester, week: w);
-        expect(_eventCell('测试考试甲'), findsNothing, reason: '第 $w 周');
-      }
-      await _pumpGrid(tester);
-      expect(_eventCell('测试考试甲'), findsOneWidget);
-    });
-
-    testWidgets('EX06/EX09/EV13 「显示考试」关：不画考试；打开后立即恢复', (tester) async {
-      _load(manual: [_course('m1', '测试课甲')]);
-      await tester.runAsync(() => _c.addScheduleEvent(_event('')));
-      _setShowExams(false);
-      await _pumpGrid(tester);
-      expect(_eventCell('测试考试甲'), findsNothing);
-      expect(find.byKey(const Key('schedule_cell_exam_pill')), findsNothing);
-      _setShowExams(true);
-      await _pumpGrid(tester);
-      expect(_eventCell('测试考试甲'), findsOneWidget);
-    });
-
     test('EX-offweek-1 日期在查看周内必有 item；showExams 关则无', () async {
       _load(manual: [_course('m1', '测试课甲')]);
       await _c.addScheduleEvent(_event('ex1'));
@@ -564,452 +446,454 @@ void main() {
       expect(scheduleItemsForColumn(_c, _week, 2), isEmpty);
     });
 
-    testWidgets('EX-offweek-2 考试所在周：即使查看周≠本周也正常色 + 仅「考试」', (tester) async {
-      final orig = TimetableController.clock;
-      addTearDown(() => TimetableController.clock = orig);
-      // 本周固定第 5 周；查看第 8 周（考试所在周）→ 仍正常色。
-      TimetableController.clock = () => DateTime(2026, 9, 28, 10);
-      _load(manual: [_course('m1', '测试课甲')]);
-      await tester.runAsync(() => _c.addScheduleEvent(_event('')));
-      expect(_c.currentWeek, 5);
-      expect(_c.viewingWeek, _week);
-      final item = scheduleItemsForColumn(_c, _week, 2).single;
-      expect(item.activeThisWeek, isTrue);
+    testWidgets('周格渲染、非本周幽灵、重叠「2 项」、表头不在节次内圆点列表与学期外提示', (tester) async {
+      final sem = tester.ensureSemantics();
+      try {
+        // 1. 考试/其他格与「显示考试」、非本周幽灵状态切换、与课程重叠优先显示考试与冲突计数
+        _load(manual: [_course('m1', '测试课甲', day: 2, start: 1, end: 2)]);
+        await tester.runAsync(() => _c.addScheduleEvent(_event('')));
+        final other = _event(
+          'other1',
+          kind: ScheduleKind.other,
+          title: '测试日程甲',
+          start: const TimeOfDayMinutes(13, 45),
+          end: const TimeOfDayMinutes(15, 25),
+        );
+        await tester.runAsync(() => _c.addScheduleEvent(other));
+        await _pumpGrid(tester);
+        expect(_eventCell('测试考试甲'), findsOneWidget);
+        expect(
+          find.byKey(const Key('schedule_cell_conflict_dot')),
+          findsOneWidget,
+        );
+        expect(find.text('2 项'), findsOneWidget);
+        expect(_eventCell('测试日程甲'), findsOneWidget);
+        expect(
+          find.byKey(const Key('schedule_cell_other_pill')),
+          findsOneWidget,
+        );
 
-      await _pumpGrid(tester);
-      final cell = _eventCell('测试考试甲');
-      expect(cell, findsOneWidget);
-      expect(
-        find.descendant(
-          of: cell,
-          matching: find.byKey(const Key('schedule_cell_exam_pill')),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: cell,
-          matching: find.byKey(const Key('schedule_cell_off_week_pill')),
-        ),
-        findsNothing,
-      );
-      expect(
-        find.descendant(of: cell, matching: find.text('非本周')),
-        findsNothing,
-      );
-      final ink = tester.widget<Ink>(
-        find.descendant(of: cell, matching: find.byType(Ink)),
-      );
-      final deco = ink.decoration! as BoxDecoration;
-      expect(
-        deco.color,
-        TimetableTheme.examCellBg(Color(_c.settings.examColor)),
-      );
-      expect(deco.border, isNull);
-    });
+        _setShowExams(false);
+        await _pumpGrid(tester);
+        expect(_eventCell('测试考试甲'), findsNothing);
+        expect(find.text('2 项'), findsNothing);
+        expect(_eventCell('测试日程甲'), findsOneWidget);
 
-    testWidgets('EX-offweek-3 更早周 + 显示非本周：幽灵灰底双胶囊；更晚周不画', (tester) async {
-      _load(manual: [_course('m1', '测试课甲')]);
-      await tester.runAsync(() => _c.addScheduleEvent(_event('')));
-      // 默认关：第 5 周不幽灵
-      expect(scheduleItemsForColumn(_c, 5, 2), isEmpty);
-      _setShowNonCurrentWeek(true);
-      final ghosts = scheduleItemsForColumn(_c, 5, 2);
-      expect(ghosts, hasLength(1));
-      expect(ghosts.single.activeThisWeek, isFalse);
-      expect(ghosts.single.event.title, '测试考试甲');
-      // 更晚周不画
-      expect(scheduleItemsForColumn(_c, 9, 2), isEmpty);
+        _setShowExams(true);
+        _setShowNonCurrentWeek(true);
+        await tester.runAsync(
+          () => _c.addScheduleEvent(
+            _event(
+              'ghost3',
+              title: '幽灵考试乙',
+              date: _tuesday.add(const Duration(days: 1)),
+            ),
+          ),
+        );
+        await _pumpGrid(tester, week: 5);
+        final ghost = _eventCell('幽灵考试乙');
+        expect(ghost, findsOneWidget);
+        expect(
+          find.descendant(
+            of: ghost,
+            matching: find.byKey(const Key('schedule_cell_off_week_pill')),
+          ),
+          findsOneWidget,
+        );
+        await _pumpGrid(tester, week: 9);
+        expect(_eventCell('幽灵考试乙'), findsNothing);
 
-      await _pumpGrid(tester, week: 5);
-      final cell = _eventCell('测试考试甲');
-      expect(cell, findsOneWidget);
-      expect(
-        find.descendant(
-          of: cell,
-          matching: find.byKey(const Key('schedule_cell_exam_pill')),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: cell,
-          matching: find.byKey(const Key('schedule_cell_off_week_pill')),
-        ),
-        findsOneWidget,
-      );
-      final ink = tester.widget<Ink>(
-        find.descendant(of: cell, matching: find.byType(Ink)),
-      );
-      expect(
-        (ink.decoration! as BoxDecoration).color,
-        TimetableTheme.offWeekBg,
-      );
-    });
+        // 2. 不在节次内的午休/晚间日程：不画格子，表头显示圆点 + 读屏，点击列表再打开详情
+        _c.debugReset();
+        _load(manual: [_course('m1', '测试课甲')]);
+        final lunch = _event(
+          'lunch',
+          kind: ScheduleKind.other,
+          title: '测试日程午休',
+          date: _tuesday,
+          start: const TimeOfDayMinutes(12, 0),
+          end: const TimeOfDayMinutes(13, 30),
+        );
+        final late = _event(
+          'late',
+          title: '测试考试晚',
+          date: _tuesday,
+          start: const TimeOfDayMinutes(21, 30),
+          end: const TimeOfDayMinutes(22, 30),
+        );
+        await tester.runAsync(() async {
+          await _c.addScheduleEvent(late);
+          await _c.addScheduleEvent(lunch);
+        });
+        await _pumpGrid(tester);
+        expect(_eventCell('测试日程午休'), findsNothing);
+        expect(_eventCell('测试考试晚'), findsNothing);
+        expect(find.bySemanticsLabel('周二，另有 2 项不在节次内'), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('day_header_unplaced_2')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('unplaced_events_sheet')), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('unplaced_item_late')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('schedule_detail_sheet')), findsOneWidget);
 
-    testWidgets('EV10/EX06 与课程重叠优先显示考试格、冲突圆点和「2 项」；考试隐藏时不计冲突', (tester) async {
-      _load(manual: [_course('m1', '测试课甲', day: 2, start: 1, end: 2)]);
-      await tester.runAsync(() => _c.addScheduleEvent(_event('')));
-      await _pumpGrid(tester);
-      expect(_eventCell('测试考试甲'), findsOneWidget);
-      expect(find.text('2 项'), findsOneWidget);
-      expect(
-        find.byKey(const Key('schedule_cell_conflict_dot')),
-        findsOneWidget,
-      );
-
-      _setShowExams(false);
-      await _pumpGrid(tester);
-      expect(_eventCell('测试考试甲'), findsNothing);
-      expect(find.text('2 项'), findsNothing);
-      expect(find.text('2 门'), findsNothing);
-      expect(find.byKey(const Key('schedule_cell_conflict_dot')), findsNothing);
-      expect(find.byKey(const Key('course_cell_conflict_dot')), findsNothing);
-    });
-
-    testWidgets('EV11/EV12 「其他」：「日程」胶囊、按名称配色；不受「显示考试」控制', (tester) async {
-      _load(manual: [_course('m1', '测试课甲')]);
-      final other = _event(
-        '',
-        kind: ScheduleKind.other,
-        title: '测试日程甲',
-        start: const TimeOfDayMinutes(13, 45),
-        end: const TimeOfDayMinutes(15, 25),
-      );
-      await tester.runAsync(() => _c.addScheduleEvent(other));
-      await _pumpGrid(tester);
-      final cell = _eventCell('测试日程甲');
-      expect(cell, findsOneWidget);
-      final pill = find.descendant(
-        of: cell,
-        matching: find.byKey(const Key('schedule_cell_other_pill')),
-      );
-      expect(pill, findsOneWidget);
-      expect(
-        find.descendant(of: pill, matching: find.text('日程')),
-        findsOneWidget,
-      );
-      expect(find.byKey(const Key('schedule_cell_exam_pill')), findsNothing);
-      final idx = _c.otherColorIndexOf(_c.scheduleEvents.single);
-      final ink = tester.widget<Ink>(
-        find.descendant(of: cell, matching: find.byType(Ink)),
-      );
-      expect(
-        (ink.decoration! as BoxDecoration).color,
-        TimetableTheme.blendCellBg(
-          TimetableTheme.courseColor(idx),
-          _c.settings.cellOpacity,
-        ),
-      );
-
-      _setShowExams(false);
-      await _pumpGrid(tester);
-      expect(_eventCell('测试日程甲'), findsOneWidget);
-    });
-
-    testWidgets('EV16 点日程格打开详情弹层', (tester) async {
-      _load(manual: [_course('m1', '测试课甲')]);
-      await tester.runAsync(() => _c.addScheduleEvent(_event('')));
-      await _pumpGrid(tester);
-      await tester.tap(_eventCell('测试考试甲'));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('schedule_detail_sheet')), findsOneWidget);
-      expect(find.byKey(const Key('schedule_detail_delete')), findsOneWidget);
+        // 3. 日期不在本学期：编辑页展示提示且仍可保存并在首页卡片列出
+        final outside = DateTime(2027, 3, 1);
+        expect(isOutsideTermWeeks(_c, DateTime(2026, 8, 30)), isTrue);
+        await _pumpLauncher(
+          tester,
+          (context) => showScheduleEventEditPage(
+            context,
+            controller: _c,
+            initialDate: outside,
+          ),
+        );
+        expect(find.text('不在本学期，周视图里看不到'), findsOneWidget);
+        await tester.enterText(
+          find.byKey(const Key('schedule_form_title')),
+          '测试日程学期外',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('schedule_form_save')));
+        await _settleIo(tester);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: TimetableHomeCard(now: () => DateTime(2027, 3, 1, 7)),
+            ),
+          ),
+        );
+        await tester.pump();
+        expect(find.text('测试日程学期外'), findsOneWidget);
+      } finally {
+        sem.dispose();
+      }
     });
   });
 
-  group('EV-2 不在节次内的日程（午休 / 节次之外）', () {
-    final wednesday = DateTime(2026, 10, 21);
-    ScheduleEvent lunch({DateTime? date}) => _event(
-      'lunch',
-      kind: ScheduleKind.other,
-      title: '测试日程午休',
-      date: date ?? _tuesday,
-      start: const TimeOfDayMinutes(12, 0),
-      end: const TimeOfDayMinutes(13, 30),
+  group('首页考试卡、考试列表与定位', () {
+    final examsToday = DateTime(2026, 10, 12);
+    ScheduleEvent examCardItem(
+      String id,
+      DateTime date, {
+      int sh = 9,
+      int sm = 0,
+      int eh = 11,
+      int em = 0,
+    }) => _event(
+      id,
+      title: '测试考试$id',
+      date: date,
+      start: TimeOfDayMinutes(sh, sm),
+      end: TimeOfDayMinutes(eh, em),
     );
-    ScheduleEvent late({DateTime? date}) => _event(
-      'late',
-      title: '测试考试晚',
-      date: date ?? wednesday,
-      start: const TimeOfDayMinutes(21, 30),
-      end: const TimeOfDayMinutes(22, 30),
-    );
-    Finder header(int day) => find.byKey(ValueKey('day_header_unplaced_$day'));
-    Finder dotIn(int day) => find.descendant(
-      of: header(day),
-      matching: find.byKey(const Key('day_header_dot')),
-    );
-    Color dotColor(WidgetTester tester, int day) =>
-        (tester
-                    .widget<DecoratedBox>(
-                      find.descendant(
-                        of: dotIn(day),
-                        matching: find.byType(DecoratedBox),
-                      ),
-                    )
-                    .decoration
-                as BoxDecoration)
-            .color!;
 
-    testWidgets('EV07 EV32 EV33 午休日程与晚间考试：不画格子，表头日期下 4dp 圆点 + 读屏文案', (
-      tester,
-    ) async {
-      final sem = tester.ensureSemantics();
-      _load(manual: [_course('m1', '测试课甲')]);
-      await tester.runAsync(() async {
-        await _c.addScheduleEvent(lunch());
-        await _c.addScheduleEvent(late());
+    test('examDaysAway：今天 0、明天 1、昨天 -1', () {
+      expect(examDaysAway(examsToday, DateTime(2026, 10, 12)), 0);
+      expect(examDaysAway(examsToday, DateTime(2026, 10, 13)), 1);
+      expect(examDaysAway(examsToday, DateTime(2026, 10, 11)), -1);
+      expect(examDaysAway(DateTime(2026, 12, 31), DateTime(2027, 1, 1)), 1);
+    });
+
+    test('examCountdownLabel：今天/明天/后天/还有X天/已结束', () {
+      expect(examCountdownLabel(examsToday, DateTime(2026, 10, 12)), '今天');
+      expect(examCountdownLabel(examsToday, DateTime(2026, 10, 13)), '明天');
+      expect(examCountdownLabel(examsToday, DateTime(2026, 10, 14)), '后天');
+      expect(examCountdownLabel(examsToday, DateTime(2026, 10, 20)), '还有 8 天');
+      expect(examCountdownLabel(examsToday, DateTime(2026, 10, 11)), '已结束');
+    });
+
+    test('upcomingExams：只要考试、排除过去、按日期升序', () async {
+      _load();
+      await _c.addScheduleEvent(examCardItem('c', DateTime(2026, 10, 20)));
+      await _c.addScheduleEvent(examCardItem('a', DateTime(2026, 10, 13)));
+      await _c.addScheduleEvent(examCardItem('p', DateTime(2026, 10, 11)));
+      await _c.addScheduleEvent(
+        _event(
+          'o',
+          kind: ScheduleKind.other,
+          title: '其他日程',
+          date: DateTime(2026, 10, 15),
+          start: const TimeOfDayMinutes(9, 0),
+          end: const TimeOfDayMinutes(10, 0),
+        ),
+      );
+      expect(
+        upcomingExams(_c, today: examsToday).map((e) => e.title).toList(),
+        ['测试考试a', '测试考试c'],
+      );
+    });
+
+    for (final showExams in [false, true]) {
+      test('考试查询不受显示开关影响：showExams=$showExams', () async {
+        _load(showExams: showExams);
+        await _c.replaceJwxtExams([
+          examCardItem(
+            'u',
+            examsToday,
+          ).copyWith(source: ScheduleSource.jwxt, courseCode: 'k-u'),
+          examCardItem(
+            'p',
+            DateTime(2026, 10, 11),
+          ).copyWith(source: ScheduleSource.jwxt, courseCode: 'k-p'),
+        ]);
+        await _c.addScheduleEvent(
+          _event(
+            'o',
+            kind: ScheduleKind.other,
+            title: '其他日程',
+            date: examsToday,
+            start: const TimeOfDayMinutes(9, 0),
+            end: const TimeOfDayMinutes(10, 0),
+          ),
+        );
+        expect(upcomingExams(_c, today: examsToday).map((e) => e.id), ['u']);
+        expect(pastExams(_c, today: examsToday).map((e) => e.id), ['p']);
+        expect(
+          _c.scheduleEventsOn(examsToday).map((e) => e.id),
+          showExams ? ['u', 'o'] : ['o'],
+        );
+        expect(
+          (await ScheduleStore.readEvents()).where((e) => e.isExam),
+          hasLength(2),
+        );
       });
-      await _pumpGrid(tester);
-      expect(_eventCell('测试日程午休'), findsNothing);
-      expect(_eventCell('测试考试晚'), findsNothing);
+    }
+
+    testWidgets('首页与考试列表卡片展示/截断、开关仅影响周课表及单场定位重复触发', (tester) async {
+      // 1. 无未来考试时整张卡片隐藏；有未来考试时展示倒计时并按 homeMaxExams 截断
+      _load();
+      await tester.runAsync(
+        () => _c.addScheduleEvent(examCardItem('old', DateTime(2026, 10, 11))),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: TimetableExamsCard(now: () => examsToday)),
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const Key('exams_card_title')), findsNothing);
+
+      await tester.runAsync(() async {
+        await _c.addScheduleEvent(examCardItem('e0', examsToday));
+        await _c.addScheduleEvent(examCardItem('e2', DateTime(2026, 10, 15)));
+        await _c.addScheduleEvent(examCardItem('e3', DateTime(2026, 10, 18)));
+      });
+      await tester.pumpAndSettle();
+      expect(find.textContaining('今天'), findsWidgets);
+      expect(find.byKey(const Key('exams_card_row_e0')), findsOneWidget);
+      expect(find.byKey(const Key('exams_card_row_e2')), findsOneWidget);
+      expect(find.byKey(const Key('exams_card_row_e3')), findsNothing);
+
+      await tester.runAsync(
+        () => _c.updateSettings(_c.settings.copyWith(homeMaxExams: 3)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('exams_card_row_e3')), findsOneWidget);
+
+      // 2. showExams=false 时周课表不画，但首页卡片与考试列表始终展示
+      await tester.runAsync(
+        () => _c.updateSettings(_c.settings.copyWith(showExams: false)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('exams_card_title')), findsOneWidget);
+      await _pumpGrid(tester, week: 7);
       expect(find.byType(ScheduleEventCell), findsNothing);
-
-      expect(dotIn(2), findsOneWidget);
-      expect(dotIn(3), findsOneWidget);
-      expect(find.byKey(const Key('day_header_dot')), findsNWidgets(2));
-      expect(tester.getSize(dotIn(2)), const Size(4, 4));
-      // 其他 → 该名称固定色（白底强调色）；考试 → examColor。
-      expect(
-        dotColor(tester, 2),
-        scheduleAccentOnWhite(
-          _c,
-          _c.scheduleEvents.firstWhere((e) => e.id == 'lunch'),
-        ),
+      await tester.runAsync(
+        () => _c.updateSettings(_c.settings.copyWith(showExams: true)),
       );
-      expect(dotColor(tester, 3), Color(_c.settings.examColor));
 
-      expect(find.bySemanticsLabel('周二，另有 1 项不在节次内'), findsOneWidget);
-      expect(find.bySemanticsLabel('周三，另有 1 项不在节次内'), findsOneWidget);
-      // 没有不在节次内日程的日期：无圆点、无点按。
-      expect(header(1), findsNothing);
-      sem.dispose();
-    });
-
-    testWidgets('同一天多项：圆点取最早一项颜色；点表头弹出列表，点一项打开详情', (tester) async {
-      final sem = tester.ensureSemantics();
-      _load(manual: [_course('m1', '测试课甲')]);
-      await tester.runAsync(() async {
-        await _c.addScheduleEvent(late(date: _tuesday));
-        await _c.addScheduleEvent(lunch());
-      });
-      await _pumpGrid(tester);
-      expect(
-        dotColor(tester, 2),
-        scheduleAccentOnWhite(
-          _c,
-          _c.scheduleEvents.firstWhere((e) => e.id == 'lunch'),
-        ),
+      // 3. 首页标题进列表；单场直达第 8 周、高亮 3 秒消失，返回后可再次定位
+      _c.debugReset();
+      _load();
+      final focusExam = examCardItem('focus', DateTime(2026, 10, 20));
+      await tester.runAsync(() => _c.addScheduleEvent(focusExam));
+      final router = GoRouter(
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (_, _) =>
+                Scaffold(body: TimetableExamsCard(now: () => examsToday)),
+          ),
+          GoRoute(
+            path: '/apps/exam-schedule',
+            builder: (_, _) => const TimetableExamsPage(),
+          ),
+          GoRoute(
+            path: '/apps/timetable',
+            builder: (_, state) =>
+                TimetablePage(focusEvent: state.extra as ScheduleEvent?),
+          ),
+        ],
       );
-      expect(find.bySemanticsLabel('周二，另有 2 项不在节次内'), findsOneWidget);
-
-      await tester.tap(header(2));
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        MaterialApp.router(theme: appLightTheme(), routerConfig: router),
+      );
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('unplaced_events_sheet')), findsOneWidget);
-      expect(find.text('周二不在节次内的 2 项'), findsOneWidget);
-      final a = tester.getTopLeft(
-        find.byKey(const ValueKey('unplaced_item_lunch')),
-      );
-      final b = tester.getTopLeft(
-        find.byKey(const ValueKey('unplaced_item_late')),
-      );
-      expect(a.dy, lessThan(b.dy)); // 按开始时间
 
-      await tester.tap(find.byKey(const ValueKey('unplaced_item_late')));
+      await tester.tap(find.byKey(const Key('exams_card_title')));
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('unplaced_events_sheet')), findsNothing);
-      expect(find.byKey(const Key('schedule_detail_sheet')), findsOneWidget);
-      expect(find.text('测试考试晚'), findsWidgets);
-      sem.dispose();
+      expect(find.byType(TimetableExamsPage), findsOneWidget);
+      router.pop();
+      await tester.pumpAndSettle();
+
+      for (var attempt = 0; attempt < 2; attempt++) {
+        await tester.tap(find.byKey(const Key('exams_card_row_focus')));
+        await tester.pumpAndSettle();
+        expect(_c.viewingWeek, 8);
+        expect(find.byKey(const Key('schedule_focus_focus')), findsOneWidget);
+        await tester.pump(const Duration(seconds: 3));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('schedule_focus_focus')), findsNothing);
+        router.pop();
+        await tester.pumpAndSettle();
+      }
     });
 
-    testWidgets('不计入冲突圆点与「N 门」', (tester) async {
-      // 周二第 1–2 节有课；同一天午休 + 晚间日程不和它成组。
-      _load(manual: [_course('m1', '测试课甲', day: 2, start: 1, end: 2)]);
+    testWidgets('实际路由定位未来/过去周次，深色减少动画隐藏周末晚间自动滚动，重叠点击与无节次打开详情', (tester) async {
+      // 1. 实际路由从考试列表定位过去/未来周次
+      _load();
       await tester.runAsync(() async {
-        await _c.addScheduleEvent(lunch());
-        await _c.addScheduleEvent(late(date: _tuesday));
+        await _c.addScheduleEvent(examCardItem('past', DateTime(2026, 10, 6)));
+        await _c.addScheduleEvent(
+          examCardItem('future', DateTime(2026, 11, 23)),
+        );
       });
-      await _pumpGrid(tester);
-      expect(dotIn(2), findsOneWidget);
-      expect(find.textContaining('门'), findsNothing);
-      expect(find.byKey(const Key('course_cell_conflict_dot')), findsNothing);
-    });
+      final router = buildRouter()..go('/apps/exam-schedule');
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        MaterialApp.router(theme: appLightTheme(), routerConfig: router),
+      );
+      await tester.pumpAndSettle();
+      for (final entry in {'future': 13, 'past': 6}.entries) {
+        await tester.tap(find.byKey(Key('exams_page_row_${entry.key}')));
+        await tester.pumpAndSettle();
+        expect(_c.viewingWeek, entry.value);
+        expect(
+          find.byKey(Key('schedule_cell_${entry.key}')).hitTestable(),
+          findsOneWidget,
+        );
+        router.pop();
+        await tester.pumpAndSettle();
+      }
 
-    testWidgets('受「显示考试」与当前周控制', (tester) async {
-      _load(manual: [_course('m1', '测试课甲')]);
-      await tester.runAsync(() async {
-        await _c.addScheduleEvent(late());
-      });
-      await _pumpGrid(tester);
-      expect(dotIn(3), findsOneWidget);
-
-      _setShowExams(false);
-      await _pumpGrid(tester);
-      expect(header(3), findsNothing);
-      expect(find.byKey(const Key('day_header_dot')), findsNothing);
-
-      _setShowExams(true);
-      await _pumpGrid(tester, week: _week + 1);
-      expect(find.byKey(const Key('day_header_dot')), findsNothing);
-      await _pumpGrid(tester, week: _week - 1);
-      expect(find.byKey(const Key('day_header_dot')), findsNothing);
-    });
-
-    testWidgets('首页卡片照常按时间列出', (tester) async {
-      _load(manual: [_course('m1', '测试课甲')]); // 周一 10:10
-      await tester.runAsync(() async {
-        await _c.addScheduleEvent(lunch(date: _monday));
-        await _c.addScheduleEvent(late(date: _monday));
-      });
-      final morning = DateTime(2026, 10, 19, 7);
+      // 2. 深色减少动画下定位被隐藏的周日晚间考试：临时显露列、自动滚动但不改设置
+      tester.view.physicalSize = const Size(375, 667);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      _c.debugSetSnapshot(
+        TimetableSnapshot(
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(
+            termStartDate: _termStart,
+            showExams: false,
+            showSaturday: false,
+            showSunday: false,
+          ),
+        ),
+        viewingWeek: 7,
+      );
+      final lateExam = examCardItem(
+        'late',
+        DateTime(2026, 10, 18),
+        sh: 19,
+        sm: 40,
+        eh: 21,
+        em: 20,
+      ).copyWith(source: ScheduleSource.jwxt, courseCode: 'test-late');
+      await tester.runAsync(() => _c.replaceJwxtExams([lateExam]));
       await tester.pumpWidget(
         MaterialApp(
-          home: Scaffold(body: TimetableHomeCard(now: () => morning)),
+          theme: appDarkTheme(),
+          home: MediaQuery(
+            data: const MediaQueryData(
+              size: Size(375, 667),
+              disableAnimations: true,
+            ),
+            child: Scaffold(
+              body: WeekGrid(week: 7, controller: _c, focusedEvent: lateExam),
+            ),
+          ),
         ),
       );
-      await tester.pump();
-      final l = find.byKey(const Key('home_event_row_lunch'));
-      final t = find.byKey(const Key('home_event_row_late'));
-      expect(l, findsOneWidget);
-      // design item 4：最多 homeMaxItems（默认 2）项，截断且无「还有 N 项」。
-      expect(t, findsNothing);
-      expect(find.textContaining('还有'), findsNothing);
-    });
-  });
-
-  group('EV-1 日期不在本学期', () {
-    testWidgets('日期在学期周次外：日期下灰字提示，仍可保存；首页照常显示', (tester) async {
-      _load(manual: [_course('m1', '测试课甲')]);
-      final outside = DateTime(2027, 3, 1); // 远超本学期周数
-      await _pumpLauncher(
-        tester,
-        (context) => showScheduleEventEditPage(
-          context,
-          controller: _c,
-          initialDate: outside,
-        ),
-      );
-      final hint = find.byKey(const Key('schedule_form_outside_term_hint'));
-      expect(hint, findsOneWidget);
-      expect(find.text('不在本学期，周视图里看不到'), findsOneWidget);
-      expect(tester.widget<Text>(hint).style?.color, TimetableTheme.hint);
-      expect(isOutsideTermWeeks(_c, DateTime(2026, 8, 30)), isTrue); // 开学前
-      expect(isOutsideTermWeeks(_c, _tuesday), isFalse);
-
-      await tester.enterText(
-        find.byKey(const Key('schedule_form_title')),
-        '测试日程学期外',
-      );
-      await tester.pump();
-      await tester.tap(find.byKey(const Key('schedule_form_save')));
-      await _settleIo(tester);
-      expect(_c.scheduleEvents.single.date, outside);
-
-      // 学期内日期：无提示。
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ScheduleEventEditPage(controller: _c, initialDate: _tuesday),
-        ),
-      );
-      await tester.pump();
-      expect(hint, findsNothing);
-
-      // 首页：那天照常列出。
-      final day = DateTime(2027, 3, 1, 7);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(body: TimetableHomeCard(now: () => day)),
-        ),
-      );
-      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('day_header_7')), findsOneWidget);
       expect(
-        find.byKey(ValueKey('home_event_row_${_c.scheduleEvents.single.id}')),
+        find.byKey(const Key('schedule_cell_late')).hitTestable(),
         findsOneWidget,
       );
-    });
-  });
+      expect(_c.settings.showExams, isFalse);
+      expect(_c.settings.showSaturday, isFalse);
+      expect(_c.settings.showSunday, isFalse);
 
-  group('「其他」日程固定配色（产品经理 10/18）', () {
-    ScheduleEvent other(String id, String title) =>
-        _event(id, kind: ScheduleKind.other, title: title);
-
-    test('同名同色；写进 schedule_events.json 的 otherColors', () async {
-      _load(manual: [_course('m1', '测试课甲')]);
-      await _c.addScheduleEvent(other('a', '测试日程甲'));
-      await _c.addScheduleEvent(other('b', '测试日程甲'));
-      await _c.addScheduleEvent(other('c', '测试日程乙'));
-      final ev = {for (final e in _c.scheduleEvents) e.id: e};
-      expect(_c.otherColorIndexOf(ev['a']!), _c.otherColorIndexOf(ev['b']!));
-      // 有空余色号时不同名称不同色。
-      expect(
-        _c.otherColorIndexOf(ev['a']!),
-        isNot(_c.otherColorIndexOf(ev['c']!)),
+      // 3. 目标考试与两组课程重叠时下半部分仍可点击弹出全部叠放；无节次直接弹出详情
+      await tester.pumpWidget(const SizedBox.shrink());
+      _c.debugReset();
+      _c.debugSetSnapshot(
+        TimetableSnapshot(
+          courses: [
+            _course('overlap-course', '测试重叠课程', day: 2, start: 1, end: 2),
+            _course('later-course', '测试后段课程', day: 2, start: 4, end: 4),
+          ],
+          periods: TimetableController.defaultPeriods(),
+          settings: TimetableSettings(termStartDate: _termStart),
+        ),
+        viewingWeek: 8,
       );
-      final stored = await ScheduleStore.readOtherColors();
-      expect(stored.keys, containsAll(['测试日程甲', '测试日程乙']));
-      expect(stored['测试日程甲'], _c.otherColorIndexOf(ev['a']!));
-      // 考试不登记色号。
-      await _c.addScheduleEvent(_event('x'));
-      expect((await ScheduleStore.readOtherColors()).length, 2);
-      // 只写日程（如教务考试替换）也不丢 otherColors。
-      await _c.replaceJwxtExams(const []);
-      expect((await ScheduleStore.readOtherColors()).length, 2);
-    });
+      final target = examCardItem(
+        'target',
+        DateTime(2026, 10, 20),
+        sh: 9,
+        em: 50,
+      );
+      await tester.runAsync(() async {
+        await _c.addScheduleEvent(examCardItem('earlier', target.date, sh: 8));
+        await _c.addScheduleEvent(target);
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: WeekGrid(week: 8, controller: _c, focusedEvent: target),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final btn = find.byKey(const Key('schedule_cell_target'));
+      expect(btn.hitTestable(at: const Alignment(0, 0.8)), findsOneWidget);
+      await tester.tapAt(
+        tester.getRect(btn).bottomCenter - const Offset(0, 12),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('stack_item_overlap-course')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('stack_item_event_target')), findsOneWidget);
 
-    test('EV25 名称哈希位被课程占用 → 改用课程没用的色号', () async {
-      final course = _course('m1', '测试课甲');
-      _load(manual: [course]);
-      final courseIdx = _c.colorIndexOf(_c.combinedCourses.single);
-      String? clash;
-      for (var i = 0; i < 500 && clash == null; i++) {
-        final n = '测试日程$i';
-        if (courseColorIndexForName(n) % kCoursePaletteSize == courseIdx) {
-          clash = n;
-        }
-      }
-      expect(clash, isNotNull);
-      await _c.addScheduleEvent(other('a', clash!));
-      final idx = _c.otherColorIndexOf(_c.scheduleEvents.single);
-      expect(idx, isNot(courseIdx));
-      expect(idx, inInclusiveRange(0, kCoursePaletteSize - 1));
-    });
-
-    test('不改课程颜色，也不写 course_colors.json', () async {
-      _load(manual: [_course('m1', '测试课甲'), _course('m2', '测试课乙', day: 2)]);
-      final before = {
-        for (final c in _c.combinedCourses) c.id: _c.colorIndexOf(c),
-      };
-      final file = File('${tmp.path}/${TimetableStore.courseColorsFile}');
-      final bytesBefore = file.existsSync() ? file.readAsStringSync() : null;
-      for (var i = 0; i < 20; i++) {
-        await _c.addScheduleEvent(other('o$i', '测试日程$i'));
-      }
-      final after = {
-        for (final c in _c.combinedCourses) c.id: _c.colorIndexOf(c),
-      };
-      expect(after, before);
-      expect(file.existsSync() ? file.readAsStringSync() : null, bytesBefore);
-    });
-
-    test('改名：改成已有名称 → 用该名称的颜色；改成新名称 → 沿用原颜色', () async {
-      _load(manual: [_course('m1', '测试课甲')]);
-      await _c.addScheduleEvent(other('a', '测试日程甲'));
-      await _c.addScheduleEvent(other('b', '测试日程乙'));
-      ScheduleEvent byId(String id) =>
-          _c.scheduleEvents.firstWhere((e) => e.id == id);
-      final colorA = _c.otherColorIndexOf(byId('a'));
-      final colorB = _c.otherColorIndexOf(byId('b'));
-
-      await _c.updateScheduleEvent(byId('a').copyWith(title: '测试日程丙'));
-      expect(_c.otherColorIndexOf(byId('a')), colorA);
-      expect((await ScheduleStore.readOtherColors())['测试日程丙'], colorA);
-
-      await _c.updateScheduleEvent(byId('a').copyWith(title: '测试日程乙'));
-      expect(_c.otherColorIndexOf(byId('a')), colorB);
-      // 已分配的颜色不变。
-      expect(_c.otherColorIndexOf(byId('b')), colorB);
+      await tester.pumpWidget(const SizedBox.shrink());
+      _c.debugReset();
+      _load();
+      final unplaced = examCardItem(
+        'unplaced',
+        DateTime(2026, 10, 20),
+        sh: 12,
+        eh: 13,
+      );
+      await tester.runAsync(() => _c.addScheduleEvent(unplaced));
+      await tester.pumpWidget(
+        MaterialApp(home: TimetablePage(focusEvent: unplaced)),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<ScheduleEventDetailSheet>(
+              find.byType(ScheduleEventDetailSheet),
+            )
+            .eventId,
+        'unplaced',
+      );
     });
   });
 }

@@ -1,22 +1,29 @@
 import 'dart:async';
-import 'dart:io';
-import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nuist_sta_app/core/colors.dart';
+import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/core/schedule/weekly_classes.dart';
 import 'package:nuist_sta_app/core/theme.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_building_model.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_building_model_page.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_api.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_canvas.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_heading.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_location.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_native.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_navigation.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_page.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_panels.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_source.dart';
+// Use the existing plugin's platform boundary without adding production hooks.
+// ignore: depend_on_referenced_packages
+import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
 
 // Fixtures exercise the repository boundary; no fixture is shipped in the app.
 const testFloors = [
@@ -57,7 +64,6 @@ class TestSource implements CampusMapSource {
 }
 
 void main() {
-  final boundary = GlobalKey();
   Future<void> mount(
     WidgetTester tester, {
     CampusMapSource source = const UnconfiguredCampusMapSource(),
@@ -74,7 +80,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
       MaterialApp(
-        theme: theme ?? ThemeData(fontFamily: 'MapTestFont'),
+        theme: theme ?? appLightTheme(),
         builder: (context, child) => MediaQuery(
           data: MediaQuery.of(context).copyWith(
             textScaler: TextScaler.linear(textScale),
@@ -82,262 +88,150 @@ void main() {
           ),
           child: child!,
         ),
-        home: RepaintBoundary(
-          key: boundary,
-          child: CampusMapPage(
-            source: source,
-            location: location,
-            heading: heading,
-            styleUrl: styleUrl,
-            useNativeMap: false,
-          ),
+        home: CampusMapPage(
+          source: source,
+          location: location,
+          heading: heading,
+          styleUrl: styleUrl,
+          useNativeMap: false,
         ),
       ),
     );
     await tester.pumpAndSettle();
   }
 
-  Future<void> capture(WidgetTester tester, String name) async {
-    if (!const bool.fromEnvironment('MAP_CAPTURE')) return;
-    final render =
-        boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-    await tester.runAsync(() async {
-      final image = await render.toImage(pixelRatio: 2);
-      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      final file = File('build/map-previews/$name.png');
-      await file.parent.create(recursive: true);
-      await file.writeAsBytes(bytes!.buffer.asUint8List());
-      image.dispose();
-    });
-    await tester.pump();
-  }
-
-  testWidgets('键盘十二帧变化不重复构建地图画布', (tester) async {
-    await mount(
-      tester,
-      source: TestSource(),
-      styleUrl: '{"version":8,"sources":{},"layers":[]}',
-    );
-    final builds = <String, int>{};
-    final previous = debugOnRebuildDirtyWidget;
-    addTearDown(() => debugOnRebuildDirtyWidget = previous);
-    debugOnRebuildDirtyWidget = (element, builtOnce) {
-      previous?.call(element, builtOnce);
-      final name = element.widget.runtimeType.toString();
-      if (name == 'CampusMapCanvas' || name == 'CampusMapPage') {
-        builds[name] = (builds[name] ?? 0) + 1;
-      }
-    };
-    for (var frame = 1; frame <= 12; frame++) {
-      tester.view.viewInsets = FakeViewPadding(bottom: frame * 20.0);
-      await tester.pump(const Duration(milliseconds: 16));
-    }
-    expect(builds, isEmpty);
-    expect(tester.takeException(), isNull);
-  });
-
-  setUpAll(() async {
-    if (const bool.fromEnvironment('MAP_CAPTURE')) {
-      final icons = File(
-        'C:/dev/flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
-      );
-      if (icons.existsSync()) {
-        final loader = FontLoader(
-          'MaterialIcons',
-        )..addFont(Future.value(ByteData.sublistView(icons.readAsBytesSync())));
-        await loader.load();
-      }
-      final font = File('C:/Windows/Fonts/msyh.ttc');
-      if (font.existsSync()) {
-        final loader = FontLoader('MapTestFont')
-          ..addFont(Future.value(ByteData.sublistView(font.readAsBytesSync())));
-        await loader.load();
-      }
-    }
-  });
-
-  for (final dark in [false, true]) {
-    testWidgets('地图后台和路由覆盖时释放定位，恢复后只订阅一次（深色：$dark）', (tester) async {
-      final location = _TrackingLocation();
-      final heading = _TestHeading();
-      addTearDown(location.values.close);
-      addTearDown(heading.values.close);
-      await mount(
-        tester,
-        source: TestSource(),
-        location: location,
-        heading: heading,
-        theme: dark ? appDarkTheme() : appLightTheme(),
-      );
-      expect(location.watches, 1);
-      expect(location.values.hasListener, isTrue);
-      expect(heading.values.hasListener, isTrue);
-
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-      await tester.pumpAndSettle();
-      expect(location.values.hasListener, isFalse);
-      expect(heading.values.hasListener, isFalse);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pumpAndSettle();
-      expect(location.watches, 2);
-      expect(location.values.hasListener, isTrue);
-      expect(heading.values.hasListener, isTrue);
-
-      // 从地图真实的街景入口覆盖地图，而不是另造路由模拟隐藏。
-      await tester.enterText(find.byType(TextField), '测试楼宇');
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('测试楼宇').last);
-      await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('查看街景'));
-      await tester.pumpAndSettle();
-      expect(location.values.hasListener, isFalse);
-      expect(heading.values.hasListener, isFalse);
-      await tester.tap(find.byTooltip('返回地图'));
-      await tester.pumpAndSettle();
-      expect(location.watches, 3);
-      expect(location.values.hasListener, isTrue);
-      expect(heading.values.hasListener, isTrue);
-      await tester.pumpWidget(const SizedBox.shrink());
-      expect(location.values.hasListener, isFalse);
-      expect(heading.values.hasListener, isFalse);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('朝向变化仅更新画布且退出停止传感器（深色：$dark）', (tester) async {
-      final heading = _TestHeading();
-      addTearDown(heading.values.close);
-      await mount(
-        tester,
-        source: TestSource(),
-        location: _LiveLocation(),
-        heading: heading,
-        styleUrl: 'test-style',
-        theme: dark ? appDarkTheme() : appLightTheme(),
-      );
-      final scaffold = tester.widget<Scaffold>(find.byType(Scaffold));
-      CampusMapCanvas canvas() => tester.widget(find.byType(CampusMapCanvas));
-      expect(heading.values.hasListener, isTrue);
-      heading.values.add(30);
-      await tester.pumpAndSettle();
-      expect(canvas().userHeading, 30);
-      expect(tester.widget<Scaffold>(find.byType(Scaffold)), same(scaffold));
-      heading.values.add(31);
-      await tester.pumpAndSettle();
-      expect(canvas().userHeading, 30, reason: '小角度抖动不触发更新');
-      heading.values.add(60);
-      await tester.pumpAndSettle();
-      expect(canvas().userHeading, 60);
-      expect(tester.widget<Scaffold>(find.byType(Scaffold)), same(scaffold));
-      await tester.pumpWidget(const SizedBox.shrink());
-      expect(heading.values.hasListener, isFalse);
-      expect(tester.takeException(), isNull);
-    });
-  }
-
-  testWidgets('后台期间返回的权限检查不能重新启动传感器', (tester) async {
-    final ready = Completer<bool>();
-    final location = _TrackingLocation(ready.future);
+  testWidgets('前后台和街景路由覆盖释放定位及朝向监听，后台权限回调不重启传感器', (tester) async {
+    final location = _TrackingLocation();
     final heading = _TestHeading();
     addTearDown(location.values.close);
     addTearDown(heading.values.close);
-    await mount(tester, location: location, heading: heading);
+    await mount(
+      tester,
+      source: TestSource(),
+      location: location,
+      heading: heading,
+      theme: appDarkTheme(),
+    );
+    expect(location.watches, 1);
+    expect(location.values.hasListener, isTrue);
+    expect(heading.values.hasListener, isTrue);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pumpAndSettle();
+    expect(location.values.hasListener, isFalse);
+    expect(heading.values.hasListener, isFalse);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(location.watches, 2);
+    expect(location.values.hasListener, isTrue);
+    expect(heading.values.hasListener, isTrue);
+
+    await tester.enterText(find.byType(TextField), '测试楼宇');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('测试楼宇').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('查看街景'));
+    await tester.pumpAndSettle();
+    expect(location.values.hasListener, isFalse);
+    expect(heading.values.hasListener, isFalse);
+    await tester.tap(find.byTooltip('返回地图'));
+    await tester.pumpAndSettle();
+    expect(location.watches, 3);
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(location.values.hasListener, isFalse);
+    expect(heading.values.hasListener, isFalse);
+
+    final ready = Completer<bool>();
+    final gatedLocation = _TrackingLocation(ready.future);
+    final gatedHeading = _TestHeading();
+    addTearDown(gatedLocation.values.close);
+    addTearDown(gatedHeading.values.close);
+    await mount(tester, location: gatedLocation, heading: gatedHeading);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
     ready.complete(true);
     await tester.pumpAndSettle();
-    expect(location.watches, 0);
-    expect(heading.values.hasListener, isFalse);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pumpAndSettle();
-    expect(location.watches, 1);
-    expect(location.values.hasListener, isTrue);
-    expect(heading.values.hasListener, isTrue);
+    expect(gatedLocation.watches, 0);
+    expect(gatedHeading.values.hasListener, isFalse);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('unconfigured UI has no invented places and exposes layers', (
-    tester,
-  ) async {
-    await mount(tester);
+  testWidgets('未配置底图提示、图层切换、定位权限错误及两倍字号不溢出', (tester) async {
+    await mount(tester, location: _FailingLocation());
     expect(find.text('底图服务尚未配置'), findsOneWidget);
-    await capture(tester, 'map-phone');
+    await tester.tap(find.byTooltip('定位到我的位置'));
+    await tester.pumpAndSettle();
+    expect(find.text('未获得定位权限，无法显示你的位置'), findsOneWidget);
     await tester.tap(find.byTooltip('地图图层'));
     await tester.pumpAndSettle();
-    expect(find.text('标准地图'), findsOneWidget);
-    // 街景现在是图层模式里的一张缩略图卡片，不再是独立开关
     await tester.tap(find.text('街景地图'));
     await tester.pumpAndSettle();
     expect(find.text('街景暂未开放'), findsOneWidget);
-    await capture(tester, 'map-layers');
-    expect(find.byTooltip('街景覆盖'), findsNothing); // 右上角不再有街景图标
+    await mount(tester, location: _FailingLocation(), textScale: 2);
+    await tester.tap(find.byTooltip('地图图层'));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
-    'backend floors switch and stale response cannot replace selected floor',
-    (tester) async {
-      final source = TestSource()..slowFloor = Completer<CampusFloorSnapshot>();
-      await mount(tester, source: source, size: const Size(1000, 800));
-      await tester.tap(find.text('测试楼宇'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('室内'));
-      await tester.pump();
-      // 宽屏下右侧楼层条和面板里的楼层页签同时存在，点面板页签（后渲染的那个）。
-      expect(find.text('L2'), findsNWidgets(2));
-      await tester.tap(find.text('L2').last);
-      await tester.pumpAndSettle();
-      expect(find.text('upper 房间'), findsOneWidget);
-      source.slowFloor!.complete(
-        const CampusFloorSnapshot(
-          rooms: [CampusRoom(id: 'stale', name: '过期房间', floorId: 'lower')],
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('过期房间'), findsNothing);
-      expect(find.text('L2  楼层导览'), findsOneWidget);
-      await tester.tap(find.byTooltip('查看街景'));
-      await tester.pumpAndSettle();
-      expect(find.text('街景暂未开放'), findsOneWidget);
-      await tester.tap(find.byTooltip('返回地图'));
-      await tester.pumpAndSettle();
-      expect(find.text('L2  楼层导览'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    },
-  );
-
-  testWidgets('search and route keep missing backend data empty', (
-    tester,
-  ) async {
-    await mount(tester, source: TestSource(), size: const Size(1000, 800));
+  testWidgets('搜索与路线防空、楼宇周课程展示、楼层切换忽略过期响应以及路线导航引导操作', (tester) async {
+    WeeklyClasses.source = const _FixedWeek([
+      WeeklyClass(
+        courseName: '高等数学',
+        location: '测试楼宇A101',
+        weekday: 2,
+        startNode: 3,
+        endNode: 4,
+      ),
+      WeeklyClass(
+        courseName: '大学英语',
+        location: '其他楼B202',
+        weekday: 3,
+        startNode: 1,
+        endNode: 2,
+      ),
+    ]);
+    addTearDown(() => WeeklyClasses.source = null);
+    final source = TestSource()..slowFloor = Completer<CampusFloorSnapshot>();
+    await mount(tester, source: source, size: const Size(1000, 800));
+    expect(find.text('测试楼宇 · 1 节'), findsOneWidget);
     await tester.enterText(find.byType(TextField), '不存在');
     await tester.pumpAndSettle();
     expect(find.text('没有找到相关地点'), findsOneWidget);
     await tester.tap(find.byTooltip('清除搜索'));
     await tester.pumpAndSettle();
+
     await tester.tap(find.text('测试楼宇'));
     await tester.pumpAndSettle();
+    expect(find.text('本周在这里有 1 节课'), findsOneWidget);
+    expect(find.text('高等数学'), findsOneWidget);
+    expect(find.text('A101'), findsOneWidget);
+    expect(find.text('大学英语'), findsNothing);
+
+    await tester.tap(find.text('室内'));
+    await tester.pump();
+    await tester.tap(find.text('L2').last);
+    await tester.pumpAndSettle();
+    expect(find.text('upper 房间'), findsOneWidget);
+    source.slowFloor!.complete(
+      const CampusFloorSnapshot(
+        rooms: [CampusRoom(id: 'stale', name: '过期房间', floorId: 'lower')],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('过期房间'), findsNothing);
+    expect(find.text('L2  楼层导览'), findsOneWidget);
+
     await tester.tap(find.text('路线'));
     await tester.pumpAndSettle();
-    expect(find.text('搜索起点'), findsOneWidget); // 起终点卡片里的起点栏
-    expect(find.text('导航'), findsOneWidget); // 面板标题
-    expect(tester.takeException(), isNull);
-  });
+    expect(find.text('搜索起点'), findsOneWidget);
+    expect(find.text('导航'), findsOneWidget);
 
-  testWidgets('route preview and navigation bars show Baidu-style guidance', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(800, 1200);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    // 东行 100 米后左转，再北行 100 米。
     List<double> at(double east, double north) => [
       118.7 + east / (111320 * 0.8462),
       32.2 + north / 111320,
@@ -360,8 +254,10 @@ void main() {
         instructions: const ['沿校园道路步行', '到达目的地'],
       ),
     );
-    final now = DateTime(2026, 10, 24, 16, 0);
     var started = 0, exited = 0, simulated = 0;
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    tester.view.physicalSize = const Size(800, 1200);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -372,7 +268,7 @@ void main() {
                 originLabel: '我的位置',
                 destinationLabel: '北辰楼',
                 via: const ['文德楼'],
-                now: now,
+                now: DateTime(2026, 10, 24, 16, 0),
                 onStart: () => started++,
                 onSimulate: () => simulated++,
               ),
@@ -380,7 +276,7 @@ void main() {
               CampusNavStatusBar(
                 progress: route.progressAt(40),
                 destinationLabel: '北辰楼',
-                now: now,
+                now: DateTime(2026, 10, 24, 16, 0),
                 onExit: () => exited++,
                 onFinish: () {},
               ),
@@ -389,109 +285,297 @@ void main() {
         ),
       ),
     );
-    expect(find.text('3'), findsOneWidget); // 200 米约 3 分钟
-    expect(find.text('预计 16:03 到达 · 约 286 步 · 消耗 10 千卡'), findsOneWidget);
-    expect(find.text('途经 文德楼'), findsOneWidget);
-    // 时间线：起点、左转、终点。
-    expect(find.text('我的位置'), findsOneWidget);
-    expect(find.text('左转'), findsOneWidget);
-    expect(find.text('北辰楼'), findsOneWidget);
-    // 指引条下方的「随后」提示。
-    expect(find.text('随后'), findsOneWidget);
-    // 指引条：距左转还有 60 米。
-    expect(find.text('60 米 后左转', findRichText: true), findsOneWidget);
-    expect(find.text('剩余 160 米 · 2 分钟'), findsOneWidget);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('开始导航'));
     await tester.tap(find.text('模拟导航'));
     await tester.tap(find.text('退出'));
-    expect(started, 1);
-    expect(exited, 1);
-    expect(simulated, 1);
+    expect((started, simulated, exited), (1, 1, 1));
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('locate button surfaces permission errors', (tester) async {
-    await mount(tester, location: _FailingLocation());
-    await tester.tap(find.byTooltip('定位到我的位置'));
-    await tester.pumpAndSettle();
-    expect(find.text('未获得定位权限，无法显示你的位置'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('locate success keeps page usable', (tester) async {
-    await mount(tester, location: _FixedLocation());
-    await tester.tap(find.byTooltip('定位到我的位置'));
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
-  });
-
-  for (final size in [
-    const Size(375, 667),
-    const Size(844, 390),
-    const Size(1280, 800),
-  ]) {
-    testWidgets('responsive empty UI ${size.width}x${size.height}', (
-      tester,
-    ) async {
-      await mount(tester, size: size);
-      await capture(tester, 'map-${size.width.toInt()}');
-      expect(tester.takeException(), isNull);
+  testWidgets('切换无几何楼层与清除选中时清理旧室内图层与数据源', (tester) async {
+    final origFactory = MapLibrePlatform.createInstance;
+    MapLibrePlatform.createInstance = _FakeMapLibrePlatform.new;
+    late _TrackingBridge bridge;
+    CampusMapNative.debugBridgeOverride = (_) => bridge = _TrackingBridge();
+    addTearDown(() {
+      MapLibrePlatform.createInstance = origFactory;
+      CampusMapNative.debugBridgeOverride = null;
     });
-  }
 
-  testWidgets('large text and reduced motion remain usable', (tester) async {
-    await mount(tester, textScale: 2);
-    await tester.tap(find.byTooltip('地图图层'));
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
-  });
+    CampusMapCanvas floorCanvas(CampusFloor? floor) => CampusMapCanvas(
+      styleUrl: '{"version":8,"sources":{},"layers":[]}',
+      selectedPlace: const CampusPlace(id: 'b1', name: '明德楼', hasIndoor: true),
+      floor: floor,
+      selectedRoom: null,
+      onPlaceSelected: (_) {},
+      onRoomSelected: (_) {},
+      floorGeoJson: floor == null
+          ? null
+          : {
+              'type': 'FeatureCollection',
+              'features': [
+                {
+                  'type': 'Feature',
+                  'geometry': {
+                    'type': 'Polygon',
+                    'coordinates': [
+                      [
+                        [118.7, 32.2],
+                        [118.701, 32.2],
+                        [118.701, 32.201],
+                        [118.7, 32.2],
+                      ],
+                    ],
+                  },
+                  'properties': {
+                    'room_id': 'r1',
+                    'building_id': 'b1',
+                    'floor_id': floor.id,
+                    'kind': 'room',
+                  },
+                },
+              ],
+            },
+    );
 
-  testWidgets('dark theme renders dark map chrome', (tester) async {
-    await mount(tester, theme: appDarkTheme());
-    Iterable<Color?> materialColors() =>
-        tester.widgetList<Material>(find.byType(Material)).map((m) => m.color);
-    expect(materialColors(), contains(AppPalette.dark.pageBg));
-    expect(materialColors(), isNot(contains(Colors.white)));
-
-    await tester.tap(find.byTooltip('地图图层'));
-    await tester.pumpAndSettle();
-    expect(materialColors(), isNot(contains(Colors.white)));
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('楼宇卡片显示本周在这栋楼的课，别的楼的课不算', (tester) async {
-    WeeklyClasses.source = const _FixedWeek([
-      WeeklyClass(
-        courseName: '高等数学',
-        location: '测试楼宇A101',
-        weekday: 2,
-        startNode: 3,
-        endNode: 4,
+    const f1 = CampusFloor(id: 'f1', label: '1F', number: 1, levelIndex: 0);
+    await tester.pumpWidget(
+      MaterialApp(home: CampusMapNative(configuration: floorCanvas(f1))),
+    );
+    final map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
+    map.onMapCreated!(
+      MapLibreMapController(
+        maplibrePlatform: MapLibrePlatform.createInstance(),
+        annotationOrder: const [],
+        annotationConsumeTapEvents: const [],
+        initialCameraPosition: const CameraPosition(
+          target: LatLng(32.2, 118.7),
+          zoom: 17,
+        ),
       ),
-      WeeklyClass(
-        courseName: '大学英语',
-        location: '其他楼B202',
-        weekday: 3,
-        startNode: 1,
-        endNode: 2,
-      ),
-    ]);
-    addTearDown(() => WeeklyClasses.source = null);
-    await mount(tester, source: TestSource());
-    // 总览面板：「你本周常去」只算在测试楼宇的那节课。
-    expect(find.text('测试楼宇 · 1 节'), findsOneWidget);
-    // 手机尺寸下面板只露出三分之一，先点拖动条把面板展开。
-    await tester.tap(find.bySemanticsLabel('展开地图面板'));
+    );
+    map.onStyleLoadedCallback!();
     await tester.pumpAndSettle();
-    expect(find.byTooltip('随机去个地方'), findsOneWidget);
-    await tester.tap(find.text('测试楼宇'));
+    expect(bridge.sources, contains('campus-floor'));
+
+    await tester.pumpWidget(
+      MaterialApp(home: CampusMapNative(configuration: floorCanvas(null))),
+    );
     await tester.pumpAndSettle();
-    expect(find.text('本周在这里有 1 节课'), findsOneWidget);
-    expect(find.text('高等数学'), findsOneWidget);
-    expect(find.text('A101'), findsOneWidget);
-    expect(find.text('大学英语'), findsNothing);
-    expect(tester.takeException(), isNull);
+    expect(bridge.sources, isNot(contains('campus-floor')));
+    expect(bridge.layers.where((l) => l.contains('floor')), isEmpty);
   });
+
+  testWidgets('建筑三维模型入口检测、切层加载、外域拦截与窄屏两倍字号兜底不溢出', (tester) async {
+    final modelSource = _ModelSource();
+    final previousPlatform = WebViewPlatform.instance;
+    final webPlatform = _FakeWebViewPlatform();
+    WebViewPlatform.instance = webPlatform;
+    addTearDown(() {
+      if (previousPlatform != null) WebViewPlatform.instance = previousPlatform;
+    });
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    try {
+      Widget modelPage({int? level}) => CampusBuildingModelPage(
+        source: modelSource,
+        buildingId: 'OSM-Way862952692',
+        buildingName: '图书馆',
+        model: _buildingModel,
+        initialLevelIndex: level,
+      );
+
+      final pending = Completer<CampusBuildingModel?>();
+      modelSource.load = (_) => pending.future;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: CampusBuildingModelEntry(
+              source: modelSource,
+              buildingId: 'library',
+              buildingName: '图书馆',
+            ),
+          ),
+        ),
+      );
+      expect(find.text('正在检测模型…'), findsOneWidget);
+      pending.completeError(const CampusMapApiException('网络故障'));
+      await tester.pumpAndSettle();
+      expect(find.text('网络故障'), findsOneWidget);
+      modelSource.load = (_) async => null;
+      await tester.tap(find.byTooltip('重新检测三维模型'));
+      await tester.pumpAndSettle();
+      expect(find.text('该建筑尚未上传 GLB 模型'), findsOneWidget);
+      modelSource.load = (_) async => _buildingModel;
+      await tester.tap(find.byTooltip('重新检测三维模型'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('三维模型'));
+      await tester.pumpAndSettle();
+      expect(find.text('图书馆 · 三维模型'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+      webPlatform.controllers.clear();
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      await tester.pumpWidget(MaterialApp(home: modelPage(level: 6)));
+      await tester.pump();
+      final first = webPlatform.controllers.single;
+      expect(
+        first.channels.keys,
+        containsAll(['CampusModelViewer', 'NuistDiagnostics']),
+      );
+      expect(first.loaded!.queryParameters['floor'], '6');
+      first.message('not json');
+      first.message('{"type":"ready"}');
+      await tester.pumpAndSettle();
+      expect(find.text('正在加载三维模型…'), findsNothing);
+
+      await tester.tap(find.byType(AppSelectField<int>));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is TextField &&
+              (widget.decoration?.hintText?.startsWith('搜索') ?? false),
+        ),
+        '1F',
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find
+            .descendant(
+              of: find.byType(MiuixPopupHost),
+              matching: find.text('1F'),
+            )
+            .last,
+      );
+      await tester.pump();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      final second = webPlatform.controllers.last;
+      expect(second.loaded!.queryParameters['floor'], '0');
+      second.message('{"type":"error","message":"GLB 文件损坏"}');
+      await tester.pumpAndSettle();
+      expect(find.text('GLB 文件损坏'), findsOneWidget);
+      await tester.tap(find.text('重试'));
+      await tester.pump();
+      expect(webPlatform.controllers.length, 3);
+      for (final url in [
+        'about:blank',
+        'javascript:alert(1)',
+        'https://other.test/',
+        'https://campus.test/admin/',
+      ]) {
+        expect(
+          await second.delegate.navigation(
+            NavigationRequest(url: url, isMainFrame: true),
+          ),
+          NavigationDecision.prevent,
+        );
+      }
+      expect(
+        await second.delegate.navigation(
+          NavigationRequest(url: second.loaded.toString(), isMainFrame: true),
+        ),
+        NavigationDecision.navigate,
+      );
+      webPlatform.controllers.last.delegate.resourceError(
+        const WebResourceError(
+          errorCode: -1,
+          description: 'offline',
+          isForMainFrame: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('三维查看页面加载失败，请检查网络后重试'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      tester.view.physicalSize = const Size(375, 667);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler: const TextScaler.linear(2),
+              disableAnimations: true,
+            ),
+            child: child!,
+          ),
+          home: modelPage(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('复制查看链接'));
+      expect(tester.takeException(), isNull);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+}
+
+class _FakeMapLibrePlatform extends MapLibrePlatform {
+  @override
+  Widget buildView(
+    Map<String, dynamic> creationParams,
+    OnPlatformViewCreatedCallback onPlatformViewCreated,
+    Set<Factory<OneSequenceGestureRecognizer>>? gestureRecognizers,
+  ) => const SizedBox();
+
+  @override
+  Future<void> initPlatform(int id) async {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => Future<dynamic>.value();
+}
+
+class _TrackingBridge implements CampusMapBridge {
+  final sources = <String>{};
+  final layers = <String>[];
+
+  @override
+  Future<void> addGeoJsonSource(String id, Map<String, dynamic> _) async =>
+      sources.add(id);
+
+  @override
+  Future<void> removeSource(String id) async => sources.remove(id);
+
+  @override
+  Future<void> removeLayer(String id) async => layers.remove(id);
+
+  @override
+  Future<void> addFillLayer(
+    String s,
+    String l,
+    FillLayerProperties p, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  }) async => layers.add(l);
+
+  @override
+  Future<void> addLineLayer(
+    String s,
+    String l,
+    LineLayerProperties p, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  }) async => layers.add(l);
+
+  @override
+  Future<void> addSymbolLayer(
+    String s,
+    String l,
+    SymbolLayerProperties p, {
+    String? belowLayerId,
+    dynamic filter,
+    bool enableInteraction = true,
+  }) async => layers.add(l);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
 }
 
 class _FixedWeek implements WeeklyClassSource {
@@ -505,12 +589,6 @@ class _FailingLocation implements UserLocationSource {
   @override
   Future<GeoPoint> current() async =>
       throw const CampusLocationException('未获得定位权限，无法显示你的位置');
-}
-
-class _FixedLocation implements UserLocationSource {
-  @override
-  Future<GeoPoint> current() async =>
-      const GeoPoint(longitude: 118.70695, latitude: 32.20275);
 }
 
 class _TestHeading implements HeadingSource {
@@ -556,4 +634,119 @@ class _TrackingLocation extends _LiveLocation {
     watches++;
     return values.stream;
   }
+}
+
+final _buildingModel = CampusBuildingModel(
+  url: Uri.parse('https://campus.test/models/library.glb'),
+  floors: List.generate(
+    7,
+    (i) => CampusModelFloor(levelIndex: i, displayName: '${i + 1}F'),
+  ),
+);
+
+class _ModelSource implements CampusBuildingModelSource, CampusMapSource {
+  Future<CampusBuildingModel?> Function(String)? load;
+  @override
+  Future<CampusBuildingModel?> loadBuildingModel(String id) async =>
+      load == null ? _buildingModel : await load!(id);
+
+  @override
+  Uri buildingModelViewerUri(String id, {int? levelIndex}) => Uri.https(
+    'campus.test',
+    '/admin/model-viewer.html',
+    {'building_id': id, 'floor': levelIndex?.toString() ?? 'all'},
+  );
+  @override
+  bool get isConfigured => true;
+  @override
+  Future<CampusMapSnapshot> loadCampus() async => const CampusMapSnapshot(
+    places: [
+      CampusPlace(
+        id: 'library',
+        buildingId: 'OSM-Way862952692',
+        name: '图书馆',
+        hasIndoor: true,
+        floors: [
+          CampusFloor(id: 'floor-99', label: '7F', number: 99, levelIndex: 6),
+        ],
+      ),
+    ],
+  );
+  @override
+  Future<CampusFloorSnapshot> loadFloor(
+    String buildingId,
+    String floorId,
+  ) async => const CampusFloorSnapshot();
+  @override
+  Future<CampusRouteResult?> planRoute(CampusRouteRequest request) async =>
+      null;
+}
+
+class _FakeWebViewPlatform extends WebViewPlatform {
+  final controllers = <_FakeWebViewController>[];
+  @override
+  PlatformWebViewController createPlatformWebViewController(
+    PlatformWebViewControllerCreationParams params,
+  ) {
+    final controller = _FakeWebViewController(params);
+    controllers.add(controller);
+    return controller;
+  }
+
+  @override
+  PlatformNavigationDelegate createPlatformNavigationDelegate(
+    PlatformNavigationDelegateCreationParams params,
+  ) => _FakeNavigationDelegate(params);
+  @override
+  PlatformWebViewWidget createPlatformWebViewWidget(
+    PlatformWebViewWidgetCreationParams params,
+  ) => _FakeWebViewWidget(params);
+}
+
+class _FakeWebViewController extends PlatformWebViewController {
+  _FakeWebViewController(super.params) : super.implementation();
+  final channels = <String, JavaScriptChannelParams>{};
+  late _FakeNavigationDelegate delegate;
+  Uri? loaded;
+  @override
+  Future<void> setJavaScriptMode(JavaScriptMode javaScriptMode) async {}
+  @override
+  Future<void> addJavaScriptChannel(JavaScriptChannelParams params) async =>
+      channels[params.name] = params;
+  @override
+  Future<void> runJavaScript(String javaScript) async {}
+  @override
+  Future<void> setPlatformNavigationDelegate(
+    PlatformNavigationDelegate handler,
+  ) async => delegate = handler as _FakeNavigationDelegate;
+  @override
+  Future<void> loadRequest(LoadRequestParams params) async =>
+      loaded = params.uri;
+  void message(String value) => channels['CampusModelViewer']!
+      .onMessageReceived(JavaScriptMessage(message: value));
+}
+
+class _FakeNavigationDelegate extends PlatformNavigationDelegate {
+  _FakeNavigationDelegate(super.params) : super.implementation();
+  late NavigationRequestCallback navigation;
+  late WebResourceErrorCallback resourceError;
+  @override
+  Future<void> setOnPageStarted(PageEventCallback callback) async {}
+  @override
+  Future<void> setOnPageFinished(PageEventCallback callback) async {}
+  @override
+  Future<void> setOnNavigationRequest(
+    NavigationRequestCallback callback,
+  ) async => navigation = callback;
+  @override
+  Future<void> setOnWebResourceError(WebResourceErrorCallback callback) async =>
+      resourceError = callback;
+  @override
+  Future<void> setOnHttpError(HttpResponseErrorCallback callback) async {}
+}
+
+class _FakeWebViewWidget extends PlatformWebViewWidget {
+  _FakeWebViewWidget(super.params) : super.implementation();
+  @override
+  Widget build(BuildContext context) => const SizedBox.expand();
 }

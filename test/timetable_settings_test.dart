@@ -1,895 +1,830 @@
-// 设置页 v0.4 卡片版、格子接设置、B/C 配色（spec §13.3–§13.7；用例 23 章 ST、CA16）。
-// 全部为构造数据。
+import 'dart:convert';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nuist_sta_app/core/ui/miuix_dialog.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_colors.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_settings_page.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_color.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_grid.dart';
-
-final _c = TimetableController.instance;
-
-double _lum(Color c) {
-  double ch(double v) =>
-      v <= 0.03928 ? v / 12.92 : math.pow((v + 0.055) / 1.055, 2.4).toDouble();
-  return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
-}
-
-double _contrast(Color a, Color b) {
-  final la = _lum(a), lb = _lum(b);
-  final hi = math.max(la, lb), lo = math.min(la, lb);
-  return (hi + 0.05) / (lo + 0.05);
-}
-
-Color _hex(String h) => Color(int.parse('FF$h', radix: 16));
-
-/// 找一个哈希色号为 [hash] 且大于 [after] 的「测试课…」课名（构造用，确定性）。
-String _nameWithHash(int hash, {String after = ''}) {
-  for (var i = 0; i < 100000; i++) {
-    final n = '测试课$i';
-    if (courseColorIndexForName(n) == hash && n.compareTo(after) > 0) return n;
-  }
-  throw StateError('no name');
-}
-
-Course _course(
-  String id,
-  String name, {
-  int day = 1,
-  int start = 1,
-  int? colorIndex,
-}) => Course(
-  id: id,
-  name: name,
-  colorIndex: colorIndex,
-  slots: [
-    CourseSlot(
-      day: day,
-      startNode: start,
-      endNode: start + 1,
-      weeks: '1' * 16,
-      location: '测试楼A101',
-      teacher: '教师A',
-    ),
-  ],
-);
-
-/// [dir] 下所有文件的 路径 → (内容, 修改时间)，用来断言「打开页面不回写」。
-Map<String, (String, DateTime)> _filesIn(Directory dir) => {
-  for (final f in dir.listSync(recursive: true).whereType<File>())
-    f.path: (f.readAsStringSync(), f.lastModifiedSync()),
-};
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_layout.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_widget_layout.dart';
 
 void main() {
-  late Directory tmp;
+  group('v0.4 设置默认值与宽松读取', () {
+    test('默认值与非法/未知类型回落（§13.3/§13.6）', () {
+      const s = TimetableSettings();
+      expect(s.showLocation, isTrue);
+      expect(s.showTeacher, isFalse);
+      expect(s.fontScale, CellFontScale.standard);
+      expect(s.fontScale.factor, 1.0);
+      expect(s.cellOpacity, 100);
+      expect(s.paletteScheme, 'A');
+      expect(s.weekStartsSunday, isFalse);
+      expect(s.showTomorrowOnHome, isTrue);
+      expect(s.reminderEnabled, isFalse);
+      expect(s.reminderLeadMinutes, 15);
+      expect(TimetableSettings.fromJson(const {}).toJson(), s.toJson());
 
-  void load({TimetableSettings? settings, List<Course> manual = const []}) {
-    _c.debugSetSnapshot(
-      TimetableSnapshot(
-        periods: TimetableController.defaultPeriods(),
-        settings:
-            settings ?? TimetableSettings(termStartDate: DateTime(2026, 8, 31)),
-      ),
-      viewingWeek: 7,
-      manualCourses: manual,
-    );
-  }
+      final bad = TimetableSettings.fromJson({
+        'fontScale': 'huge',
+        'paletteScheme': 'D',
+        'showLocation': 'no',
+        'showTeacher': 1,
+        'showTomorrowOnHome': null,
+        'reminderEnabled': 'true',
+        'weekStartsOnMonday': 'nope',
+      });
+      expect(bad.fontScale, CellFontScale.standard);
+      expect(bad.paletteScheme, 'A');
+      expect(bad.showLocation, isTrue);
+      expect(bad.showTeacher, isFalse);
+      expect(bad.showTomorrowOnHome, isTrue);
+      expect(bad.reminderEnabled, isFalse);
+      expect(bad.weekStartsSunday, isFalse);
 
-  setUp(() {
-    tmp = Directory.systemTemp.createTempSync('tt_settings_v2');
-    TimetableStore.debugDirectory = tmp;
-    _c.debugReset();
-    load();
-  });
-
-  tearDown(() {
-    TimetableStore.debugDirectory = null;
-    _c.debugReset();
-    if (tmp.existsSync()) tmp.deleteSync(recursive: true);
-  });
-
-  Future<void> settleIo(WidgetTester tester) async {
-    for (var i = 0; i < 20; i++) {
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 20)),
-      );
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-  }
-
-  Future<void> pumpPage(WidgetTester tester, Widget body) async {
-    // 提醒 + 小组件卡片打开后页面变长：拉高视口让懒加载列表全部建出来。
-    tester.view.physicalSize = const Size(1080, 6000);
-    tester.view.devicePixelRatio = 2.625;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      MaterialApp(home: MiuixPopupHostScope(child: body)),
-    );
-    await tester.pump();
-  }
-
-  bool switchValue(WidgetTester tester, String key) => tester
-      .widget<Switch>(
-        find.descendant(
-          of: find.byKey(Key(key)),
-          matching: find.byType(Switch),
-        ),
-      )
-      .value;
-
-  Future<void> pumpAppearance(WidgetTester tester) async {
-    tester.view.physicalSize = const Size(1080, 6000);
-    tester.view.devicePixelRatio = 2.625;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      MaterialApp(
-        home: MiuixPopupHostScope(
-          child: TimetableAppearancePage(controller: _c),
-        ),
-      ),
-    );
-    await tester.pump();
-  }
-
-  Future<void> reveal(WidgetTester tester, Key key) async {
-    final f = find.byKey(key, skipOffstage: false);
-    await tester.scrollUntilVisible(
-      f,
-      300,
-      scrollable: find.descendant(
-        of: find.byType(ListView),
-        matching: find.byType(Scrollable),
-      ),
-    );
-    await tester.pumpAndSettle();
-  }
-
-  bool chipSelected(WidgetTester tester, String groupKey, String label) =>
-      tester
-          .widget<Semantics>(
-            find
-                .ancestor(
-                  of: find.descendant(
-                    of: find.byKey(Key(groupKey)),
-                    matching: find.byKey(ValueKey('seg_$label')),
-                  ),
-                  matching: find.byType(Semantics),
-                )
-                .first,
-          )
-          .properties
-          .selected!;
-
-  group('设置页', () {
-    testWidgets('ST01 默认值', (tester) async {
-      await pumpAppearance(tester);
-      await reveal(tester, const Key('tt_settings_show_location'));
-      expect(switchValue(tester, 'tt_settings_show_location'), isTrue);
-      expect(switchValue(tester, 'tt_settings_show_teacher'), isFalse);
-      await reveal(tester, const Key('tt_settings_font_scale'));
-      expect(chipSelected(tester, 'tt_settings_font_scale', '标准'), isTrue);
-      // 一周起始改为 trailing + 弹窗，默认周一。
-      await reveal(tester, const Key('tt_settings_week_start'));
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('tt_settings_week_start')),
-          matching: find.text('周一'),
-        ),
-        findsOneWidget,
-      );
-      await reveal(tester, const Key('tt_settings_opacity'));
-      expect(
-        tester
-            .widget<Text>(find.byKey(const Key('tt_settings_opacity_value')))
-            .data,
-        '100%',
-      );
-      // A/B/C 入口已隐藏（ST19）；默认方案仍为 A（存储）。
-      expect(find.text('A 柔和'), findsNothing);
-      expect(_c.settings.paletteScheme, 'A');
-      await pumpPage(
-        tester,
-        TimetableSettingsPage(controller: _c, showReminderCard: true),
-      );
-      expect(switchValue(tester, 'tt_settings_reminder'), isFalse);
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('tt_settings_reminder_lead')),
-          matching: find.text('15 分钟'),
-        ),
-        findsOneWidget,
-      );
-      expect(switchValue(tester, 'tt_settings_show_tomorrow'), isTrue);
-      expect(_c.settings.periodHeight, 64);
-      // 提醒关着时「提前时间」整行置灰不可点。
-      await tester.tap(
-        find.byKey(const Key('tt_settings_reminder_lead')),
-        warnIfMissed: false,
-      );
-      await settleIo(tester);
-      expect(_c.settings.reminderLeadMinutes, 15);
+      final ok = TimetableSettings.fromJson({
+        'fontScale': 'large',
+        'paletteScheme': 'C',
+        'showTeacher': true,
+        'weekStartsOnMonday': false,
+        'reminderLeadMinutes': 30,
+      });
+      expect(ok.fontScale, CellFontScale.large);
+      expect(ok.paletteScheme, 'C');
+      expect(ok.showTeacher, isTrue);
+      expect(ok.weekStartsSunday, isTrue);
+      expect(ok.reminderLeadMinutes, 30);
     });
 
-    testWidgets('ST02 设置重组并保留明日提醒、顺序、组内行', (tester) async {
-      await pumpPage(
-        tester,
-        TimetableSettingsPage(controller: _c, showReminderCard: true),
+    test('4×6 设置与周末继承：保留 v1 偏好、仅未单独设置时继承外观、跨课表合并', () {
+      const s = TimetableSettings();
+      expect(s.widgetWeekCellHeight, 34);
+      expect(s.widgetWeekFontSize, 10);
+      expect(s.widgetWeekOpacity, 100);
+      expect(s.widgetWeekWidgetOpacity, 100);
+      expect(s.widgetWeekCompactRows, isTrue);
+      expect(s.widgetWeekShowWeekend, isTrue);
+      expect(TimetableSettings.sanitizeWeekCellHeight(20), 24);
+      expect(TimetableSettings.sanitizeWeekCellHeight(80), 64);
+      expect(TimetableSettings.sanitizeWeekCellHeight(34.6), 35);
+      expect(TimetableSettings.sanitizeWeekCellHeight('40'), 34);
+      expect(TimetableSettings.sanitizeWeekFontSize(8), 9);
+      expect(TimetableSettings.sanitizeWeekFontSize(16), 14);
+      expect(TimetableSettings.sanitizeWeekFontSize(12.4), 12);
+      expect(TimetableSettings.sanitizeWeekFontSize(null), 10);
+
+      final saved = s.copyWith(
+        widgetWeekCellHeight: 40,
+        widgetWeekFontSize: 12,
+        widgetWeekOpacity: 60,
+        widgetWeekWidgetOpacity: 80,
+        widgetWeekCompactRows: false,
+        widgetWeekShowWeekend: true,
       );
-      tester.view.physicalSize = const Size(1080, 6000);
-      await tester.pump();
-      // 两类提醒归入同组，管理和恢复操作独立分组。
-      final titles = [
-        '首页与桌面',
-        TtSettingsText.widgetCard,
-        TtSettingsText.reminderCard,
-        '课表管理',
-      ];
-      final ys = [
-        for (final t in titles) tester.getTopLeft(find.text(t).first).dy,
-      ];
-      for (var i = 1; i < ys.length; i++) {
-        expect(ys[i] > ys[i - 1], isTrue, reason: titles[i]);
-      }
-      Finder inGroup(String g, String text) => find.descendant(
-        of: find.byKey(Key('tt_settings_group_$g')),
-        matching: find.text(text),
-      );
-      expect(inGroup('home', TtSettingsText.homeMaxItems), findsOneWidget);
-      expect(inGroup('home', TtSettingsText.homeMaxExams), findsOneWidget);
-      expect(inGroup('home', '显示明天的课'), findsOneWidget);
-      for (final t in [
-        TtSettingsText.reminderSwitch,
-        TtSettingsText.reminderLead,
-        TtSettingsText.nextDayReminder,
-        TtSettingsText.nextDayTime,
+      final round = TimetableSettings.fromJson(saved.toJson());
+      expect(round.widgetWeekCellHeight, 40);
+      expect(round.widgetWeekFontSize, 12);
+      expect(round.widgetWeekOpacity, 60);
+      expect(round.widgetWeekWidgetOpacity, 80);
+      expect(round.widgetWeekCompactRows, isFalse);
+      expect(round.widgetWeekShowWeekend, isTrue);
+
+      final merged = const TimetableSettings(termCode: '2026-2027-1')
+          .withDisplayPrefsFrom(saved);
+      expect(merged.termCode, '2026-2027-1');
+      expect(merged.widgetWeekCellHeight, 40);
+      expect(merged.widgetWeekShowWeekend, isTrue);
+      expect(WeekWidgetPrefs.fromSettings(merged).toJson(), {
+        'opacity': 60,
+        'widgetOpacity': 80,
+        'showWeekend': true,
+        'showLocation': true,
+        'showTeacher': true,
+        'showPeriod': true,
+        'nodesPerDay': 11,
+        'weekStartsSunday': false,
+        'showGridLines': true,
+        'headerTextSize': 11,
+        'fontScale': 1,
+      });
+      final clamped = TimetableSettings.fromJson({
+        'widgetWeekCellHeight': 999,
+        'widgetWeekFontSize': -1,
+        'widgetWeekOpacity': 5,
+      });
+      expect(clamped.widgetWeekCellHeight, 64);
+      expect(clamped.widgetWeekFontSize, 9);
+      expect(clamped.widgetWeekOpacity, 30);
+
+      // 4×6 周末：未单独设置时继承 showSaturday && showSunday
+      for (final (sat, sun, override, expected) in [
+        (true, true, null, true),
+        (true, false, null, false),
+        (false, true, null, false),
+        (false, false, null, false),
+        (true, true, false, false),
+        (false, false, true, true),
       ]) {
-        expect(inGroup('reminder', t), findsOneWidget, reason: t);
-      }
-      expect(find.text('教务账号'), findsNothing);
-      expect(inGroup('management', '课表管理'), findsOneWidget);
-      expect(find.byKey(const Key('tt_settings_group_restore')), findsNothing);
-      expect(find.byKey(const Key('tt_settings_group_widget')), findsNothing);
-      // 周视图 / 考试 / 格子信息不得残留在设置首页；外观入口改成置顶的独立单行卡。
-      for (final g in ['display', 'appearance', 'exam']) {
+        final settings = TimetableSettings.fromJson({
+          'showSaturday': sat,
+          'showSunday': sun,
+          'widgetWeekShowWeekend': ?override,
+        });
+        expect(settings.widgetWeekShowWeekend, expected);
+        final json = settings.toJson();
+        expect(json.containsKey('widgetWeekShowWeekend'), override != null);
+        expect(json['widgetWeekShowWeekend'], override);
         expect(
-          find.byKey(Key('tt_settings_group_$g')),
-          findsNothing,
-          reason: g,
+          TimetableSettings.fromJson(json).widgetWeekShowWeekend,
+          expected,
         );
       }
-      final appearanceCard = find.byKey(
-        const Key('tt_settings_appearance_card'),
-      );
-      expect(appearanceCard, findsOneWidget);
       expect(
-        tester.getTopLeft(appearanceCard).dy,
-        lessThan(
-          tester.getTopLeft(find.byKey(const Key('tt_settings_group_home'))).dy,
-        ),
-      );
-      final appearanceEntry = find.byKey(
-        const Key('tt_settings_appearance_entry'),
-      );
-      expect(appearanceEntry, findsOneWidget);
-      // 无分组标题：整页只有行标题这一处「外观」；无副标题：行内只有一个 Text。
-      expect(find.text('外观'), findsOneWidget);
-      expect(
-        find.descendant(of: appearanceEntry, matching: find.byType(Text)),
-        findsOneWidget,
-      );
-      for (final t in ['深色模式', '网格线', '背景', '圆角', '开学', '当前周', '配色与预览']) {
-        expect(find.textContaining(t), findsNothing, reason: t);
-      }
-      // 正常字号的导航、开关、选择行统一为 56dp；卡片圆角保持 12。
-      expect(
-        tester
-            .getSize(find.byKey(const Key('tt_settings_show_tomorrow')))
-            .height,
-        52,
-      );
-      final card = tester.widget<Material>(
-        find
-            .descendant(
-              of: find.byKey(const Key('tt_settings_group_home')),
-              matching: find.byType(Material),
-            )
-            .first,
-      );
-      expect(card.borderRadius, BorderRadius.circular(12));
-      expect(card.color, Colors.white);
-      for (final text in ['放假期间也会提醒', '同步后的改动', '无']) {
-        expect(find.text(text), findsNothing);
-      }
-    });
-
-    testWidgets('ST02b 隐藏课前提醒及小组件卡片时：明日提醒仍显示，间距正常', (tester) async {
-      expect(kShowReminderSettings, isTrue);
-      await pumpPage(
-        tester,
-        TimetableSettingsPage(controller: _c, showReminderCard: false),
-      );
-      expect(find.text('放假期间也会提醒'), findsNothing);
-      expect(find.text('提前时间'), findsNothing);
-      for (final m in TimetableSettings.reminderLeadOptions) {
-        expect(find.text('$m 分钟'), findsNothing, reason: '$m');
-        expect(find.byKey(Key('tt_settings_lead_$m')), findsNothing);
-      }
-      for (final k in [
-        'tt_settings_reminder',
-        'tt_settings_reminder_hint',
-        'tt_settings_reminder_lead',
-      ]) {
-        expect(find.byKey(Key(k)), findsNothing, reason: k);
-      }
-      final groups = [
-        for (final g in ['home', 'reminder', 'management'])
-          find.byKey(Key('tt_settings_group_$g')),
-      ];
-      for (final g in groups) {
-        expect(g, findsOneWidget);
-      }
-      final titles = ['首页与桌面', '提醒', '课表管理'];
-      final ys = [
-        for (final t in titles) tester.getTopLeft(find.text(t).first).dy,
-      ];
-      for (var i = 1; i < ys.length; i++) {
-        expect(ys[i] > ys[i - 1], isTrue, reason: titles[i]);
-      }
-      for (var i = 1; i < groups.length; i++) {
-        expect(
-          tester.getTopLeft(groups[i]).dy,
-          tester.getBottomLeft(groups[i - 1]).dy,
-          reason: titles[i],
-        );
-      }
-      expect(find.byKey(const Key('tt_settings_widget_entry')), findsNothing);
-    });
-
-    testWidgets('ST02c 存储里 reminderEnabled=true：隐藏提醒卡片时无提醒 UI，打开不回写', (
-      tester,
-    ) async {
-      final stored = TimetableSettings(
-        termStartDate: DateTime(2026, 8, 31),
-        reminderEnabled: true,
-        reminderLeadMinutes: 30,
-      );
-      await tester.runAsync(() => TimetableStore.saveSettings(stored));
-      final read = (await tester.runAsync(TimetableStore.readSettings))!;
-      expect(read.reminderEnabled, isTrue);
-      load(settings: read);
-      final before = _filesIn(tmp);
-      expect(before, isNotEmpty);
-
-      await pumpPage(
-        tester,
-        TimetableSettingsPage(controller: _c, showReminderCard: false),
-      );
-      await settleIo(tester);
-      expect(find.text('上课提醒'), findsNothing);
-      expect(
-        find.byKey(const Key('tt_settings_group_reminder')),
-        findsOneWidget,
-      );
-      expect(find.text('放假期间也会提醒'), findsNothing);
-      expect(find.textContaining('分钟'), findsNothing);
-      expect(find.byKey(const Key('tt_settings_reminder')), findsNothing);
-      expect(_c.settings.reminderEnabled, isTrue);
-      expect(_c.settings.reminderLeadMinutes, 30);
-      expect(_filesIn(tmp), before);
-    });
-
-    testWidgets('明日提醒与课前提醒独立，关闭后时间不可选，重开可选择半小时档位', (tester) async {
-      await pumpPage(tester, TimetableSettingsPage(controller: _c));
-      tester.view.physicalSize = const Size(1080, 6000);
-      await tester.pump();
-      final switchKey = find.byKey(const Key('tt_settings_next_day_reminder'));
-      final timeKey = find.byKey(const Key('tt_settings_next_day_time'));
-      await tester.ensureVisible(switchKey);
-      await tester.pumpAndSettle();
-      expect(switchValue(tester, 'tt_settings_next_day_reminder'), isTrue);
-      expect(
-        find.descendant(
-          of: switchKey,
-          matching: find.text(TtSettingsText.nextDayReminder),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: timeKey,
-          matching: find.text(TtSettingsText.nextDayTime),
-        ),
-        findsOneWidget,
-      );
-      expect(find.text('22:00'), findsOneWidget);
-
-      await tester.tap(switchKey);
-      await settleIo(tester);
-      expect(_c.settings.nextDayReminderEnabled, isFalse);
-      expect(_c.settings.reminderEnabled, isFalse);
-      // 关闭后时间行 IgnorePointer，点不到、也不弹 sheet。
-      await tester.ensureVisible(timeKey);
-      await tester.tap(timeKey, warnIfMissed: false);
-      await tester.pumpAndSettle();
-      expect(find.text('21:00'), findsNothing);
-
-      await tester.tap(switchKey);
-      await settleIo(tester);
-      expect(_c.settings.nextDayReminderEnabled, isTrue);
-      await tester.pumpAndSettle();
-
-      // 直接改时间档位并校验与课前提醒独立；半小时 sheet 用 ensureVisible 后再点。
-      await tester.ensureVisible(timeKey);
-      await tester.tap(timeKey);
-      await tester.pumpAndSettle();
-      expect(find.text('21:00'), findsOneWidget);
-      expect(find.text('23:30'), findsOneWidget);
-      await tester.tap(find.text('23:30'));
-      await settleIo(tester);
-      expect(_c.settings.nextDayReminderMinute, 1410);
-      expect(_c.settings.reminderEnabled, isFalse);
-      final stored = (await tester.runAsync(TimetableStore.readSettings))!;
-      expect(stored.nextDayReminderMinute, 1410);
-      expect(stored.nextDayReminderEnabled, isTrue);
-    });
-
-    testWidgets('连点多个设置：每次读当前值合并，互不覆盖并持久化', (tester) async {
-      await pumpAppearance(tester);
-      await reveal(tester, const Key('tt_settings_show_location'));
-      await tester.tap(find.byKey(const Key('tt_settings_show_location')));
-      await tester.tap(find.byKey(const Key('tt_settings_show_teacher')));
-      await reveal(tester, const Key('tt_settings_font_scale'));
-      await tester.tap(
-        find.descendant(
-          of: find.byKey(const Key('tt_settings_font_scale')),
-          matching: find.byKey(const ValueKey('seg_大')),
-        ),
-      );
-      await reveal(tester, const Key('tt_settings_week_start'));
-      await tester.tap(find.byKey(const Key('tt_settings_week_start')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('周日'));
-      // 选择现在会等落盘成功才关闭；先完成真实 I/O，避免弹层挡住下一页点击。
-      await settleIo(tester);
-      await tester.pumpAndSettle();
-      await pumpPage(tester, TimetableSettingsPage(controller: _c));
-      expect(
-        find.byKey(const Key('tt_settings_show_tomorrow')).hitTestable(),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const Key('tt_settings_show_tomorrow')));
-      await tester.tap(find.byKey(const Key('tt_settings_home_max_exams')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('4'));
-      await settleIo(tester);
-      final s = _c.settings;
-      expect(s.showLocation, isFalse);
-      expect(s.showTeacher, isTrue);
-      expect(s.fontScale, CellFontScale.large);
-      expect(s.weekStartsOnMonday, isFalse);
-      expect(s.showTomorrowOnHome, isFalse);
-      expect(s.homeMaxExams, 4);
-      final stored = (await tester.runAsync(TimetableStore.readSettings))!;
-      expect(stored.showLocation, isFalse);
-      expect(stored.showTeacher, isTrue);
-      expect(stored.fontScale, CellFontScale.large);
-      expect(stored.weekStartsOnMonday, isFalse);
-      expect(stored.showTomorrowOnHome, isFalse);
-      expect(stored.homeMaxExams, 4);
-    });
-
-    testWidgets('ST12 不透明度滑块 30–100、步长 10', (tester) async {
-      await pumpAppearance(tester);
-      final slider = tester.widget<Slider>(
-        find.byKey(const Key('tt_settings_opacity')),
-      );
-      expect((slider.min, slider.max, slider.divisions), (30.0, 100.0, 7));
-      await tester.drag(
-        find.byKey(const Key('tt_settings_opacity')),
-        const Offset(-2000, 0),
-      );
-      // updateSettings 先 merge/save 再 notifyListeners，等标签刷新后再断言。
-      String? opacityLabel() => tester
-          .widget<Text>(find.byKey(const Key('tt_settings_opacity_value')))
-          .data;
-      for (var i = 0; i < 40 && opacityLabel() != '30%'; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      expect(_c.settings.cellOpacity, 30);
-      expect(opacityLabel(), '30%');
-    });
-
-    testWidgets('ST12b 存储不透明度 55：读出保留 55，滑块/标签显示 55%，打开不回写', (tester) async {
-      await tester.runAsync(
-        () => TimetableStore.saveSettings(
-          TimetableSettings(
-            termStartDate: DateTime(2026, 8, 31),
-            cellOpacity: 55,
-          ),
-        ),
-      );
-      final read = (await tester.runAsync(TimetableStore.readSettings))!;
-      expect(read.cellOpacity, 55);
-      load(settings: read);
-      final before = _filesIn(tmp);
-
-      await pumpAppearance(tester);
-      await settleIo(tester);
-      final slider = tester.widget<Slider>(
-        find.byKey(const Key('tt_settings_opacity')),
-      );
-      expect(slider.value, 55.0);
-      expect(slider.label, '55%');
-      expect(
-        tester
-            .widget<Text>(find.byKey(const Key('tt_settings_opacity_value')))
-            .data,
-        '55%',
-      );
-      expect(find.text('50%'), findsNothing);
-      expect(find.text('60%'), findsNothing);
-      expect(_c.settings.cellOpacity, 55);
-      expect(_filesIn(tmp), before);
-      final again = (await tester.runAsync(TimetableStore.readSettings))!;
-      expect(again.cellOpacity, 55);
-    });
-
-    testWidgets('提醒：开关后提前时间可选；接入点回调可让开关弹回', (tester) async {
-      var calls = 0;
-      await pumpPage(
-        tester,
-        TimetableSettingsPage(
-          controller: _c,
-          showReminderCard: true,
-          onReminderToggle: (context, enable) async {
-            calls++;
-            return false; // 模拟权限被拒
-          },
-        ),
-      );
-      await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-      await settleIo(tester);
-      expect(calls, 1);
-      expect(_c.settings.reminderEnabled, isFalse);
-
-      await pumpPage(
-        tester,
-        TimetableSettingsPage(controller: _c, showReminderCard: true),
-      );
-      await tester.tap(find.byKey(const Key('tt_settings_reminder')));
-      await settleIo(tester);
-      expect(_c.settings.reminderEnabled, isTrue);
-      await tester.tap(find.byKey(const Key('tt_settings_reminder_lead')));
-      await tester.pumpAndSettle();
-      Finder leadChoice(int minutes) => find.descendant(
-        of: find.byType(MiuixPopupHost),
-        matching: find.text('$minutes 分钟'),
-      );
-      for (final m in kReminderLeadChoices) {
-        expect(leadChoice(m), findsOneWidget);
-      }
-      await tester.tap(leadChoice(30));
-      await settleIo(tester);
-      expect(_c.settings.reminderLeadMinutes, 30);
-    });
-
-    testWidgets('ST19 外观页暂时不展示配色方案 A/B/C 入口', (tester) async {
-      await pumpAppearance(tester);
-      expect(find.byKey(const Key('tt_settings_palette')), findsNothing);
-      expect(find.text('A 柔和'), findsNothing);
-      expect(find.text('B 马卡龙'), findsNothing);
-      expect(find.text('C 莫兰迪'), findsNothing);
-      // storage 字段仍可读（默认 A），不因隐藏入口而丢失。
-      expect(_c.settings.paletteScheme, 'A');
-    });
-  });
-
-  group('格子接设置', () {
-    Future<void> pumpGrid(WidgetTester tester) async {
-      tester.view.physicalSize = const Size(1080, 2400);
-      tester.view.devicePixelRatio = 2.625;
-      addTearDown(tester.view.reset);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: ListenableBuilder(
-              listenable: _c,
-              builder: (context, _) => WeekGrid(week: 7, controller: _c),
-            ),
-          ),
-        ),
-      );
-      await tester.pump();
-    }
-
-    TimetableSettings base() => TimetableSettings(
-      termStartDate: DateTime(2026, 8, 31),
-      periodHeight: 90,
-    );
-
-    testWidgets('ST04 关地点：格内无 @ 行', (tester) async {
-      load(
-        settings: base().copyWith(showLocation: false),
-        manual: [_course('a', '测试课甲')],
-      );
-      await pumpGrid(tester);
-      expect(find.textContaining('@'), findsNothing);
-      expect(find.textContaining('测试课甲'), findsOneWidget);
-    });
-
-    testWidgets('ST05 开老师：老师在地点下面；默认关时不显示', (tester) async {
-      load(settings: base(), manual: [_course('a', '测试课甲', start: 1)]);
-      await pumpGrid(tester);
-      expect(find.byKey(const Key('course_cell_teacher')), findsNothing);
-      load(
-        settings: base().copyWith(showTeacher: true),
-        manual: [_course('a', '测试课甲', start: 1)],
-      );
-      await pumpGrid(tester);
-      final teacher = find.byKey(const Key('course_cell_teacher'));
-      expect(teacher, findsOneWidget);
-      expect(tester.widget<Text>(teacher).data, '教师A');
-      expect(
-        tester.getTopLeft(teacher).dy >
-            tester.getTopLeft(find.textContaining('@')).dy,
+        TimetableSettings.fromJson({'widgetWeekShowWeekend': 'invalid'})
+            .widgetWeekShowWeekend,
         isTrue,
       );
+      expect(s.copyWith(showSaturday: false).widgetWeekShowWeekend, isFalse);
+      final explicit = s.copyWith(widgetWeekShowWeekend: false);
+      expect(s.withDisplayPrefsFrom(explicit).widgetWeekShowWeekend, isFalse);
+      final resetToInherited = explicit.withDisplayPrefsFrom(s);
+      expect(resetToInherited.widgetWeekShowWeekend, isTrue);
+      expect(
+        resetToInherited.toJson().containsKey('widgetWeekShowWeekend'),
+        isFalse,
+      );
+      expect(
+        resetToInherited.copyWith(showSunday: false).widgetWeekShowWeekend,
+        isFalse,
+      );
     });
 
-    testWidgets('ST09 宽格文字大小三档：取整后课名 11 / 12 / 14', (tester) async {
-      for (final (scale, size) in [
-        (CellFontScale.small, 11.0),
-        (CellFontScale.standard, 12.0),
-        (CellFontScale.large, 14.0),
+    test('不透明度（30–100）、headerTextSize（10–14）与 showPeriodTimes 钳制', () {
+      int op(Object? v) => TimetableSettings.sanitizeOpacity(v);
+      expect(op(25), 30);
+      expect(op(0), 30);
+      expect(op(150), 100);
+      expect(op(55.4), 55);
+      expect(op(55.5), 56);
+      expect(op(70), 70);
+      expect(op('80'), 100);
+      expect(op(null), 100);
+      expect(op(double.nan), 100);
+      expect(op(double.infinity), 100);
+
+      expect(const TimetableSettings().headerTextSize, 11);
+      expect(const TimetableSettings().showPeriodTimes, isTrue);
+      expect(TimetableSettings.sanitizeHeaderTextSize(null), 11);
+      expect(TimetableSettings.sanitizeHeaderTextSize(9), 10);
+      expect(TimetableSettings.sanitizeHeaderTextSize(15), 14);
+      expect(TimetableSettings.sanitizeHeaderTextSize(12.4), 12.4);
+      expect(
+        TimetableSettings.fromJson({'headerTextSize': 13}).headerTextSize,
+        13,
+      );
+      expect(
+        TimetableSettings.fromJson({'showPeriodTimes': false}).showPeriodTimes,
+        isFalse,
+      );
+      expect(TimetableSettings.fromJson(const {}).showPeriodTimes, isTrue);
+      const round = TimetableSettings(
+        headerTextSize: 12,
+        showPeriodTimes: false,
+      );
+      final back = TimetableSettings.fromJson(round.toJson());
+      expect(back.headerTextSize, 12);
+      expect(back.showPeriodTimes, isFalse);
+    });
+
+    test('homeMaxItems / homeMaxExams（1–4 回落 2）与提前时间（5/10/15/30 回落 15）', () {
+      expect(const TimetableSettings().homeMaxItems, 2);
+      expect(const TimetableSettings().homeMaxExams, 2);
+      for (final (v, expected) in [
+        (null, 2),
+        ('x', 2),
+        (0, 2),
+        (5, 2),
+        (1.2, 1),
+        (4, 4),
       ]) {
-        load(
-          settings: base().copyWith(
-            fontScale: scale,
+        expect(TimetableSettings.sanitizeHomeMaxItems(v), expected);
+        expect(TimetableSettings.sanitizeHomeMaxExams(v), expected);
+      }
+      expect(TimetableSettings.fromJson({'homeMaxItems': 3}).homeMaxItems, 3);
+      expect(TimetableSettings.fromJson({'homeMaxItems': 9}).homeMaxItems, 2);
+      expect(TimetableSettings.fromJson({'homeMaxExams': 3}).homeMaxExams, 3);
+      expect(TimetableSettings.fromJson({'homeMaxExams': 9}).homeMaxExams, 2);
+      final copied = const TimetableSettings().copyWith(homeMaxExams: 4);
+      expect(copied.toJson()['homeMaxExams'], 4);
+      expect(TimetableSettings.fromJson(copied.toJson()).homeMaxExams, 4);
+      final withPrefs = const TimetableSettings(termCode: '2026-2027-1')
+          .withDisplayPrefsFrom(copied);
+      expect(withPrefs.homeMaxExams, 4);
+      expect(withPrefs.termCode, '2026-2027-1');
+
+      int lead(Object? v) => TimetableSettings.sanitizeLeadMinutes(v);
+      expect(TimetableSettings.reminderLeadOptions, [5, 10, 15, 30]);
+      for (final ok in [5, 10, 15, 30]) {
+        expect(lead(ok), ok);
+      }
+      expect(lead(30.0), 30);
+      for (final bad in [20, 12, 12.5, 25, 0, -3, 100, null, '15', 'x', true]) {
+        expect(lead(bad), 15, reason: '$bad');
+      }
+    });
+  });
+
+  group('每周第一天（设置 9）', () {
+    test('列顺序', () {
+      List<int> f(
+        bool sun1,
+        bool sat,
+        bool sun, {
+        bool satC = false,
+        bool sunC = false,
+      }) => weekColumnDays(
+        weekStartsSunday: sun1,
+        showSaturday: sat,
+        showSunday: sun,
+        saturdayHasClass: satC,
+        sundayHasClass: sunC,
+      );
+      expect(f(false, true, true), [1, 2, 3, 4, 5, 6, 7]);
+      expect(f(true, true, true), [7, 1, 2, 3, 4, 5, 6]);
+      expect(f(true, true, false), [1, 2, 3, 4, 5, 6]);
+      expect(f(true, false, false), [1, 2, 3, 4, 5]);
+      expect(f(true, false, false, sunC: true), [7, 1, 2, 3, 4, 5]);
+      expect(f(false, false, false, satC: true), [1, 2, 3, 4, 5, 6]);
+    });
+
+    test('周日列是本教学周的周日；月份取周一', () {
+      final monday = DateTime(2026, 10, 12);
+      expect(weekColumnDate(monday, 7), DateTime(2026, 10, 18));
+      expect(weekColumnDate(monday, 1), monday);
+      expect(weekMonthLabel(DateTime(2026, 9, 28)), 9);
+    });
+
+    test('控制器：周次仍按周一算，周日列自动出现时放第一列', () {
+      final c = TimetableController.instance;
+      final orig = TimetableController.clock;
+      TimetableController.clock = () => DateTime(2026, 10, 18);
+      addTearDown(() {
+        TimetableController.clock = orig;
+        c.debugReset();
+      });
+      c.debugReset();
+      c.debugSetSnapshot(
+        TimetableSnapshot(
+          settings: TimetableSettings(
+            termStartDate: DateTime(2026, 8, 31),
+            termStartFromJwxt: true,
             showSaturday: false,
             showSunday: false,
+            weekStartsOnMonday: false,
           ),
-          manual: [_course('a', '测试课甲')],
-        );
-        await pumpGrid(tester);
-        final name = tester.widget<CourseNameText>(find.byType(CourseNameText));
-        expect(name.style.fontSize, closeTo(size, 0.001));
+          courses: const [
+            Course(
+              id: 'k',
+              name: '周日课',
+              source: CourseSource.jwxt,
+              slots: [
+                CourseSlot(day: 7, startNode: 1, endNode: 2, weeks: '0000001'),
+              ],
+            ),
+          ],
+        ),
+      );
+      expect(c.currentWeek, 7);
+      expect(c.visibleDays(7), [7, 1, 2, 3, 4, 5]);
+      expect(c.visibleDays(6), [1, 2, 3, 4, 5]);
+      expect(c.dateOfColumn(7, 7), DateTime(2026, 10, 18));
+      expect(c.monthLabelOf(5), 9);
+    });
+  });
+
+  group('TX 细胞文字颜色 & ST10 最小字号 & S03b 格高钳制', () {
+    test('TX01/TX02 cellTextColor 序列化往返与缺省回退 auto', () {
+      for (final mode in CellTextColorMode.values) {
+        final s = TimetableSettings(cellTextColor: mode);
+        final back = TimetableSettings.fromJson(s.toJson());
+        expect(back.cellTextColor, mode);
+        expect(s.toJson()['cellTextColor'], mode.name);
       }
+      final json = const TimetableSettings().toJson()..remove('cellTextColor');
+      expect(
+        TimetableSettings.fromJson(json).cellTextColor,
+        CellTextColorMode.auto,
+      );
+      json['cellTextColor'] = 'purple';
+      expect(
+        TimetableSettings.fromJson(json).cellTextColor,
+        CellTextColorMode.auto,
+      );
     });
 
     test('ST10 最小 10sp 夹紧后取整', () {
       const scaler = TextScaler.linear(0.85);
       final v = CourseCell.cellFontSize(12, 0.9, scaler);
-      // 10/0.85≈11.76 取整为 12，实际 10.2sp：仍不低于 10sp。
       expect(v, 12);
       expect(v * 0.85, closeTo(10.2, 0.001));
       expect(v * 0.85, greaterThanOrEqualTo(10 - 1e-9));
     });
 
-    testWidgets('ST13 不透明度只作用于底色：文字/角标/圆点不变淡', (tester) async {
-      load(
-        settings: base().copyWith(cellOpacity: 30),
-        manual: [_course('a', '测试课甲'), _course('b', '测试课乙')],
-      );
-      await pumpGrid(tester);
-      final cell = tester.widget<CourseCell>(find.byType(CourseCell));
-      final ink = tester.widget<Ink>(
-        find.descendant(
-          of: find.byType(CourseCell),
-          matching: find.byType(Ink),
-        ),
-      );
-      final bg = (ink.decoration! as BoxDecoration).color!;
-      final pair = coursePairFor(_c, cell.cell.course);
-      expect(bg, Color.lerp(TimetableTheme.pageBg, pair.bg, 0.3));
-      expect(bg.a, 1.0);
-      final fg = pair.fg;
-      final name = tester.widget<CourseNameText>(find.byType(CourseNameText));
-      expect(name.style.color, fg);
-      final dot = tester.widget<Container>(
-        find.byKey(const Key('course_cell_conflict_dot')),
-      );
-      expect((dot.decoration! as BoxDecoration).color, fg);
-      expect(fg.a, 1.0);
-    });
-
-    testWidgets('ST13b 不透明度 55：格子底色按 55% 往页面底色混合', (tester) async {
-      load(
-        settings: base().copyWith(cellOpacity: 55),
-        manual: [_course('a', '测试课甲')],
-      );
-      await pumpGrid(tester);
-      expect(_c.settings.cellOpacity, 55);
-      final cell = tester.widget<CourseCell>(find.byType(CourseCell));
-      final ink = tester.widget<Ink>(
-        find.descendant(
-          of: find.byType(CourseCell),
-          matching: find.byType(Ink),
-        ),
-      );
-      final bg = (ink.decoration! as BoxDecoration).color!;
-      final raw = coursePairFor(_c, cell.cell.course).bg;
-      expect(bg, TimetableTheme.blendCellBg(raw, 55));
-      expect(bg, Color.lerp(TimetableTheme.pageBg, raw, 0.55));
-      expect(bg, isNot(TimetableTheme.blendCellBg(raw, 50)));
-      expect(bg, isNot(TimetableTheme.blendCellBg(raw, 60)));
-      expect(bg.a, 1.0);
-    });
-
-    testWidgets('换配色 B：未自选时格子仍走 id 哈希 12 预设（忽略 A/B/C）', (tester) async {
-      load(
-        settings: base().copyWith(paletteScheme: 'B'),
-        manual: [_course('a', '测试课甲', colorIndex: 12)],
-      );
-      await pumpGrid(tester);
-      final cell = tester.widget<CourseCell>(find.byType(CourseCell));
-      final pair = coursePairFor(_c, cell.cell.course);
-      final ink = tester.widget<Ink>(
-        find.descendant(
-          of: find.byType(CourseCell),
-          matching: find.byType(Ink),
-        ),
-      );
-      expect((ink.decoration! as BoxDecoration).color, pair.bg);
-      final name = tester.widget<CourseNameText>(find.byType(CourseNameText));
-      expect(name.style.color, pair.fg);
-      // 不再等于旧 B 柔和色板。
-      expect(pair.bg, isNot(_hex('F2CFA8')));
-    });
-
-    testWidgets('每周第一天=周日：周日放第一列，日期 10/18，月份按周一', (tester) async {
-      load(
-        settings: base().copyWith(weekStartsOnMonday: false),
-        manual: [_course('a', '测试课甲')],
-      );
-      await pumpGrid(tester);
-      final xs = {
-        for (final d in ['日', '一', '六']) d: tester.getTopLeft(find.text(d)).dx,
-      };
-      expect(xs['日']! < xs['一']!, isTrue);
-      expect(xs['一']! < xs['六']!, isTrue);
-      expect(find.text('18'), findsOneWidget); // 第 7 周周日 10/18
-      expect(find.text('10月'), findsOneWidget);
+    test('S03b periodHeight 默认 64 且读取时钳到 52–90', () {
+      TimetableSettings parse(Object? v) =>
+          TimetableSettings.fromJson({'periodHeight': v});
+      expect(const TimetableSettings().periodHeight, 64);
+      expect(parse(44).periodHeight, 52);
+      expect(parse(200).periodHeight, 90);
+      expect(parse('abc').periodHeight, 64);
+      expect(parse(null).periodHeight, 64);
+      expect(parse('70').periodHeight, 70);
     });
   });
 
-  group('B/C 配色（§13.7）', () {
-    const bBg = [
-      'A8D8FF', 'FFC2A8', 'B5E5B9', 'D5C2FF', 'FFE29A', '9FE3DD', 'FFB8D1', //
-      'C9D3E6', 'B3BEFF', 'D6EBA0', 'FFB3B3', 'A3E6CF', 'F2CFA8', 'E8BFF2',
-      'FFBDE6', 'AEE0F5',
-    ];
-    const cBg = [
-      'B7C9D6', 'D8B9A8', 'B9C8B0', 'C6B8D0', 'D9CBA6', 'A9C6C1', 'D4AFB9', //
-      'C2C2BA', 'B3B8D3', 'C8CDA6', 'D6ADA8', 'A8C4B4', 'D2BFA6', 'CDB4C9',
-      'D9B3C3', 'ADC3D3',
-    ];
+  group('设置持久化、合并写入与 20 周边界', () {
+    late Directory tmp;
+    final c = TimetableController.instance;
+    File settingsFile() => File('${tmp.path}/settings.json');
+    Future<Map<String, dynamic>> readFile() async =>
+        jsonDecode(await settingsFile().readAsString()) as Map<String, dynamic>;
 
-    test('ST17 色值：B、C 各 16 色，共用一个深色文字色', () {
-      final b = TimetableTheme.pairsOf(CoursePaletteScheme.macaron);
-      final c = TimetableTheme.pairsOf(CoursePaletteScheme.morandi);
-      expect(b, hasLength(16));
-      expect(c, hasLength(16));
-      for (var i = 0; i < 16; i++) {
-        expect(b[i].bg, _hex(bBg[i]), reason: 'B $i');
-        expect(b[i].fg, _hex('1F2430'));
-        expect(c[i].bg, _hex(cBg[i]), reason: 'C $i');
-        expect(c[i].fg, _hex('2A2E35'));
-      }
+    void fakeOkFetch() {
+      TimetableController.bindingCheck = () async => true;
+      TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
+          TimetableSnapshot(settings: baseSettings!);
+    }
+
+    setUp(() async {
+      tmp = await Directory.systemTemp.createTemp('tt_settings');
+      TimetableStore.debugDirectory = tmp;
+      c.debugReset();
     });
 
-    test('ST17/ST18 对比度：三套 × 16 色 × 100..30% 均 ≥ 4.5，最低值与规范一致', () {
-      const expected = {
-        CoursePaletteScheme.soft: (5.46, 5.71, 5.91),
-        CoursePaletteScheme.macaron: (8.66, 11.25, 12.43),
-        CoursePaletteScheme.morandi: (6.75, 9.36, 10.58),
-      };
-      for (final scheme in CoursePaletteScheme.values) {
-        final mins = <int, double>{};
-        for (final p in TimetableTheme.pairsOf(scheme)) {
-          double? prev;
-          for (var op = 100; op >= 30; op -= 10) {
-            final bg = TimetableTheme.blendCellBg(p.bg, op);
-            final ratio = _contrast(bg, p.fg);
-            expect(ratio >= 4.5, isTrue, reason: '$scheme $op');
-            if (prev != null) expect(ratio >= prev - 1e-9, isTrue);
-            prev = ratio;
-            mins[op] = math.min(mins[op] ?? 99, ratio);
+    tearDown(() async {
+      TimetableStore.debugBeforeBatchReplace = null;
+      TimetableController.bindingCheck = () async => false;
+      TimetableStore.debugDirectory = null;
+      c.debugReset();
+      if (await tmp.exists()) await tmp.delete(recursive: true);
+    });
+
+    test('启动读到坏值只在内存纠正，不改文件', () async {
+      final raw = jsonEncode({
+        'cellOpacity': 999,
+        'reminderLeadMinutes': 12,
+        'fontScale': 'huge',
+        'unknownKey': [1, 2],
+      });
+      settingsFile().writeAsStringSync(raw);
+      await c.ensureStarted();
+      expect(c.settings.cellOpacity, 100);
+      expect(c.settings.reminderLeadMinutes, 15);
+      expect(c.settings.fontScale, CellFontScale.standard);
+      expect(settingsFile().readAsStringSync(), raw);
+    });
+
+    test('改一个设置只写这个键，未知键与坏原值保留', () async {
+      settingsFile().writeAsStringSync(
+        jsonEncode({'cellOpacity': 999, 'unknownKey': 'keep'}),
+      );
+      await c.ensureStarted();
+      await c.updateSettings(
+        c.settings.copyWith(showTeacher: true, weekStartsOnMonday: false),
+      );
+      final json = jsonDecode(settingsFile().readAsStringSync()) as Map;
+      expect(json['showTeacher'], true);
+      expect(json['weekStartsOnMonday'], false);
+      expect(json['unknownKey'], 'keep');
+      expect(json['cellOpacity'], 999);
+      expect(json.containsKey('paletteScheme'), isFalse);
+    });
+
+    test('有教务缓存时也从 settings.json 读新设置', () async {
+      await TimetableStore.saveSnapshot(
+        TimetableSnapshot(
+          settings: TimetableSettings(
+            termCode: '2026-2027-1',
+            termStartDate: DateTime(2026, 8, 31),
+            termStartFromJwxt: true,
+          ),
+        ),
+      );
+      settingsFile().writeAsStringSync(
+        jsonEncode({
+          'showTomorrowOnHome': false,
+          'paletteScheme': 'B',
+          'cellOpacity': 60,
+          'weekStartsOnMonday': false,
+        }),
+      );
+      await c.ensureStarted();
+      expect(c.settings.showTomorrowOnHome, isFalse);
+      expect(c.settings.paletteScheme, 'B');
+      expect(c.settings.cellOpacity, 60);
+      expect(c.settings.weekStartsSunday, isTrue);
+      expect(c.settings.termCode, '2026-2027-1');
+    });
+
+    test('连续滑杆调整只保存最新值，其他设置键和恢复原值均保留', () async {
+      c.debugSetSnapshot(
+        const TimetableSnapshot(settings: TimetableSettings()),
+      );
+      var replacements = 0;
+      TimetableStore.debugBeforeBatchReplace = (_) => replacements++;
+      final changes = [
+        for (var index = 0; index < 40; index++)
+          c.updateSettings(
+            c.settingsForEditing.copyWith(periodHeight: 52 + index % 38),
+          ),
+        c.updateSettings(c.settingsForEditing.copyWith(showTeacher: false)),
+        c.updateSettings(c.settingsForEditing.copyWith(periodHeight: 64)),
+      ];
+      await Future.wait(changes);
+      expect(
+        replacements,
+        lessThanOrEqualTo(4),
+        reason: '中间高度均不落盘；恢复原值无变化的文件也不重写',
+      );
+      expect(c.settings.periodHeight, 64);
+      expect(c.settings.showTeacher, isFalse);
+      c.debugReset();
+      await c.ensureStarted();
+      expect(c.settings.periodHeight, 64);
+      expect(c.settings.showTeacher, isFalse);
+    });
+
+    test(
+      'successful sync does not rewrite settings.json (periodHeight 44 kept)',
+      () async {
+        await settingsFile().writeAsString(jsonEncode({'periodHeight': 44}));
+        final before = await settingsFile().readAsString();
+
+        fakeOkFetch();
+        await c.ensureStarted();
+        await c.syncFromJwxt();
+
+        expect(c.syncStatus, TimetableSyncStatus.success);
+        expect(c.settings.periodHeight, 52);
+        final after = jsonDecode(await settingsFile().readAsString()) as Map;
+        final orig = jsonDecode(before) as Map;
+        after.removeWhere((k, _) => TimetableStore.termSettingKeys.contains(k));
+        expect(after, orig);
+        expect(after['periodHeight'], 44);
+      },
+    );
+
+    test(
+      'S03c: sync, unbind, re-login+sync keep periodHeight 44 and switches',
+      () async {
+        final stored = {
+          'periodHeight': 44,
+          'showSaturday': false,
+          'showSunday': false,
+          'showNonCurrentWeek': true,
+          'showGridLines': false,
+          'termCode': '2025-2026-2',
+        };
+        await settingsFile().writeAsString(jsonEncode(stored));
+        fakeOkFetch();
+
+        void expectUserFields(Map<String, dynamic> f) {
+          for (final k in [
+            'periodHeight',
+            'showSaturday',
+            'showSunday',
+            'showNonCurrentWeek',
+            'showGridLines',
+          ]) {
+            expect(f[k], stored[k], reason: k);
           }
         }
-        final (m100, m50, m30) = expected[scheme]!;
-        // A 的规范值只给到一位小数（§13.5），按 0.1 容差；B/C 按用例 ≤ 0.05。
-        final tol = scheme == CoursePaletteScheme.soft ? 0.1 : 0.05;
-        expect(mins[100]!, closeTo(m100, tol), reason: '$scheme 100');
-        expect(mins[50]!, closeTo(m50, tol), reason: '$scheme 50');
-        expect(mins[30]!, closeTo(m30, tol), reason: '$scheme 30');
+
+        await c.ensureStarted();
+        await c.syncFromJwxt();
+        expect(c.syncStatus, TimetableSyncStatus.success);
+        expect(c.settings.periodHeight, 52);
+        expectUserFields(await readFile());
+
+        final displayBefore = c.settings;
+        await c.handleLogout();
+        final m = c.settings;
+        expect(m.periodHeight, displayBefore.periodHeight);
+        expect(m.periodHeight, 52);
+        expect(m.showSaturday, isFalse);
+        expect(m.showSunday, isFalse);
+        expect(m.showNonCurrentWeek, isTrue);
+        expect(m.showGridLines, isFalse);
+        expect(m.cellRadius, displayBefore.cellRadius);
+        expect(m.nodesPerDay, displayBefore.nodesPerDay);
+        expect(m.weekStartsOnMonday, displayBefore.weekStartsOnMonday);
+        expect(m.scheduleName, displayBefore.scheduleName);
+        expect(m.termStartFromJwxt, isFalse);
+        final afterUnbind = await readFile();
+        expectUserFields(afterUnbind);
+        expect(afterUnbind.containsKey('termCode'), isFalse);
+
+        c.debugReset();
+        fakeOkFetch();
+        await c.ensureStarted();
+        await c.syncFromJwxt();
+        expect(c.syncStatus, TimetableSyncStatus.success);
+        expectUserFields(await readFile());
+      },
+    );
+
+    test(
+      'S03e: unknown key futureKey preserved through sync and unbind',
+      () async {
+        await settingsFile().writeAsString(
+          jsonEncode({
+            'periodHeight': 44,
+            'futureKey': {'a': 1},
+          }),
+        );
+        fakeOkFetch();
+        await c.ensureStarted();
+        await c.syncFromJwxt();
+        expect((await readFile())['futureKey'], {'a': 1});
+        await c.handleLogout();
+        final f = await readFile();
+        expect(f['futureKey'], {'a': 1});
+        expect(f['periodHeight'], 44);
+      },
+    );
+
+    test(
+      'S03e: updateSettings merges only changed keys into raw file',
+      () async {
+        await settingsFile().writeAsString(
+          jsonEncode({'periodHeight': 44, 'futureKey': 1}),
+        );
+        await c.ensureStarted();
+        expect(c.settings.showSaturday, isTrue);
+        await c.updateSettings(c.settings.copyWith(showSaturday: false));
+        final f = await readFile();
+        expect(f['futureKey'], 1);
+        expect(f['periodHeight'], 44);
+        expect(f['showSaturday'], isFalse);
+        expect(c.settings.showSaturday, isFalse);
+      },
+    );
+
+    group('term keys on sync', () {
+      final termKeys = TimetableStore.termSettingKeys;
+      final origClock = TimetableController.clock;
+      tearDown(() => TimetableController.clock = origClock);
+
+      Course jwxtCourse(String weeks) => Course(
+        id: 'j1',
+        name: '高数',
+        source: CourseSource.jwxt,
+        slots: [CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: weeks)],
+      );
+
+      void fakeTermFetch({required int maxWeeks, String? weeks}) {
+        TimetableController.bindingCheck = () async => true;
+        TimetableController.fetchSnapshot = (term, {baseSettings}) async =>
+            TimetableSnapshot(
+              settings: baseSettings!.copyWith(
+                termCode: '2026-2027-1',
+                termStartDate: DateTime(2026, 8, 31),
+                termStartFromJwxt: true,
+                maxWeeks: maxWeeks,
+              ),
+              courses: [if (weeks != null) jwxtCourse(weeks)],
+            );
       }
-    });
 
-    test('近似对表：B、C 各 9 对，写死与规范一致', () {
-      expect(kNearColorPairs[CoursePaletteScheme.macaron], const [
-        (0, 7), (0, 15), (3, 8), (3, 13), (4, 12), (5, 11), (6, 14), (7, 8), //
-        (13, 14),
-      ]);
-      expect(kNearColorPairs[CoursePaletteScheme.morandi], const [
-        (0, 15), (2, 9), (3, 13), (4, 7), (4, 9), (4, 12), (6, 14), (7, 9), //
-        (13, 14),
-      ]);
-      // C 的 (2,7) 23.0°、(1,12) 23.3° 都不算。
-      expect(colorsNear(2, 7, scheme: CoursePaletteScheme.morandi), isFalse);
-      expect(colorsNear(1, 12, scheme: CoursePaletteScheme.morandi), isFalse);
-    });
+      test(
+        '(a) sync without changed term data keeps settings.json bytes',
+        () async {
+          TimetableController.clock = () => DateTime(2026, 10, 11);
+          final file = settingsFile();
+          await file.writeAsString(
+            jsonEncode({
+              'periodHeight': 44,
+              'showSaturday': false,
+              'futureKey': 'x',
+              'termCode': '2026-2027-1',
+              'termStartDate': '2026-08-31',
+              'maxWeeks': 30,
+              'termStartFromJwxt': true,
+            }),
+          );
+          final before = await file.readAsBytes();
+          final mtime = await file.lastModified();
+          fakeTermFetch(maxWeeks: 30);
+          await c.ensureStarted();
+          await c.syncFromJwxt();
+          expect(c.syncStatus, TimetableSyncStatus.success);
+          expect(await file.readAsBytes(), before);
+          expect(await file.lastModified(), mtime);
+        },
+      );
 
-    test('CA16 换方案：自动色按新方案重算顺延，手动色号保留，不落盘', () async {
-      final a = _nameWithHash(1);
-      final b = _nameWithHash(12, after: a);
-      final cName = _nameWithHash(5);
-      final d = _nameWithHash(11, after: cName);
-      final n4 = _nameWithHash(4);
-      final manual = [
-        _course('a', a, day: 1, start: 1),
-        _course('b', b, day: 1, start: 3),
-        _course('c', cName, day: 3, start: 1),
-        _course('d', d, day: 3, start: 3),
-        _course('z', '测试课Z', day: 5, start: 1, colorIndex: 12),
-        _course('n', n4, day: 5, start: 3),
-      ];
-      load(manual: manual);
-      Map<String, int> colors() => {
-        for (final x in _c.manualCourses) x.id: _c.colorIndexOf(x),
-      };
-      final settingsFile = File('${tmp.path}/timetable/settings.json');
-      Map<String, int>? first;
-      for (final k in ['A', 'B', 'C', 'A']) {
-        await _c.updateSettings(_c.settings.copyWith(paletteScheme: k));
-        final m = colors();
-        final scheme = coursePaletteSchemeOf(k);
-        // 全局去重：6 门课分配到 6 个互不相同的色号，手动色号 12 保留，相邻不撞色。
-        expect(m.values.toSet(), hasLength(6), reason: k);
-        expect(m['z'], 12, reason: k);
-        expect(
-          colorsClash(m['a']!, m['b']!, scheme: scheme),
-          isFalse,
-          reason: '$k a/b',
-        );
-        expect(
-          colorsClash(m['c']!, m['d']!, scheme: scheme),
-          isFalse,
-          reason: '$k c/d',
-        );
-        expect(
-          colorsClash(m['z']!, m['n']!, scheme: scheme),
-          isFalse,
-          reason: '$k z/n',
-        );
-        first ??= m;
-        // 手动色号仍是 12；课程数据不写顺延后的色号。
-        expect(_c.manualCourses.firstWhere((x) => x.id == 'z').colorIndex, 12);
-        expect(
-          _c.manualCourses
-              .where((x) => x.id != 'z')
-              .every((x) => x.colorIndex == null),
-          isTrue,
-        );
-        if (settingsFile.existsSync()) {
-          final text = settingsFile.readAsStringSync();
-          expect(text.contains('"paletteScheme"'), isTrue);
-          expect(text.contains('colorIndex'), isFalse);
+      test('(b) sync with term data changes only the 4 term keys', () async {
+        TimetableController.clock = () => DateTime(2026, 10, 11);
+        final orig = {
+          'periodHeight': 44,
+          'showSaturday': false,
+          'showSunday': false,
+          'showNonCurrentWeek': true,
+          'futureKey': {'n': 1},
+        };
+        await settingsFile().writeAsString(jsonEncode(orig));
+        fakeTermFetch(maxWeeks: 30);
+        await c.ensureStarted();
+        await c.syncFromJwxt();
+        final f = await readFile();
+        for (final e in orig.entries) {
+          expect(f[e.key], e.value, reason: e.key);
         }
-      }
-      expect(colors(), first); // 切回 A 与初始一致
+        expect(f.keys.toSet(), {...orig.keys, ...termKeys});
+        expect(f['termCode'], '2026-2027-1');
+        expect(f['termStartDate'], '2026-08-31');
+        expect(f['maxWeeks'], 30);
+        expect(f['termStartFromJwxt'], isTrue);
+        expect(c.settings.termCode, '2026-2027-1');
+        expect(c.settings.termStartFromJwxt, isTrue);
+      });
+
+      test('(c) 解绑后重新同步：本周第 6 周，总周数仍为 20', () async {
+        TimetableController.clock = () => DateTime(2026, 10, 11);
+        await settingsFile().writeAsString(jsonEncode({'periodHeight': 44}));
+        fakeTermFetch(maxWeeks: 30, weeks: '${'1' * 10}${'0' * 20}');
+        await c.ensureStarted();
+        await c.syncFromJwxt();
+        await c.handleLogout();
+        expect(c.settings.termStartFromJwxt, isFalse);
+        expect(c.totalWeeks, 20);
+
+        fakeTermFetch(maxWeeks: 30, weeks: '${'0' * 17}1${'0' * 12}');
+        await c.syncFromJwxt();
+        expect(c.syncStatus, TimetableSyncStatus.success);
+        expect(c.settings.termStartDate, DateTime(2026, 8, 31));
+        expect(c.settings.termStartFromJwxt, isTrue);
+        expect(c.totalWeeks, 20);
+        expect(c.currentWeek, 6);
+        final f = await readFile();
+        expect(f['termStartFromJwxt'], isTrue);
+        expect(f['periodHeight'], 44);
+      });
+    });
+
+    group('W02 学期固定 20 周', () {
+      final origClock = TimetableController.clock;
+      tearDown(() => TimetableController.clock = origClock);
+      setUp(() => TimetableController.clock = () => DateTime(2026, 10, 11));
+
+      String bits(int lastWeek) => '${'1' * lastWeek}${'0' * (30 - lastWeek)}';
+      Course course(String id, String weeks, CourseSource src) => Course(
+        id: id,
+        name: id,
+        source: src,
+        slots: [CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: weeks)],
+      );
+      TimetableSnapshot snap(List<Course> courses) => TimetableSnapshot(
+        settings: TimetableSettings(
+          termCode: '2026-2027-1',
+          termStartDate: DateTime(2026, 8, 31),
+          termStartFromJwxt: true,
+        ),
+        periods: TimetableController.defaultPeriods(),
+        courses: courses,
+      );
+
+      test('各类课程组合（18周/20周/空课表/未排课或无时段）总周数固定为 20', () {
+        final scenarios = <(String, List<Course>, List<Course>)>[
+          ('仅教务课到第18周', [course('j', bits(18), CourseSource.jwxt)], const []),
+          (
+            '教务18周+手动20周',
+            [course('j', bits(18), CourseSource.jwxt)],
+            [course('m', bits(20), CourseSource.manual)],
+          ),
+          ('无课程', const [], const []),
+          (
+            '含未排课和无时段',
+            [
+              course('j', bits(12), CourseSource.jwxt),
+              const Course(
+                id: 'other',
+                name: '其他',
+                source: CourseSource.jwxt,
+                slots: [
+                  CourseSlot(
+                    day: 0,
+                    startNode: 0,
+                    endNode: 0,
+                    weeks: '',
+                    weeksLabel: '2-25周',
+                  ),
+                ],
+              ),
+              const Course(id: 'noslot', name: 'x', source: CourseSource.jwxt),
+            ],
+            const [],
+          ),
+          (
+            '仅无时段课程',
+            const [Course(id: 'noslot', name: 'x', source: CourseSource.jwxt)],
+            const [],
+          ),
+        ];
+        for (final (label, jwxt, manual) in scenarios) {
+          c.debugSetSnapshot(snap(jwxt), manualCourses: manual);
+          expect(c.totalWeeks, 20, reason: label);
+        }
+      });
+
+      test('删除第 20 周手动课程后仍停留在第 20 周', () async {
+        c.debugSetSnapshot(
+          snap([course('j', bits(18), CourseSource.jwxt)]),
+          manualCourses: [course('m', bits(20), CourseSource.manual)],
+        );
+        c.setViewingWeek(20);
+        expect(c.viewingWeek, 20);
+        expect(await c.deleteManualCourse('m'), isTrue);
+        expect(c.totalWeeks, 20);
+        expect(c.viewingWeek, 20);
+        await c.addManualCourse(course('m2', bits(20), CourseSource.manual));
+        expect(c.totalWeeks, 20);
+        expect(c.viewingWeek, 20);
+      });
+
+      test('浏览周固定钳到 20，解绑前后保持边界，原始课程周次保留', () async {
+        c.debugSetSnapshot(
+          snap([course('j', bits(25), CourseSource.jwxt)]),
+          manualCourses: const [],
+        );
+        c.setViewingWeek(25);
+        expect(c.totalWeeks, 20);
+        expect(c.viewingWeek, 20);
+        expect(c.cellsForDay(25, 1).single.activeThisWeek, isTrue);
+        expect(c.cellsForDay(26, 1), isEmpty);
+        await c.handleLogout();
+        expect(c.totalWeeks, 20);
+        expect(c.viewingWeek, 20);
+      });
+
+      test('W02h 开学前边界：当日无课无提醒，前一日次日命中第1周，翻周与回本周正常', () {
+        TimetableController.clock = () => DateTime(2026, 8, 30);
+        c.debugSetSnapshot(
+          snap([course('j', bits(18), CourseSource.jwxt)]),
+          manualCourses: const [],
+        );
+        expect(c.actualWeek(DateTime(2026, 8, 30)), 0);
+        final items = c.todayCourses(now: DateTime(2026, 8, 30, 7));
+        expect(items, isEmpty);
+        expect(items.where((i) => i.minutesUntilStart != null), isEmpty);
+        final firstDay = DateTime(2026, 8, 31);
+        expect(c.actualWeek(firstDay), 1);
+        expect(c.coursesOnDate(firstDay).map((i) => i.course.id), ['j']);
+
+        TimetableController.clock = () => DateTime(2026, 8, 24);
+        c.debugSetSnapshot(
+          snap([course('j', bits(18), CourseSource.jwxt)]),
+          manualCourses: const [],
+        );
+        expect(c.actualWeek(DateTime(2026, 8, 24)), 0);
+        expect(c.todayCourses(now: DateTime(2026, 8, 24, 7)), isEmpty);
+        expect(c.coursesOnDate(DateTime(2026, 8, 24)), isEmpty);
+        expect(c.currentWeek, 1);
+        expect(c.viewingWeek, 1);
+        c.setViewingWeek(0);
+        expect(c.viewingWeek, 1);
+        c.setViewingWeek(5);
+        expect(c.viewingWeek, 5);
+        c.goToCurrentWeek();
+        expect(c.viewingWeek, 1);
+      });
+
+      test('W02f 课程只到第 18 周时第 19 周无课，默认浏览第 19 周且可翻到第 20 周', () {
+        TimetableController.clock = () => DateTime(2027, 1, 4);
+        c.debugSetSnapshot(
+          snap([course('j', bits(18), CourseSource.jwxt)]),
+          manualCourses: const [],
+        );
+        expect(c.actualWeek(DateTime(2027, 1, 4)), 19);
+        expect(c.totalWeeks, 20);
+        expect(c.todayCourses(now: DateTime(2027, 1, 4, 7)), isEmpty);
+        expect(c.coursesOnDate(DateTime(2027, 1, 4)), isEmpty);
+        expect(c.coursesOnDate(DateTime(2026, 12, 28)), isNotEmpty);
+
+        TimetableController.clock = () => DateTime(2027, 1, 6);
+        c.debugSetSnapshot(
+          snap([course('j', bits(18), CourseSource.jwxt)]),
+          manualCourses: const [],
+        );
+        expect(c.currentWeek, 19);
+        expect(c.viewingWeek, 19);
+        c.setViewingWeek(20);
+        expect(c.viewingWeek, 20);
+        c.goToCurrentWeek();
+        expect(c.viewingWeek, 19);
+        expect(c.isViewingCurrentWeek, isTrue);
+      });
     });
   });
 }

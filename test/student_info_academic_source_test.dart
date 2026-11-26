@@ -132,34 +132,36 @@ void main() {
     }
   });
 
-  for (final entry in <int, int?>{
-    2025: 1,
-    2026: 2,
-    2027: 3,
-    2024: null,
-    2101: null,
-  }.entries) {
-    final year = entry.key;
-    final grade = entry.value;
-    test('只读本地学年 $year，得到年级 $grade', () async {
+  test('只读本地学年推算各年级，越界返回未知', () async {
+    for (final entry in <int, int?>{
+      2025: 1,
+      2026: 2,
+      2027: 3,
+      2024: null,
+      2101: null,
+    }.entries) {
+      cacheReads = 0;
+      accountReads = 0;
+      final year = entry.key;
+      final grade = entry.value;
       cached = _info(academicYear: year);
       final StudentAcademicSource localSource = source;
 
       final result = await localSource.readLocal();
 
-      expect(result.portalBound, isTrue);
-      expect(result.identityMatches, isTrue);
-      expect(result.undergraduate, isTrue);
-      expect(result.academicYear, year);
-      expect(result.enrollmentYear, 2025);
-      expect(result.grade, grade);
-      expect(result.fromCache, isTrue);
-      expect(result.loading, isFalse);
-      expect(result.error, isNull);
-      expect(cacheReads, 1);
-      expect(accountReads, 2);
-    });
-  }
+      expect(result.portalBound, isTrue, reason: 'year=$year');
+      expect(result.identityMatches, isTrue, reason: 'year=$year');
+      expect(result.undergraduate, isTrue, reason: 'year=$year');
+      expect(result.academicYear, year, reason: 'year=$year');
+      expect(result.enrollmentYear, 2025, reason: 'year=$year');
+      expect(result.grade, grade, reason: 'year=$year');
+      expect(result.fromCache, isTrue, reason: 'year=$year');
+      expect(result.loading, isFalse, reason: 'year=$year');
+      expect(result.error, isNull, reason: 'year=$year');
+      expect(cacheReads, 1, reason: 'year=$year');
+      expect(accountReads, 2, reason: 'year=$year');
+    }
+  });
 
   test('没有本地缓存时返回未知年级，不补拉学生信息', () async {
     cached = null;
@@ -206,33 +208,33 @@ void main() {
     expect(result.grade, isNull);
   });
 
-  for (final category in ['学生/研究生', '学生/非本科生', '']) {
-    test('用户类别「$category」没有本科生层级时返回未知年级', () async {
+  test('非本科生类别返回未知年级', () async {
+    for (final category in ['学生/研究生', '学生/非本科生', '']) {
       cached = _info(category: category);
 
       final result = await source.readLocal();
 
-      expect(result.identityMatches, isTrue);
-      expect(result.undergraduate, isFalse);
-      expect(result.grade, isNull);
-    });
-  }
+      expect(result.identityMatches, isTrue, reason: category);
+      expect(result.undergraduate, isFalse, reason: category);
+      expect(result.grade, isNull, reason: category);
+    }
+  });
 
-  for (final studentId in ['2025', '']) {
-    test('缓存学号「$studentId」格式不完整时不视为可靠身份', () async {
+  test('缓存学号格式不完整时不视为可靠身份', () async {
+    for (final studentId in ['2025', '']) {
       cached = _info(studentId: studentId);
       account = studentId.isEmpty ? _studentId : studentId;
 
       final result = await source.readLocal();
 
-      expect(result.portalBound, isTrue);
-      expect(result.identityMatches, isFalse);
-      expect(result.academicYear, isNull);
-      expect(result.enrollmentYear, isNull);
-      expect(result.fetchedAt, isNull);
-      expect(result.grade, isNull);
-    });
-  }
+      expect(result.portalBound, isTrue, reason: studentId);
+      expect(result.identityMatches, isFalse, reason: studentId);
+      expect(result.academicYear, isNull, reason: studentId);
+      expect(result.enrollmentYear, isNull, reason: studentId);
+      expect(result.fetchedAt, isNull, reason: studentId);
+      expect(result.grade, isNull, reason: studentId);
+    }
+  });
 
   test('缓存账号与绑定账号不一致时不暴露年份和获取时间', () async {
     account = 'different-account';
@@ -259,20 +261,22 @@ void main() {
     expect(accountReads, 2);
   });
 
-  for (final emptyAccount in <String?>[null, '', '  ']) {
-    test('绑定账号「$emptyAccount」为空时直接返回未知年级，不读缓存', () async {
+  test('绑定账号为空或空白时直接返回未知年级，不读缓存', () async {
+    for (final emptyAccount in <String?>[null, '', '  ']) {
+      cacheReads = 0;
+      accountReads = 0;
       account = emptyAccount;
 
       final result = await source.readLocal();
 
-      expect(result.portalBound, isFalse);
-      expect(result.identityMatches, isFalse);
-      expect(result.grade, isNull);
-      expect(result.loading, isFalse);
-      expect(cacheReads, 0);
-      expect(accountReads, 1);
-    });
-  }
+      expect(result.portalBound, isFalse, reason: '$emptyAccount');
+      expect(result.identityMatches, isFalse, reason: '$emptyAccount');
+      expect(result.grade, isNull, reason: '$emptyAccount');
+      expect(result.loading, isFalse, reason: '$emptyAccount');
+      expect(cacheReads, 0, reason: '$emptyAccount');
+      expect(accountReads, 1, reason: '$emptyAccount');
+    }
+  });
 
   test('过了自然日的本地缓存仍只读一次，不触发过期刷新', () async {
     final oldInfo = _info(
@@ -321,8 +325,10 @@ void main() {
     expect(accountReads, 5);
   });
 
-  for (final after in <String?>[null, 'different-account']) {
-    test('读缓存期间绑定变为「$after」时拒绝旧记录', () async {
+  test('读缓存期间绑定解绑或切换账号时拒绝旧记录', () async {
+    for (final after in <String?>[null, 'different-account']) {
+      account = _studentId;
+      accountReads = 0;
       final delayedCache = Completer<StudentInfo?>();
       final cacheStarted = Completer<void>();
       readCache = () {
@@ -336,16 +342,16 @@ void main() {
       delayedCache.complete(_info(academicYear: 2025));
       final result = await pending;
 
-      expect(result.portalBound, after != null);
-      expect(result.identityMatches, isFalse);
-      expect(result.academicYear, isNull);
-      expect(result.enrollmentYear, isNull);
-      expect(result.fetchedAt, isNull);
-      expect(result.grade, isNull);
-      expect(result.loading, isFalse);
-      expect(accountReads, 2);
-    });
-  }
+      expect(result.portalBound, after != null, reason: '$after');
+      expect(result.identityMatches, isFalse, reason: '$after');
+      expect(result.academicYear, isNull, reason: '$after');
+      expect(result.enrollmentYear, isNull, reason: '$after');
+      expect(result.fetchedAt, isNull, reason: '$after');
+      expect(result.grade, isNull, reason: '$after');
+      expect(result.loading, isFalse, reason: '$after');
+      expect(accountReads, 2, reason: '$after');
+    }
+  });
 
   test('首次账号读取晚到时，第二次核验仍阻止旧绑定穿透', () async {
     final delayedAccount = Completer<String?>();
@@ -371,14 +377,16 @@ void main() {
     expect(accountReads, 2);
   });
 
-  for (final stage in [
-    'bound_account_before',
-    'cache_read',
-    'bound_account_after',
-  ]) {
-    test('本地读取阶段 $stage 失败时返回未知年级并保留原始诊断', () async {
+  test('本地读取各阶段失败时返回未知年级并保留原始诊断', () async {
+    for (final stage in [
+      'bound_account_before',
+      'cache_read',
+      'bound_account_after',
+    ]) {
       final records = <Map<String, Object?>>[];
       AppLog.recordListenerForTesting = records.add;
+      readCache = null;
+      readAccount = null;
       if (stage == 'cache_read') {
         readCache = () async => throw const FormatException('synthetic cache');
       } else {
@@ -394,11 +402,11 @@ void main() {
 
       final result = await source.readLocal();
 
-      expect(result.grade, isNull);
-      expect(result.error, isNotEmpty);
-      expect(result.error, isNot(contains(_studentId)));
-      expect(result.loading, isFalse);
-      expect(result.fromCache, isTrue);
+      expect(result.grade, isNull, reason: stage);
+      expect(result.error, isNotEmpty, reason: stage);
+      expect(result.error, isNot(contains(_studentId)), reason: stage);
+      expect(result.loading, isFalse, reason: stage);
+      expect(result.fromCache, isTrue, reason: stage);
       final failure = records.singleWhere(
         (record) => record['event'] == 'grade_source.unavailable',
       );
@@ -406,8 +414,8 @@ void main() {
       expect(attrs['stage'], stage);
       expect(attrs['error_chain'], isNotEmpty);
       expect(attrs['stack_trace'], isNotEmpty);
-    });
-  }
+    }
+  });
 
   test('实际本地缓存不存在时，读取不创建学生信息目录', () async {
     final directory = await localDirectory();
@@ -464,8 +472,8 @@ void main() {
     expect(attrs['stack_trace'], isNotEmpty);
   });
 
-  for (final fetchedAt in <String?>[null, 'invalid-time']) {
-    test('本地缓存获取时间「$fetchedAt」无效时拒绝记录并保留诊断', () async {
+  test('本地缓存获取时间缺失或无效时拒绝记录并保留诊断', () async {
+    for (final fetchedAt in <String?>[null, 'invalid-time']) {
       final directory = await localDirectory();
       final file = profileFile(directory);
       await file.parent.create(recursive: true);
@@ -475,8 +483,8 @@ void main() {
       final records = <Map<String, Object?>>[];
       AppLog.recordListenerForTesting = records.add;
 
-      expect(await StudentInfoStore.read(), isNull);
-      expect(await file.readAsString(), original);
+      expect(await StudentInfoStore.read(), isNull, reason: '$fetchedAt');
+      expect(await file.readAsString(), original, reason: '$fetchedAt');
       final failure = records.singleWhere(
         (record) => record['event'] == 'cache.read_failed',
       );
@@ -484,8 +492,8 @@ void main() {
       expect(attrs['error_type'], 'FormatException');
       expect(attrs['error_chain'], isNotEmpty);
       expect(attrs['stack_trace'], isNotEmpty);
-    });
-  }
+    }
+  });
 
   test('本地目录平台不可用时保留系统原因及堆栈', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -509,16 +517,44 @@ void main() {
     expect(attrs['stack_trace'], isNotEmpty);
   });
 
-  test('学生卡正常保存仍会创建本地目录且可恢复', () async {
-    final directory = await localDirectory();
-    final info = _info();
+  group('SemesterInfo 模型', () {
+    test('校历缺字段 / 空对象返回 null', () {
+      expect(SemesterInfo.tryFromJson(null), isNull);
+      expect(SemesterInfo.tryFromJson(const {}), isNull);
+      expect(
+        SemesterInfo.tryFromJson({
+          'xn': '2025',
+          'xq': '',
+          'ksrq': '',
+          'jsrq': '',
+        }),
+        isNull,
+      );
+    });
 
-    await StudentInfoStore.save(info);
-    final restored = await StudentInfoStore.read();
+    test('maxWeeks 为 "0" / 空时进度为 0，不出现 NaN', () {
+      for (final w in ['0', '', null]) {
+        final s = SemesterInfo.tryFromJson({
+          'xn': '2025',
+          'xq': '1',
+          'ksrq': '2025-09-01',
+          'jsrq': '2026-01-18',
+          'maxWeeks': w,
+        })!;
+        expect(s.maxWeeks, 0);
+        expect(s.progressAt(DateTime(2025, 10, 1)), 0);
+      }
+    });
 
-    expect(await profileFile(directory).exists(), isTrue);
-    expect(restored?.user.studentId, _studentId);
-    expect(restored?.semester?.year, info.semester?.year);
-    expect(restored?.fetchedAt, info.fetchedAt);
+    test('开学前进度钳到 0', () {
+      final s = SemesterInfo.tryFromJson({
+        'xn': '2025',
+        'xq': '1',
+        'ksrq': '2025-09-01',
+        'jsrq': '2026-01-18',
+        'maxWeeks': '20',
+      })!;
+      expect(s.progressAt(DateTime(2025, 8, 1)), 0);
+    });
   });
 }

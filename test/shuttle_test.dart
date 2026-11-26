@@ -1,12 +1,19 @@
 import 'dart:async';
-import 'dart:typed_data';
+import 'dart:math' show Point;
 
 import 'package:dio/dio.dart';
+// ignore: depend_on_referenced_packages
+import 'package:fake_async/fake_async.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:nuist_sta_app/core/config/campus_config.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_canvas.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_native.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_page.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/shuttle_api.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/shuttle_controller.dart';
@@ -37,39 +44,157 @@ class FakeShuttleSource implements ShuttleSource {
   void close() => closed = true;
 }
 
+/// 一次对原生地图的调用：方法名和实参，按调用顺序记录。
+class _Call {
+  _Call(this.name, this.positional, this.named);
+
+  final String name;
+  final List<Object?> positional;
+  final Map<String, Object?> named;
+
+  /// 位置参数 [index]，缺省时返回 null。
+  Object? arg(int index) =>
+      index < positional.length ? positional[index] : null;
+}
+
+/// 0.28 起插件经带类型的 Pigeon 消息访问原生，不能再 mock method channel，
+/// 这里换成假的 [MapLibrePlatform]，记录所有调用并返回空结果。
+class _FakePlatform extends MapLibrePlatform {
+  final calls = <_Call>[];
+
+  Iterable<_Call> where(String name) => calls.where((c) => c.name == name);
+
+  @override
+  Future<void> initPlatform(int id) async {}
+
+  @override
+  Widget buildView(
+    Map<String, dynamic> creationParams,
+    OnPlatformViewCreatedCallback onPlatformViewCreated,
+    Set<Factory<OneSequenceGestureRecognizer>>? gestureRecognizers,
+  ) => const SizedBox();
+
+  @override
+  Future<List<Point>> toScreenLocationBatch(Iterable<LatLng> latLngs) async {
+    calls.add(_Call('toScreenLocationBatch', [latLngs], const {}));
+    return [
+      for (var i = 0; i < latLngs.length; i++)
+        Point(i.toDouble() * 30, i.toDouble() * 30),
+    ];
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    final name = invocation.memberName
+        .toString()
+        .replaceFirst('Symbol("', '')
+        .replaceFirst('")', '');
+    calls.add(
+      _Call(name, invocation.positionalArguments, {
+        for (final entry in invocation.namedArguments.entries)
+          entry.key
+                  .toString()
+                  .replaceFirst('Symbol("', '')
+                  .replaceFirst('")', ''):
+              entry.value,
+      }),
+    );
+    // 其余方法都返回空的完成态 Future，足够让控制器继续执行。
+    return Future<Null>.value();
+  }
+}
+
+CampusMapCanvas configuration(
+  List<ShuttleVehicle> vehicles, {
+  String style = 'synthetic-style',
+}) => CampusMapCanvas(
+  styleUrl: style,
+  selectedPlace: null,
+  floor: null,
+  selectedRoom: null,
+  onPlaceSelected: (_) {},
+  onRoomSelected: (_) {},
+  mapLayer: CampusMapLayer.transit,
+  shuttleVehicles: vehicles,
+  shuttleDirections: {for (final v in vehicles) v.id: ShuttleDirection.east},
+);
+
 void main() {
-  testWidgets('曾成功后的停更仍有警告，连续失败降噪且恢复可追踪', (tester) async {
-    final records = <Map<String, Object?>>[];
-    AppLog.recordListenerForTesting = records.add;
-    final source = FakeShuttleSource();
-    final controller = ShuttleController(source);
-    try {
-      controller.setActive(true);
-      source.pending.last.complete([]);
-      await tester.pump();
-      for (var attempt = 0; attempt < 2; attempt++) {
-        await tester.pump(const Duration(seconds: 3));
-        source.pending.last.completeError(StateError('合成公交断线'));
-        await tester.pump();
+  test('曾成功后的停更仍有警告，连续失败降噪且恢复可追踪', () {
+    fakeAsync((async) {
+      final records = <Map<String, Object?>>[];
+      AppLog.recordListenerForTesting = records.add;
+      final source = FakeShuttleSource();
+      final controller = ShuttleController(source);
+      try {
+        controller.setActive(true);
+        source.pending.last.complete([]);
+        async.flushMicrotasks();
+        for (var attempt = 0; attempt < 2; attempt++) {
+          async.elapse(const Duration(seconds: 3));
+          source.pending.last.completeError(StateError('合成公交断线'));
+          async.flushMicrotasks();
+        }
+        async.elapse(const Duration(seconds: 3));
+        source.pending.last.complete([]);
+        async.flushMicrotasks();
+        final failures = records
+            .where((event) => event['event'] == 'vehicles.refresh_failed')
+            .toList();
+        expect(failures, hasLength(2));
+        expect(failures.first['level'], 'WARNING');
+        expect(failures.last['level'], 'DEBUG');
+        expect(
+          records.where((event) => event['event'] == 'vehicles.recovered'),
+          hasLength(1),
+        );
+      } finally {
+        controller.dispose();
+        AppLog.recordListenerForTesting = null;
       }
-      await tester.pump(const Duration(seconds: 3));
-      source.pending.last.complete([]);
-      await tester.pump();
-      final failures = records
-          .where((event) => event['event'] == 'vehicles.refresh_failed')
-          .toList();
-      expect(failures, hasLength(2));
-      expect(failures.first['level'], 'WARNING');
-      expect(failures.last['level'], 'DEBUG');
-      expect(
-        records.where((event) => event['event'] == 'vehicles.recovered'),
-        hasLength(1),
-      );
-    } finally {
-      controller.dispose();
-      AppLog.recordListenerForTesting = null;
-    }
+    });
   });
+
+  test('失败只提示一次，继续轮询；成功缺失车辆移除，后台停止', () {
+    fakeAsync((async) {
+      final source = FakeShuttleSource();
+      final controller = ShuttleController(source);
+      var errors = 0;
+      controller.onFirstFailure = () => errors++;
+      controller.setActive(true);
+      source.pending.last.completeError(StateError('synthetic'));
+      async.flushMicrotasks();
+      expect(errors, 1);
+      async.elapse(const Duration(seconds: 3));
+      source.pending.last.complete([
+        ShuttleVehicle.parse(row('a'))!,
+        ShuttleVehicle.parse(row('b', online: 0))!,
+      ]);
+      async.flushMicrotasks();
+      expect(controller.vehicles, hasLength(2));
+      async.elapse(const Duration(seconds: 3));
+      source.pending.last.complete([ShuttleVehicle.parse(row('a'))!]);
+      async.flushMicrotasks();
+      expect(controller.vehicles.map((v) => v.id), ['a']);
+      async.elapse(const Duration(seconds: 3));
+      source.pending.last.completeError(StateError('synthetic'));
+      async.flushMicrotasks();
+      expect(errors, 1);
+      controller.setActive(false);
+      final count = source.pending.length;
+      async.elapse(const Duration(seconds: 9));
+      expect(source.pending.length, count);
+      controller.setActive(true);
+      expect(source.pending.length, count + 1);
+      controller.setActive(false);
+      source.pending.last.complete([]);
+      async.flushMicrotasks();
+      expect(controller.vehicles, hasLength(1));
+      controller.dispose();
+      expect(source.closed, isTrue);
+    });
+  });
+
   test('坐标逆变换匹配校准工具，在线状态只看 ol', () {
     final v = ShuttleVehicle.parse(row('bus-a'))!;
     expect(v.point.longitude, closeTo(118.71900271346217, 1e-9));
@@ -197,8 +322,8 @@ void main() {
     dio.close();
   });
 
-  for (final status in [401, 403]) {
-    test('状态接口$status重建独立jsession后只重试一次', () async {
+  test('状态接口 401/403 重建独立jsession后只重试一次', () async {
+    for (final status in [401, 403]) {
       final dio = Dio();
       var logins = 0;
       var queries = 0;
@@ -227,15 +352,15 @@ void main() {
       dio.httpClientAdapter = adapter;
       final api = ShuttleApi(dio: dio);
       try {
-        expect((await api.load()).single.id, 'NXD4');
-        expect(logins, 2);
-        expect(queries, 2);
+        expect((await api.load()).single.id, 'NXD4', reason: 'status=$status');
+        expect(logins, 2, reason: 'status=$status');
+        expect(queries, 2, reason: 'status=$status');
       } finally {
         api.close();
         dio.close(force: true);
       }
-    });
-  }
+    }
+  });
 
   test('批量查询全部一位两位NXD编号，筛选完整编号并按vid去重', () async {
     final dio = Dio();
@@ -320,44 +445,6 @@ void main() {
     dio.close();
   });
 
-  testWidgets('失败只提示一次，继续轮询；成功缺失车辆移除，后台停止', (tester) async {
-    final source = FakeShuttleSource();
-    final controller = ShuttleController(source);
-    var errors = 0;
-    controller.onFirstFailure = () => errors++;
-    controller.setActive(true);
-    source.pending.last.completeError(StateError('synthetic'));
-    await tester.pump();
-    expect(errors, 1);
-    await tester.pump(const Duration(seconds: 3));
-    source.pending.last.complete([
-      ShuttleVehicle.parse(row('a'))!,
-      ShuttleVehicle.parse(row('b', online: 0))!,
-    ]);
-    await tester.pump();
-    expect(controller.vehicles, hasLength(2));
-    await tester.pump(const Duration(seconds: 3));
-    source.pending.last.complete([ShuttleVehicle.parse(row('a'))!]);
-    await tester.pump();
-    expect(controller.vehicles.map((v) => v.id), ['a']);
-    await tester.pump(const Duration(seconds: 3));
-    source.pending.last.completeError(StateError('synthetic'));
-    await tester.pump();
-    expect(errors, 1);
-    controller.setActive(false);
-    final count = source.pending.length;
-    await tester.pump(const Duration(seconds: 9));
-    expect(source.pending.length, count);
-    controller.setActive(true);
-    expect(source.pending.length, count + 1);
-    controller.setActive(false);
-    source.pending.last.complete([]);
-    await tester.pump();
-    expect(controller.vehicles, hasLength(1));
-    controller.dispose();
-    expect(source.closed, isTrue);
-  });
-
   testWidgets('页面仅显示一次短toast，前后台及图层切换控制请求', (tester) async {
     final source = FakeShuttleSource();
     await tester.pumpWidget(
@@ -410,13 +497,95 @@ void main() {
     expect(source.closed, isTrue);
   });
 
-  testWidgets('俯视图标输出高分辨率透明PNG', (tester) async {
-    final bytes = await tester.runAsync(
-      () => ShuttleMapLayer.icon(const Color(0xFF409CE8), 3),
+  testWidgets('车辆独立更新、覆盖站点、随地图旋转，样式重载恢复图层', (tester) async {
+    final platform = _FakePlatform();
+    final originalFactory = MapLibrePlatform.createInstance;
+    MapLibrePlatform.createInstance = () => platform;
+    addTearDown(() => MapLibrePlatform.createInstance = originalFactory);
+    final controller = MapLibreMapController(
+      maplibrePlatform: platform,
+      annotationOrder: const [],
+      annotationConsumeTapEvents: const [],
+      initialCameraPosition: const CameraPosition(
+        target: LatLng(32.2, 118.7),
+        zoom: 16,
+      ),
     );
-    expect(bytes!.take(8), [137, 80, 78, 71, 13, 10, 26, 10]);
-    final header = ByteData.sublistView(bytes);
-    expect(header.getUint32(16), 288);
-    expect(header.getUint32(20), 288);
+    const vehicle = ShuttleVehicle(
+      id: 'a',
+      point: GeoPoint(longitude: 118.71, latitude: 32.2),
+      heading: 90,
+      online: true,
+    );
+    Widget page(CampusMapCanvas c) =>
+        MaterialApp(home: CampusMapNative(configuration: c));
+    Future<void> drain() async {
+      for (var i = 0; i < 4; i++) {
+        await tester.pump();
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 30)),
+        );
+      }
+      await tester.pump();
+    }
+
+    await tester.pumpWidget(page(configuration(const [vehicle])));
+    var map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
+    map.onMapCreated!(controller);
+    map.onStyleLoadedCallback!();
+    await drain();
+    final layers = platform.where('addSymbolLayer').toList();
+    expect(
+      layers.map((c) => c.arg(1)),
+      containsAllInOrder(['shuttle-stop-labels', 'shuttle-vehicle-icons']),
+    );
+    final properties = layers.last.arg(2) as Map;
+    expect(properties['icon-rotation-alignment'], 'map');
+    expect(properties['icon-anchor'], 'center');
+    final initialAdds = platform.where('addGeoJsonSource').length;
+    final initialCameraCalls = platform.where('animateCamera').length;
+    const moved = ShuttleVehicle(
+      id: 'a',
+      point: GeoPoint(longitude: 118.72, latitude: 32.21),
+      heading: 90,
+      online: false,
+    );
+    await tester.pumpWidget(page(configuration(const [moved])));
+    await tester.pump(const Duration(milliseconds: 250));
+    await drain();
+    await tester.pump(const Duration(milliseconds: 500));
+    await drain();
+    expect(platform.where('addGeoJsonSource').length, initialAdds);
+    expect(platform.where('animateCamera').length, initialCameraCalls);
+    final updates = platform
+        .where('setGeoJsonSource')
+        .where((c) => c.arg(0) == 'shuttle-vehicles');
+    expect(updates, isNotEmpty);
+    final geojson = updates.last.arg(1) as Map;
+    expect(geojson['features'].single['geometry']['coordinates'], [
+      118.72,
+      32.21,
+    ]);
+    expect(geojson['features'].single['properties']['icon'], 'shuttle-offline');
+    map.onCameraMove!(
+      const CameraPosition(target: LatLng(32.2, 118.7), zoom: 17, bearing: 90),
+    );
+    await tester.pump(const Duration(milliseconds: 110));
+    await drain();
+    await tester.pumpWidget(
+      page(configuration(const [moved], style: 'synthetic-style-2')),
+    );
+    map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
+    map.onStyleLoadedCallback!();
+    await drain();
+    expect(
+      platform
+          .where('addSymbolLayer')
+          .where((c) => c.arg(1) == 'shuttle-vehicle-icons'),
+      hasLength(2),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
   });
 }

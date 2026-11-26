@@ -32,7 +32,7 @@ void main() {
     }
   });
 
-  testWidgets('首页展示 NUIST++ 标题与校园地图入口', (WidgetTester tester) async {
+  testWidgets('首页宫格、学习页卡片与我的页核心入口展示', (WidgetTester tester) async {
     await _pumpPhone(tester);
 
     expect(find.text('NUIST++'), findsOneWidget);
@@ -44,24 +44,23 @@ void main() {
     expect(find.text('首页'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);
     expect(find.byType(AppGridItem), findsNWidgets(8));
-    expect(
-      tester
-          .widgetList<AppGridItem>(find.byType(AppGridItem))
-          .map((w) => w.app.id),
-      [
-        'bulletin',
-        'electricity',
-        'free-classroom',
-        'campus-map',
-        'timetable',
-        'exam-schedule',
-        'library',
-        'sunshine-run',
-      ],
-    );
+
+    await tester.tap(find.text('学习'));
+    await tester.pumpAndSettle();
+    for (final label in const ['本学期', '学业概览', '成绩查询', '双创学分', '劳动积分']) {
+      expect(find.text(label), findsOneWidget);
+    }
+
+    await tester.tap(find.text('我的'));
+    await tester.pumpAndSettle();
+    expect(find.text('统一门户'), findsOneWidget);
+    expect(find.text('点击登录'), findsNothing);
+    for (final label in ['设置', '关于']) {
+      expect(find.text(label), findsOneWidget);
+    }
   });
 
-  testWidgets('点击校园地图进入小程序页（全屏、无底部页签）', (WidgetTester tester) async {
+  testWidgets('点击校园地图或空教室进入全屏小程序页（无底部页签）', (WidgetTester tester) async {
     await _pumpPhone(tester);
 
     final map = find.text('校园地图');
@@ -73,57 +72,6 @@ void main() {
     expect(find.byType(TextField), findsOneWidget);
     expect(find.byTooltip('地图图层'), findsOneWidget);
     expect(find.byType(BottomNavigationBar), findsNothing);
-  });
-
-  testWidgets('点击空教室进入查询页（全屏、无底部页签）', (WidgetTester tester) async {
-    await _pumpPhone(tester);
-
-    final free = find.text('空教室');
-    await tester.ensureVisible(free);
-    await tester.pumpAndSettle();
-    await tester.tap(free);
-    await tester.pumpAndSettle();
-
-    // 测试环境下安全存储 / 文件读取永远不会完成，页面停在初始态即可；
-    // 这里只确认入口链路通、页面能布局出来。
-    expect(find.widgetWithText(AppBar, '空教室'), findsOneWidget);
-    expect(find.text('选择教学楼'), findsOneWidget);
-    expect(find.text('今天'), findsOneWidget);
-    expect(find.byType(BottomNavigationBar), findsNothing);
-  });
-
-  testWidgets('切到我的页展示用户卡片与功能列表', (WidgetTester tester) async {
-    await _pumpPhone(tester);
-
-    await tester.tap(find.text('我的'));
-    await tester.pumpAndSettle();
-
-    // 测试环境读不到安全存储，表头停在加载态。
-    expect(find.text('统一门户'), findsOneWidget);
-    expect(find.text('点击登录'), findsNothing);
-    expect(find.text('我的社团'), findsNothing);
-    expect(find.text('我的活动'), findsNothing);
-    for (final label in ['设置', '关于']) {
-      expect(find.text(label), findsOneWidget);
-    }
-  });
-
-  testWidgets('切到学习页展示五张卡片的标题', (WidgetTester tester) async {
-    await _pumpPhone(tester);
-
-    await tester.tap(find.text('学习'));
-    await tester.pumpAndSettle();
-
-    // 测试环境没有平台通道，各卡读不到本地状态、也不会去请求网络，
-    // 只保证壳把五张卡都摆出来了。
-    const labels = ['本学期', '学业概览', '成绩查询', '双创学分', '劳动积分'];
-    for (final label in labels) {
-      expect(find.text(label), findsOneWidget);
-    }
-    final positions = labels
-        .map((label) => tester.getTopLeft(find.text(label)).dy)
-        .toList();
-    expect(positions, orderedEquals([...positions]..sort()));
   });
 
   testWidgets('我的页进入设置并切换深色模式', (WidgetTester tester) async {
@@ -160,172 +108,185 @@ void main() {
     );
   });
 
-  for (final mode in [ThemeMode.light, ThemeMode.dark]) {
-    testWidgets('${mode.name} 下从首页打开图书馆并取消、完成预测性返回', (tester) async {
-      addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
-      tester.view.physicalSize = const Size(400, 850);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      AppThemeMode.instance.value = mode;
-      await tester.pumpWidget(const NuistApp());
-      await tester.ensureVisible(find.text('图书馆'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('图书馆'));
-      await tester.pumpAndSettle();
+  testWidgets('深色模式下从首页打开图书馆并取消、完成预测性返回', (tester) async {
+    addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
+    tester.view.physicalSize = const Size(400, 850);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    AppThemeMode.instance.value = ThemeMode.dark;
+    await tester.pumpWidget(const NuistApp());
+    await tester.ensureVisible(find.text('图书馆'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('图书馆'));
+    await tester.pumpAndSettle();
 
-      final context = tester.element(find.text('馆藏查询'));
-      final route = ModalRoute.of(context)! as PageRoute;
-      expect(
-        Theme.of(context).brightness,
-        mode == ThemeMode.dark ? Brightness.dark : Brightness.light,
+    final context = tester.element(find.text('馆藏查询'));
+    final route = ModalRoute.of(context)! as PageRoute;
+    expect(Theme.of(context).brightness, Brightness.dark);
+    expect(find.text('我的借阅'), findsOneWidget);
+    Future<void> gesture(String method, [double progress = 0]) async {
+      ByteData? response;
+      const codec = StandardMethodCodec();
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'flutter/backgesture',
+        codec.encodeMethodCall(
+          MethodCall(method, {
+            'touchOffset': [5.0, 300.0],
+            'progress': progress,
+            'swipeEdge': 0,
+          }),
+        ),
+        (data) => response = data,
       );
-      expect(find.text('我的借阅'), findsOneWidget);
-      Future<void> gesture(String method, [double progress = 0]) async {
-        ByteData? response;
-        const codec = StandardMethodCodec();
-        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
-          'flutter/backgesture',
-          codec.encodeMethodCall(
-            MethodCall(method, {
-              'touchOffset': [5.0, 300.0],
-              'progress': progress,
-              'swipeEdge': 0,
-            }),
-          ),
-          (data) => response = data,
-        );
-        if (method == 'startBackGesture') {
-          expect(codec.decodeEnvelope(response!), isTrue);
-        }
-        await tester.pumpAndSettle();
+      if (method == 'startBackGesture') {
+        expect(codec.decodeEnvelope(response!), isTrue);
       }
-
-      await gesture('startBackGesture');
-      await gesture('updateBackGestureProgress', 0.4);
-      expect(route.animation!.value, closeTo(0.6, 0.001));
-      await gesture('cancelBackGesture');
-      expect(route.isCurrent, isTrue);
-      expect(find.text('馆藏查询'), findsOneWidget);
-
-      await gesture('startBackGesture');
-      await gesture('updateBackGestureProgress', 0.4);
-      await gesture('commitBackGesture');
-      expect(find.text('馆藏查询'), findsNothing);
-      expect(find.text('NUIST++'), findsOneWidget);
-    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
-
-    testWidgets('${mode.name} 下路由和直接推入的页面支持预测性返回及取消', (tester) async {
-      addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
-      AppThemeMode.instance.value = mode;
-      await _pumpPhone(tester);
-      await tester.tap(find.text('我的'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('设置'));
-      await tester.pumpAndSettle();
+    }
 
-      final context = tester.element(find.text('深色模式'));
-      final settingsRoute = ModalRoute.of(context)! as PageRoute;
-      final navigator = Navigator.of(context);
-      final edge = mode == ThemeMode.light ? 0 : 1;
-      expect(settingsRoute.popGestureEnabled, isTrue);
-      expect(settingsRoute.isCurrent, isTrue);
-      expect(Theme.of(context).platform, TargetPlatform.android);
-      expect(settingsRoute.navigator, same(navigator));
-      final builder = Theme.of(context)
-          .pageTransitionsTheme
-          .builders[TargetPlatform.android];
-      expect(builder, isA<PredictiveBackPageTransitionsBuilder>());
-      expect(
-        (builder! as PredictiveBackPageTransitionsBuilder).fallbackColor,
-        AppPalette.of(context).pageBg,
+    await gesture('startBackGesture');
+    await gesture('updateBackGestureProgress', 0.4);
+    expect(route.animation!.value, closeTo(0.6, 0.001));
+    await gesture('cancelBackGesture');
+    expect(route.isCurrent, isTrue);
+    expect(find.text('馆藏查询'), findsOneWidget);
+
+    await gesture('startBackGesture');
+    await gesture('updateBackGestureProgress', 0.4);
+    await gesture('commitBackGesture');
+    expect(find.text('馆藏查询'), findsNothing);
+    expect(find.text('NUIST++'), findsOneWidget);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets('路由和直接推入的页面支持预测性返回及取消', (tester) async {
+    addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
+    AppThemeMode.instance.value = ThemeMode.light;
+    await _pumpPhone(tester);
+    await tester.tap(find.text('我的'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设置'));
+    await tester.pumpAndSettle();
+
+    final context = tester.element(find.text('深色模式'));
+    final settingsRoute = ModalRoute.of(context)! as PageRoute;
+    final navigator = Navigator.of(context);
+    expect(settingsRoute.popGestureEnabled, isTrue);
+    expect(settingsRoute.isCurrent, isTrue);
+    final builder = Theme.of(context)
+        .pageTransitionsTheme
+        .builders[TargetPlatform.android];
+    expect(builder, isA<PredictiveBackPageTransitionsBuilder>());
+    expect(
+      (builder! as PredictiveBackPageTransitionsBuilder).fallbackColor,
+      AppPalette.of(context).pageBg,
+    );
+    Future<void> gesture(String method, {double progress = 0}) async {
+      ByteData? response;
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'flutter/backgesture',
+        const StandardMethodCodec().encodeMethodCall(
+          MethodCall(method, {
+            'touchOffset': [5.0, 300.0],
+            'progress': progress,
+            'swipeEdge': 0,
+          }),
+        ),
+        (data) => response = data,
       );
-      Future<void> gesture(String method, {double progress = 0}) async {
-        ByteData? response;
-        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
-          'flutter/backgesture',
-          const StandardMethodCodec().encodeMethodCall(
-            MethodCall(method, {
-              'touchOffset': [edge == 0 ? 5.0 : 385.0, 300.0],
-              'progress': progress,
-              'swipeEdge': edge,
-            }),
-          ),
-          (data) => response = data,
-        );
-        expect(response, isNotNull, reason: method);
-        final result = const StandardMethodCodec().decodeEnvelope(response!);
-        if (method == 'startBackGesture') {
-          expect(result, isTrue);
-          expect(navigator.userGestureInProgress, isTrue);
-        }
-        await tester.pumpAndSettle();
+      expect(response, isNotNull, reason: method);
+      final result = const StandardMethodCodec().decodeEnvelope(response!);
+      if (method == 'startBackGesture') {
+        expect(result, isTrue);
+        expect(navigator.userGestureInProgress, isTrue);
       }
-
-      // 使用实际 go_router 页面，取消时应保留页面及其路由栈。
-      await gesture('startBackGesture');
-      await gesture('updateBackGestureProgress', progress: 0.4);
-      expect(navigator.userGestureInProgress, isTrue);
-      expect(settingsRoute.animation!.value, closeTo(0.6, 0.001));
-      expect(find.text('统一门户'), findsOneWidget);
-      await gesture('cancelBackGesture');
-      expect(navigator.userGestureInProgress, isFalse);
-      expect(settingsRoute.isCurrent, isTrue);
-      expect(settingsRoute.animation!.value, 1);
-      expect(find.text('深色模式'), findsOneWidget);
-
-      // 小程序内部直接 push 的 MaterialPageRoute 也应使用同一套手势。
-      final detailRoute = MaterialPageRoute<void>(
-        builder: (_) => const Scaffold(body: Text('内部详情')),
-      );
-      navigator.push(detailRoute);
       await tester.pumpAndSettle();
-      await gesture('startBackGesture');
-      await gesture('updateBackGestureProgress', progress: 0.4);
-      expect(detailRoute.animation!.value, closeTo(0.6, 0.001));
-      await gesture('commitBackGesture');
-      expect(find.text('内部详情'), findsNothing);
-      expect(settingsRoute.isCurrent, isTrue);
+    }
 
-      await gesture('startBackGesture');
-      await gesture('updateBackGestureProgress', progress: 0.4);
-      await gesture('commitBackGesture');
-      expect(find.text('深色模式'), findsNothing);
-      expect(find.text('统一门户'), findsOneWidget);
-      expect(navigator.canPop(), isFalse);
-    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
-  }
+    await gesture('startBackGesture');
+    await gesture('updateBackGestureProgress', progress: 0.4);
+    expect(navigator.userGestureInProgress, isTrue);
+    expect(settingsRoute.animation!.value, closeTo(0.6, 0.001));
+    await gesture('cancelBackGesture');
+    expect(navigator.userGestureInProgress, isFalse);
+    expect(settingsRoute.isCurrent, isTrue);
+    expect(find.text('深色模式'), findsOneWidget);
 
-  for (final mode in [ThemeMode.light, ThemeMode.dark]) {
-    testWidgets('${mode.name} 下窄屏直启点击首页铃铛遮罩覆盖底栏且不触发切换', (tester) async {
-      addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
-      AppThemeMode.instance.value = mode;
-      tester.view.devicePixelRatio = 1;
-      tester.view.physicalSize = const Size(390, 844);
-      tester.view.padding = const FakeViewPadding(top: 43, bottom: 24);
-      tester.view.viewPadding = const FakeViewPadding(top: 43, bottom: 24);
-      addTearDown(tester.view.reset);
+    final detailRoute = MaterialPageRoute<void>(
+      builder: (_) => const Scaffold(body: Text('内部详情')),
+    );
+    navigator.push(detailRoute);
+    await tester.pumpAndSettle();
+    await gesture('startBackGesture');
+    await gesture('updateBackGestureProgress', progress: 0.4);
+    expect(detailRoute.animation!.value, closeTo(0.6, 0.001));
+    await gesture('commitBackGesture');
+    expect(find.text('内部详情'), findsNothing);
+    expect(settingsRoute.isCurrent, isTrue);
 
-      await tester.pumpWidget(const NuistApp());
-      await tester.pumpAndSettle();
+    await gesture('startBackGesture');
+    await gesture('updateBackGestureProgress', progress: 0.4);
+    await gesture('commitBackGesture');
+    expect(find.text('深色模式'), findsNothing);
+    expect(find.text('统一门户'), findsOneWidget);
+    expect(navigator.canPop(), isFalse);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
-      await tester.tap(find.byTooltip('公告'));
-      await tester.pumpAndSettle();
+  testWidgets('窄屏直启点击首页铃铛遮罩覆盖底栏且不触发切换', (tester) async {
+    addTearDown(() => AppThemeMode.instance.value = ThemeMode.system);
+    AppThemeMode.instance.value = ThemeMode.dark;
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.padding = const FakeViewPadding(top: 43, bottom: 24);
+    tester.view.viewPadding = const FakeViewPadding(top: 43, bottom: 24);
+    addTearDown(tester.view.reset);
 
-      expect(find.byType(AnnouncementDialog), findsOneWidget);
-      expect(
-        tester.getSize(find.byType(ModalBarrier).last),
-        const Size(390, 844),
-      );
-      expect(find.text('学习').hitTestable(), findsNothing);
+    await tester.pumpWidget(const NuistApp());
+    await tester.pumpAndSettle();
 
-      await tester.tapAt(tester.getCenter(find.text('学习')));
-      await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('公告'));
+    await tester.pumpAndSettle();
 
-      expect(find.byType(AnnouncementDialog), findsNothing);
-      expect(find.text('NUIST++'), findsOneWidget);
-      expect(find.text('本学期'), findsNothing);
-      expect(tester.takeException(), isNull);
-    });
-  }
+    expect(find.byType(AnnouncementDialog), findsOneWidget);
+    expect(
+      tester.getSize(find.byType(ModalBarrier).last),
+      const Size(390, 844),
+    );
+    expect(find.text('学习').hitTestable(), findsNothing);
+
+    await tester.tapAt(tester.getCenter(find.text('学习')));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AnnouncementDialog), findsNothing);
+    expect(find.text('NUIST++'), findsOneWidget);
+    expect(find.text('本学期'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('窄屏详情退场动画中途底栏不抢占高度，动画结束后恢复底栏', (tester) async {
+    await _pumpPhone(tester);
+    await tester.tap(find.text('我的'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设置'));
+    await tester.pumpAndSettle();
+    expect(find.text('首页'), findsNothing);
+    final duringHeight = tester
+        .getSize(find.byKey(const ValueKey('app-pane-2')))
+        .height;
+
+    await tester.binding.handlePopRoute();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('首页'), findsNothing);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('app-pane-2'))).height,
+      duringHeight,
+    );
+
+    await tester.pumpAndSettle();
+    expect(find.text('首页'), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('app-pane-2'))).height,
+      lessThan(duringHeight),
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 }

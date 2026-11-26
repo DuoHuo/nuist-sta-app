@@ -25,43 +25,36 @@ void main() {
   });
 
   group('PrivacyConsent', () {
-    test('没有记录时是未选择，选择落盘后重启可读回', () async {
+    test('没有记录时是未选择，选择落盘后重启可读回且仅 accepted 算已同意', () async {
       final first = store();
       await first.load();
       expect(first.value, PrivacyDecision.undecided);
+      expect(first.accepted, isFalse);
       await first.set(PrivacyDecision.accepted);
+      expect(first.accepted, isTrue);
       final second = store();
       await second.load();
       expect(second.value, PrivacyDecision.accepted);
       await second.set(PrivacyDecision.declined);
+      expect(first.accepted, isTrue);
+      expect(second.accepted, isFalse);
       final third = store();
       await third.load();
       expect(third.value, PrivacyDecision.declined);
     });
 
-    test('旧版本政策的记录失效，重新询问', () async {
+    test('旧版本或损坏记录均按未选择处理', () async {
       File('${tmp.path}/privacy_consent').writeAsStringSync(
         '{"version":${kPrivacyPolicyVersion - 1},"decision":"accepted"}',
       );
-      final consent = store();
-      await consent.load();
-      expect(consent.value, PrivacyDecision.undecided);
-    });
+      final outdated = store();
+      await outdated.load();
+      expect(outdated.value, PrivacyDecision.undecided);
 
-    test('记录损坏时按未选择处理', () async {
       File('${tmp.path}/privacy_consent').writeAsStringSync('not json');
-      final consent = store();
-      await consent.load();
-      expect(consent.value, PrivacyDecision.undecided);
-    });
-
-    test('只有 accepted 才算已同意', () {
-      final consent = store();
-      expect(consent.accepted, isFalse);
-      consent.value = PrivacyDecision.declined;
-      expect(consent.accepted, isFalse);
-      consent.value = PrivacyDecision.accepted;
-      expect(consent.accepted, isTrue);
+      final corrupt = store();
+      await corrupt.load();
+      expect(corrupt.value, PrivacyDecision.undecided);
     });
 
     test('匿名标识是 UUID v4，生成后落盘复用，损坏时重新生成', () async {
@@ -156,7 +149,7 @@ void main() {
       expect(consent.value, PrivacyDecision.declined);
     });
 
-    testWidgets('撤回弹窗可以点遮罩关闭，不改变选择', (tester) async {
+    testWidgets('撤回弹窗点遮罩或取消均不改变选择', (tester) async {
       final consent = PrivacyConsent(directory: () async => null)
         ..value = PrivacyDecision.accepted;
       await open(
@@ -167,6 +160,13 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('撤回同意'), findsOneWidget);
       await tester.tapAt(const Offset(4, 4));
+      await tester.pumpAndSettle();
+      expect(find.text('撤回同意'), findsNothing);
+      expect(consent.accepted, isTrue);
+
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       expect(find.text('撤回同意'), findsNothing);
       expect(consent.accepted, isTrue);
@@ -253,11 +253,6 @@ void main() {
       expect(find.textContaining('正文内容', findRichText: true), findsOneWidget);
     });
 
-    testWidgets('打包的 PRIVACY.md 可读取并包含匿名标识说明', (tester) async {
-      final text = await rootBundle.loadString(PrivacyPolicyPage.assetPath);
-      expect(text, allOf(contains('random_uuid_v1'), contains('匿名标识')));
-    });
-
     testWidgets('关于页显示隐私政策与开源许可入口', (tester) async {
       await tester.pumpWidget(
         MaterialApp(theme: appLightTheme(), home: const AboutPage()),
@@ -300,23 +295,13 @@ void main() {
       await tester.pumpAndSettle();
       expect(PrivacyConsent.instance.accepted, isTrue);
     });
-
-    testWidgets('撤回弹窗点取消不改变选择', (tester) async {
-      PrivacyConsent.instance.value = PrivacyDecision.accepted;
-      await tester.pumpWidget(
-        MaterialApp(theme: appLightTheme(), home: const SettingsPage()),
-      );
-      final entry = find.byKey(const Key('settings_privacy_consent'));
-      await tester.scrollUntilVisible(entry, 200);
-      await tester.tap(entry);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('取消'));
-      await tester.pumpAndSettle();
-      expect(PrivacyConsent.instance.accepted, isTrue);
-      expect(find.textContaining('如果您撤回对', findRichText: true), findsNothing);
-    });
   });
-  group('原生许可证', () {
+  group('静态资源与原生许可证', () {
+    test('打包的 PRIVACY.md 可读取并包含匿名标识说明', () async {
+      final text = await rootBundle.loadString(PrivacyPolicyPage.assetPath);
+      expect(text, allOf(contains('random_uuid_v1'), contains('匿名标识')));
+    });
+
     test('按分隔行解析，跳过空条目', () {
       final entries = parseNativeLicenses(
         '组件甲\n\n正文甲\n-----8<-----\n\n-----8<-----\n组件乙\n\n正文乙\n',

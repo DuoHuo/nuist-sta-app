@@ -209,6 +209,6 @@ Cookie 灌进 WebView 再加载页面，网页里直接就是登录态。
 - [ ] 普通 manifest 的 `entry` 与 `url` 恰好提供一个；没有详情页的学习卡片使用 `AppManifest.cardOnly`
 - [ ] `mini_apps/<name>/` 没有 import `shell/*` 或兄弟小程序
 - [ ] Store 的读写都有 `try/catch` 兜底
-- [ ] 有解析逻辑的话补上单元测试（参考 `test/free_classroom_models_test.dart`）
+- [ ] 有解析逻辑的话补上单元测试（参考 `test/study_models_test.dart`）
 - [ ] 学习页卡片已声明 `studyCard` 的构建、顺序与所需刷新回调，且已在唯一注册表中登记
 - [ ] 有详情页时，卡片内部使用 `context.push('/apps/<id>')` 跳转

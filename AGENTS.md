@@ -141,6 +141,14 @@ fix(electricity): 修复只有一条记录时折线图不显示
 - 以下内容只在用户明确要求时改动：`pubspec.yaml` 的 `version`、Flutter 版本、`.github/workflows/`、Android 签名配置、`assets/js/vconsole.min.js`。
 - 新增或升级依赖前必须先问；改了依赖要一并提交 `pubspec.lock`。
 
+### 测试分层与 Widget 测试红线
+
+- **优先纯 Unit Test**：数据解析、网络与鉴权、Controller/Store 状态管理、算法和边界条件使用纯 `test()` 验证；禁止为了测试纯逻辑而套用 `pumpWidget`。
+- **Widget Test 只测行为与底线**：用于核心用户交互、加载/空态/错误态/禁用态等状态流转、隐私或权限门禁、主题契约（如 WCAG 对比度）以及窄屏 `RenderFlex` 溢出冒烟。
+- **禁止静态样式与实现细节断言**：不得在 `testWidgets` 中断言静态 `EdgeInsets`、`SizedBox`、`fontSize`、`fontWeight`、`borderRadius`、硬编码颜色、动画毫秒数、卡片静态排布顺序，或 `LayoutBuilder`、`RepaintBoundary`、`IntrinsicHeight` 等内部 Widget 树结构。
+- **禁止伪单测与冗余矩阵**：禁止编写读取 `.dart`/`.kt` 源码做正则扫描的测试、`toImage`/画布像素抓图或 `TextPainter` 断行排版数学断言、`MethodChannel` JSON 逐字段字典断言，以及深浅色/多屏宽/多字号循环矩阵；涉及原生桥接或排版逻辑时只测核心状态流转或真实业务行为。
+- **禁止碎片化批次命名**：不得新建带日期或临时验收编号的测试文件，例如 `*_1027_test.dart`、`*_s2_*_test.dart`；新增用例归入对应模块已有测试文件。
+
 ## 9. 交付前验证
 
 - 必须通过：`dart format lib test` 后无差异、`flutter analyze` 零问题、`flutter test` 全绿、`cargo test` 正常通过。

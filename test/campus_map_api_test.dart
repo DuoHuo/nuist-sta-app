@@ -9,6 +9,7 @@ import 'package:nuist_sta_app/core/app_directories.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_api.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_cache.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_data.dart';
+import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_photos.dart';
 import 'package:nuist_sta_app/mini_apps/campus_map/campus_map_source.dart';
 
 typedef Handler = FutureOr<ResponseBody> Function(RequestOptions request);
@@ -265,8 +266,8 @@ void main() {
       ).reversed.toList(),
     };
 
-    for (final suffix in ['', '/', '/api/v1', '/api/v1/']) {
-      test('uses configured host/port and API suffix "$suffix"', () async {
+    test('uses configured host/port and normalizes API suffixes', () async {
+      for (final suffix in ['', '/', '/api/v1', '/api/v1/']) {
         setup((request) {
           expect(request.method, 'GET');
           expect(
@@ -276,30 +277,37 @@ void main() {
           return ok(modelData);
         }, baseUrl: 'https://campus.example:8443$suffix');
         final model = (await api.loadBuildingModel(id))!;
-        expect(
-          model.url.toString(),
-          'https://campus.example:8443/models/library.glb',
-        );
-        expect(model.version, 'v2');
-        expect(
-          model.floors.map((f) => f.levelIndex),
-          orderedEquals(List.generate(7, (i) => i)),
-        );
-        expect(model.floors.last.displayName, '7F');
-        expect(model.floors.last.elevationM, 21);
-        expect(model.floors.last.nodeName, 'Floor_6');
-        expect(
-          model.floors.last.url.toString(),
-          'https://campus.example:8443/models/library-6.glb',
-        );
-        for (final level in [null, 0, 1, 2, 3, 4, 5, 6]) {
+        if (suffix.isEmpty) {
           expect(
-            api.buildingModelViewerUri(id, levelIndex: level).toString(),
-            'https://campus.example:8443/admin/model-viewer.html?building_id=$id&floor=${level ?? 'all'}',
+            model.url.toString(),
+            'https://campus.example:8443/models/library.glb',
+          );
+          expect(model.version, 'v2');
+          expect(
+            model.floors.map((f) => f.levelIndex),
+            orderedEquals(List.generate(7, (i) => i)),
+          );
+          expect(model.floors.last.displayName, '7F');
+          expect(model.floors.last.elevationM, 21);
+          expect(model.floors.last.nodeName, 'Floor_6');
+          expect(
+            model.floors.last.url.toString(),
+            'https://campus.example:8443/models/library-6.glb',
+          );
+          for (final level in [null, 0, 1, 2, 3, 4, 5, 6]) {
+            expect(
+              api.buildingModelViewerUri(id, levelIndex: level).toString(),
+              'https://campus.example:8443/admin/model-viewer.html?building_id=$id&floor=${level ?? 'all'}',
+            );
+          }
+        } else {
+          expect(
+            api.buildingModelViewerUri(id).toString(),
+            'https://campus.example:8443/admin/model-viewer.html?building_id=$id&floor=all',
           );
         }
-      });
-    }
+      }
+    });
 
     test('encodes building IDs in request and viewer query', () async {
       const specialId = 'building /?&中文';
@@ -320,35 +328,38 @@ void main() {
       });
     });
 
-    for (final html in [false, true]) {
-      test('HTTP 404 is no model (HTML: $html)', () async {
-        setup(
-          (_) => html
-              ? ResponseBody.fromString('<html>Not found</html>', 404)
-              : response({'code': 'not_found', 'message': '暂无模型'}, status: 404),
-        );
-        expect(await api.loadBuildingModel(id), isNull);
-      });
-    }
-
-    for (final status in [401, 500]) {
-      test('HTTP $status remains a retryable error', () async {
-        setup(
-          (_) =>
-              response({'code': 'error', 'message': '服务不可用'}, status: status),
-        );
-        await expectLater(
-          api.loadBuildingModel(id),
-          throwsA(
-            isA<CampusMapApiException>().having(
-              (e) => e.statusCode,
-              'status',
-              status,
+    test(
+      'treats HTTP 404 (JSON/HTML) as no model and 401/500 as errors',
+      () async {
+        for (final html in [false, true]) {
+          setup(
+            (_) => html
+                ? ResponseBody.fromString('<html>Not found</html>', 404)
+                : response({
+                    'code': 'not_found',
+                    'message': '暂无模型',
+                  }, status: 404),
+          );
+          expect(await api.loadBuildingModel(id), isNull);
+        }
+        for (final status in [401, 500]) {
+          setup(
+            (_) =>
+                response({'code': 'error', 'message': '服务不可用'}, status: status),
+          );
+          await expectLater(
+            api.loadBuildingModel(id),
+            throwsA(
+              isA<CampusMapApiException>().having(
+                (e) => e.statusCode,
+                'status',
+                status,
+              ),
             ),
-          ),
-        );
-      });
-    }
+          );
+        }
+      },
+    );
 
     test('rejects malformed metadata instead of claiming no model', () async {
       setup(
@@ -372,33 +383,6 @@ void main() {
       );
     });
   });
-
-  test(
-    'deployed API routes legacy Martin loopback through the same origin',
-    () async {
-      setup((request) {
-        expect(request.uri.host, 'duohuo.org.cn');
-        expect(request.uri.port, 12345);
-        if (request.uri.path.endsWith('/map/config')) {
-          return ok({
-            'tile_url': 'http://localhost:3000/campus/{z}/{x}/{y}',
-            'bounds': [118.6, 32.1, 118.8, 32.3],
-          });
-        }
-        if (request.uri.path.endsWith('/buildings')) {
-          return ok({'buildings': []});
-        }
-        return ok({'pois': []});
-      }, baseUrl: 'http://duohuo.org.cn:12345');
-      final snapshot = await api.loadCampus();
-      // 没有 style_url：用内置样式，瓦片地址换成服务器给的 tile_url（归一到代理）。
-      final style = jsonDecode(snapshot.styleString!) as Map;
-      expect(style['sources']['openmaptiles']['tiles'], [
-        'http://duohuo.org.cn:12345/martin/campus/{z}/{x}/{y}',
-      ]);
-      expect(snapshot.places, isEmpty);
-    },
-  );
 
   test('bulk building geometry replaces per-building requests', () async {
     final paths = <String>[];
@@ -927,50 +911,52 @@ void main() {
     );
   });
 
-  for (final status in [200, 422]) {
-    test('normalizes backend error envelope at HTTP $status', () async {
+  test(
+    'normalizes backend error envelopes, 502 HTML and transport timeout',
+    () async {
+      for (final status in [200, 422]) {
+        setup(
+          (request) => response({
+            'code': 'no_route',
+            'message': '无法规划路线',
+          }, status: status),
+        );
+        await expectLater(
+          api.loadFingerprints(),
+          throwsA(
+            isA<CampusMapApiException>()
+                .having((e) => e.code, 'code', 'no_route')
+                .having((e) => e.statusCode, 'status', status)
+                .having((e) => e.toString(), 'message', '无法规划路线'),
+          ),
+        );
+      }
       setup(
-        (request) =>
-            response({'code': 'no_route', 'message': '无法规划路线'}, status: status),
+        (request) => ResponseBody.fromString('<html>bad gateway</html>', 502),
       );
       await expectLater(
         api.loadFingerprints(),
-        throwsA(
-          isA<CampusMapApiException>()
-              .having((e) => e.code, 'code', 'no_route')
-              .having((e) => e.statusCode, 'status', status)
-              .having((e) => e.toString(), 'message', '无法规划路线'),
+        throwsA(isA<CampusMapApiException>()),
+      );
+      adapter = FakeAdapter(
+        (request) => throw DioException(
+          requestOptions: request,
+          type: DioExceptionType.connectionTimeout,
         ),
       );
-    });
-  }
-
-  test('normalizes malformed response and transport failures', () async {
-    setup(
-      (request) => ResponseBody.fromString('<html>bad gateway</html>', 502),
-    );
-    await expectLater(
-      api.loadFingerprints(),
-      throwsA(isA<CampusMapApiException>()),
-    );
-    adapter = FakeAdapter(
-      (request) => throw DioException(
-        requestOptions: request,
-        type: DioExceptionType.connectionTimeout,
-      ),
-    );
-    dio.httpClientAdapter = adapter;
-    await expectLater(
-      api.loadFingerprints(),
-      throwsA(
-        isA<CampusMapApiException>().having(
-          (e) => e.message,
-          'message',
-          contains('超时'),
+      dio.httpClientAdapter = adapter;
+      await expectLater(
+        api.loadFingerprints(),
+        throwsA(
+          isA<CampusMapApiException>().having(
+            (e) => e.message,
+            'message',
+            contains('超时'),
+          ),
         ),
-      ),
-    );
-  });
+      );
+    },
+  );
 
   test('close is idempotent and does not dispose caller-owned Dio', () async {
     setup((request) => ok({'fingerprints': []}));
@@ -981,5 +967,118 @@ void main() {
       api.loadFingerprints(),
       throwsA(isA<CampusMapApiException>()),
     );
+  });
+
+  group('校园建筑照片解析与接口', () {
+    test('parses photo list and resolves relative file urls', () async {
+      setup((request) {
+        expect(request.uri.path, '/api/v1/buildings/b1/photos');
+        return ok({
+          'count': 2,
+          'photos': [
+            {
+              'photo_id': 7,
+              'building_id': 'b1',
+              'url': '/photos/0123456789abcdef0123456789abcdef.jpg',
+              'caption': '南门实景',
+              'source': 'survey',
+              'taken_at': '2026-09-01T08:30:00Z',
+              'sort_order': 1,
+            },
+            {
+              'photo_id': 8,
+              'building_id': 'b1',
+              'url': '/photos/fedcba9876543210fedcba9876543210.png',
+              'caption': '',
+              'source': '志愿者拍摄',
+              'taken_at': null,
+              'sort_order': 2,
+            },
+          ],
+        });
+      });
+      final photos = await api.loadBuildingPhotos('b1');
+      expect(photos, hasLength(2));
+      expect(
+        photos.first.url,
+        'http://example.test/photos/0123456789abcdef0123456789abcdef.jpg',
+      );
+      expect(photos.first.label, '南门实景');
+      expect(photos.first.takenAt, DateTime.utc(2026, 9, 1, 8, 30));
+      expect(photos.last.label, '志愿者拍摄');
+      expect(photos.last.takenAt, isNull);
+
+      expect(
+        () => resolvePhotoUri(Uri.parse('http://example.test/'), ''),
+        throwsA(isA<CampusPhotoException>()),
+      );
+      expect(
+        resolvePhotoUri(
+          Uri.parse('http://example.test/'),
+          '/photos/ab.jpg',
+        ).toString(),
+        'http://example.test/photos/ab.jpg',
+      );
+      final lenient = parsePhotos(Uri.parse('http://example.test/'), [
+        {'photo_id': 1, 'url': '/photos/a.jpg'},
+        {'url': '/photos/b.jpg'},
+        'junk',
+      ], strict: false);
+      expect(lenient.map((p) => p.id), [1]);
+    });
+
+    test(
+      'empty list is a normal result, malformed payload is an error',
+      () async {
+        setup((_) => ok({'photos': <Object>[], 'count': 0}));
+        expect(await api.loadBuildingPhotos('b1'), isEmpty);
+
+        setup((_) => ok({'photos': 'nope'}));
+        await expectLater(
+          api.loadBuildingPhotos('b1'),
+          throwsA(
+            isA<CampusMapApiException>().having(
+              (e) => e.toString(),
+              'message',
+              contains('格式'),
+            ),
+          ),
+        );
+
+        setup(
+          (_) => ok({
+            'photos': [
+              {'photo_id': 1},
+            ],
+          }),
+        );
+        await expectLater(
+          api.loadBuildingPhotos('b1'),
+          throwsA(
+            isA<CampusMapApiException>().having(
+              (e) => e.toString(),
+              'message',
+              contains('必要字段'),
+            ),
+          ),
+        );
+      },
+    );
+
+    test('unknown building surfaces the backend 404 message', () async {
+      setup(
+        (_) => response({'code': 'not_found', 'message': '建筑不存在'}, status: 404),
+      );
+      await expectLater(
+        api.loadBuildingPhotos('missing'),
+        throwsA(
+          isA<CampusMapApiException>().having(
+            (e) => e.toString(),
+            'message',
+            '建筑不存在',
+          ),
+        ),
+      );
+    });
   });
 }

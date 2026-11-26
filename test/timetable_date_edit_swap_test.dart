@@ -4,10 +4,13 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_apply_weeks_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_date_edits.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_delete_scope_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_overrides.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_remaining_weeks.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
@@ -557,5 +560,180 @@ void main() {
     expect(s.partnerOf(DateTime(2026, 9, 9, 13)), DateTime(2026, 9, 7));
     expect(DaySwap.tryParse(s.toJson())!.dateB, DateTime(2026, 9, 9));
     expect(MoveScope.values, contains(MoveScope.allWeeks));
+  });
+
+  group('剩余周判定、weeks 作用域、缺文件与删除范围', () {
+    test('缺 day_swaps.json 时读为空，可继续写入；ScheduleStore version 写 3', () async {
+      await seed();
+      final f = File('${tmp.path}/${ScheduleStore.daySwapsFile}');
+      expect(f.existsSync(), isFalse);
+      await restart();
+      expect(c.daySwaps, isEmpty);
+      await c.editOccurrence(cellOf(_mon2, 'MATH|01'), note: 'x');
+      final raw = jsonDecode(
+        File('${tmp.path}/${ScheduleStore.courseEditsFile}').readAsStringSync(),
+      ) as Map<String, dynamic>;
+      expect(raw['version'], ScheduleStore.courseEditsVersion);
+      expect(ScheduleStore.courseEditsVersion, 3);
+      expect(await c.addDaySwap(_mon2, _tue2), isNotNull);
+      expect(c.daySwaps, hasLength(1));
+      expect(f.existsSync(), isTrue);
+    });
+
+    test('remaining weeks helper 与非本周灰格之后无课隐藏', () async {
+      const slot = CourseSlot(
+        day: 1,
+        startNode: 1,
+        endNode: 2,
+        weeks: '1111000000000000',
+      );
+      expect(slotHasRemainingWeeks(slot, 2), isTrue);
+      expect(slotHasRemainingWeeks(slot, 4), isFalse);
+      expect(slotHasRemainingWeeks(slot, 8), isFalse);
+      final course = _jwxt('x', 'x').copyWith(slots: [slot]);
+      expect(courseHasRemainingWeeks(course, 3), isTrue);
+      expect(courseHasRemainingWeeks(course, 4), isFalse);
+      expect(examHasRemainingWeeks(6, 5), isTrue);
+      expect(examHasRemainingWeeks(5, 5), isFalse);
+      expect(examHasRemainingWeeks(4, 5), isFalse);
+
+      nextFetch = [
+        _jwxt('EARLY|01', '早课').copyWith(
+          slots: const [
+            CourseSlot(
+              day: 1,
+              startNode: 1,
+              endNode: 2,
+              weeks: '1100000000000000',
+              teacher: '虚构老师',
+              location: '教一-101',
+            ),
+          ],
+        ),
+      ];
+      await c.ensureStarted();
+      await c.syncFromJwxt();
+      await c.updateSettings(c.settings.copyWith(showNonCurrentWeek: true));
+      expect(
+        c.cellsForDay(3, 1).where((x) => x.course.id == 'EARLY|01'),
+        isEmpty,
+      );
+      expect(
+        c
+            .cellsForDay(1, 1)
+            .where((x) => x.activeThisWeek && x.course.id == 'EARLY|01'),
+        isNotEmpty,
+      );
+    });
+
+    test('weeks 字段兼容、多周编辑、单周退回 oneDay 与摘要文案', () async {
+      await seed();
+      final legacy = CourseDateEdit.tryParse({
+        'id': 'legacy',
+        'courseId': 'MATH|01',
+        'date': '2026-09-07',
+        'origStart': 1,
+        'origEnd': 2,
+        'kind': 'edit',
+        'name': '高数旧',
+        'createdAt': '',
+      })!;
+      expect(legacy.scope, DateEditScope.oneDay);
+      expect(legacy.weeks, isEmpty);
+
+      final withWeeks = CourseDateEdit.tryParse({
+        'id': 'w',
+        'courseId': 'MATH|01',
+        'date': '2026-09-07',
+        'origStart': 1,
+        'origEnd': 2,
+        'kind': 'edit',
+        'scope': 'weeks',
+        'weeks': [3, 5, 7, 5],
+        'location': '新地点',
+        'createdAt': '',
+      })!;
+      expect(withWeeks.weeks, [3, 5, 7]);
+      expect(withWeeks.isWeeksScoped, isTrue);
+
+      final rec = await c.editOccurrenceWeeks(
+        cellOf(_mon2, 'MATH|01'),
+        weeks: [3, 5, 7],
+        location: '操场',
+      );
+      expect(rec!.scope, DateEditScope.weeks);
+      expect(cellOf(_mon2, 'MATH|01').slot.location, '教一-101');
+      expect(cellOf(_mon3, 'MATH|01').slot.location, '操场');
+      expect(await c.restoreDateEdit(rec.id), isTrue);
+      expect(cellOf(_mon3, 'MATH|01').slot.location, '教一-101');
+
+      final single = await c.editOccurrenceWeeks(
+        cellOf(_mon2, 'MATH|01'),
+        weeks: [2],
+        name: '高数·当天',
+      );
+      expect(single!.scope, DateEditScope.oneDay);
+      expect(single.weeks, isEmpty);
+      expect(cellOf(_mon2, 'MATH|01').course.name, '高数·当天');
+
+      expect(applyWeeksSummary([1, 2, 3], 3), '全部 3 周');
+      expect(applyWeeksSummary([3, 5, 8], 16), '第 3、5、8 周');
+      expect(applyWeeksSummary([3, 5, 7], 16), '第 3–7 周（单）');
+      expect(isAllSemesterWeeks([1, 2, 3, 4], 4), isTrue);
+      expect(isAllSemesterWeeks([1, 2], 4), isFalse);
+    });
+
+    test('删除范围：oneDay / weekdayMatch / 文案', () async {
+      nextFetch = [
+        _jwxt('MATH|01', '高数'),
+        const Course(
+          id: 'MATH|02',
+          name: '高数乙',
+          source: CourseSource.jwxt,
+          slots: [
+            CourseSlot(
+              day: 1,
+              startNode: 5,
+              endNode: 6,
+              weeks: '1111111111111111',
+            ),
+          ],
+        ),
+      ];
+      await c.ensureStarted();
+      await c.syncFromJwxt();
+      expect(deleteScopeOneDayLabel(2, 1), '仅第 2 周周一的这节课');
+      expect(deleteScopeWeekdayMatchLabel(1, relaxed: false), '全部周一同老师同地点的这节课');
+      expect(deleteScopeWeekdayMatchLabel(1, relaxed: true), '全部周一同名课程的这节课');
+
+      final d1 = await c.deleteOccurrence(cellOf(_mon2, 'MATH|01'));
+      expect(d1!.scope, DateEditScope.oneDay);
+      expect(d1.isDelete, isTrue);
+      expect(
+        c
+            .cellsForDay(2, 1)
+            .where((x) => x.activeThisWeek && x.course.id == 'MATH|01'),
+        isEmpty,
+      );
+      expect(cellOf(_mon3, 'MATH|01').dateEdit, isNull);
+
+      await c.restoreDateEdit(d1.id);
+      final wm = await c.deleteWeekdayMatch(cellOf(_mon2, 'MATH|02'));
+      expect(wm!.scope, DateEditScope.weekdayMatch);
+      expect(wm.matchEmptyTeacherLocation, isTrue);
+      expect(wm.weekday, 1);
+      expect(
+        c
+            .cellsForDay(2, 1)
+            .where((x) => x.activeThisWeek && x.course.id == 'MATH|02'),
+        isEmpty,
+      );
+      expect(
+        c
+            .cellsForDay(4, 1)
+            .where((x) => x.activeThisWeek && x.course.id == 'MATH|02'),
+        isEmpty,
+      );
+    });
   });
 }

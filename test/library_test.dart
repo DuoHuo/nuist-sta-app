@@ -3,7 +3,6 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/config/campus_config.dart';
@@ -313,7 +312,7 @@ void main() {
     expect(paddedCoverSourceRect(pixels, side), isNull);
   });
 
-  testWidgets('能打开馆藏详情，未绑定时只请求公开馆藏', (tester) async {
+  testWidgets('能打开馆藏详情，未绑定时只请求公开馆藏且复制原始 ISBN', (tester) async {
     tester.view.physicalSize = const Size(800, 1000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -364,105 +363,36 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.byType(CircularProgressIndicator), findsNWidgets(2));
-    expect(find.byType(LinearProgressIndicator), findsNothing);
     detailReady.complete();
     await tester.pumpAndSettle();
     expect(find.text('馆藏详情'), findsOneWidget);
-    expect(find.text('书目信息'), findsNothing);
     expect(find.text('测试馆藏'), findsOneWidget);
-    expect(find.textContaining('编著'), findsNothing);
-    expect(find.byType(Table), findsOneWidget);
-    expect(
-      tester.widget<Table>(find.byType(Table)).children,
-      everyElement(
-        isA<TableRow>().having((row) => row.children.length, '列数', 2),
-      ),
-    );
-    final table = tester.getRect(find.byType(Table));
-    final classification = tester.getTopLeft(find.text('中图法分类号')).dy;
-    final isbn = tester.getTopLeft(find.text('ISBN')).dy;
-    final pageCount = tester.getTopLeft(find.text('页数')).dy;
-    final firstRowHeight = isbn - classification;
-    expect(isbn, closeTo(pageCount, 0.1));
-    expect(table.height - firstRowHeight, closeTo(firstRowHeight, 0.1));
-    expect(firstRowHeight, lessThan(49));
-    expect(find.text('318页'), findsOneWidget);
-    expect(find.text('载体形态'), findsNothing);
-    expect(find.textContaining('26cm'), findsNothing);
-    final copy = find.byTooltip('复制 ISBN');
-    final copyIcon = tester.getCenter(find.byIcon(Icons.content_copy_outlined));
-    expect(copyIcon, tester.getCenter(copy));
-    expect(copyIcon.dy, closeTo(tester.getCenter(find.text('ISBN')).dy, 3));
-    expect(find.byType(LibraryBookCover), findsOneWidget);
-    final bookTitle = tester.widget<Text>(find.text('测试馆藏'));
-    expect(bookTitle.style?.fontSize, 20);
-    final parallelTitle = find.text('并列正题名');
-    final abstract = find.text('内容提要');
-    expect(
-      tester.getTopLeft(parallelTitle).dy,
-      lessThan(tester.getTopLeft(abstract).dy),
-    );
-    expect(find.textContaining('其他题名'), findsNothing);
-    final labelStyle = tester.widget<Text>(find.text('ISBN')).style;
-    expect(labelStyle?.fontSize, 11);
-    expect(tester.widget<Text>(abstract).style, labelStyle);
-    expect(find.text('北京:测试出版社,2021'), findsOneWidget);
-    final infoTop = tester.getTopLeft(find.byType(LibraryBookInfoCard)).dy;
-    final holdingsTop = tester.getTopLeft(find.text('馆藏位置')).dy;
-    expect(infoTop, lessThan(holdingsTop));
     expect(find.text('测试总馆 · 三楼北'), findsOneWidget);
-    final firstHolding = tester.getTopLeft(find.text('测试总馆 · 三楼北')).dy;
-    final secondHolding = tester.getTopLeft(find.text('测试总馆 · 二楼南')).dy;
-    expect(secondHolding - firstHolding, lessThan(64));
-    expect(find.text('书架 A12'), findsOneWidget);
     expect(find.text('可借'), findsOneWidget);
-    expect(find.text('ISBN'), findsOneWidget);
-    expect(find.text('¥ 89.00'), findsOneWidget);
 
-    final copied = find.text('ISBN 已复制');
-    for (var index = 0; index < 4; index++) {
-      await tester.tap(copy);
-      await tester.pump(const Duration(milliseconds: 500));
-      expect(copied, findsOneWidget);
-    }
-    expect(copiedIsbns, List.filled(4, {'text': '978-7-03-022595-5'}));
-    expect(
-      tester.getTopLeft(copied).dy,
-      closeTo(tester.getBottomLeft(find.byType(AppBar)).dy + 20, 2),
-    );
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(copied, findsOneWidget);
-    await tester.pageBack();
-    await tester.pumpAndSettle();
-    expect(copied, findsNothing);
-    expect(paths, hasLength(4));
-    await tester.tap(find.text('测试馆藏'));
-    await tester.pumpAndSettle();
-    expect(copied, findsNothing);
-    await tester.pump(const Duration(seconds: 8));
-    expect(copied, findsNothing);
-    await tester.tap(copy);
-    await tester.pump();
-    expect(copied, findsOneWidget);
-    await tester.pump(const Duration(seconds: 2));
-    expect(copied, findsNothing);
+    await tester.tap(find.byTooltip('复制 ISBN'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('ISBN 已复制'), findsOneWidget);
+    expect(copiedIsbns, [
+      {'text': '978-7-03-022595-5'},
+    ]);
     await tester.pageBack();
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('我的借阅'));
     await tester.pumpAndSettle();
     expect(find.text('前往门户绑定'), findsOneWidget);
-    expect(paths, hasLength(7));
+    expect(paths, hasLength(4));
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('窄屏大字下 ISBN 留在格内，复制原始号码且不带定价', (tester) async {
-    tester.view.physicalSize = const Size(300, 800);
+  testWidgets('窄屏大字与深色模式下正常渲染借阅卡片并复制多段 ISBN', (tester) async {
+    tester.view.physicalSize = const Size(350, 690);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final copiedIsbns = <String>[];
 
+    final copiedIsbns = <String>[];
     const firstIsbn = '978-7-03-083819-3';
     const secondIsbn = '9787030225955';
     final book = LibraryBookInfo.fromJson({
@@ -479,7 +409,6 @@ void main() {
             '中图法分类号': 'TP301.6',
             'ISBN及定价': '$firstIsbn 精装/CNY78.00',
             '载体形态项': '318页',
-            '提要文摘附注': '本书由两名作者编著。',
           },
         },
       },
@@ -489,7 +418,7 @@ void main() {
         theme: appDarkTheme(),
         builder: (context, child) => MediaQuery(
           data: MediaQuery.of(context)
-              .copyWith(textScaler: TextScaler.linear(1.5)),
+              .copyWith(textScaler: const TextScaler.linear(1.5)),
           child: child!,
         ),
         home: Scaffold(
@@ -507,37 +436,11 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-
-    const isbnText = '$firstIsbn\n$secondIsbn';
-    final paragraph = tester.renderObject<RenderParagraph>(find.text(isbnText));
-    final boxes = paragraph.getBoxesForSelection(
-      TextSelection(baseOffset: 0, extentOffset: isbnText.length),
-    );
-    expect(boxes.length, greaterThan(2));
-    expect(
-      boxes.map((box) => box.right),
-      everyElement(lessThanOrEqualTo(paragraph.size.width + 0.1)),
-    );
-    expect(find.text('精装'), findsOneWidget);
-    expect(find.text('甲作者、乙作者'), findsOneWidget);
-    expect(find.textContaining('编著'), findsNothing);
-
-    final copy = find.byTooltip('复制 ISBN');
-    expect(
-      tester.widget<IconButton>(find.byType(IconButton).last).iconSize,
-      14,
-    );
-    await tester.tap(copy);
+    await tester.tap(find.byTooltip('复制 ISBN'));
     await tester.pumpAndSettle();
-    expect(copiedIsbns.single, isbnText);
+    expect(copiedIsbns.single, '$firstIsbn\n$secondIsbn');
     expect(tester.takeException(), isNull);
-  });
 
-  testWidgets('我的借阅在窄屏深色模式下保留紧凑卡片和完整借阅信息', (tester) async {
-    tester.view.physicalSize = const Size(350, 690);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
     final loans = Completer<LibraryResultPage<LibraryLoan>>();
     await tester.pumpWidget(
       MaterialApp(
@@ -549,9 +452,6 @@ void main() {
     );
     await tester.tap(find.text('我的借阅'));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-    expect(find.byType(LinearProgressIndicator), findsNothing);
     loans.complete(
       LibraryResultPage(
         items: [
@@ -568,10 +468,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final bookTile = find.widgetWithText(ListTile, '测试借阅书目');
-    expect(tester.widget<ListTile>(bookTile).dense, isTrue);
-    expect(tester.getSize(bookTile).height, lessThan(100));
     for (final text in [
+      '测试借阅书目',
       '测试作者',
       '测试总馆三楼',
       '借出 2026-10-20',

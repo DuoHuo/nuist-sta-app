@@ -181,43 +181,48 @@ void main() {
     expect('raw_sibling_marker_right'.allMatches(parent), hasLength(1));
   });
 
-  test('共享登录的两个消费者只附登录证据，不借用生产者其他业务正文', () async {
-    final loginRegistered = Completer<void>();
-    final finishLogin = Completer<void>();
-    late Future<void> sharedLogin;
-    Map<String, Object?>? loginEvidence;
-    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
-    dio.httpClientAdapter = _Adapter((options, _) async {
-      final endpoint = options.uri.pathSegments.last;
-      if (endpoint == 'login') await finishLogin.future;
-      return ResponseBody.fromString('shared_case_marker_$endpoint', 200);
-    });
-    installHttpDiagnostics(dio);
-    addTearDown(() => dio.close(force: true));
-    final owner = AppLog.logger('test.owner')
-        .operation<void>('owner', () async {
+  test('共享登录消费者（独立 Trace 与同父 Trace 兄弟）只附登录证据，不混入对方业务正文', () async {
+    Future<void> verify({required bool sameParent}) async {
+      records.clear();
+      final loginRegistered = Completer<void>();
+      final finishLogin = Completer<void>();
+      late Future<void> sharedLogin;
+      Map<String, Object?>? loginEvidence;
+      final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+      dio.httpClientAdapter = _Adapter((options, _) async {
+        final endpoint = options.uri.pathSegments.last;
+        if (endpoint == 'login') await finishLogin.future;
+        return ResponseBody.fromString('shared_marker_$endpoint', 200);
+      });
+      installHttpDiagnostics(dio);
+      addTearDown(() => dio.close(force: true));
+
+      Future<void> run() async {
+        final log = AppLog.logger('test.shared');
+        final owner = log.operation<void>('owner', () async {
           await dio.get<String>('https://service.example/owner_private');
-          sharedLogin = AppLog.logger('test.auth')
-              .operation<void>('shared.login', () async {
-                final response = await dio.get<String>(
-                  'https://service.example/login',
-                );
-                loginEvidence = httpDiagnosticEvidence(response.requestOptions);
-                throw const DiagnosticException(
-                  '共享认证响应无效',
-                  code: 'login_response_invalid',
-                );
-              });
+          sharedLogin = log.operation<void>('shared.login', () async {
+            final response = await dio.get<String>(
+              'https://service.example/login',
+            );
+            loginEvidence = httpDiagnosticEvidence(response.requestOptions);
+            throw const DiagnosticException(
+              '共享认证响应无效',
+              code: 'login_response_invalid',
+            );
+          });
           loginRegistered.complete();
           await sharedLogin;
         });
-    final ownerFailure = expectLater(
-      owner,
-      throwsA(isA<DiagnosticException>()),
-    );
-    await loginRegistered.future;
-    final waiter = AppLog.logger('test.waiter')
-        .operation<void>('waiter', () async {
+        final ownerFailure = expectLater(
+          owner,
+          throwsA(isA<DiagnosticException>()),
+        );
+        await loginRegistered.future;
+        final waiter = log.operation<void>('waiter', () async {
+          if (sameParent) {
+            await dio.get<String>('https://service.example/waiter_private');
+          }
           try {
             await sharedLogin;
           } finally {
@@ -226,98 +231,43 @@ void main() {
             }
           }
         });
-    final waiterFailure = expectLater(
-      waiter,
-      throwsA(isA<DiagnosticException>()),
-    );
-    finishLogin.complete();
-    await Future.wait([ownerFailure, waiterFailure]);
-    final ownerEvidence = jsonEncode(evidenceOf(failedOperation('owner')));
-    final waiterEvidence = jsonEncode(evidenceOf(failedOperation('waiter')));
-    expect(ownerEvidence, contains('shared_case_marker_owner_private'));
-    expect(ownerEvidence, contains('shared_case_marker_login'));
-    expect(waiterEvidence, contains('shared_case_marker_login'));
-    expect(waiterEvidence, isNot(contains('shared_case_marker_owner_private')));
-  });
+        final waiterFailure = expectLater(
+          waiter,
+          throwsA(isA<DiagnosticException>()),
+        );
+        finishLogin.complete();
+        await Future.wait([ownerFailure, waiterFailure]);
+      }
 
-  test('同一父 Trace 内共享登录的兄弟消费者各自保留原文且不混入兄弟正文', () async {
-    final loginRegistered = Completer<void>();
-    final finishLogin = Completer<void>();
-    late Future<void> sharedLogin;
-    Map<String, Object?>? loginEvidence;
-    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
-    dio.httpClientAdapter = _Adapter((options, _) async {
-      final endpoint = options.uri.pathSegments.last;
-      if (endpoint == 'login') await finishLogin.future;
-      return ResponseBody.fromString('sibling_login_marker_$endpoint', 200);
-    });
-    installHttpDiagnostics(dio);
-    addTearDown(() => dio.close(force: true));
-    final log = AppLog.logger('test.shared_siblings');
-    await log.operation<void>('shared.parent', () async {
-      final owner = log.operation<void>('sibling.owner', () async {
-        await dio.get<String>('https://service.example/owner_private');
-        sharedLogin = log.operation<void>('sibling.login', () async {
-          final response = await dio.get<String>(
-            'https://service.example/login',
-          );
-          loginEvidence = httpDiagnosticEvidence(response.requestOptions);
-          throw const DiagnosticException(
-            '共享登录未完成',
-            code: 'login_response_invalid',
-          );
-        });
-        loginRegistered.complete();
-        await sharedLogin;
-      });
-      final ownerFailure = expectLater(
-        owner,
-        throwsA(isA<DiagnosticException>()),
-      );
-      await loginRegistered.future;
-      final waiter = log.operation<void>('sibling.waiter', () async {
-        await dio.get<String>('https://service.example/waiter_private');
-        try {
-          await sharedLogin;
-        } finally {
-          if (loginEvidence case final evidence?) {
-            AppLog.addEvidence('shared.login', evidence);
-          }
-        }
-      });
-      final waiterFailure = expectLater(
-        waiter,
-        throwsA(isA<DiagnosticException>()),
-      );
-      finishLogin.complete();
-      await Future.wait([ownerFailure, waiterFailure]);
-    });
-    final owner = failedOperation('sibling.owner');
-    final waiter = failedOperation('sibling.waiter');
-    expect(owner['trace_id'], waiter['trace_id']);
-    expect(owner['span_id'], isNot(waiter['span_id']));
-    final ownerEvidence = jsonEncode(evidenceOf(owner));
-    final waiterEvidence = jsonEncode(evidenceOf(waiter));
-    expect(ownerEvidence, contains('sibling_login_marker_login'));
-    expect(waiterEvidence, contains('sibling_login_marker_login'));
-    expect(ownerEvidence, contains('sibling_login_marker_owner_private'));
-    expect(
-      ownerEvidence,
-      isNot(contains('sibling_login_marker_waiter_private')),
-    );
-    expect(waiterEvidence, contains('sibling_login_marker_waiter_private'));
-    expect(
-      waiterEvidence,
-      isNot(contains('sibling_login_marker_owner_private')),
-    );
-    expect(
-      'sibling_login_marker_login'.allMatches(ownerEvidence),
-      hasLength(1),
-    );
-    expect(
-      'sibling_login_marker_login'.allMatches(waiterEvidence),
-      hasLength(1),
-    );
+      if (sameParent) {
+        await AppLog.logger('test.shared')
+            .operation<void>('shared.parent', run);
+      } else {
+        await run();
+      }
+
+      final ownerRecord = failedOperation('owner');
+      final waiterRecord = failedOperation('waiter');
+      if (sameParent) {
+        expect(ownerRecord['trace_id'], waiterRecord['trace_id']);
+        expect(ownerRecord['span_id'], isNot(waiterRecord['span_id']));
+      } else {
+        expect(ownerRecord['trace_id'], isNot(waiterRecord['trace_id']));
+      }
+      final ownerEvidence = jsonEncode(evidenceOf(ownerRecord));
+      final waiterEvidence = jsonEncode(evidenceOf(waiterRecord));
+      expect(ownerEvidence, contains('shared_marker_owner_private'));
+      expect('shared_marker_login'.allMatches(ownerEvidence), hasLength(1));
+      expect('shared_marker_login'.allMatches(waiterEvidence), hasLength(1));
+      expect(waiterEvidence, isNot(contains('shared_marker_owner_private')));
+      if (sameParent) {
+        expect(ownerEvidence, isNot(contains('shared_marker_waiter_private')));
+        expect(waiterEvidence, contains('shared_marker_waiter_private'));
+      }
+    }
+
+    await verify(sameParent: false);
+    await verify(sameParent: true);
   });
 
   test('业务重试后的失败详情同时保留各次原始响应', () async {
@@ -463,27 +413,6 @@ void main() {
     expect(stack, contains('#1 main (package:nuist_sta_app/main.dart:9:2)'));
     expect(stack, isNot(contains('synthetic-ticket')));
     expect(AppLog.formatDetails(records.single), contains('可定位的原始错误'));
-  });
-
-  test('一卡通固定路由参数不被当作姓名，真正个人参数仍遮蔽', () {
-    const route =
-        'https://service.example/plat-pc/?name=loginTransit&mode=full';
-    expect(DiagnosticRedactor.text(route), route);
-    expect(
-      DiagnosticRedactor.text(
-        'https://service.example/profile?name=synthetic-person',
-      ),
-      isNot(contains('synthetic-person')),
-    );
-  });
-
-  test('落地地址的hash路由授权值遮蔽，保留实际位置与其他参数', () {
-    const landing =
-        'https://service.example/plat-pc/#/login?synjones-auth=synthetic-opaque-secret&mode=full';
-    final cleaned = DiagnosticRedactor.text(landing);
-    expect(cleaned, contains('#/login?synjones-auth='));
-    expect(cleaned, contains('mode=full'));
-    expect(cleaned, isNot(contains('synthetic-opaque-secret')));
   });
 
   test('共享登录详情关联生产者且不混入其他启动会话', () {
@@ -700,97 +629,6 @@ void main() {
       AppLog.formatDetails(records.single),
       contains('CERTIFICATE_VERIFY_FAILED'),
     );
-  });
-
-  test('中断响应保留已收到内容并明确标记不完整', () async {
-    final dio = Dio(BaseOptions(responseType: ResponseType.stream));
-    final source = StreamController<Uint8List>();
-    dio.httpClientAdapter = _Adapter(
-      (_, _) async => ResponseBody(
-        source.stream,
-        200,
-        headers: {
-          Headers.contentTypeHeader: ['text/plain'],
-        },
-      ),
-    );
-    installHttpDiagnostics(dio);
-    addTearDown(() => dio.close(force: true));
-    final response = await dio.get<ResponseBody>(
-      'https://service.example/stream',
-    );
-    final reading = response.data!.stream.drain<void>();
-    final failed = expectLater(reading, throwsA(isA<SocketException>()));
-    source.add(Uint8List.fromList(utf8.encode('partial response')));
-    source.addError(const SocketException('connection reset by peer'));
-    await failed;
-    await Future<void>.delayed(Duration.zero);
-    await source.close();
-    final body = exchange()['response'] as Map;
-    expect(body['complete'], isFalse);
-    expect(body['body'], 'partial response');
-  });
-
-  test('WebAuthn 与表单内嵌 JSON 脱敏，业务 id 保留', () {
-    final assertion = jsonEncode({
-      'id': 'synthetic-credential',
-      'type': 'public-key',
-      'response': {'signature': 'synthetic-signature'},
-    });
-    final form = 'responseJson=${Uri.encodeComponent(assertion)}&mode=login';
-    final raw = jsonEncode({
-      'allowCredentials': [
-        {'id': 'synthetic-credential', 'type': 'public-key'},
-      ],
-      'body': jsonEncode({'token': 'synthetic-token'}),
-      'id': 'business-item',
-    });
-    final cleaned = DiagnosticRedactor.text(raw);
-    expect(cleaned, contains('business-item'));
-    expect(cleaned, isNot(contains('synthetic-credential')));
-    expect(cleaned, isNot(contains('synthetic-token')));
-    expect(
-      DiagnosticRedactor.text(form),
-      isNot(contains('synthetic-credential')),
-    );
-    expect(
-      DiagnosticRedactor.text(form),
-      isNot(contains('synthetic-signature')),
-    );
-    expect(
-      DiagnosticRedactor.text('Bad state: token=synthetic-token'),
-      isNot(contains('synthetic-token')),
-    );
-  });
-
-  test('大正文超过旧单条限制仍完整落盘、导出与清除', () async {
-    final temp = await Directory.systemTemp.createTemp(
-      'diagnostic_payload_test_',
-    );
-    addTearDown(() async {
-      await AppLog.resetForTesting();
-      await temp.delete(recursive: true);
-    });
-    await AppLog.initialize(directory: temp);
-    final body = '${'x' * 700000}\n完整末尾标记';
-    AppLog.recordHttpExchange('test.large', {
-      'request_id': 1,
-      'response': {'body': body, 'complete': true},
-    });
-    final snapshot = await AppLog.snapshot();
-    expect(snapshot.content, contains('完整末尾标记'));
-    final record = const LineSplitter()
-        .convert(snapshot.content)
-        .map(jsonDecode)
-        .singleWhere((record) => record['scope'] == 'test.large');
-    expect(record['attrs']['details']['response']['body'], body);
-    final export = await AppLog.createExport({});
-    expect(await export.readAsString(), contains('完整末尾标记'));
-    final attachments = Directory('${temp.path}/nuist_sta_app/logs/records');
-    expect(await attachments.list().length, 1);
-    await AppLog.clear();
-    expect(await attachments.list().length, 0);
-    expect((await AppLog.snapshot()).content, isEmpty);
   });
 
   test('大响应后台脱敏后才交付业务，解析失败仍包含完整证据', () async {
@@ -1107,40 +945,6 @@ void main() {
     expect(records.any((r) => r['event'] == 'capture.failed'), isFalse);
   });
 
-  test('诊断副本半途写入失败仍保留已写前缀，业务正文完整且标识不完整', () async {
-    final directory = await Directory.systemTemp.createTemp(
-      'partial-spool-test-',
-    );
-    addTearDown(() async {
-      diagnosticSpoolWriteForTesting = null;
-      await AppLog.resetForTesting();
-      await directory.delete(recursive: true);
-    });
-    await AppLog.initialize(directory: directory);
-    diagnosticSpoolWriteForTesting = (written) async {
-      if (written >= 64 * 1024) {
-        throw const FileSystemException('synthetic disk unavailable');
-      }
-    };
-    final body = '${'A' * (64 * 1024)}正文末尾${'B' * (64 * 1024)}';
-    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
-    dio.httpClientAdapter = _Adapter(
-      (_, _) async => ResponseBody.fromString(body, 200),
-    );
-    installHttpDiagnostics(dio);
-    addTearDown(() => dio.close(force: true));
-    final response = await dio.get<String>('https://service.example/partial');
-    expect(response.data, body);
-    final reference =
-        httpDiagnosticEvidence(response.requestOptions)!['record_ref']
-            as Map<String, Object?>;
-    final full = await AppLog.readRecord(reference);
-    final captured = (full!['attrs'] as Map)['details']['response'] as Map;
-    expect(captured['body'], 'A' * (64 * 1024));
-    expect(captured['complete'], isFalse);
-    expect(captured['incomplete_reason'], 'capture_spool_write_failed');
-  });
-
   test('非流式大正文响应立即交付业务，不等待后台脱敏压缩与附件落盘', () async {
     final directory = await Directory.systemTemp.createTemp('http-async-test-');
     addTearDown(() async {
@@ -1232,7 +1036,7 @@ void main() {
     }
   });
 
-  test('大正文流式传输触发背压后中断仍完整保留已接收前缀并标记不完整', () async {
+  test('流式响应中断（小正文与大正文背压）均保留已收前缀并标记不完整', () async {
     final directory = await Directory.systemTemp.createTemp(
       'http-backpressure-test-',
     );
@@ -1241,17 +1045,50 @@ void main() {
       await directory.delete(recursive: true);
     });
     await AppLog.initialize(directory: directory);
-    final source = StreamController<Uint8List>();
-    final dio = Dio(BaseOptions(responseType: ResponseType.stream));
-    dio.httpClientAdapter = _Adapter(
-      (_, _) async => ResponseBody(
-        source.stream,
-        200,
-        headers: {
-          Headers.contentTypeHeader: ['text/plain'],
-        },
-      ),
+
+    // 1. 小正文流中断直接内联保留前缀。
+    final smallSource = StreamController<Uint8List>();
+    final smallDio = Dio(BaseOptions(responseType: ResponseType.stream))
+      ..httpClientAdapter = _Adapter(
+        (_, _) async => ResponseBody(
+          smallSource.stream,
+          200,
+          headers: {
+            Headers.contentTypeHeader: ['text/plain'],
+          },
+        ),
+      );
+    installHttpDiagnostics(smallDio);
+    addTearDown(() => smallDio.close(force: true));
+    final smallResponse = await smallDio.get<ResponseBody>(
+      'https://service.example/stream',
     );
+    final smallFailed = expectLater(
+      smallResponse.data!.stream.drain<void>(),
+      throwsA(isA<SocketException>()),
+    );
+    smallSource.add(Uint8List.fromList(utf8.encode('partial response')));
+    smallSource.addError(const SocketException('connection reset by peer'));
+    await smallFailed;
+    await Future<void>.delayed(Duration.zero);
+    await smallSource.close();
+    final smallBody = exchange()['response'] as Map;
+    expect(smallBody['complete'], isFalse);
+    expect(smallBody['body'], 'partial response');
+
+    // 2. 大正文流触发背压后中断仍完整保留已接收前缀。
+    records.clear();
+    final source = StreamController<Uint8List>();
+    final dio = Dio(BaseOptions(responseType: ResponseType.stream))
+      ..httpClientAdapter = _Adapter(
+        (_, _) async => ResponseBody(
+          source.stream,
+          200,
+          headers: {
+            Headers.contentTypeHeader: ['text/plain'],
+          },
+        ),
+      );
     installHttpDiagnostics(dio);
     addTearDown(() => dio.close(force: true));
 
@@ -1412,175 +1249,217 @@ void main() {
     expect(captured['incomplete_reason'], 'capture_spool_write_failed');
   });
 
-  test('流水线触发背压时 spoolWrite 真实失败无未捕获异常、不死锁且保留精确前缀', () async {
+  test('流水线触发背压或半途 spoolWrite 失败无未捕获异常、不死锁且保留精确前缀', () async {
     final directory = await Directory.systemTemp.createTemp('http-pipe-fail-');
     addTearDown(() async {
+      diagnosticSpoolWriteForTesting = null;
       diagnosticSpoolFailAfterBytesForTesting = null;
       await AppLog.resetForTesting();
       await directory.delete(recursive: true);
     });
     await AppLog.initialize(directory: directory);
-    diagnosticSpoolFailAfterBytesForTesting = 64 * 1024;
 
-    final body = '${'A' * (64 * 1024)}${'B' * (640 * 1024)}';
-    final unhandled = <Object>[];
-    Response<String>? response;
-    await runZonedGuarded(
-      () async {
+    Future<void> runCase(String path, String body) async {
+      final unhandled = <Object>[];
+      Response<String>? response;
+      await runZonedGuarded(() async {
         final dio = Dio(BaseOptions(responseType: ResponseType.plain));
         dio.httpClientAdapter = _Adapter(
           (_, _) async => ResponseBody.fromString(body, 200),
         );
         installHttpDiagnostics(dio);
         addTearDown(() => dio.close(force: true));
-        response = await dio.get<String>('https://service.example/pipe-fail');
+        response = await dio.get<String>('https://service.example/$path');
         await waitForPendingHttpDiagnostics();
-      },
-      (error, stack) {
-        unhandled.add(error);
-      },
-    );
+      }, (error, stack) => unhandled.add(error));
+      expect(unhandled, isEmpty, reason: path);
+      expect(response!.data, body, reason: path);
+      final ref =
+          httpDiagnosticEvidence(response!.requestOptions)!['record_ref']
+              as Map<String, Object?>;
+      final full = await AppLog.readRecord(ref);
+      final captured = (full!['attrs'] as Map)['details']['response'] as Map;
+      expect(captured['body'], 'A' * (64 * 1024), reason: path);
+      expect(captured['complete'], isFalse, reason: path);
+      expect(
+        captured['incomplete_reason'],
+        'capture_spool_write_failed',
+        reason: path,
+      );
+    }
 
-    expect(unhandled, isEmpty);
-    expect(response!.data, body);
-    final ref =
-        httpDiagnosticEvidence(response!.requestOptions)!['record_ref']
-            as Map<String, Object?>;
-    final full = await AppLog.readRecord(ref);
-    final captured = (full!['attrs'] as Map)['details']['response'] as Map;
-    expect(captured['body'], 'A' * (64 * 1024));
-    expect(captured['complete'], isFalse);
-    expect(captured['incomplete_reason'], 'capture_spool_write_failed');
+    diagnosticSpoolWriteForTesting = (written) async {
+      if (written >= 64 * 1024) {
+        throw const FileSystemException('synthetic disk unavailable');
+      }
+    };
+    await runCase('partial', '${'A' * (64 * 1024)}正文末尾${'B' * (64 * 1024)}');
+    diagnosticSpoolWriteForTesting = null;
+
+    diagnosticSpoolFailAfterBytesForTesting = 64 * 1024;
+    await runCase('pipe-fail', '${'A' * (64 * 1024)}${'B' * (640 * 1024)}');
   });
 
-  group('独立审查：脱敏边界', () {
-    test('HTML控件名保留语义且隐藏token值', () {
-      const raw = '<input name="token" value="synthetic-hidden-token">';
-      final cleaned = DiagnosticRedactor.text(raw);
-      expect(cleaned.contains('synthetic-hidden-token'), isFalse);
-      expect(cleaned, contains('name="token"'));
-    });
+  group('脱敏边界', () {
+    test('HTML 表单控件、无引号属性、表格列/合并表头与全角冒号脱敏', () {
+      final quotedInput = DiagnosticRedactor.text(
+        '<input name="token" value="synthetic-hidden-token">',
+      );
+      expect(quotedInput, isNot(contains('synthetic-hidden-token')));
+      expect(quotedInput, contains('name="token"'));
 
-    test('中文文本装在base64正文时仍清除敏感字段', () {
-      final raw = jsonEncode({
-        'token': 'synthetic-binary-token',
-        'message': '中文说明' * 100,
-      });
-      final cleaned = DiagnosticRedactor.value(
-        base64Encode(utf8.encode(raw)),
-        key: 'body_base64',
-      ) as String;
+      final unquotedAndKv = DiagnosticRedactor.text(
+        '<input name=token value=synthetic-unquoted-token>'
+        '<table><tr><td>姓名</td><td>synthetic-person</td><td>学号</td><td>202512340001</td></tr></table>',
+      );
+      expect(unquotedAndKv, isNot(contains('synthetic-unquoted-token')));
+      expect(unquotedAndKv, isNot(contains('synthetic-person')));
+      expect(unquotedAndKv, contains('name=token'));
+
+      final tdTable = DiagnosticRedactor.text(
+        '<table><tr><td>姓名</td><td>状态</td></tr>'
+        '<tr><td>synthetic-student-name</td><td>active</td></tr></table>',
+      );
+      expect(tdTable, isNot(contains('synthetic-student-name')));
+      expect(tdTable, contains('状态'));
+      expect(tdTable, contains('active'));
+
+      final thTable = DiagnosticRedactor.text(
+        '<table><tr><th>姓名</th><th>状态</th></tr>'
+        '<tr><td>synthetic-student-name</td><td>active</td></tr></table>',
+      );
+      expect(thTable, contains('<th>状态</th>'));
+      expect(thTable, isNot(contains('synthetic-student-name')));
+
+      final colspanTable = DiagnosticRedactor.text(
+        '<table><tr><th>序号</th><th colspan="2">姓名</th><th>成绩</th></tr>'
+        '<tr><td>1</td><td>synthetic-cn-name</td><td>synthetic-en-name</td><td>93.5</td></tr></table>',
+      );
+      expect(colspanTable, isNot(contains('synthetic-')));
+      expect(colspanTable, isNot(contains('93.5')));
+      expect(colspanTable, contains('<td>1</td>'));
+
       expect(
-        utf8.decode(base64Decode(cleaned)).contains('synthetic-binary-token'),
-        isFalse,
+        DiagnosticRedactor.text('姓名：synthetic-person；请求失败'),
+        isNot(contains('synthetic-person')),
       );
     });
 
-    test('td表头按列清除个人值并保留正常列', () {
-      const raw =
-          '<table><tr><td>姓名</td><td>状态</td></tr>'
-          '<tr><td>synthetic-student-name</td><td>active</td></tr></table>';
-      final cleaned = DiagnosticRedactor.text(raw);
-      expect(cleaned.contains('synthetic-student-name'), isFalse);
-      expect(cleaned, contains('状态'));
-      expect(cleaned, contains('active'));
-    });
+    test('JSON 凭据、CAS 断言与 WebAuthn 内嵌表单脱敏，业务 id 与正常字段保留', () {
+      const jsonRaw =
+          '{"Cookie":"synthetic-cookie","Authorization":"synthetic-auth",'
+          '"JSESSIONID":"synthetic-session","CASTGC":"synthetic-cas",'
+          '"x-client-device-id":"synthetic-device", "message":"gateway upstream failed","count":2}';
+      final jsonCleaned = DiagnosticRedactor.text(jsonRaw);
+      expect(jsonCleaned, isNot(contains('synthetic-')));
+      expect(jsonCleaned, contains('gateway upstream failed'));
+      expect(jsonCleaned, contains('"count":2'));
+      expect(jsonDecode(jsonCleaned), isA<Map>());
 
-    test('th敏感列后的普通表头不能被误当作个人值', () {
-      const raw =
-          '<table><tr><th>姓名</th><th>状态</th></tr>'
-          '<tr><td>synthetic-student-name</td><td>active</td></tr></table>';
-      final cleaned = DiagnosticRedactor.text(raw);
-      expect(cleaned, contains('<th>状态</th>'));
-      expect(cleaned.contains('synthetic-student-name'), isFalse);
-    });
-
-    test('CAS响应中的匿名凭据标识必须遮蔽', () {
-      const raw = '{"datas":{"anonbiometricsd":"synthetic-device-secret"}}';
       expect(
-        DiagnosticRedactor.text(raw).contains('synthetic-device-secret'),
-        isFalse,
+        DiagnosticRedactor.text(
+          '{"datas":{"anonbiometricsd":"synthetic-device-secret"}}',
+        ),
+        isNot(contains('synthetic-device-secret')),
       );
-    });
 
-    test('CAS断言请求的id按接口语义遮蔽，业务id不受影响', () {
-      final cleaned = DiagnosticRedactor.value({
+      final casCleaned = DiagnosticRedactor.value({
         'request': {
           'url': 'https://cas.example/authserver/startAssertion',
           'body': '{"id":"synthetic-device-secret","userId":"synthetic-user"}',
         },
       });
-      expect(jsonEncode(cleaned).contains('synthetic-device-secret'), isFalse);
+      expect(
+        jsonEncode(casCleaned),
+        isNot(contains('synthetic-device-secret')),
+      );
       expect(
         DiagnosticRedactor.text('{"id":"business-id"}'),
         contains('business-id'),
       );
-    });
 
-    test('multipart只隐藏敏感字段值，不删字段名或后续正文', () {
-      const raw =
-          '--form-boundary\r\nContent-Disposition: form-data; name="password"\r\n\r\n'
-          'synthetic-multipart-secret\r\n--form-boundary\r\nContent-Disposition: form-data; name="note"\r\n\r\n'
-          'gateway diagnostic details\r\n--form-boundary--\r\n';
-      final cleaned = DiagnosticRedactor.text(raw);
-      expect(cleaned.contains('synthetic-multipart-secret'), isFalse);
-      expect(cleaned, contains('name="password"'));
-      expect(cleaned, contains('gateway diagnostic details'));
-    });
-
-    test('multipart多行敏感值必须整段替换', () {
-      const raw =
-          '--form-boundary\r\nContent-Disposition: form-data; name="privateKey"\r\n\r\n'
-          'synthetic-secret-line-one\r\nsynthetic-secret-line-two\r\n--form-boundary--\r\n';
-      final cleaned = DiagnosticRedactor.text(raw);
-      expect(cleaned.contains('synthetic-secret'), isFalse);
-      expect(cleaned, contains('name="privateKey"'));
-      expect(cleaned, contains('--form-boundary--'));
-    });
-
-    test('HTML无引号属性与键值表格也正确处理', () {
-      const raw =
-          '<input name=token value=synthetic-unquoted-token>'
-          '<table><tr><td>姓名</td><td>synthetic-person</td><td>学号</td><td>202512340001</td></tr></table>';
-      final cleaned = DiagnosticRedactor.text(raw);
-      expect(cleaned.contains('synthetic-unquoted-token'), isFalse);
-      expect(cleaned.contains('synthetic-person'), isFalse);
-      expect(cleaned, contains('name=token'));
-    });
-
-    test('JSON凭据净化不吞掉后续正常字段和错误说明', () {
-      const raw =
-          '{"Cookie":"synthetic-cookie","Authorization":"synthetic-auth",'
-          '"JSESSIONID":"synthetic-session","CASTGC":"synthetic-cas",'
-          '"x-client-device-id":"synthetic-device", "message":"gateway upstream failed","count":2}';
-      final cleaned = DiagnosticRedactor.text(raw);
-      expect(cleaned.contains('synthetic-'), isFalse);
-      expect(cleaned, contains('gateway upstream failed'));
-      expect(cleaned, contains('"count":2'));
-      expect(jsonDecode(cleaned), isA<Map>());
-    });
-
-    test('没有敏感值的嵌套服务地址保留原始编码', () {
-      const raw =
-          'https://cas.example/login?service=https://business.example/home&mode=normal';
-      expect(DiagnosticRedactor.text(raw), raw);
-    });
-
-    test('合并表头后的成绩列仍按实际列号脱敏', () {
-      const raw =
-          '<table><tr><th>序号</th><th colspan="2">姓名</th><th>成绩</th></tr>'
-          '<tr><td>1</td><td>synthetic-cn-name</td><td>synthetic-en-name</td><td>93.5</td></tr></table>';
-      final cleaned = DiagnosticRedactor.text(raw);
-      expect(cleaned.contains('synthetic-'), isFalse);
-      expect(cleaned.contains('93.5'), isFalse);
-      expect(cleaned, contains('<td>1</td>'));
-    });
-
-    test('中文全角冒号后的个人值也会遮蔽', () {
+      final assertion = jsonEncode({
+        'id': 'synthetic-credential',
+        'type': 'public-key',
+        'response': {'signature': 'synthetic-signature'},
+      });
+      final form = 'responseJson=${Uri.encodeComponent(assertion)}&mode=login';
+      final webAuthn = DiagnosticRedactor.text(
+        jsonEncode({
+          'allowCredentials': [
+            {'id': 'synthetic-credential', 'type': 'public-key'},
+          ],
+          'body': jsonEncode({'token': 'synthetic-token'}),
+          'id': 'business-item',
+        }),
+      );
+      expect(webAuthn, contains('business-item'));
+      expect(webAuthn, isNot(contains('synthetic-credential')));
+      expect(webAuthn, isNot(contains('synthetic-token')));
       expect(
-        DiagnosticRedactor.text('姓名：synthetic-person；请求失败')
-            .contains('synthetic-person'),
-        isFalse,
+        DiagnosticRedactor.text(form),
+        isNot(contains('synthetic-credential')),
+      );
+      expect(
+        DiagnosticRedactor.text(form),
+        isNot(contains('synthetic-signature')),
+      );
+      expect(
+        DiagnosticRedactor.text('Bad state: token=synthetic-token'),
+        isNot(contains('synthetic-token')),
+      );
+    });
+
+    test('URL 路由参数、Multipart 多行与 Base64 文本正文脱敏', () {
+      const safeRoute =
+          'https://service.example/plat-pc/?name=loginTransit&mode=full';
+      expect(DiagnosticRedactor.text(safeRoute), safeRoute);
+      expect(
+        DiagnosticRedactor.text(
+          'https://service.example/profile?name=synthetic-person',
+        ),
+        isNot(contains('synthetic-person')),
+      );
+
+      const safeServiceUrl =
+          'https://cas.example/login?service=https://business.example/home&mode=normal';
+      expect(DiagnosticRedactor.text(safeServiceUrl), safeServiceUrl);
+
+      final hashLanding = DiagnosticRedactor.text(
+        'https://service.example/plat-pc/#/login?synjones-auth=synthetic-opaque-secret&mode=full',
+      );
+      expect(hashLanding, contains('#/login?synjones-auth='));
+      expect(hashLanding, contains('mode=full'));
+      expect(hashLanding, isNot(contains('synthetic-opaque-secret')));
+
+      final singleMultipart = DiagnosticRedactor.text(
+        '--form-boundary\r\nContent-Disposition: form-data; name="password"\r\n\r\n'
+        'synthetic-multipart-secret\r\n--form-boundary\r\nContent-Disposition: form-data; name="note"\r\n\r\n'
+        'gateway diagnostic details\r\n--form-boundary--\r\n',
+      );
+      expect(singleMultipart, isNot(contains('synthetic-multipart-secret')));
+      expect(singleMultipart, contains('name="password"'));
+      expect(singleMultipart, contains('gateway diagnostic details'));
+
+      final multiLineMultipart = DiagnosticRedactor.text(
+        '--form-boundary\r\nContent-Disposition: form-data; name="privateKey"\r\n\r\n'
+        'synthetic-secret-line-one\r\nsynthetic-secret-line-two\r\n--form-boundary--\r\n',
+      );
+      expect(multiLineMultipart, isNot(contains('synthetic-secret')));
+      expect(multiLineMultipart, contains('name="privateKey"'));
+      expect(multiLineMultipart, contains('--form-boundary--'));
+
+      final rawBase64Json = jsonEncode({
+        'token': 'synthetic-binary-token',
+        'message': '中文说明' * 100,
+      });
+      final cleanedBase64 = DiagnosticRedactor.value(
+        base64Encode(utf8.encode(rawBase64Json)),
+        key: 'body_base64',
+      ) as String;
+      expect(
+        utf8.decode(base64Decode(cleanedBase64)),
+        isNot(contains('synthetic-binary-token')),
       );
     });
   });

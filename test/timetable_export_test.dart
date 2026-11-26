@@ -301,18 +301,49 @@ void main() {
     );
   });
 
-  testWidgets('顶部直接进入导出页', (tester) async {
+  testWidgets('未同意隐私政策前导出需先经过隐私同意门禁，同意后发送并复制口令', (tester) async {
+    PrivacyConsent.instance.value = PrivacyDecision.undecided;
+    final blockedApi = _FakeApi();
+    addTearDown(blockedApi.close);
     await tester.pumpWidget(
-      MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
+      MaterialApp(
+        theme: appLightTheme(),
+        home: TimetableExportPage(controller: _c, api: blockedApi),
+      ),
     );
+    await tester.tap(find.text('生成 WakeUp 口令'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('导出到 WakeUp'));
+    expect(find.text('需要同意隐私政策'), findsOneWidget);
+    await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
-    expect(find.byType(TimetableExportPage), findsOneWidget);
-    expect(find.text('生成 WakeUp 口令'), findsOneWidget);
+    expect(blockedApi.requests, 0);
+    expect(PrivacyConsent.instance.value, PrivacyDecision.undecided);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+
+    PrivacyConsent.instance.value = PrivacyDecision.declined;
+    final okApi = _FakeApi();
+    addTearDown(okApi.close);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appLightTheme(),
+        home: TimetableExportPage(controller: _c, api: okApi),
+      ),
+    );
+    await tester.tap(find.text('生成 WakeUp 口令'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('同意并继续'));
+    await tester.pumpAndSettle();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump();
+    expect(PrivacyConsent.instance.accepted, isTrue);
+    expect(okApi.requests, 1);
   });
 
-  testWidgets('生成期间禁用按钮，成功后自动复制带文案的口令', (tester) async {
+  testWidgets('生成期间禁用按钮，成功后自动复制口令且无未导出课时隐藏清单入口', (tester) async {
     final api = _FakeApi();
     addTearDown(api.close);
     String? clipboard;
@@ -354,77 +385,26 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(clipboard, '分享口令为「$_shareId」');
+    expect(find.byKey(const Key('tt_export_skipped_link')), findsNothing);
 
     await tester.tap(find.text('复制口令'));
     await tester.pump();
     expect(clipboard, '分享口令为「$_shareId」');
   });
 
-  for (final decision in [
-    PrivacyDecision.undecided,
-    PrivacyDecision.declined,
-  ]) {
-    testWidgets('${decision.name}：生成口令前要求同意，取消则不发送课表', (tester) async {
-      PrivacyConsent.instance.value = decision;
-      final api = _FakeApi();
-      addTearDown(api.close);
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: appLightTheme(),
-          home: TimetableExportPage(controller: _c, api: api),
-        ),
-      );
-      await tester.tap(find.text('生成 WakeUp 口令'));
-      await tester.pumpAndSettle();
-      expect(find.text('需要同意隐私政策'), findsOneWidget);
-      await tester.tap(find.text('取消'));
-      await tester.pumpAndSettle();
-      expect(api.requests, 0);
-      expect(PrivacyConsent.instance.value, decision);
-    });
-  }
-
-  testWidgets('生成口令时同意隐私政策后继续发送', (tester) async {
-    PrivacyConsent.instance.value = PrivacyDecision.declined;
-    final api = _FakeApi();
-    addTearDown(api.close);
+  testWidgets('顶部可直接进入导出页，有未导出课时口令下展示原因清单', (tester) async {
     await tester.pumpWidget(
-      MaterialApp(
-        theme: appLightTheme(),
-        home: TimetableExportPage(controller: _c, api: api),
-      ),
+      MaterialApp(theme: appLightTheme(), home: const TimetablePage()),
     );
-    await tester.tap(find.text('生成 WakeUp 口令'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('同意并继续'));
-    // 先等 Miuix 弹窗的退出动画播完，路由才会返回结果。
+    await tester.tap(find.byTooltip('导出到 WakeUp'));
     await tester.pumpAndSettle();
-    // 记录选择要经过平台通道的异步往返，真实异步让它先完成。
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 100)),
-    );
-    await tester.pump();
-    expect(PrivacyConsent.instance.accepted, isTrue);
-    expect(api.requests, 1);
-  });
-  testWidgets('无未导出课时不显示入口', (tester) async {
-    final api = _FakeApi();
-    addTearDown(api.close);
-    api.completion.complete(
-      const TimetableWakeupShare(shareText: '分享口令为「$_shareId」'),
-    );
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: appLightTheme(),
-        home: TimetableExportPage(controller: _c, api: api),
-      ),
-    );
-    await tester.tap(find.text('生成 WakeUp 口令'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('tt_export_skipped_link')), findsNothing);
-  });
+    expect(find.byType(TimetableExportPage), findsOneWidget);
+    expect(find.text('生成 WakeUp 口令'), findsOneWidget);
 
-  testWidgets('有未导出课：口令下显示入口，点开列出原因', (tester) async {
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+
     _loadCourses([
       const Course(
         id: 'valid',

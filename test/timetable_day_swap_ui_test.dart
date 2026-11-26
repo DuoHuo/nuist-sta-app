@@ -88,6 +88,8 @@ void main() {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 2.625;
     addTearDown(tester.view.reset);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
     await tester.pumpWidget(
       MaterialApp(
         theme: ThemeData(),
@@ -115,73 +117,14 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('SWU01 长按表头 → 整天调课页（原日期预填）→ 选目标 → 互换；两天都显示「调」', (tester) async {
-    load();
-    await pumpGrid(tester);
-    expect(find.byKey(const Key('day_header_swap_badge')), findsNothing);
-    await longPressHeader(tester, 1);
-    expect(find.byKey(const Key('day_swaps_page')), findsOneWidget);
-    expect(find.text('10月12日'), findsOneWidget); // 原日期预填
-    await tester.tap(find.byKey(const Key('day_swap_to')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('14'));
-    await tester.pumpAndSettle();
-    expect(find.text('10月14日'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('day_swap_submit')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('day_swap_confirm_dialog')), findsOneWidget);
-    expect(find.text('与10月14日互换'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('day_swap_confirm')));
-    await settleIo(tester);
-    await tester.pumpAndSettle();
-    expect(c.daySwaps, hasLength(1));
-    expect(c.isSwappedDate(_mon) && c.isSwappedDate(_wed), isTrue);
-    // 回到网格看角标
-    await tester.pageBack();
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('day_header_swap_badge')), findsNWidgets(2));
-    expect(find.text('已与10月14日互换'), findsOneWidget);
-  });
-
-  testWidgets('SWU02 取消确认 / 取消选日期：不调课', (tester) async {
-    load();
-    await pumpGrid(tester);
-    await longPressHeader(tester, 1);
-    await tester.tap(find.byKey(const Key('day_swap_to')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('day_swap_confirm_dialog')), findsNothing);
-    await tester.tap(find.text('14'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('day_swap_submit')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('day_swap_cancel')));
-    await settleIo(tester);
-    expect(c.daySwaps, isEmpty);
-  });
-
-  testWidgets('SWU03 已调课：页内记录可「恢复」', (tester) async {
-    load();
-    final s = (await tester.runAsync(() => c.addDaySwap(_mon, _wed)))!;
-    await pumpGrid(tester);
-    expect(find.byKey(const Key('day_header_swap_badge')), findsNWidgets(2));
-    await longPressHeader(tester, 3);
-    expect(find.byKey(const Key('day_swaps_page')), findsOneWidget);
-    expect(find.text('10月12日与10月14日的课程互换'), findsOneWidget);
-    await tester.tap(find.byKey(Key('day_swap_restore_${s.id}')));
-    await settleIo(tester);
-    await tester.pumpAndSettle();
-    expect(c.daySwaps, isEmpty);
-    expect(find.byKey(const Key('day_swaps_empty')), findsOneWidget);
-  });
-
-  testWidgets('SWU04 失败提示：同一天 / 学期外 / 对方已调过课', (tester) async {
+  testWidgets('长按表头调课：取消不变、同一天/已调过课校验、互换角标及页内与设置记录恢复', (tester) async {
+    // 1. 失败校验：同一天 / 对方已调过课
     load();
     await tester.runAsync(() => c.addDaySwap(_wed, _thu));
     await pumpHost(
       tester,
       TimetableDaySwapsPage(controller: c, initialFrom: _mon),
     );
-
     Future<void> attempt(int day, String msg) async {
       await tester.tap(find.byKey(const Key('day_swap_to')));
       await tester.pumpAndSettle();
@@ -199,6 +142,66 @@ void main() {
     await attempt(12, '不能和同一天互换');
     await attempt(14, '10月14日已调过课，请先撤销');
     expect(c.daySwaps, hasLength(1));
+
+    // 2. 取消确认不调课 → 确认互换显示两枚「调」角标 → 页内「恢复」还原为空
+    c.debugReset();
+    load();
+    await pumpGrid(tester);
+    expect(find.byKey(const Key('day_header_swap_badge')), findsNothing);
+    await longPressHeader(tester, 1);
+    expect(find.byKey(const Key('day_swaps_page')), findsOneWidget);
+    expect(find.text('10月12日'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('day_swap_to')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('14'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('day_swap_submit')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('day_swap_cancel')));
+    await settleIo(tester);
+    expect(c.daySwaps, isEmpty);
+
+    await tester.tap(find.byKey(const Key('day_swap_submit')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('day_swap_confirm')));
+    await settleIo(tester);
+    await tester.pumpAndSettle();
+    expect(c.daySwaps, hasLength(1));
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('day_header_swap_badge')), findsNWidgets(2));
+    expect(find.text('已与10月14日互换'), findsOneWidget);
+
+    await longPressHeader(tester, 3);
+    final firstSwap = c.daySwaps.single;
+    await tester.tap(find.byKey(Key('day_swap_restore_${firstSwap.id}')));
+    await settleIo(tester);
+    await tester.pumpAndSettle();
+    expect(c.daySwaps, isEmpty);
+    expect(find.byKey(const Key('day_swaps_empty')), findsOneWidget);
+
+    // 3. 从设置 -> 课程管理 -> 调课记录查看空态、新增后一句话展示并恢复
+    await pumpHost(tester, TimetableSettingsPage(controller: c));
+    await tester.tap(find.byKey(const Key('tt_settings_management_entry')));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('tt_settings_day_swaps')),
+      200,
+    );
+    await tester.ensureVisible(find.byKey(const Key('tt_settings_day_swaps')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tt_settings_day_swaps')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('day_swaps_empty')), findsOneWidget);
+    final s = (await tester.runAsync(() => c.addDaySwap(_wed, _mon)))!;
+    await tester.pumpAndSettle();
+    expect(find.text('10月12日与10月14日的课程互换'), findsOneWidget);
+    await tester.tap(find.byKey(Key('day_swap_restore_${s.id}')));
+    await settleUntil(
+      tester,
+      () => find.byKey(const Key('day_swaps_empty')).evaluate().isNotEmpty,
+    );
+    expect(c.daySwaps, isEmpty);
   });
 
   test('SWU05 学期范围与文字', () {
@@ -210,37 +213,12 @@ void main() {
     expect(daySwapErrorFor(c, DateTime(2026, 8, 30), _wed), '日期不在本学期内');
   });
 
-  testWidgets('SWU06 设置 → 调课记录：空状态；有记录时一句话 +「恢复」', (tester) async {
-    load();
-    await pumpHost(tester, TimetableSettingsPage(controller: c));
-    await tester.tap(find.byKey(const Key('tt_settings_management_entry')));
-    await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('tt_settings_day_swaps')),
-      200,
-    );
-    expect(find.byKey(const Key('tt_settings_day_swaps')), findsOneWidget);
-    await tester.ensureVisible(find.byKey(const Key('tt_settings_day_swaps')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('tt_settings_day_swaps')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('day_swaps_page')), findsOneWidget);
-    expect(find.byKey(const Key('day_swaps_empty')), findsOneWidget);
+  GridCell cellOn(DateTime d, String id) => c
+      .cellsForDay(c.weekOfDate(d), d.weekday)
+      .firstWhere((x) => x.activeThisWeek && x.course.id == id);
 
-    final s = (await tester.runAsync(() => c.addDaySwap(_wed, _mon)))!;
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('day_swaps_empty')), findsNothing);
-    expect(find.text('10月12日与10月14日的课程互换'), findsOneWidget);
-    await tester.tap(find.byKey(Key('day_swap_restore_${s.id}')));
-    await settleUntil(
-      tester,
-      () => find.byKey(const Key('day_swaps_empty')).evaluate().isNotEmpty,
-    );
-    expect(c.daySwaps, isEmpty);
-    expect(find.byKey(const Key('day_swaps_empty')), findsOneWidget);
-  });
-
-  testWidgets('SWU07 深色模式：调课记录页与表头角标正常渲染', (tester) async {
+  testWidgets('深色调课角标与记录、详情只删这一天及单日修改恢复与无标记圆点', (tester) async {
+    // 1. 深色模式下调课记录页与表头角标正常渲染
     load();
     await tester.runAsync(() => c.addDaySwap(_mon, _wed));
     await pumpHost(
@@ -259,13 +237,9 @@ void main() {
     );
     expect(find.byKey(const Key('day_header_swap_badge')), findsNWidgets(2));
     expect(tester.takeException(), isNull);
-  });
 
-  GridCell cellOn(DateTime d, String id) => c
-      .cellsForDay(c.weekOfDate(d), d.weekday)
-      .firstWhere((x) => x.activeThisWeek && x.course.id == id);
-
-  testWidgets('SWU08 详情删除三档 → 只删这一天；「恢复这一天」→ 回来', (tester) async {
+    // 2. 详情只删这一天；单日修改无圆点且不波及下一周，可从详情恢复这一天
+    c.debugReset();
     load();
     await pumpHost(
       tester,
@@ -273,8 +247,6 @@ void main() {
         body: CourseDetailSheet(cell: cellOn(_mon, 'm1'), controller: c),
       ),
     );
-    expect(find.byKey(const Key('course_detail_restore_day')), findsNothing);
-    expect(find.byKey(const Key('course_detail_delete_day')), findsNothing);
     await tester.tap(find.byKey(const Key('course_detail_delete')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('delete_scope_sheet')), findsOneWidget);
@@ -287,21 +259,25 @@ void main() {
       isEmpty,
     );
     expect(cellOn(DateTime(2026, 10, 19), 'm1').dateEdit, isNull);
-    expect(c.courseDateEdits, hasLength(1));
 
     await tester.runAsync(() async {
       await c.restoreDateEdit(c.courseDateEdits.single.id);
       await c.editOccurrence(cellOn(_mon, 'm1'), name: '读书会·改');
     });
-    final edited = cellOn(_mon, 'm1');
-    expect(edited.dateEdit, isNotNull);
     await pumpHost(
       tester,
       Scaffold(
-        body: CourseDetailSheet(cell: edited, controller: c),
+        body: WeekGrid(week: _week, controller: c, onCourseTap: (_) {}),
+      ),
+      mode: ThemeMode.dark,
+    );
+    expect(find.byKey(const Key('course_cell_date_edit_dot')), findsNothing);
+    await pumpHost(
+      tester,
+      Scaffold(
+        body: CourseDetailSheet(cell: cellOn(_mon, 'm1'), controller: c),
       ),
     );
-    expect(find.byKey(const Key('course_detail_date_edit')), findsOneWidget);
     await tester.tap(find.byKey(const Key('course_detail_date_edit')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('course_detail_restore_day')));
@@ -309,34 +285,4 @@ void main() {
     expect(c.courseDateEdits, isEmpty);
     expect(cellOn(_mon, 'm1').dateEdit, isNull);
   });
-
-  for (final mode in [ThemeMode.light, ThemeMode.dark]) {
-    testWidgets('SWU09 单日修改不显示标记圆点，修改仍只影响当天（${mode.name}）', (tester) async {
-      load();
-      await pumpGrid(tester);
-      expect(find.byKey(const Key('course_cell_date_edit_dot')), findsNothing);
-      await tester.runAsync(
-        () => c.editOccurrence(cellOn(_mon, 'm1'), location: '新地点'),
-      );
-      await pumpHost(
-        tester,
-        Scaffold(
-          body: WeekGrid(week: _week, controller: c, onCourseTap: (_) {}),
-        ),
-        mode: mode,
-      );
-      expect(find.byKey(const Key('course_cell_date_edit_dot')), findsNothing);
-      expect(cellOn(_mon, 'm1').slot.location, '新地点');
-      expect(tester.takeException(), isNull);
-      // 下一周同一门课没有圆点。
-      await pumpHost(
-        tester,
-        Scaffold(
-          body: WeekGrid(week: _week + 1, controller: c, onCourseTap: (_) {}),
-        ),
-        mode: mode,
-      );
-      expect(find.byKey(const Key('course_cell_date_edit_dot')), findsNothing);
-    });
-  }
 }

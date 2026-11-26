@@ -129,7 +129,7 @@ void main() {
     expect(headers.containsKey('X-Client-ID'), isFalse);
   });
 
-  test('非法渠道和不安全字段省略，不伪装成release或注入请求头', () {
+  test('非法渠道、不安全字段及无效标识均被省略，匿名标识校验 UUID v4', () {
     final headers = ClientMetadata(
       platform: 'android',
       appPackage: 'valid.package\r\nInjected: yes',
@@ -148,23 +148,28 @@ void main() {
       'X-Client-ID': 'ab' * 32,
       'X-Client-ID-Type': 'ssaid_sha256_v1',
     });
-  });
 
-  test('设备标识格式错误时不带类型头，ROM名称可独立存在', () {
-    const metadata = ClientMetadata(
+    const badClientId = ClientMetadata(
       platform: 'android',
       appPackage: 'dev.duohuo.nuist_sta_app',
       clientId: 'raw-android-id',
       romName: 'HarmonyOS',
     );
-    expect(metadata.headers['X-ROM-Name'], 'HarmonyOS');
-    expect(metadata.headers.containsKey('X-ROM-Version'), isFalse);
-    expect(metadata.headers.containsKey('X-Client-ID'), isFalse);
-    expect(metadata.headers.containsKey('X-Client-ID-Type'), isFalse);
+    expect(badClientId.headers['X-ROM-Name'], 'HarmonyOS');
+    expect(badClientId.headers.containsKey('X-ROM-Version'), isFalse);
+    expect(badClientId.headers.containsKey('X-Client-ID'), isFalse);
+    expect(badClientId.headers.containsKey('X-Client-ID-Type'), isFalse);
+
+    final badAnon = ClientMetadata(
+      platform: 'android',
+      anonymousId: 'ab' * 32,
+    ).headers;
+    expect(badAnon.containsKey('X-Client-ID'), isFalse);
+    expect(badAnon.containsKey('X-Client-ID-Type'), isFalse);
   });
 
-  test('OriginOS Ocean 使用确证的市场代号，其他 ROM 不接受该代号', () {
-    Map<String, String> headers(String name, String version) => ClientMetadata(
+  test('特殊 ROM 版本代号（OriginOS Ocean、HarmonyOSNEXT）按规则清洗', () {
+    Map<String, String> headers(String name, String? version) => ClientMetadata(
       platform: 'android',
       romName: name,
       romVersion: version,
@@ -179,42 +184,35 @@ void main() {
       isFalse,
     );
     expect(headers('OriginOS', '6')['X-ROM-Version'], '6');
-  });
 
-  test('鸿蒙 Android 兼容环境单独分类，宿主版本与 Android 版本分开', () {
-    const metadata = ClientMetadata(
+    const harmonyNext = ClientMetadata(
       platform: 'android',
       androidVersion: '12',
       androidSdk: 31,
       romName: 'HarmonyOSNEXT',
       romVersion: '6.0.0',
     );
-    expect(metadata.headers['X-ROM-Name'], 'HarmonyOSNEXT');
-    expect(metadata.headers['X-ROM-Version'], '6.0.0');
-    expect(metadata.headers['X-Android-Version'], '12');
+    expect(harmonyNext.headers['X-ROM-Name'], 'HarmonyOSNEXT');
+    expect(harmonyNext.headers['X-ROM-Version'], '6.0.0');
+    expect(harmonyNext.headers['X-Android-Version'], '12');
     expect(
-      const ClientMetadata(
-        platform: 'android',
-        romName: 'HarmonyOSNEXT',
-      ).headers.containsKey('X-ROM-Version'),
+      headers('HarmonyOSNEXT', null).containsKey('X-ROM-Version'),
       isFalse,
     );
   });
 
-  test('包信息失败时可使用原生实际包名，但不编造应用版本', () async {
-    final provider = ClientMetadataProvider(
+  test('包名来源回退、渠道版本号校验与设备标识解耦', () async {
+    final fallbackProvider = ClientMetadataProvider(
       consent: consentOf(PrivacyDecision.accepted),
       platform: 'android',
       packageLoader: () async => throw PlatformException(code: 'unavailable'),
       nativeLoader: () async => {'appPackage': 'dev.duohuo.nuist_sta_app'},
     );
-    final metadata = await provider.get();
-    expect(metadata.headers['X-App-Package'], 'dev.duohuo.nuist_sta_app');
-    expect(metadata.headers.containsKey('X-App-Version-Code'), isFalse);
-  });
+    final fallback = await fallbackProvider.get();
+    expect(fallback.headers['X-App-Package'], 'dev.duohuo.nuist_sta_app');
+    expect(fallback.headers.containsKey('X-App-Version-Code'), isFalse);
 
-  test('设备标识不依赖包名来源，包信息单独处理', () async {
-    final provider = ClientMetadataProvider(
+    final independentProvider = ClientMetadataProvider(
       consent: consentOf(PrivacyDecision.accepted),
       platform: 'android',
       packageLoader: () async => packageInfo(),
@@ -223,43 +221,39 @@ void main() {
         'clientId': 'ab' * 32,
       },
     );
-    final headers = (await provider.get()).headers;
-    expect(headers['X-Client-ID'], 'ab' * 32);
-    expect(headers['X-App-Package'], 'dev.duohuo.nuist_sta_app');
-  });
+    final independent = (await independentProvider.get()).headers;
+    expect(independent['X-Client-ID'], 'ab' * 32);
+    expect(independent['X-App-Package'], 'dev.duohuo.nuist_sta_app');
 
-  test('不同包名和渠道共享相同设备标识，包名缺失也可发送标识', () {
-    ClientMetadata metadata({String? package, String channel = 'dev'}) =>
-        ClientMetadata(
-          platform: 'android',
-          appPackage: package,
-          appChannel: channel,
-          clientId: 'cd' * 32,
-        );
-    final dev = metadata(package: 'org.example.nuist.dev').headers;
-    final release = metadata(
-      package: 'org.example.nuist',
-      channel: 'release',
-    ).headers;
-    final unknown = metadata().headers;
-    expect(dev['X-Client-ID'], release['X-Client-ID']);
-    expect(unknown['X-Client-ID'], dev['X-Client-ID']);
-    expect(unknown.containsKey('X-App-Package'), isFalse);
-    expect(dev['X-App-Package'], isNot(release['X-App-Package']));
-    expect(dev['X-App-Channel'], isNot(release['X-App-Channel']));
-  });
-
-  test('无效渠道及版本号不会被包装成有效兼容信息', () async {
-    final provider = ClientMetadataProvider(
+    final invalidProvider = ClientMetadataProvider(
       consent: consentOf(PrivacyDecision.accepted),
       platform: 'android',
       appChannel: 'invalid',
       packageLoader: () async => packageInfo(buildNumber: 'v02800'),
       nativeLoader: () async => {},
     );
-    final metadata = await provider.get();
-    expect(metadata.headers.containsKey('X-App-Channel'), isFalse);
-    expect(metadata.headers.containsKey('X-App-Version-Code'), isFalse);
+    final invalid = await invalidProvider.get();
+    expect(invalid.headers.containsKey('X-App-Channel'), isFalse);
+    expect(invalid.headers.containsKey('X-App-Version-Code'), isFalse);
+
+    ClientMetadata of({String? package, String channel = 'dev'}) =>
+        ClientMetadata(
+          platform: 'android',
+          appPackage: package,
+          appChannel: channel,
+          clientId: 'cd' * 32,
+        );
+    final dev = of(package: 'org.example.nuist.dev').headers;
+    final release = of(
+      package: 'org.example.nuist',
+      channel: 'release',
+    ).headers;
+    final unknown = of().headers;
+    expect(dev['X-Client-ID'], release['X-Client-ID']);
+    expect(unknown['X-Client-ID'], dev['X-Client-ID']);
+    expect(unknown.containsKey('X-App-Package'), isFalse);
+    expect(dev['X-App-Package'], isNot(release['X-App-Package']));
+    expect(dev['X-App-Channel'], isNot(release['X-App-Channel']));
   });
 
   test('公告缓存变体区分包渠道版本，且不包含设备信息', () {
@@ -401,14 +395,5 @@ void main() {
     expect(headers['X-Client-ID-Type'], 'random_uuid_v1');
     expect(headers['X-ROM-Name'], 'anonymous');
     expect(headers['X-Android-Version'], 'anonymous');
-  });
-
-  test('匿名标识不是 UUID v4 时不发送标识头', () {
-    final headers = ClientMetadata(
-      platform: 'android',
-      anonymousId: 'ab' * 32,
-    ).headers;
-    expect(headers.containsKey('X-Client-ID'), isFalse);
-    expect(headers.containsKey('X-Client-ID-Type'), isFalse);
   });
 }
