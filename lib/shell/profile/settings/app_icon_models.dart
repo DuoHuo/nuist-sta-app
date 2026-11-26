@@ -29,11 +29,6 @@ const appIconChoices = <AppIconChoice>[
     assetPath: 'assets/images/app_icon.png',
   ),
   AppIconChoice(
-    id: AppIconIds.alt,
-    label: '海海',
-    assetPath: 'assets/images/app_icon_alt.png',
-  ),
-  AppIconChoice(
     id: AppIconIds.mascot,
     label: '信小龙',
     assetPath: 'assets/images/app_icon_mascot.png',
@@ -43,6 +38,11 @@ const appIconChoices = <AppIconChoice>[
     label: '派龙',
     assetPath: 'assets/images/app_icon_mascot_color.png',
   ),
+  AppIconChoice(
+    id: AppIconIds.alt,
+    label: '海海',
+    assetPath: 'assets/images/app_icon_alt.png',
+  )
 ];
 
 /// 原生端返回的图标状态。字段全部做了防御性解析，避免版本不一致时页面崩溃。
