@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/colors.dart';
+import '../../core/navigation/app_page.dart';
 import '../../core/ui/miuix_dialog.dart';
 import 'library_api.dart';
 import 'library_controller.dart';
@@ -64,7 +65,7 @@ class _LibraryPageState extends State<LibraryPage>
 
   void _openBook(String id) {
     Navigator.of(context).push<void>(
-      MaterialPageRoute(
+      AppPageRoute(
         builder: (context) =>
             LibraryDetailPage(api: _controller.api, bookId: id),
       ),

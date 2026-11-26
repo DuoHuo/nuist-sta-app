@@ -35,6 +35,8 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
   /// 准备门户会话时的失败；非 null 时用错误页顶替 WebView。
   PortalException? _error;
   bool _preparing = false;
+  bool _canGoBack = false;
+  int _historyRevision = 0;
 
   @override
   void initState() {
@@ -48,13 +50,44 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
           onProgress: (p) {
             if (mounted) setState(() => _progress = p);
           },
-          onPageStarted: _diagnostics.pageStarted,
-          onPageFinished: _diagnostics.pageFinished,
-          onWebResourceError: _diagnostics.resourceError,
+          onPageStarted: (url) {
+            _diagnostics.pageStarted(url);
+            _syncBackHistory();
+          },
+          onUrlChange: (_) => _syncBackHistory(),
+          onPageFinished: (url) async {
+            await _diagnostics.pageFinished(url);
+            await _syncBackHistory();
+          },
+          onWebResourceError: (error) {
+            _diagnostics.resourceError(error);
+            _syncBackHistory();
+          },
           onHttpError: _diagnostics.httpError,
         ),
       );
     _start();
+  }
+
+  // 系统在手势开始前就需要知道能否退出，不能等返回回调里再异步查询。
+  Future<void> _syncBackHistory() async {
+    final revision = ++_historyRevision;
+    final canGoBack = await _controller.canGoBack();
+    if (!mounted || revision != _historyRevision || canGoBack == _canGoBack) {
+      return;
+    }
+    setState(() => _canGoBack = canGoBack);
+  }
+
+  Future<void> _onBack() async {
+    final canGoBack = await _controller.canGoBack();
+    if (!mounted) return;
+    if (canGoBack) {
+      await _controller.goBack();
+      await _syncBackHistory();
+    } else {
+      Navigator.of(context).pop();
+    }
   }
 
   Future<void> _start() async {
@@ -124,30 +157,36 @@ class _MiniWebViewPageState extends State<MiniWebViewPage> {
   @override
   Widget build(BuildContext context) {
     // 只管容器层（顶栏、进度条、错误页）；网页内容是学校自己的页面，不做反色。
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.manifest.label),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(2),
-          // 加载完成后隐藏；value 传 null 会变成无限循环的不确定进度动画。
-          child: _progress < 100
-              ? LinearProgressIndicator(
-                  minHeight: 2,
-                  value: _progress / 100,
-                  color: Theme.of(context).colorScheme.primary,
-                  backgroundColor: AppPalette.of(context).rowDivider,
-                )
-              : const SizedBox(height: 2),
-        ),
-      ),
-      body: switch ((_error, _preparing)) {
-        (final PortalException error, _) => _PortalErrorView(
-          error: error,
-          onRetry: _start,
-        ),
-        (_, true) => const Center(child: CircularProgressIndicator()),
-        _ => WebViewWidget(controller: _controller),
+    return PopScope(
+      canPop: _error != null || _preparing || !_canGoBack,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _onBack();
       },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(widget.manifest.label),
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(2),
+            // 加载完成后隐藏；value 传 null 会变成无限循环的不确定进度动画。
+            child: _progress < 100
+                ? LinearProgressIndicator(
+                    minHeight: 2,
+                    value: _progress / 100,
+                    color: Theme.of(context).colorScheme.primary,
+                    backgroundColor: AppPalette.of(context).rowDivider,
+                  )
+                : const SizedBox(height: 2),
+          ),
+        ),
+        body: switch ((_error, _preparing)) {
+          (final PortalException error, _) => _PortalErrorView(
+            error: error,
+            onRetry: _start,
+          ),
+          (_, true) => const Center(child: CircularProgressIndicator()),
+          _ => WebViewWidget(controller: _controller),
+        },
+      ),
     );
   }
 }

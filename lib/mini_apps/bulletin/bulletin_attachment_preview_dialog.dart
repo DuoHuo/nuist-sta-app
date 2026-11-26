@@ -335,56 +335,54 @@ class _BulletinAttachmentPreviewDialogState
         _kind != null &&
         _kind != BulletinPreviewKind.unsupported &&
         (!_useOfficeEngine || _officeEngineReady);
-    return Dialog.fullscreen(
-      child: Scaffold(
-        backgroundColor: palette.pageBg,
-        appBar: AppBar(
-          title: const Text('附件预览'),
-          leading: IconButton(
-            tooltip: '关闭预览',
-            icon: const Icon(Icons.close),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          actions: [
-            if (canPreview && (_searchFile != null || _useOfficeEngine))
-              IconButton(
-                tooltip: _searchExpanded ? '关闭查找' : '查找文字',
-                onPressed: () =>
-                    setState(() => _searchExpanded = !_searchExpanded),
-                icon: Icon(_searchExpanded ? Icons.search_off : Icons.search),
+    return Scaffold(
+      backgroundColor: palette.pageBg,
+      appBar: AppBar(
+        title: const Text('附件预览'),
+        leading: IconButton(
+          tooltip: '关闭预览',
+          icon: const Icon(Icons.close),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        actions: [
+          if (canPreview && (_searchFile != null || _useOfficeEngine))
+            IconButton(
+              tooltip: _searchExpanded ? '关闭查找' : '查找文字',
+              onPressed: () =>
+                  setState(() => _searchExpanded = !_searchExpanded),
+              icon: Icon(_searchExpanded ? Icons.search_off : Icons.search),
+            ),
+          if (canPreview)
+            IconButton(
+              tooltip: '用其他应用打开',
+              onPressed: _opening ? null : _openExternally,
+              icon: const Icon(Icons.open_in_new),
+            ),
+        ],
+      ),
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                widget.attachment.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: palette.titleText,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            if (canPreview)
-              IconButton(
-                tooltip: '用其他应用打开',
-                onPressed: _opening ? null : _openExternally,
-                icon: const Icon(Icons.open_in_new),
+            ),
+            Expanded(child: _buildContent(palette)),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(_error!, style: TextStyle(color: palette.danger)),
               ),
           ],
-        ),
-        body: SafeArea(
-          top: false,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  widget.attachment.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: palette.titleText,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              Expanded(child: _buildContent(palette)),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(_error!, style: TextStyle(color: palette.danger)),
-                ),
-            ],
-          ),
         ),
       ),
     );
