@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/ui/app_bottom_sheet.dart';
+
 import 'timetable_date_edits.dart';
 import 'timetable_theme.dart';
 
@@ -13,7 +15,7 @@ Future<EditScope?> showEditScopeSheet(
   BuildContext context, {
   required DateTime date,
 }) {
-  return showModalBottomSheet<EditScope>(
+  return showAppModalBottomSheet<EditScope>(
     context: context,
     isDismissible: true,
     enableDrag: true,

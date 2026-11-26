@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_snack_bar.dart';
+import '../../core/ui/app_bottom_sheet.dart';
 import '../../core/ui/miuix_dialog.dart';
 import 'timetable_controller.dart';
 import 'timetable_course_color.dart';
@@ -46,7 +47,7 @@ Future<TimetableColorPick?> showTimetableColorPicker(
     textColorMode: textColorMode,
     onSave: onSave,
   );
-  return showModalBottomSheet<TimetableColorPick>(
+  return showAppModalBottomSheet<TimetableColorPick>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,

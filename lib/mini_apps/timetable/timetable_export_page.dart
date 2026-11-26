@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
+import '../../core/ui/app_bottom_sheet.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/privacy/privacy_consent_dialog.dart';
 import 'timetable_controller.dart';
@@ -125,7 +126,7 @@ class _TimetableExportPageState extends State<TimetableExportPage> {
 
   Future<void> _showSkippedSheet(List<TimetableExportSkippedSlot> items) {
     final palette = AppPalette.of(context);
-    return showModalBottomSheet<void>(
+    return showAppModalBottomSheet<void>(
       context: context,
       backgroundColor: palette.surface,
       shape: const RoundedRectangleBorder(

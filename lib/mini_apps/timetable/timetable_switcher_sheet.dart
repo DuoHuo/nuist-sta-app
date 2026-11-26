@@ -6,6 +6,8 @@ import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
+import '../../core/navigation/app_page.dart';
+import '../../core/ui/app_bottom_sheet.dart';
 import '../../core/ui/miuix_dialog.dart';
 import 'timetable_controller.dart';
 import 'timetable_export_page.dart';
@@ -24,7 +26,7 @@ Future<void> showTimetableSwitcherSheet(
   ValueChanged<int>? onSelectWeek,
 }) {
   final host = controller ?? TimetableController.instance;
-  return showModalBottomSheet<void>(
+  return showAppModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
@@ -588,7 +590,7 @@ class _TimetableSwitcherContentState extends State<TimetableSwitcherContent> {
                 final nav = Navigator.of(context);
                 widget.onClosePanel?.call();
                 await nav.push(
-                  MaterialPageRoute<void>(
+                  AppPageRoute<void>(
                     builder: (_) => TimetableImportPage(controller: controller),
                   ),
                 );
@@ -700,7 +702,7 @@ class _ScheduleItemTile extends StatelessWidget {
     if (!nav.mounted) return;
     onClosePanel?.call();
     await nav.push(
-      MaterialPageRoute<void>(
+      AppPageRoute<void>(
         builder: (_) => TimetableExportPage(controller: targetController),
       ),
     );

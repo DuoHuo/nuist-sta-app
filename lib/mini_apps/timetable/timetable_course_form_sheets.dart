@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/ui/app_bottom_sheet.dart';
 import '../../core/ui/miuix_dialog.dart';
 import 'timetable_theme.dart';
 import 'timetable_week_format.dart';
@@ -16,7 +17,7 @@ Future<List<int>?> showCourseWeeksSheet(
   BuildContext context, {
   required int totalWeeks,
   required Set<int> initial,
-}) => showModalBottomSheet<List<int>>(
+}) => showAppModalBottomSheet<List<int>>(
   context: context,
   isScrollControlled: true,
   useSafeArea: true,
@@ -95,7 +96,7 @@ Future<bool> confirmCourseWeekChange(
   required Set<int> before,
   required Set<int> after,
 }) async {
-  final confirmed = await showModalBottomSheet<bool>(
+  final confirmed = await showAppModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,

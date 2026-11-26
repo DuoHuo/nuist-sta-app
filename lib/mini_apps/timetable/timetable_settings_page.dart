@@ -7,6 +7,7 @@ import 'package:flutter_miuix/miuix.dart';
 import '../../core/navigation/app_page.dart';
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
+import '../../core/ui/app_bottom_sheet.dart';
 import '../../core/ui/miuix_dialog.dart';
 import 'timetable_appearance_page.dart';
 import 'timetable_change_log_page.dart';
@@ -96,7 +97,7 @@ class TimetableSettingsPage extends StatelessWidget {
   }) async {
     var saving = false;
     String? saveError;
-    final saved = await showModalBottomSheet<bool>(
+    final saved = await showAppModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       builder: (_) => StatefulBuilder(
@@ -531,7 +532,7 @@ class _TimetableWidgetSettingsPageState
     required WidgetPinSize size,
     bool settingsUnavailable = false,
   }) async {
-    return await showModalBottomSheet<bool>(
+    return await showAppModalBottomSheet<bool>(
           context: context,
           isScrollControlled: true,
           backgroundColor: Colors.transparent,

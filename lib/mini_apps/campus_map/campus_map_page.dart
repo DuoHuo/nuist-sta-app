@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../../core/navigation/app_page.dart';
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
+import '../../core/ui/app_bottom_sheet.dart';
 import '../../core/logging/app_log.dart';
 import '../../core/schedule/weekly_classes.dart';
 import 'shuttle_api.dart';
@@ -894,7 +895,7 @@ class _CampusMapPageState extends State<CampusMapPage>
         destinationRoomId: _room?.id,
       );
     } else {
-      request = await showModalBottomSheet<CampusRouteRequest>(
+      request = await showAppModalBottomSheet<CampusRouteRequest>(
         context: context,
         isScrollControlled: true,
         backgroundColor: colors.surface,
@@ -2026,7 +2027,7 @@ class _CampusMapPageState extends State<CampusMapPage>
       );
 
   Future<void> _showLayers() async {
-    await showModalBottomSheet<void>(
+    await showAppModalBottomSheet<void>(
       context: context,
       backgroundColor: colors.surface,
       showDragHandle: true,

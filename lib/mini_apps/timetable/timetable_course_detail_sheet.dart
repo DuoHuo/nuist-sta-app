@@ -3,6 +3,7 @@ import 'timetable_persistence_feedback.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/app_snack_bar.dart';
+import '../../core/ui/app_bottom_sheet.dart';
 import '../../core/ui/miuix_dialog.dart';
 import 'timetable_change_format.dart';
 import 'timetable_color_picker.dart';
@@ -23,7 +24,7 @@ Future<void> showCourseDetailSheet(
 }) {
   // 叠加选色/备注入口时键盘每帧更新弹层约束，复用详情避免重建底层文字。
   final detail = CourseDetailSheet(cell: cell, controller: controller);
-  return showModalBottomSheet<void>(
+  return showAppModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
@@ -346,7 +347,7 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     final course = cell.course;
     final base = widget.controller.baseOccurrenceOf(cell);
     final changes = widget.controller.courseDetailChanges(cell);
-    await showModalBottomSheet<void>(
+    await showAppModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: TimetableTheme.colorsOf(context).surface,
