@@ -95,7 +95,8 @@ class _RootPageState extends State<RootPage> {
             final navigation = widget.navigation;
             final current = navigation.updateLayout(wide: layout.wide);
             final combined = layout.wide && current != 2;
-            final showBar = layout.wide || !navigation.hasDetails(current);
+            final showBar =
+                layout.wide || !navigation.hasVisibleDetails(current);
             Widget tabButton(_TabItem item) => _TabButton(
               item: item,
               selected: layout.wide

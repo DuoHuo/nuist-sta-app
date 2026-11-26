@@ -80,6 +80,17 @@ class _AppPageBasedRoute<T> extends PageRoute<T>
       : super.reverseTransitionDuration;
 
   @override
+  TickerFuture didPush() {
+    final result = super.didPush();
+    if (_page.directLaunch) {
+      // 入场已完成（transitionDuration 为 zero），将 controller.duration
+      // 恢复为标准转场时长，确保后续取消预测性返回手势时平滑回弹。
+      controller?.duration = super.transitionDuration;
+    }
+    return result;
+  }
+
+  @override
   RoutePopDisposition get popDisposition {
     // go_router 为所有常驻分支登记 PopScope，包括隐藏的详情栈。
     // 根路由按可见栈登记平台返回能力，不能让预加载分支取消 Android 回调。
