@@ -7,6 +7,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../core/app_snack_bar.dart';
 import '../../core/colors.dart';
 import '../../core/logging/app_log.dart';
+import '../../core/navigation/app_page.dart';
 import 'bulletin_api.dart';
 import 'bulletin_attachment_preview_dialog.dart';
 import 'bulletin_detail_repository.dart';
@@ -172,12 +173,14 @@ class _BulletinDetailPageState extends State<BulletinDetailPage> {
     if (_attachmentPreviewOpen) return;
     _attachmentPreviewOpen = true;
     try {
-      await showDialog<void>(
-        context: context,
-        useRootNavigator: false,
-        builder: (_) => BulletinAttachmentPreviewDialog(
-          attachment: attachment,
-          api: _repository.api,
+      await Navigator.of(context).push<void>(
+        AppPageRoute<void>(
+          fullscreenDialog:
+              Theme.of(context).platform != TargetPlatform.android,
+          builder: (_) => BulletinAttachmentPreviewDialog(
+            attachment: attachment,
+            api: _repository.api,
+          ),
         ),
       );
     } catch (error, stackTrace) {

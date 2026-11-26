@@ -887,4 +887,48 @@ void main() {
     tester.view.resetViewInsets();
     await tester.pumpAndSettle();
   });
+
+  for (final dark in [false, true]) {
+    testWidgets('${dark ? '深色' : '浅色'}日程表单未修改支持预测性返回，修改后拦截并可恢复', (
+      tester,
+    ) async {
+      _load();
+      await _pumpLauncher(
+        tester,
+        (context) => showScheduleEventEditPage(
+          context,
+          controller: _c,
+          kind: ScheduleKind.other,
+        ),
+        theme: dark ? appDarkTheme() : appLightTheme(),
+      );
+      final titleField = find.byKey(const Key('schedule_form_title'));
+      final route = ModalRoute.of(tester.element(titleField))! as PageRoute;
+      expect(route.popGestureEnabled, isTrue);
+
+      await tester.enterText(titleField, '临时日程');
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      expect(route.popGestureEnabled, isFalse);
+      expect(await _backGesture(tester, 'startBackGesture'), isFalse);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('放弃未保存的修改？'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('schedule_form_discard_cancel')));
+      await tester.pumpAndSettle();
+      expect(find.text('临时日程'), findsOneWidget);
+
+      await tester.enterText(titleField, '');
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      expect(route.popGestureEnabled, isTrue);
+
+      expect(await _backGesture(tester, 'startBackGesture'), isTrue);
+      await _backGesture(tester, 'updateBackGestureProgress', progress: 0.4);
+      await _backGesture(tester, 'commitBackGesture');
+      expect(find.byKey(const Key('schedule_form_title')), findsNothing);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+  }
 }

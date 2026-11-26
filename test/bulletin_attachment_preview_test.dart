@@ -891,4 +891,109 @@ void main() {
     expect(openCalls, isEmpty);
     expect(tester.takeException(), isNull);
   });
+
+  for (final dark in [false, true]) {
+    testWidgets('${dark ? '深色' : '浅色'}从公告详情点击附件进入预览支持 Android 预测性返回', (
+      tester,
+    ) async {
+      final api = _FixtureApi(fixture('notice.txt', utf8.encode('附件里的中文内容')));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: dark ? appDarkTheme() : appLightTheme(),
+          home: BulletinDetailPage(
+            bulletin: const Bulletin(
+              id: '1',
+              title: '测试公告',
+              url: 'https://bulletin.campus.invalid/info/1/1.htm',
+              officialCategory: '其他',
+              publisher: '测试单位',
+              publishedAt: '2026-10-19',
+            ),
+            api: api,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('测试附件'));
+      await _pumpUntil(tester, find.text('附件里的中文内容'));
+
+      final route =
+          ModalRoute.of(
+                tester.element(find.byType(BulletinAttachmentPreviewDialog)),
+              )!
+              as PageRoute;
+      expect(route.fullscreenDialog, isFalse);
+      expect(route.popGestureEnabled, isTrue);
+
+      ByteData? startResponse;
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'flutter/backgesture',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('startBackGesture', {
+            'touchOffset': [5.0, 300.0],
+            'progress': 0.0,
+            'swipeEdge': 0,
+          }),
+        ),
+        (data) => startResponse = data,
+      );
+      expect(
+        const StandardMethodCodec().decodeEnvelope(startResponse!),
+        isTrue,
+      );
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'flutter/backgesture',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('updateBackGestureProgress', {
+            'touchOffset': [40.0, 300.0],
+            'progress': 0.4,
+            'swipeEdge': 0,
+          }),
+        ),
+        (_) {},
+      );
+      await tester.pumpAndSettle();
+      expect(route.animation!.value, closeTo(0.6, 0.001));
+
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'flutter/backgesture',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('cancelBackGesture', {
+            'touchOffset': [5.0, 300.0],
+            'progress': 0.0,
+            'swipeEdge': 0,
+          }),
+        ),
+        (_) {},
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('附件里的中文内容'), findsOneWidget);
+
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'flutter/backgesture',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('startBackGesture', {
+            'touchOffset': [5.0, 300.0],
+            'progress': 0.0,
+            'swipeEdge': 0,
+          }),
+        ),
+        (_) {},
+      );
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'flutter/backgesture',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('commitBackGesture', {
+            'touchOffset': [80.0, 300.0],
+            'progress': 0.8,
+            'swipeEdge': 0,
+          }),
+        ),
+        (_) {},
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(BulletinAttachmentPreviewDialog), findsNothing);
+      expect(find.text('公告正文'), findsOneWidget);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+  }
 }
