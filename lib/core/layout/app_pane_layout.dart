@@ -135,7 +135,7 @@ class AppPaneLayout {
     );
   }
 
-  /// 将窗口级安全区、键盘与显示特征换算成面板局部坐标。
+  /// 将窗口级安全区、键盘、显示特征与屏幕圆角换算成面板局部坐标。
   static MediaQueryData mediaForRect(MediaQueryData media, Rect rect) {
     EdgeInsets crop(EdgeInsets insets) => EdgeInsets.fromLTRB(
       (insets.left - rect.left).clamp(0.0, rect.width),
@@ -146,7 +146,12 @@ class AppPaneLayout {
         rect.height,
       ),
     );
-    return media.copyWith(
+    final coversWindow =
+        rect.left <= 0 &&
+        rect.top <= 0 &&
+        rect.right >= media.size.width &&
+        rect.bottom >= media.size.height;
+    final cropped = media.copyWith(
       size: rect.size,
       padding: crop(media.padding),
       viewPadding: crop(media.viewPadding),
@@ -161,5 +166,11 @@ class AppPaneLayout {
             ),
       ],
     );
+    // 面板未贴合窗口四边时，其顶/底角不在物理屏幕圆角处；显式设为 BorderRadius.zero
+    // 可同时避免 Android API 31+ 透传物理圆角，以及设为 null 后回退到 0→32dp 圆角插值
+    // 导致窄屏或宽屏分栏在手势完成前顶栏两角出现突兀圆角缺口。
+    return coversWindow
+        ? cropped
+        : cropped.applyDisplayCornerRadii(BorderRadius.zero);
   }
 }

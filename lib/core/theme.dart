@@ -23,7 +23,9 @@ ThemeData _buildTheme(Brightness brightness) {
     pageTransitionsTheme: PageTransitionsTheme(
       builders: {
         ...const PageTransitionsTheme().builders,
-        TargetPlatform.android: const PredictiveBackPageTransitionsBuilder(),
+        TargetPlatform.android: PredictiveBackPageTransitionsBuilder(
+          fallbackColor: palette.pageBg,
+        ),
       },
     ),
     // 品牌色不走 M3 seed 推导：seed 会把 primary 调成算法生成的近似色，
