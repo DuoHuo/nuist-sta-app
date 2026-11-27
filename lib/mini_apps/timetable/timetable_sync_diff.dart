@@ -76,6 +76,7 @@ class TimetableChangeRecord {
     required this.fingerprint,
     this.courseName = '',
     this.courseWeeks = '',
+    this.termStartDate = '',
     this.xnxqdm = '',
     this.before,
     this.after,
@@ -98,6 +99,9 @@ class TimetableChangeRecord {
   /// 旧记录为空时仍可展示快照周次，但不推断「全部周次」。
   final String courseWeeks;
 
+  /// 该学期第 1 周周一日期（`yyyy-MM-dd`），仅用于将离散周次换算为具体日期展示，不参与指纹。
+  final String termStartDate;
+
   final String xnxqdm;
 
   /// 相关字段快照；`added` 时为 null，`removed` 时 after 为 null。
@@ -107,19 +111,21 @@ class TimetableChangeRecord {
   final String fingerprint;
   final bool notified;
 
-  TimetableChangeRecord copyWith({bool? notified}) => TimetableChangeRecord(
-    id: id,
-    time: time,
-    type: type,
-    slotKey: slotKey,
-    fingerprint: fingerprint,
-    courseName: courseName,
-    courseWeeks: courseWeeks,
-    xnxqdm: xnxqdm,
-    before: before,
-    after: after,
-    notified: notified ?? this.notified,
-  );
+  TimetableChangeRecord copyWith({bool? notified, String? termStartDate}) =>
+      TimetableChangeRecord(
+        id: id,
+        time: time,
+        type: type,
+        slotKey: slotKey,
+        fingerprint: fingerprint,
+        courseName: courseName,
+        courseWeeks: courseWeeks,
+        termStartDate: termStartDate ?? this.termStartDate,
+        xnxqdm: xnxqdm,
+        before: before,
+        after: after,
+        notified: notified ?? this.notified,
+      );
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -128,6 +134,7 @@ class TimetableChangeRecord {
     'slotKey': slotKey,
     'courseName': courseName,
     if (courseWeeks.isNotEmpty) 'courseWeeks': courseWeeks,
+    if (termStartDate.isNotEmpty) 'termStartDate': termStartDate,
     'xnxqdm': xnxqdm,
     'before': before,
     'after': after,
@@ -155,6 +162,7 @@ class TimetableChangeRecord {
       slotKey: '${json['slotKey'] ?? ''}',
       courseName: '${json['courseName'] ?? ''}',
       courseWeeks: '${json['courseWeeks'] ?? ''}',
+      termStartDate: '${json['termStartDate'] ?? ''}',
       xnxqdm: '${json['xnxqdm'] ?? ''}',
       before: mapOrNull(json['before']),
       after: mapOrNull(json['after']),
@@ -331,16 +339,22 @@ class TimetableSyncDiff {
   ///
   /// [oldCourses]/[newCourses] 均为教务源缓存（可含手动课，会被忽略）。
   /// 默认旧列表为空时不记全量新增；已有成功同步基线时可显式允许。
+  static String _formatTermStartKey(DateTime? d) => d == null
+      ? ''
+      : '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
   static List<TimetableChangeRecord> compute({
     required List<Course> oldCourses,
     required List<Course> newCourses,
     bool allowWhenOldEmpty = false,
     DateTime? detectedAt,
+    DateTime? termStartDate,
     String xnxqdm = '',
     String Function()? idFactory,
   }) {
     final oldSlots = flatten(oldCourses);
     if (!allowWhenOldEmpty && oldSlots.isEmpty) return const [];
+    final termStartKey = _formatTermStartKey(termStartDate);
 
     final now = detectedAt ?? DateTime.now();
     var seq = 0;
@@ -375,6 +389,7 @@ class TimetableSyncDiff {
           old: e.value,
           neu: neu,
           time: now,
+          termStartKey: termStartKey,
           xnxqdm: xnxqdm,
           idFactory: nextId,
         ),
@@ -388,6 +403,7 @@ class TimetableSyncDiff {
       removed: removed,
       added: added,
       time: now,
+      termStartKey: termStartKey,
       xnxqdm: xnxqdm,
       idFactory: nextId,
     );
@@ -399,6 +415,7 @@ class TimetableSyncDiff {
     required DiffSlot old,
     required DiffSlot neu,
     required DateTime time,
+    required String termStartKey,
     required String xnxqdm,
     required String Function() idFactory,
   }) {
@@ -415,6 +432,7 @@ class TimetableSyncDiff {
           slotKey: neu.slotKey,
           courseName: neu.course.name,
           courseWeeks: _allCourseWeeks([old.course, neu.course]),
+          termStartDate: termStartKey,
           xnxqdm: xnxqdm,
           before: before,
           after: after,
@@ -447,6 +465,7 @@ class TimetableSyncDiff {
     required List<DiffSlot> removed,
     required List<DiffSlot> added,
     required DateTime time,
+    required String termStartKey,
     required String xnxqdm,
     required String Function() idFactory,
   }) {
@@ -521,6 +540,7 @@ class TimetableSyncDiff {
               old: r,
               neu: a,
               time: time,
+              termStartKey: termStartKey,
               xnxqdm: xnxqdm,
               idFactory: idFactory,
             ),
@@ -538,6 +558,7 @@ class TimetableSyncDiff {
                 ? a.course.name
                 : r.course.name,
             courseWeeks: _allCourseWeeks([r.course, a.course]),
+            termStartDate: termStartKey,
             xnxqdm: xnxqdm,
             before: before,
             after: after,
@@ -563,6 +584,7 @@ class TimetableSyncDiff {
           slotKey: r.slotKey,
           courseName: r.course.name,
           courseWeeks: _allCourseWeeks([r.course]),
+          termStartDate: termStartKey,
           xnxqdm: xnxqdm,
           before: before,
           after: null,
@@ -586,6 +608,7 @@ class TimetableSyncDiff {
           slotKey: a.slotKey,
           courseName: a.course.name,
           courseWeeks: _allCourseWeeks([a.course]),
+          termStartDate: termStartKey,
           xnxqdm: xnxqdm,
           before: null,
           after: after,
@@ -719,7 +742,10 @@ class TimetableSyncDiff {
 
     String pairKeyOf(ScheduleEvent e) {
       final code = (e.courseCode ?? '').trim();
-      return code.isNotEmpty ? 'code:$code' : 'id:${e.id}';
+      if (code.isNotEmpty) return 'code:$code';
+      final title = e.title.trim();
+      if (title.isNotEmpty) return 'title:$title';
+      return 'id:${e.id}';
     }
 
     final remByCourse = <String, List<ScheduleEvent>>{};
@@ -785,14 +811,19 @@ class TimetableSyncDiff {
     return records;
   }
 
-  /// 全量拉取成功后的钩子：比对旧/新教务源、按 fingerprint 去重后写入本地变更日志。
+  /// 全量拉取成功后的钩子：比对旧/新教务源、写入本地变更日志。
   ///
+  /// [renotifyIfAlreadyNotified] 为 true 时（由真实快照增量 diff 触发），
+  /// 若后续再次发生同指纹变动（如改回原教室 / 撤下后再发布），会重新标为未通知，
+  /// 避免被历史已读记录永久静音。
   /// 不改变同步成功/失败语义；调用方在写快照前后均可调用。
   /// 返回本轮应弹窗的新变动（[TimetableSyncDiffResult.toNotify]）。
   static Future<TimetableSyncDiffResult> applyAfterFetch({
     required List<Course> previousJwxtCourses,
     required List<Course> newJwxtCourses,
     bool allowWhenOldEmpty = false,
+    bool renotifyIfAlreadyNotified = true,
+    DateTime? termStartDate,
     String xnxqdm = '',
     DateTime? detectedAt,
   }) async {
@@ -801,12 +832,16 @@ class TimetableSyncDiff {
       newCourses: newJwxtCourses,
       allowWhenOldEmpty: allowWhenOldEmpty,
       detectedAt: detectedAt,
+      termStartDate: termStartDate,
       xnxqdm: xnxqdm,
     );
     if (candidates.isEmpty) {
       return const TimetableSyncDiffResult(allWritten: [], toNotify: []);
     }
-    return TimetableChangeLogStore.upsertCandidates(candidates);
+    return TimetableChangeLogStore.upsertCandidates(
+      candidates,
+      renotifyIfAlreadyNotified: renotifyIfAlreadyNotified,
+    );
   }
 
   /// 考试同步成功后的 diff 写入钩子。
@@ -814,6 +849,7 @@ class TimetableSyncDiff {
     required List<ScheduleEvent> previousJwxtExams,
     required List<ScheduleEvent> newJwxtExams,
     bool allowWhenOldEmpty = false,
+    bool renotifyIfAlreadyNotified = true,
     String xnxqdm = '',
     DateTime? detectedAt,
   }) async {
@@ -827,7 +863,10 @@ class TimetableSyncDiff {
     if (candidates.isEmpty) {
       return const TimetableSyncDiffResult(allWritten: [], toNotify: []);
     }
-    return TimetableChangeLogStore.upsertCandidates(candidates);
+    return TimetableChangeLogStore.upsertCandidates(
+      candidates,
+      renotifyIfAlreadyNotified: renotifyIfAlreadyNotified,
+    );
   }
 }
 
@@ -980,15 +1019,24 @@ class TimetableChangeLogStore {
     }
   }
 
-  /// 按 fingerprint upsert：已存在且 notified=true → 保持 notified，不进入 toNotify；
-  /// 新 fingerprint → notified=false，进入 toNotify。
+  /// 按 fingerprint upsert：
+  /// - 默认（`renotifyIfAlreadyNotified: false`）：已存在且 notified=true → 保持 notified，不进入 toNotify；
+  /// - `renotifyIfAlreadyNotified: true`：若本轮是由真实快照变化产出的新变动，
+  ///   即使历史上曾通知过同指纹记录（如 A→B→A 改回或撤下再发布），也重新标为未通知进入 toNotify。
   static Future<TimetableSyncDiffResult> upsertCandidates(
-    List<TimetableChangeRecord> candidates,
-  ) => _serialize(() => _upsertCandidates(candidates));
+    List<TimetableChangeRecord> candidates, {
+    bool renotifyIfAlreadyNotified = false,
+  }) => _serialize(
+    () => _upsertCandidates(
+      candidates,
+      renotifyIfAlreadyNotified: renotifyIfAlreadyNotified,
+    ),
+  );
 
   static Future<TimetableSyncDiffResult> _upsertCandidates(
-    List<TimetableChangeRecord> candidates,
-  ) async {
+    List<TimetableChangeRecord> candidates, {
+    required bool renotifyIfAlreadyNotified,
+  }) async {
     final existing = await _readAll();
     final byFp = <String, TimetableChangeRecord>{
       for (final c in existing) c.fingerprint: c,
@@ -998,16 +1046,17 @@ class TimetableChangeLogStore {
 
     for (final c in candidates) {
       final prev = byFp[c.fingerprint];
-      if (prev != null && prev.notified) {
+      if (prev != null && prev.notified && !renotifyIfAlreadyNotified) {
         // 静默：保留已通知状态（可刷新 time/id 以外字段，但保持 notified）。
         final kept = c.copyWith(notified: true);
         byFp[c.fingerprint] = kept;
         written.add(kept);
         continue;
       }
-      byFp[c.fingerprint] = c;
-      written.add(c);
-      toNotify.add(c);
+      final fresh = c.notified ? c.copyWith(notified: false) : c;
+      byFp[fresh.fingerprint] = fresh;
+      written.add(fresh);
+      toNotify.add(fresh);
     }
 
     // 保留历史：按 time 升序；同 fingerprint 以最新 upsert 为准。

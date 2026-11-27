@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/navigation/app_navigation.dart';
+import 'timetable_change_alert.dart';
 import 'timetable_controller.dart';
 import 'timetable_exam_merge.dart';
 import 'timetable_exams_card.dart';
@@ -11,29 +14,79 @@ import 'timetable_theme.dart';
 /// 「考试安排」全屏页（exam-schedule 小程序的 entry）。
 /// 上半部分列即将到来的考试（同主页卡片），下半部分列已结束的考试；
 /// 数据复用 [TimetableController]，点击任意行进课表查看当周位置。
-class TimetableExamsPage extends StatelessWidget {
+class TimetableExamsPage extends StatefulWidget {
   const TimetableExamsPage({super.key});
+
+  @override
+  State<TimetableExamsPage> createState() => _TimetableExamsPageState();
+}
+
+class _TimetableExamsPageState extends State<TimetableExamsPage> {
+  final _controller = TimetableController.instance;
+  late final TimetableChangeAlertCoordinator _changeAlertCoordinator;
+
+  @override
+  void initState() {
+    super.initState();
+    _changeAlertCoordinator = TimetableChangeAlertCoordinator(
+      resolveContext: () => mounted ? context : null,
+      resolveController: () => _controller,
+    );
+    unawaited(_bootstrap());
+  }
+
+  Future<void> _bootstrap() async {
+    await _controller.ensureLocalReady();
+    if (!mounted) return;
+    _changeAlertCoordinator.schedule();
+    await _controller.autoSyncIfNeeded();
+    if (!mounted) return;
+    _changeAlertCoordinator.schedule();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _changeAlertCoordinator.attach(
+      controller: _controller,
+      navigation: AppNavigationScope.readOf(context)?.navigation,
+      route: ModalRoute.of(context),
+    );
+    if (AppNavigation.isVisibleOf(context) &&
+        (ModalRoute.isCurrentOf(context) ?? true)) {
+      _changeAlertCoordinator.schedule();
+    }
+  }
+
+  @override
+  void dispose() {
+    _changeAlertCoordinator.dispose();
+    super.dispose();
+  }
 
   void _openTimetable(BuildContext context, ScheduleEvent event) =>
       AppNavigation.push(context, '/apps/timetable', extra: event);
 
   @override
   Widget build(BuildContext context) {
-    final controller = TimetableController.instance;
+    if (AppNavigation.isVisibleOf(context) &&
+        (ModalRoute.isCurrentOf(context) ?? true)) {
+      _changeAlertCoordinator.schedule();
+    }
     return Scaffold(
       appBar: AppBar(title: const Text('考试安排')),
       body: ListenableBuilder(
-        listenable: controller,
+        listenable: _controller,
         builder: (context, _) {
           final now = DateTime.now();
-          final upcoming = upcomingExams(controller, today: now);
-          final past = pastExams(controller, today: now);
+          final upcoming = upcomingExams(_controller, today: now);
+          final past = pastExams(_controller, today: now);
           final colors = TimetableTheme.colorsOf(context);
 
           if (upcoming.isEmpty && past.isEmpty) {
             return Center(
               child: Text(
-                controller.portalBound ? '本学期暂无考试安排' : '登录教务后自动显示考试安排',
+                _controller.portalBound ? '本学期暂无考试安排' : '登录教务后自动显示考试安排',
                 style: TimetableTheme.bodyStyle(color: colors.hint),
               ),
             );
@@ -46,7 +99,7 @@ class TimetableExamsPage extends StatelessWidget {
                 _GroupHeader(text: '即将到来（${upcoming.length}）'),
                 for (final e in upcoming)
                   _ExamTile(
-                    controller: controller,
+                    controller: _controller,
                     event: e,
                     today: now,
                     onTap: () => _openTimetable(context, e),
@@ -57,7 +110,7 @@ class TimetableExamsPage extends StatelessWidget {
                 _GroupHeader(text: '已结束（${past.length}）'),
                 for (final e in past)
                   _ExamTile(
-                    controller: controller,
+                    controller: _controller,
                     event: e,
                     today: now,
                     onTap: () => _openTimetable(context, e),

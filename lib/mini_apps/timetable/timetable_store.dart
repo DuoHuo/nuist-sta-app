@@ -169,7 +169,7 @@ class TimetableStore {
     'course_edits.json',
     'day_swaps.json',
     'exam_overrides.json',
-    'timetable_changes.json',
+    'sync_changes.json',
   ];
 
   /// 提醒说明的已读标记独立保存，不改变 settings.json 的键集合。

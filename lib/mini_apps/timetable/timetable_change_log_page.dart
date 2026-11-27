@@ -35,7 +35,10 @@ class _TimetableChangeLogPageState extends State<TimetableChangeLogPage> {
   @override
   void initState() {
     super.initState();
-    _future = TimetableChangeLogStore.readNewestFirst();
+    final c = widget.controller;
+    _future = c != null
+        ? c.readChangeHistoryNewestFirst()
+        : TimetableChangeLogStore.readNewestFirst();
   }
 
   @override
@@ -90,7 +93,13 @@ class _TimetableChangeLogPageState extends State<TimetableChangeLogPage> {
                           for (var i = 0; i < g.items.length; i++) ...[
                             if (i > 0)
                               Divider(height: 1, color: colors.divider),
-                            _LogRow(record: g.items[i], index: i, group: gi),
+                            _LogRow(
+                              record: g.items[i],
+                              index: i,
+                              group: gi,
+                              fallbackTermStart:
+                                  widget.controller?.settings.termStartDate,
+                            ),
                           ],
                         ],
                       ),
@@ -105,34 +114,36 @@ class _TimetableChangeLogPageState extends State<TimetableChangeLogPage> {
     );
   }
 
-  /// 同一 fingerprint（同一次 sync）合成一组；组内按原顺序。
+  /// 同一同步批次（按精确检测时间，并兼容手工同 fingerprint 条目）合成一组；组内按原顺序。
   List<_LogGroup> _groupByFingerprintTime(
     List<TimetableChangeRecord> newestFirst,
   ) {
     final out = <_LogGroup>[];
-    final seen = <String>{};
+    final byTime = <int, List<TimetableChangeRecord>>{};
+    final byFp = <String, List<TimetableChangeRecord>>{};
     for (final r in newestFirst) {
-      if (!seen.add(r.fingerprint)) continue;
-      final items = [
-        for (final x in newestFirst)
-          if (x.fingerprint == r.fingerprint) x,
-      ];
-      out.add(
-        _LogGroup(time: r.time, fingerprint: r.fingerprint, items: items),
-      );
+      final tKey = r.time.microsecondsSinceEpoch;
+      final existing = byTime[tKey] ?? byFp[r.fingerprint];
+      if (existing != null) {
+        if (!existing.any((e) => identical(e, r))) {
+          existing.add(r);
+        }
+        byTime[tKey] ??= existing;
+        byFp[r.fingerprint] ??= existing;
+        continue;
+      }
+      final items = <TimetableChangeRecord>[r];
+      byTime[tKey] = items;
+      byFp[r.fingerprint] = items;
+      out.add(_LogGroup(time: r.time, items: items));
     }
     return out;
   }
 }
 
 class _LogGroup {
-  const _LogGroup({
-    required this.time,
-    required this.fingerprint,
-    required this.items,
-  });
+  const _LogGroup({required this.time, required this.items});
   final DateTime time;
-  final String fingerprint;
   final List<TimetableChangeRecord> items;
 }
 
@@ -141,18 +152,26 @@ class _LogRow extends StatelessWidget {
     required this.record,
     required this.index,
     required this.group,
+    this.fallbackTermStart,
   });
 
   final TimetableChangeRecord record;
   final int index;
   final int group;
+  final DateTime? fallbackTermStart;
 
   @override
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
     final chip = changeTypeChipStyle(record.type, colors);
-    final scope = TimetableChangeFormat.scopeBodyOf(record);
-    final detail = TimetableChangeFormat.detailOf(record);
+    final scope = TimetableChangeFormat.scopeBodyOf(
+      record,
+      fallbackTermStart: fallbackTermStart,
+    );
+    final detail = TimetableChangeFormat.detailOf(
+      record,
+      fallbackTermStart: fallbackTermStart,
+    );
     return Padding(
       key: Key('tt_change_log_row_${group}_$index'),
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),

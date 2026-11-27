@@ -133,6 +133,9 @@ class AppNavigationController extends ChangeNotifier {
   bool hasVisibleDetails(int index) =>
       _branchObservers[index].hasVisibleDetails;
 
+  /// 根导航器上是否存在全局弹层（如公告、更新、隐私弹窗等）。
+  bool get hasRouteAboveRoot => _rootObserver.hasRouteAboveRoot;
+
   /// 可见分支或全局弹层需要处理返回时，由 Flutter 接管 Android 系统返回。
   bool get canHandleBack =>
       _rootObserver.hasRouteAboveRoot || _backBranch != null;

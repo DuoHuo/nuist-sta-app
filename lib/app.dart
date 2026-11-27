@@ -20,6 +20,7 @@ import 'core/schedule/weekly_classes.dart';
 import 'core/theme.dart';
 import 'core/theme_mode.dart';
 import 'mini_apps/student_info/student_info_academic_source.dart';
+import 'mini_apps/timetable/timetable_change_alert.dart';
 import 'mini_apps/timetable/timetable_controller.dart';
 import 'mini_apps/timetable/timetable_lifecycle.dart';
 import 'mini_apps/timetable/timetable_notify_bridge.dart';
@@ -113,13 +114,24 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     if (_systemTimetableRoute case final route?) {
+      final uri = _parseTimetableUri(route)!;
+      final focusTomorrow = uri.queryParameters['focus'] == 'tomorrow';
+      final widgetAction =
+          uri.queryParameters['week'] == 'next' ||
+          uri.queryParameters['open'] == 'widgetSettings';
+      final focusToken = focusTomorrow ? ++_timetableFocusToken : null;
+      final launchExtra = widgetAction
+          ? TimetableWidgetLaunchRequest(focusToken: focusToken)
+          : focusTomorrow
+          ? TimetableLaunchExtra(focusToken: focusToken)
+          : timetableDirectLaunch;
       // Navigator挂载前建立首页匹配，push才能保留返回栈，不先绘制首页。
       _router.routerDelegate.setNewRoutePath(
         _router.configuration.findMatch(Uri.parse('/')),
       );
       _router.push(
         AppNavigation.locationInBranch(route, 0),
-        extra: timetableDirectLaunch,
+        extra: launchExtra,
       );
     }
     // 校园地图等通过 core 接口读本周课程，由壳把课表的实现登记进去。
@@ -271,64 +283,84 @@ class _NuistAppState extends State<NuistApp> with WidgetsBindingObserver {
     if (!mounted) return;
     await _navigation.gestureFinished;
     if (!mounted) return;
-    final ctl = TimetableController.instance;
-    if (ctl.viewingScheduleId != ctl.primaryScheduleId) {
-      await ctl.switchViewingSchedule(ctl.primaryScheduleId);
+    final releaseAlertDefer =
+        TimetableChangeAlertCoordinator.deferPresentation();
+    try {
+      final ctl = TimetableController.instance;
+      await ctl.ensureLocalReady();
       if (!mounted) return;
-    }
-    _navigation.activate(0);
-    final target = AppNavigation.locationInBranch(route, 0);
-    final targetPath = Uri.parse(target).path;
-    // 旧版本箭头可能仍留在 Launcher 缓存里；新版在组件内切换周次。
-    final nextWeek = uri.queryParameters['week'] == 'next';
-    final widgetAction =
-        nextWeek || uri.queryParameters['open'] == 'widgetSettings';
-    // 重复点击复用已打开的课表页，保留首页作为返回落点。
-    final matches = _router.routerDelegate.currentConfiguration.matches;
-    bool containsTimetable(List<RouteMatchBase> matches) => matches.any(
-      (match) => match is ShellRouteMatch
-          ? containsTimetable(match.matches)
-          : match is ImperativeRouteMatch &&
-                match.matches.uri.path == targetPath,
-    );
-    final hasTimetable = containsTimetable(matches);
-    if (hasTimetable) {
-      final navigator = _navigation.branchNavigatorKeys[0].currentState;
-      if (navigator == null) return;
-      while (mounted) {
-        final top = _navigation.topRouteInBranch(0);
-        final hasLocalRoute = top != null && top.settings is! Page<dynamic>;
-        if (_router.state.uri.path == targetPath &&
-            !(widgetAction && hasLocalRoute)) {
-          break;
-        }
-        final before = _router.routerDelegate.currentConfiguration;
-        if (!await navigator.maybePop() || !mounted) return;
-        await WidgetsBinding.instance.endOfFrame;
-        // 本地子页不改 URI；用实际顶层路由判断是否退出，并尊重内容保护。
-        if (!mounted ||
-            (identical(top, _navigation.topRouteInBranch(0)) &&
-                before == _router.routerDelegate.currentConfiguration)) {
-          return;
+      if (ctl.viewingScheduleId != ctl.primaryScheduleId) {
+        await ctl.switchViewingSchedule(ctl.primaryScheduleId);
+        if (!mounted) return;
+      }
+      _navigation.activate(0);
+      final target = AppNavigation.locationInBranch(route, 0);
+      final targetPath = Uri.parse(target).path;
+      // 旧版本箭头可能仍留在 Launcher 缓存里；新版在组件内切换周次。
+      final nextWeek = uri.queryParameters['week'] == 'next';
+      final widgetAction =
+          nextWeek || uri.queryParameters['open'] == 'widgetSettings';
+      // 重复点击复用已打开的课表页，保留首页作为返回落点。
+      final matches = _router.routerDelegate.currentConfiguration.matches;
+      bool containsTimetable(List<RouteMatchBase> matches) => matches.any(
+        (match) => match is ShellRouteMatch
+            ? containsTimetable(match.matches)
+            : match is ImperativeRouteMatch &&
+                  match.matches.uri.path == targetPath,
+      );
+      final hasTimetable = containsTimetable(matches);
+      if (hasTimetable) {
+        final navigator = _navigation.branchNavigatorKeys[0].currentState;
+        if (navigator == null) return;
+        while (mounted) {
+          final top = _navigation.topRouteInBranch(0);
+          final hasLocalRoute = top != null && top.settings is! Page<dynamic>;
+          if (_router.state.uri.path == targetPath &&
+              !(widgetAction && hasLocalRoute)) {
+            break;
+          }
+          final before = _router.routerDelegate.currentConfiguration;
+          final popResult = top?.settings.name == kTimetableChangeAlertRouteName
+              ? kTimetableChangeAlertDeferAcknowledge
+              : null;
+          if (!await navigator.maybePop(popResult) || !mounted) return;
+          await WidgetsBinding.instance.endOfFrame;
+          // 本地子页不改 URI；用实际顶层路由判断是否退出，并尊重内容保护。
+          if (!mounted ||
+              (identical(top, _navigation.topRouteInBranch(0)) &&
+                  before == _router.routerDelegate.currentConfiguration)) {
+            return;
+          }
         }
       }
-    }
-    final focusTomorrow = uri.queryParameters['focus'] == 'tomorrow';
-    final focusToken = focusTomorrow ? ++_timetableFocusToken : null;
-    final launchExtra = widgetAction
-        ? TimetableWidgetLaunchRequest(focusToken: focusToken)
-        : focusTomorrow
-        ? TimetableLaunchExtra(focusToken: focusToken)
-        : timetableDirectLaunch;
-    if (_router.state.uri.path == targetPath) {
-      if (_router.state.uri.toString() != target ||
-          focusTomorrow ||
-          widgetAction) {
-        _router.replace(target, extra: launchExtra);
+      final focusTomorrow = uri.queryParameters['focus'] == 'tomorrow';
+      final focusToken = focusTomorrow ? ++_timetableFocusToken : null;
+      final launchExtra = widgetAction
+          ? TimetableWidgetLaunchRequest(focusToken: focusToken)
+          : focusTomorrow
+          ? TimetableLaunchExtra(focusToken: focusToken)
+          : timetableDirectLaunch;
+      if (_router.state.uri.path == targetPath) {
+        if (_router.state.uri.toString() != target ||
+            focusTomorrow ||
+            widgetAction) {
+          final navigator = _navigation.branchNavigatorKeys[0].currentState;
+          final top = _navigation.topRouteInBranch(0);
+          if (navigator != null &&
+              top?.settings.name == kTimetableChangeAlertRouteName) {
+            await navigator.maybePop(kTimetableChangeAlertDeferAcknowledge);
+            if (!mounted) return;
+            await WidgetsBinding.instance.endOfFrame;
+            if (!mounted) return;
+          }
+          _router.replace(target, extra: launchExtra);
+        }
+        return;
       }
-      return;
+      _router.push(target, extra: launchExtra);
+    } finally {
+      releaseAlertDefer();
     }
-    _router.push(target, extra: launchExtra);
   }
 
   /// 冷启动等待任务与导航器就绪，通知和页面入口共用更新详情。

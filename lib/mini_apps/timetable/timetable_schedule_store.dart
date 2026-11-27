@@ -119,11 +119,49 @@ class ScheduleStore {
   /// 同时写日程与 `otherColors`（一次原子替换）。
   static Future<void> saveEventsAndOtherColors(
     List<ScheduleEvent> events,
-    Map<String, int> otherColors,
-  ) => _write(scheduleEventsFile, {
+    Map<String, int> otherColors, {
+    bool clearJwxtExamsBaselinePending = false,
+  }) => _write(scheduleEventsFile, {
     'events': [for (final e in events) e.toJson()],
     'otherColors': otherColors,
+    if (clearJwxtExamsBaselinePending) _jwxtExamsBaselinePendingKey: null,
   });
+
+  static const _jwxtExamsBaselinePendingKey = 'jwxtExamsBaselinePending';
+
+  /// 读取「尚未建立教务考试基线」标记；缺失或非 true 均为 false。
+  static bool parseJwxtExamsBaselinePending(Map<String, dynamic> raw) =>
+      raw[_jwxtExamsBaselinePendingKey] == true;
+
+  /// 记录或清除「尚未建立教务考试基线」标记（首次同步或跨学期时考试失败置 true）。
+  static Future<void> saveJwxtExamsBaselinePending(bool pending) =>
+      _log.inSpan(() async {
+        try {
+          await TimetableStore.modifyNamedJsonFile(scheduleEventsFile, (raw) {
+            if (pending) {
+              if (raw[_jwxtExamsBaselinePendingKey] == true) return false;
+              raw[_jwxtExamsBaselinePendingKey] = true;
+            } else {
+              if (!raw.containsKey(_jwxtExamsBaselinePendingKey)) return false;
+              raw.remove(_jwxtExamsBaselinePendingKey);
+            }
+            raw['schemaVersion'] = schemaVersion;
+            return true;
+          });
+        } catch (error, stackTrace) {
+          _log.error(
+            'json.write_failed',
+            fields: {'file_kind': scheduleEventsFile},
+            error: error,
+            stackTrace: stackTrace,
+            errorKind: 'storage_write',
+          );
+          throw TimetablePersistenceException(
+            cause: error,
+            causeStackTrace: stackTrace,
+          );
+        }
+      });
 
   // ---- 教务课编辑 / 删除 ----
 
