@@ -1841,5 +1841,122 @@ void main() {
         expect(drop(60, 0, days: sundayFirst).day, 1);
       });
     });
+
+    group('remainingSessionsForCourse 剩余课节统计', () {
+      test('多时段汇总与当前时刻上下课扣减（含实验课提前下课）', () {
+        // 第 1 周 2026-08-31 起；第 2 周周一 09-07，周三 09-09。
+        // 标准课 j1：周一 1-2 节 (1..3 周，共 3 次) + 周三 7-8 节 (1..4 周，共 4 次) = 7 次。
+        // 实验课 j2：周一 1-2 节 (09:30 下课，第 1..2 周，共 2 次)。
+        final stdCourse = Course(
+          id: 'j1',
+          name: '高等数学',
+          source: CourseSource.jwxt,
+          slots: const [
+            CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '111'),
+            CourseSlot(day: 3, startNode: 7, endNode: 8, weeks: '1111'),
+          ],
+        );
+        final labCourse = Course(
+          id: 'j2',
+          name: '物理实验',
+          source: CourseSource.jwxt,
+          slots: const [
+            CourseSlot(
+              day: 1,
+              startNode: 1,
+              endNode: 2,
+              weeks: '11',
+              isLab: true,
+            ),
+          ],
+        );
+        c.debugSetSnapshot(_snap([stdCourse, labCourse]), viewingWeek: 2);
+
+        // 第 2 周周一 09:30（实验课刚好到下课时刻、标准课 09:40 下课均仍算剩余）：
+        // j1 第 1 周 2 次已过（周一周三），剩第 2 周起 5 次；j2 剩第 2 周这 1 次。
+        final atLabEnd = DateTime(2026, 9, 7, 9, 30);
+        expect(
+          c.remainingSessionsForCourse('j1', now: atLabEnd),
+          const CourseRemainingSessions(remaining: 5, total: 7),
+        );
+        expect(
+          c.remainingSessionsForCourse('j2', now: atLabEnd),
+          const CourseRemainingSessions(remaining: 1, total: 2),
+        );
+
+        // 第 2 周周一 09:35：实验课已过 09:30 扣减为 0，标准课尚未到 09:40 仍为 5。
+        final afterLabBeforeStd = DateTime(2026, 9, 7, 9, 35);
+        expect(
+          c.remainingSessionsForCourse('j1', now: afterLabBeforeStd),
+          const CourseRemainingSessions(remaining: 5, total: 7),
+        );
+        expect(
+          c.remainingSessionsForCourse('j2', now: afterLabBeforeStd),
+          const CourseRemainingSessions(remaining: 0, total: 2),
+        );
+
+        // 通过注入 TimetableController.clock 驱动缺省 now（09:41 标准课已下课 → 剩 4 节）。
+        TimetableController.clock = () => DateTime(2026, 9, 7, 9, 41);
+        expect(
+          c.remainingSessionsForCourse('j1'),
+          const CourseRemainingSessions(remaining: 4, total: 7),
+        );
+      });
+
+      test('套用单日删除、换日期、整天调课与拖动调课，周次待同步返回 null', () async {
+        final course = _jwxt('j1', '信号与系统', day: 1, weeks: '1111');
+        c.debugSetSnapshot(_snap([course]), viewingWeek: 2);
+
+        final week2Mon = DateTime(2026, 9, 7);
+        final week3Mon = DateTime(2026, 9, 14);
+        final monCell2 = c
+            .cellsForDay(2, 1)
+            .firstWhere((e) => e.course.id == 'j1');
+        final monCell3 = c
+            .cellsForDay(3, 1)
+            .firstWhere((e) => e.course.id == 'j1');
+
+        // 1. 删除第 2 周周一这一天：总次数 4→3，以第 2 周周一早上为基准剩 2 节。
+        expect(await c.deleteOccurrence(monCell2), isNotNull);
+        expect(
+          c.remainingSessionsForCourse('j1', now: week2Mon),
+          const CourseRemainingSessions(remaining: 2, total: 3),
+        );
+
+        // 2. 把第 3 周周一挪到第 3 周周四（仍在未来，总 3、剩 2）；
+        // 随后以第 3 周周二（09-15）查询，刚挪到周四的那次还在未来，剩 2 节。
+        expect(await c.editOccurrence(monCell3, toDay: 4), isNotNull);
+        expect(
+          c.remainingSessionsForCourse('j1', now: DateTime(2026, 9, 15)),
+          const CourseRemainingSessions(remaining: 2, total: 3),
+        );
+
+        // 3. 把第 4 周周一（09-21）通过整天调课对调到第 1 周周六（09-05，已过去）：
+        // 总次数仍为 3，但 09-15 时只剩第 3 周周四这 1 节。
+        expect(
+          await c.addDaySwap(DateTime(2026, 9, 21), DateTime(2026, 9, 5)),
+          isNotNull,
+        );
+        expect(
+          c.remainingSessionsForCourse('j1', now: DateTime(2026, 9, 15)),
+          const CourseRemainingSessions(remaining: 1, total: 3),
+        );
+
+        // 4. 整天互换不影响已有单日删除记录语义，第 3 周周一之后恢复也一致：
+        expect(week3Mon.isAfter(week2Mon), isTrue);
+
+        // 5. 周次待同步（termStartDate == null）返回 null；不存在或隐藏课程返回 null。
+        c.debugSetSnapshot(
+          TimetableSnapshot(
+            courses: [course],
+            periods: TimetableController.defaultPeriods(),
+            settings: const TimetableSettings(),
+          ),
+          viewingWeek: 1,
+        );
+        expect(c.remainingSessionsForCourse('j1', now: week2Mon), isNull);
+        expect(c.remainingSessionsForCourse('missing', now: week2Mon), isNull);
+      });
+    });
   });
 }

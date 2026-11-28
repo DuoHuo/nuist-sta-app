@@ -383,9 +383,13 @@ class TimetableApi {
     );
   }
 
+  /// Asia/Shanghai (UTC+8) 当前时刻，与设备时区无关。
+  static DateTime shanghaiNow() =>
+      DateTime.now().toUtc().add(const Duration(hours: 8));
+
   /// Asia/Shanghai (UTC+8) 当天日期，与设备时区无关。
   static DateTime shanghaiToday() {
-    final t = DateTime.now().toUtc().add(const Duration(hours: 8));
+    final t = shanghaiNow();
     return DateTime(t.year, t.month, t.day);
   }
 

@@ -10,6 +10,7 @@ import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/core/theme.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
@@ -710,4 +711,96 @@ void main() {
       expect(find.byKey(const Key('schedule_form_title')), findsNothing);
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));
   }
+
+  testWidgets('课程详情显示本学期还剩几节，随单日删除同步更新，周次待同步不显示', (tester) async {
+    addTearDown(() => TimetableController.clock = TimetableApi.shanghaiToday);
+    // 第 1 周周一为 2026-08-31；课程共 3 周（第 1–3 周周一 3–4 节，共 3 节）。
+    const course = Course(
+      id: 'j_rem',
+      name: '高频电子线路',
+      source: CourseSource.jwxt,
+      slots: [
+        CourseSlot(
+          day: 1,
+          startNode: 3,
+          endNode: 4,
+          weeks: '111',
+          location: '文德N417',
+          teacher: '测试教师',
+        ),
+      ],
+    );
+    _c.debugSetSnapshot(
+      TimetableSnapshot(
+        courses: const [course],
+        periods: TimetableController.defaultPeriods(),
+        settings: TimetableSettings(termStartDate: _termStart),
+      ),
+      viewingWeek: 2,
+    );
+    // 设为第 2 周周一上课前：第 1 周已上 1 节，第 2、3 周还剩 2 节（共 3 节）。
+    TimetableController.clock = () => DateTime(2026, 9, 7, 8, 0);
+
+    await _pumpLauncher(
+      tester,
+      (ctx) => showCourseDetailSheet(
+        ctx,
+        cell: _c.cellsForDay(2, 1).single,
+        controller: _c,
+      ),
+    );
+    expect(
+      find.byKey(const Key('course_detail_remaining_sessions')),
+      findsOneWidget,
+    );
+    expect(find.text('本学期还剩 2 节（共 3 节）'), findsOneWidget);
+
+    // 单日删除第 3 周周一这节课后，剩余应即时变为 1 节（共 2 节）。
+    await tester.runAsync(
+      () => _c.deleteOccurrence(_c.cellsForDay(3, 1).single),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('本学期还剩 1 节（共 2 节）'), findsOneWidget);
+
+    // 全部结束后显示已结束（共 2 节）。
+    TimetableController.clock = () => DateTime(2026, 9, 30);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: appDarkTheme(),
+        home: Scaffold(
+          body: CourseDetailSheet(
+            cell: _c.cellsForDay(2, 1).single,
+            controller: _c,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('本学期课程已结束（共 2 节）'), findsOneWidget);
+
+    // 周次待同步（termStartDate == null）时不显示剩余节数行。
+    _c.debugSetSnapshot(
+      TimetableSnapshot(
+        courses: const [course],
+        periods: TimetableController.defaultPeriods(),
+        settings: const TimetableSettings(),
+      ),
+      viewingWeek: 1,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CourseDetailSheet(
+            cell: _c.cellsForDay(1, 1).single,
+            controller: _c,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const Key('course_detail_remaining_sessions')),
+      findsNothing,
+    );
+  });
 }

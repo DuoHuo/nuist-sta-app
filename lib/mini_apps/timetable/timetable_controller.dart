@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -35,6 +36,26 @@ enum TimetableSyncStatus { idle, syncing, success, failure }
 
 /// 最近一次同步失败原因。
 enum TimetableSyncFailure { none, network, server, sessionExpired, unknown }
+
+/// 一门课在本学期的剩余与总课节统计（按课次计）。
+class CourseRemainingSessions {
+  const CourseRemainingSessions({required this.remaining, required this.total});
+
+  /// 从当前时刻起到学期末仍未结束的课次。
+  final int remaining;
+
+  /// 本学期套用调课后的总有效课次。
+  final int total;
+
+  @override
+  bool operator ==(Object other) =>
+      other is CourseRemainingSessions &&
+      other.remaining == remaining &&
+      other.total == total;
+
+  @override
+  int get hashCode => Object.hash(remaining, total);
+}
 
 /// 将同步异常归类为 [TimetableSyncFailure]。
 @visibleForTesting
@@ -6538,6 +6559,68 @@ class TimetableController extends ChangeNotifier {
       }
     }
     return items;
+  }
+
+  /// 统计 [courseId] 在本学期套用所有调课/编辑后的剩余课次与总课次（按课次计）。
+  ///
+  /// 汇总该门课全周所有有效上课时段；时间基准默认取上海当前时刻
+  /// （测试若替换了 [clock] 则沿用 [clock]）。今天尚未下课（含进行中）仍计入剩余，
+  /// 下课后扣减。周次待同步或课程不存在/已隐藏/无有效排课时返回 `null`。
+  CourseRemainingSessions? remainingSessionsForCourse(
+    String courseId, {
+    DateTime? now,
+  }) {
+    if (weekPending) return null;
+    final target = courses.where((c) => c.id == courseId).firstOrNull;
+    if (target == null || target.hidden) return null;
+
+    final currentNow =
+        now ??
+        (identical(clock, TimetableApi.shanghaiToday)
+            ? TimetableApi.shanghaiNow()
+            : clock());
+    final today = DateTime(currentNow.year, currentNow.month, currentNow.day);
+    final nowMinutes = currentNow.hour * 60 + currentNow.minute;
+
+    var maxWeek = math.max(totalWeeks, target.lastActiveWeek);
+    for (final swap in _daySwaps) {
+      for (final d in [swap.dateA, swap.dateB]) {
+        final w = _weekOfDate(d);
+        if (w > maxWeek) maxWeek = w;
+      }
+    }
+    for (final edit in _dateEdits) {
+      if (edit.courseId != courseId) continue;
+      final to = edit.toDate;
+      if (to != null) {
+        final w = _weekOfDate(to);
+        if (w > maxWeek) maxWeek = w;
+      }
+    }
+    maxWeek = maxWeek.clamp(totalWeeks, 104);
+
+    var total = 0;
+    var remaining = 0;
+    for (var week = 1; week <= maxWeek; week++) {
+      for (var day = 1; day <= 7; day++) {
+        final date = dateOfColumn(week, day);
+        for (final cell in _buildCellsForDay(week, day)) {
+          if (!cell.activeThisWeek || cell.course.id != courseId) continue;
+          total++;
+          if (date.isAfter(today)) {
+            remaining++;
+          } else if (isSameDate(date, today)) {
+            final endRaw = timeForSlot(cell.course, cell.slot, date: date).end;
+            final endMin = TimeOfDayMinutes.tryParse(endRaw);
+            if (endMin == null || nowMinutes <= endMin.totalMinutes) {
+              remaining++;
+            }
+          }
+        }
+      }
+    }
+    if (total == 0) return null;
+    return CourseRemainingSessions(remaining: remaining, total: total);
   }
 
   String? periodStart(int node) {

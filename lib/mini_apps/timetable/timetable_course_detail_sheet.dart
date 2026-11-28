@@ -97,6 +97,9 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
         ? ''
         : '${date.month}月${date.day}日 周${_weekdayCn[date.weekday - 1]}';
     final weeks = _weeksText(slot);
+    final remainingSessions = widget.controller.remainingSessionsForCourse(
+      course.id,
+    );
 
     return ConstrainedBox(
       constraints: BoxConstraints(
@@ -277,6 +280,12 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
                 ),
                 if (weeks.isNotEmpty)
                   _InfoRow(icon: Icons.calendar_today_outlined, text: weeks),
+                if (remainingSessions case final sessions?)
+                  _InfoRow(
+                    key: const Key('course_detail_remaining_sessions'),
+                    icon: Icons.timelapse_outlined,
+                    text: _remainingSessionsText(sessions),
+                  ),
                 _InfoRow(
                   key: const Key('course_detail_note'),
                   icon: Icons.notes_outlined,
@@ -631,6 +640,11 @@ class _CourseDetailSheetState extends State<CourseDetailSheet> {
     final text = formatWeekBits(slot.weeks);
     return text.isNotEmpty ? text : slot.weeksLabel;
   }
+
+  String _remainingSessionsText(CourseRemainingSessions sessions) =>
+      sessions.remaining == 0
+      ? '本学期课程已结束（共 ${sessions.total} 节）'
+      : '本学期还剩 ${sessions.remaining} 节（共 ${sessions.total} 节）';
 }
 
 /// 底部弹层顶部的拖动条（课程详情、调课范围面板共用）。
