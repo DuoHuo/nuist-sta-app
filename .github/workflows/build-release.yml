@@ -161,6 +161,15 @@ jobs:
           rustup show
           cargo --version
 
+      # 只读取 CI 在 main 上写入的 Rust 依赖缓存，发布构建不写缓存。
+      - name: Restore Rust dependencies
+        uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: native/vpn -> ../../build/rust-vpn
+          shared-key: android-vpn
+          key: ${{ hashFiles('native/vpn/rust-toolchain.toml') }}
+          save-if: false
+
       - name: Decode Keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.DH_SIGNING_KEY_BASE64 }}
@@ -188,7 +197,7 @@ jobs:
           if [ -n "$NUIST_BUILD_NAME" ]; then
             EXTRA_ARGS+=(--build-name="$NUIST_BUILD_NAME")
           fi
-          flutter build apk --release --target-platform android-arm64 --obfuscate \
+          flutter --verbose build apk --release --target-platform android-arm64 --obfuscate \
             --split-debug-info=build/app/outputs/symbols \
             --dart-define=APP_CHANNEL="$NUIST_APP_CHANNEL" "${EXTRA_ARGS[@]}"
 

@@ -216,6 +216,18 @@ jobs:
           rustup show
           cargo --version
 
+      # 缓存 cargo 依赖与 build/rust-vpn 中的依赖产物（Gradle 的 buildVpnRust 固定使用
+      # 该目录）。shared-key 与 build-release.yml 一致，发布构建只读取、不写入；
+      # 仅 main 写入，避免其他分支挤占缓存配额。rust-cache 只会自动哈希仓库根目录的
+      # rust-toolchain 文件，这里手动加入 crate 目录下的工具链文件。
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/vpn -> ../../build/rust-vpn
+          shared-key: android-vpn
+          key: ${{ hashFiles('native/vpn/rust-toolchain.toml') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Build debug APK
         run: |
           BASE_VERSION="$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' pubspec.yaml)"
