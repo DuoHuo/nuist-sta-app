@@ -133,11 +133,11 @@ void main() {
     expect(find.text('去登录'), findsNothing);
     expect(find.text('立即同步'), findsNothing);
 
-    // 点「+」弹出课程 / 考试 / 其他三项
+    // 点「+」弹出课程 / 考试 / 日程三项
     await tester.tap(find.byTooltip('添加'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('add_entry_sheet')), findsOneWidget);
-    for (final t in ['课程', '考试', '其他']) {
+    for (final t in ['课程', '考试', '日程']) {
       expect(
         find.descendant(
           of: find.byType(MiuixPopupHost),

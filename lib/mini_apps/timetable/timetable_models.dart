@@ -27,6 +27,15 @@ CourseKind courseKindOf({required Course course, required CourseSlot slot}) =>
         ? CourseKind.lab
         : CourseKind.standard);
 
+/// 合并课程全局备注与单时段备注，互不覆盖；内容相同时去重。
+String combineCourseNotes(String courseNote, String slotNote) {
+  final global = courseNote.trim();
+  final single = slotNote.trim();
+  if (global.isEmpty) return single;
+  if (single.isEmpty || single == global) return global;
+  return '$global\n$single';
+}
+
 /// 当前时段的显示名称，只有体育类型展示体育项目。
 String courseDisplayName({required Course course, required CourseSlot slot}) {
   final name = slot.nameOverride ?? course.name;
@@ -320,6 +329,7 @@ class Course {
     this.projectName = '',
     this.classId = '',
     this.credit,
+    this.note = '',
     this.colorIndex,
     this.assignedColorIndex,
     this.occurrenceColor,
@@ -352,6 +362,9 @@ class Course {
 
   final String classId;
   final double? credit;
+
+  /// 整门课程的全局备注，与各 [CourseSlot.note] 独立保存、互不覆盖。
+  final String note;
 
   /// 用户自选色号；null 则按课名哈希。
   final int? colorIndex;
@@ -399,6 +412,7 @@ class Course {
     String? projectName,
     String? classId,
     double? credit,
+    String? note,
     int? colorIndex,
     bool clearColor = false,
     int? assignedColorIndex,
@@ -418,6 +432,7 @@ class Course {
     projectName: projectName ?? this.projectName,
     classId: classId ?? this.classId,
     credit: credit ?? this.credit,
+    note: note ?? this.note,
     colorIndex: clearColor ? null : (colorIndex ?? this.colorIndex),
     assignedColorIndex: clearAssignedColor
         ? null
@@ -449,6 +464,7 @@ class Course {
     if (projectName.isNotEmpty) 'projectName': projectName,
     'classId': classId,
     if (credit != null) 'credit': credit,
+    if (note.isNotEmpty) 'note': note,
     if (colorIndex != null) 'colorIndex': colorIndex,
     if (assignedColorIndex != null) 'assignedColorIndex': assignedColorIndex,
     'source': source.name,
@@ -464,6 +480,7 @@ class Course {
     projectName: '${json['projectName'] ?? ''}',
     classId: '${json['classId'] ?? ''}',
     credit: (json['credit'] as num?)?.toDouble(),
+    note: '${json['note'] ?? ''}',
     colorIndex: _asColorIndex(json['colorIndex']),
     assignedColorIndex: _asColorIndex(json['assignedColorIndex']),
     source: CourseSource.values.firstWhere(

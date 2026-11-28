@@ -687,8 +687,14 @@ class _MiuixOptionMenuPageState<T> extends State<_MiuixOptionMenuPage<T>> {
     // 锚点靠近屏幕底部时下方放不下：菜单仍固定向下展开，但整体被定位器
     // 夹紧进窗口内，所以最大高度按整个窗口可用高度算，而不是锚点下方的余量。
     final maxHeight = math.max(120.0, height - verticalPadding - 16);
+    // 统一拦住系统返回：可关闭时走 _close 播放 Miuix 退场动画，避免
+    // showGeneralDialog(transitionDuration: Duration.zero) 直接 0ms 硬切消失；
+    // 不可关闭时保持拦截，按钮关闭由 onDismissFinished 程序化 pop 完成。
     return PopScope(
-      canPop: widget.dismissible,
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && widget.dismissible) _close();
+      },
       child: MiuixTheme(
         data: theme,
         child: MiuixPopupScope(

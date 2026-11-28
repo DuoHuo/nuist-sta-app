@@ -7,11 +7,12 @@ import '../navigation/app_navigation.dart';
 
 const double _kDefaultScrollControlDisabledMaxHeightRatio = 9.0 / 16.0;
 
-/// 显示支持 Android 预测性返回手势反馈的模态底部弹层。
+/// 显示模态底部弹层。
 ///
-/// 参数与 [showModalBottomSheet] 保持一致，内部使用 [AppModalBottomSheetRoute]，
-/// 在手势推进阶段仅对弹层卡片本身做缩放反馈（不缩放全屏遮罩），并在宽屏双栏下
-/// 遵循 [AppNavigationController.isBackTarget] 仅让返回目标栏响应手势。
+/// 参数与 [showModalBottomSheet] 保持一致，内部使用 [AppModalBottomSheetRoute]。
+/// [enablePredictiveBackScale] 为 `true`（默认）时，在 Android 预测性返回推进阶段
+/// 对弹层卡片做跟手缩放反馈；设为 `false` 时不接入预测性返回手势（`startBackGesture`
+/// 返回 `false`），按普通系统返回直接关闭弹层。
 Future<T?> showAppModalBottomSheet<T>({
   required BuildContext context,
   required WidgetBuilder builder,
@@ -35,6 +36,7 @@ Future<T?> showAppModalBottomSheet<T>({
   Offset? anchorPoint,
   AnimationStyle? sheetAnimationStyle,
   bool? requestFocus,
+  bool enablePredictiveBackScale = true,
 }) {
   assert(debugCheckHasMediaQuery(context));
   assert(debugCheckHasMaterialLocalizations(context));
@@ -70,11 +72,12 @@ Future<T?> showAppModalBottomSheet<T>({
       useSafeArea: useSafeArea,
       sheetAnimationStyle: sheetAnimationStyle,
       requestFocus: requestFocus,
+      enablePredictiveBackScale: enablePredictiveBackScale,
     ),
   );
 }
 
-/// 在 [ModalBottomSheetRoute] 基础上附加 Android 预测性返回手势反馈的路由。
+/// 在 [ModalBottomSheetRoute] 基础上协调 Android 预测性返回的路由。
 class AppModalBottomSheetRoute<T> extends ModalBottomSheetRoute<T> {
   AppModalBottomSheetRoute({
     required super.builder,
@@ -99,7 +102,11 @@ class AppModalBottomSheetRoute<T> extends ModalBottomSheetRoute<T> {
     super.useSafeArea = false,
     super.sheetAnimationStyle,
     super.requestFocus,
+    this.enablePredictiveBackScale = true,
   });
+
+  /// 是否在预测性返回推进阶段执行卡片缩放反馈。
+  final bool enablePredictiveBackScale;
 
   @override
   Widget buildTransitions(
@@ -108,15 +115,14 @@ class AppModalBottomSheetRoute<T> extends ModalBottomSheetRoute<T> {
     Animation<double> secondaryAnimation,
     Widget child,
   ) {
-    return _PredictiveBackSheetFeedback(
-      route: this,
-      child: super.buildTransitions(
-        context,
-        animation,
-        secondaryAnimation,
-        child,
-      ),
+    final base = super.buildTransitions(
+      context,
+      animation,
+      secondaryAnimation,
+      child,
     );
+    if (!enablePredictiveBackScale) return base;
+    return _PredictiveBackSheetFeedback(route: this, child: base);
   }
 }
 

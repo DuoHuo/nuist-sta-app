@@ -27,9 +27,18 @@ void main() {
       );
     });
 
-    test('单双周', () {
+    test('单双周与混合循环段', () {
       expect(formatWeeks(const [2, 4, 6, 8, 10]), '第 2–10 周（双）');
       expect(formatWeeks(const [1, 3, 5, 7, 9]), '第 1–9 周（单）');
+      expect(formatWeeks(const [3, 5, 7]), '第 3–7 周（单）');
+      expect(
+        formatWeeks(const [3, 5, 7, 10, 11], maxSegments: null),
+        '第 3–7（单）、10–11 周',
+      );
+      expect(
+        formatWeeks(const [3, 6, 7, 9, 10], maxSegments: null),
+        '第 3、6–7、9–10 周',
+      );
       // 全单但有缺口 → 不用（单），逐个列出（>3 段截断）。
       expect(formatWeeks(const [1, 3, 7]), '第 1、3、7 周');
     });

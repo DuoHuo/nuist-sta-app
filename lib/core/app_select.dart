@@ -54,6 +54,8 @@ class AppSelectField<T> extends StatefulWidget {
     this.useBottomSheet = false,
     this.textStyle,
     this.errorText,
+    this.singleLine = false,
+    this.contentPadding,
   });
 
   final String label;
@@ -68,6 +70,8 @@ class AppSelectField<T> extends StatefulWidget {
   final bool useBottomSheet;
   final TextStyle? textStyle;
   final String? errorText;
+  final bool singleLine;
+  final EdgeInsetsGeometry? contentPadding;
 
   @override
   State<AppSelectField<T>> createState() => _AppSelectFieldState<T>();
@@ -331,16 +335,26 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                             minHeight: _selectMinHeight,
                           ),
                           child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 8,
-                            ),
+                            padding:
+                                widget.contentPadding ??
+                                const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 8,
+                                ),
                             child: Row(
                               children: [
                                 Expanded(
-                                  child: Text(display, style: textStyle),
+                                  child: Text(
+                                    display,
+                                    style: textStyle,
+                                    maxLines: widget.singleLine ? 1 : null,
+                                    softWrap: !widget.singleLine,
+                                    overflow: widget.singleLine
+                                        ? TextOverflow.ellipsis
+                                        : null,
+                                  ),
                                 ),
-                                const SizedBox(width: 8),
+                                SizedBox(width: widget.singleLine ? 2 : 8),
                                 if (widget.loading)
                                   SizedBox.square(
                                     dimension: 18,
@@ -357,7 +371,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                                         : const Duration(milliseconds: 160),
                                     child: Icon(
                                       Icons.expand_more,
-                                      size: 20,
+                                      size: widget.singleLine ? 18 : 20,
                                       color: _opened
                                           ? palette.accent
                                           : palette.labelText,
@@ -407,6 +421,8 @@ class AppSelectFormField<T> extends FormField<T> {
     bool useBottomSheet = false,
     TextStyle? textStyle,
     String? errorText,
+    bool singleLine = false,
+    EdgeInsetsGeometry? contentPadding,
     super.validator,
     super.onSaved,
     super.autovalidateMode,
@@ -423,6 +439,8 @@ class AppSelectFormField<T> extends FormField<T> {
            useBottomSheet: useBottomSheet,
            textStyle: textStyle,
            errorText: field.errorText ?? errorText,
+           singleLine: singleLine,
+           contentPadding: contentPadding,
            onChanged: onChanged == null
                ? null
                : (value) {

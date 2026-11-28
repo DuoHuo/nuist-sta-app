@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/logging/app_log.dart';
 import 'package:nuist_sta_app/core/refresh/silent_refresh.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_group.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_overrides.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';

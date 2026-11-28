@@ -1,7 +1,10 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../core/ui/app_bottom_sheet.dart';
 import '../../core/ui/miuix_dialog.dart';
+import 'timetable_course_detail_sheet.dart';
 import 'timetable_theme.dart';
 import 'timetable_week_format.dart';
 
@@ -21,7 +24,9 @@ Future<List<int>?> showCourseWeeksSheet(
   context: context,
   isScrollControlled: true,
   useSafeArea: true,
-  backgroundColor: TimetableTheme.colorsOf(context).surface,
+  enablePredictiveBackScale: false,
+  backgroundColor: Colors.transparent,
+  constraints: const BoxConstraints(maxWidth: 500),
   builder: (_) => _CourseWeeksSheet(totalWeeks: totalWeeks, initial: initial),
 );
 
@@ -34,7 +39,7 @@ Future<CourseFormSaveScope?> showCourseFormSaveScopeSheet(
   DateTime? date,
 }) async {
   final canScope = currentWeek != null && courseWeeks.contains(currentWeek);
-  if (!canScope) return CourseFormSaveScope(null);
+  if (!canScope) return const CourseFormSaveScope(null);
   final future = courseWeeks.where((week) => week >= currentWeek).toList()
     ..sort();
   final choice = await showMiuixOptionDialog<_Scope>(
@@ -78,7 +83,7 @@ Future<CourseFormSaveScope?> showCourseFormSaveScopeSheet(
     case _Scope.future:
       return CourseFormSaveScope(future);
     case _Scope.all:
-      return CourseFormSaveScope(null);
+      return const CourseFormSaveScope(null);
     case _Scope.custom:
       if (!anchorContext.mounted) return null;
       final weeks = await showCourseWeeksSheet(
@@ -100,7 +105,9 @@ Future<bool> confirmCourseWeekChange(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    backgroundColor: TimetableTheme.colorsOf(context).surface,
+    enablePredictiveBackScale: false,
+    backgroundColor: Colors.transparent,
+    constraints: const BoxConstraints(maxWidth: 500),
     builder: (context) => _SheetFrame(
       sheetKey: const Key('course_form_repeat_sheet'),
       title: '调整上课周次',
@@ -147,33 +154,42 @@ class _CourseWeeksSheetState extends State<_CourseWeeksSheet> {
   }
 
   @override
-  Widget build(BuildContext context) => _SheetFrame(
-    sheetKey: const Key('course_form_weeks_sheet'),
-    title: '选择上课周次',
-    content: _WeeksGrid(
-      totalWeeks: widget.totalWeeks,
-      selected: _weeks,
-      showError: _showError,
-      onChanged: (weeks) => setState(() {
-        _weeks = weeks;
-        _showError = false;
-      }),
-    ),
-    cancelKey: const Key('course_form_weeks_cancel'),
-    confirmKey: const Key('course_form_weeks_confirm'),
-    confirmLabel: '确定',
-    onConfirm: () {
-      if (_weeks.isEmpty) {
-        setState(() => _showError = true);
-        return;
-      }
-      Navigator.pop(context, _weeks.toList()..sort());
-    },
-  );
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    final summary = _weeks.isEmpty
+        ? '未选择周次'
+        : formatWeeks(_weeks, maxSegments: null);
+    return _SheetFrame(
+      sheetKey: const Key('course_form_weeks_sheet'),
+      title: '选择上课周次',
+      subtitle: summary,
+      subtitleColor: _weeks.isEmpty ? colors.hint : colors.accent,
+      content: _WeeksGrid(
+        totalWeeks: widget.totalWeeks,
+        selected: _weeks,
+        showError: _showError,
+        onChanged: (weeks) => setState(() {
+          _weeks = weeks;
+          _showError = false;
+        }),
+      ),
+      cancelKey: const Key('course_form_weeks_cancel'),
+      confirmKey: const Key('course_form_weeks_confirm'),
+      confirmLabel: '确定',
+      onConfirm: () {
+        if (_weeks.isEmpty) {
+          setState(() => _showError = true);
+          return;
+        }
+        Navigator.pop(context, _weeks.toList()..sort());
+      },
+    );
+  }
 }
 
 enum _Scope { once, future, all, custom }
 
+/// 轻量清爽的周次选择网格：勾选前后单格宽高恒定，用柔和浅底 + 细描边替代满屏高饱和色块。
 class _WeeksGrid extends StatelessWidget {
   const _WeeksGrid({
     required this.totalWeeks,
@@ -192,73 +208,101 @@ class _WeeksGrid extends StatelessWidget {
       if (parity == 0 || (parity == 1 ? week.isOdd : week.isEven)) week,
   };
 
+  bool _matchesPreset(int parity) {
+    final target = _preset(parity);
+    return target.length == selected.length && selected.containsAll(target);
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = TimetableTheme.colorsOf(context);
+    final isAll = _matchesPreset(0);
+    final isOdd = _matchesPreset(1);
+    final isEven = _matchesPreset(2);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Wrap(
-          spacing: 4,
-          children: [
-            TextButton(
-              key: const Key('course_form_weeks_all'),
-              onPressed: () => onChanged(_preset(0)),
-              child: const Text('全部'),
-            ),
-            TextButton(
-              key: const Key('course_form_weeks_odd'),
-              onPressed: () => onChanged(_preset(1)),
-              child: const Text('单周'),
-            ),
-            TextButton(
-              key: const Key('course_form_weeks_even'),
-              onPressed: () => onChanged(_preset(2)),
-              child: const Text('双周'),
-            ),
-            TextButton(
-              key: const Key('course_form_weeks_clear'),
-              onPressed: () => onChanged({}),
-              child: const Text('清空'),
-            ),
-          ],
-        ),
-        Wrap(
           spacing: 8,
-          runSpacing: 4,
+          runSpacing: 6,
           children: [
-            for (var week = 1; week <= totalWeeks; week++)
-              Semantics(
-                label: '第 $week 周',
-                child: FilterChip(
-                  key: Key('course_form_week_$week'),
-                  label: Text('$week'),
-                  selected: selected.contains(week),
-                  showCheckmark: true,
-                  materialTapTargetSize: MaterialTapTargetSize.padded,
-                  onSelected: (value) {
-                    final next = {...selected};
-                    value ? next.add(week) : next.remove(week);
-                    onChanged(next);
-                  },
-                ),
-              ),
+            _QuickTag(
+              tagKey: const Key('course_form_weeks_all'),
+              label: '全部',
+              active: isAll,
+              onTap: () => onChanged(_preset(0)),
+            ),
+            _QuickTag(
+              tagKey: const Key('course_form_weeks_odd'),
+              label: '单周',
+              active: isOdd,
+              onTap: () => onChanged(_preset(1)),
+            ),
+            _QuickTag(
+              tagKey: const Key('course_form_weeks_even'),
+              label: '双周',
+              active: isEven,
+              onTap: () => onChanged(_preset(2)),
+            ),
+            _QuickTag(
+              tagKey: const Key('course_form_weeks_clear'),
+              label: '清空',
+              active: false,
+              muted: selected.isEmpty,
+              onTap: () => onChanged({}),
+            ),
           ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          selected.isEmpty ? '未选择周次' : formatWeeks(selected, maxSegments: null),
-          style: TextStyle(color: colors.labelText, fontSize: 13),
+        const SizedBox(height: 14),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final maxWidth = constraints.maxWidth.isFinite
+                ? constraints.maxWidth
+                : 320.0;
+            final columns = maxWidth < 260 ? 4 : 5;
+            const spacing = 8.0;
+            final cellWidth = math.max(
+              44.0,
+              (maxWidth - spacing * (columns - 1)) / columns,
+            );
+            final textHeight = MediaQuery.textScalerOf(context).scale(15);
+            final cellHeight = math.max(40.0, textHeight + 18.0);
+
+            return Wrap(
+              spacing: spacing,
+              runSpacing: spacing,
+              children: [
+                for (var week = 1; week <= totalWeeks; week++)
+                  SizedBox(
+                    width: cellWidth,
+                    height: cellHeight,
+                    child: _WeekCellButton(
+                      key: Key('course_form_week_$week'),
+                      week: week,
+                      selected: selected.contains(week),
+                      onTap: () {
+                        final next = {...selected};
+                        if (!next.remove(week)) {
+                          next.add(week);
+                        }
+                        onChanged(next);
+                      },
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
         if (showError)
           Padding(
-            padding: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.only(top: 10),
             child: Semantics(
               liveRegion: true,
               child: Text(
                 '请至少选择一周',
                 key: const Key('course_form_weeks_error'),
-                style: TextStyle(color: colors.danger),
+                style: TextStyle(color: colors.danger, fontSize: 13),
               ),
             ),
           ),
@@ -267,10 +311,113 @@ class _WeeksGrid extends StatelessWidget {
   }
 }
 
+class _QuickTag extends StatelessWidget {
+  const _QuickTag({
+    required this.tagKey,
+    required this.label,
+    required this.active,
+    required this.onTap,
+    this.muted = false,
+  });
+
+  final Key tagKey;
+  final String label;
+  final bool active;
+  final bool muted;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    return Material(
+      color: active ? colors.accentSoft : Colors.transparent,
+      shape: StadiumBorder(
+        side: BorderSide(
+          color: active
+              ? colors.accent.withValues(alpha: 0.45)
+              : colors.divider.withValues(alpha: 0.8),
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: tagKey,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+              color: active
+                  ? colors.accent
+                  : (muted ? colors.hint : colors.labelText),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WeekCellButton extends StatelessWidget {
+  const _WeekCellButton({
+    super.key,
+    required this.week,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final int week;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    // 选中态采用柔和浅主色底 + 品牌色细描边与文字，未选中态保持透明净白细描边，避免大面积重色块堆积。
+    final bg = selected ? colors.accentSoft : Colors.transparent;
+    final borderColor = selected
+        ? colors.accent.withValues(alpha: 0.75)
+        : colors.divider.withValues(alpha: 0.75);
+    final fg = selected ? colors.accent : colors.labelText;
+
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '第 $week 周',
+      excludeSemantics: true,
+      child: Material(
+        color: bg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(color: borderColor, width: 1.0),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Center(
+            child: Text(
+              '$week',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                color: fg,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _SheetFrame extends StatelessWidget {
   const _SheetFrame({
     required this.sheetKey,
     required this.title,
+    this.subtitle,
+    this.subtitleColor,
     required this.content,
     required this.cancelKey,
     required this.confirmKey,
@@ -280,6 +427,8 @@ class _SheetFrame extends StatelessWidget {
 
   final Key sheetKey;
   final String title;
+  final String? subtitle;
+  final Color? subtitleColor;
   final Widget content;
   final Key cancelKey;
   final Key confirmKey;
@@ -287,58 +436,101 @@ class _SheetFrame extends StatelessWidget {
   final VoidCallback onConfirm;
 
   @override
-  Widget build(BuildContext context) => SafeArea(
-    top: false,
-    child: ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.sizeOf(context).height * .88,
-      ),
-      child: Padding(
-        key: sheetKey,
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              title,
-              style: TextStyle(
-                color: TimetableTheme.colorsOf(context).titleText,
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Flexible(child: SingleChildScrollView(child: content)),
-            const SizedBox(height: 16),
-            Row(
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    return Material(
+      color: colors.surface,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      clipBehavior: Clip.antiAlias,
+      child: SafeArea(
+        top: false,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .86,
+          ),
+          child: Padding(
+            key: sheetKey,
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  child: OutlinedButton(
-                    key: cancelKey,
-                    onPressed: () => Navigator.pop(context),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(0, 48),
+                const Center(child: SheetDragHandle()),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    TextButton(
+                      key: cancelKey,
+                      onPressed: () => Navigator.pop(context),
+                      style: TextButton.styleFrom(
+                        foregroundColor: colors.labelText,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 6,
+                        ),
+                        minimumSize: const Size(48, 36),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('取消', style: TextStyle(fontSize: 15)),
                     ),
-                    child: const Text('取消'),
-                  ),
+                    Expanded(
+                      child: Text(
+                        title,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: colors.titleText,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      key: confirmKey,
+                      onPressed: onConfirm,
+                      style: TextButton.styleFrom(
+                        foregroundColor: colors.accent,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 6,
+                        ),
+                        minimumSize: const Size(48, 36),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: Text(
+                        confirmLabel,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    key: confirmKey,
-                    onPressed: onConfirm,
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size(0, 48),
+                if (subtitle != null && subtitle!.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: subtitleColor ?? colors.labelText,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
                     ),
-                    child: Text(confirmLabel),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: content,
                   ),
                 ),
               ],
             ),
-          ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

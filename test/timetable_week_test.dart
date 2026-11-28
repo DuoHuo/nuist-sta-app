@@ -10,8 +10,8 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_cell.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_date_edits.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_entry_add_pages.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_home_card.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_overrides.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
@@ -363,15 +363,17 @@ void main() {
       expect(find.byType(TimetablePage), findsNothing);
       expect(c.viewingWeek, 7);
 
-      // 4. 手动课表单周次选择器上限为第 20 周
+      // 4. 添加课程页周次选择器上限为第 20 周
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();
       await tester.pumpWidget(
-        MaterialApp(home: ManualCourseForm(controller: c)),
+        MaterialApp(home: TimetableAddCoursePage(controller: c)),
       );
       await tester.pump();
-      await tester.ensureVisible(find.byKey(const Key('course_form_weeks')));
-      await tester.tap(find.byKey(const Key('course_form_weeks')));
+      await tester.tap(find.byKey(const Key('add_course_slot_0')));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('slot_editor_weeks')));
+      await tester.tap(find.byKey(const Key('slot_editor_weeks')));
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('course_form_week_20'), skipOffstage: false),

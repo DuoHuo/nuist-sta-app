@@ -9,7 +9,7 @@ import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_theme.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_group.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_color.dart';
 
 String _w(int n, {bool odd = false, bool even = false}) => List.generate(

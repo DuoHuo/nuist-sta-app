@@ -11,6 +11,10 @@ import 'timetable_models.dart';
 /// 编辑 / 拖动保存时的应用范围：只改这一天 / 所有周。默认 [thisDay]。
 enum EditScope { thisDay, allWeeks }
 
+/// 「只改这一天（10月21日）」文案。
+String editScopeThisDayLabel(DateTime date) =>
+    '只改这一天（${date.month}月${date.day}日）';
+
 /// 单日修改的种类。
 enum DateEditKind { edit, delete }
 

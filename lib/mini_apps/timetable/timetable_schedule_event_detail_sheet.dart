@@ -5,15 +5,17 @@ import 'package:flutter/material.dart';
 import '../../core/app_snack_bar.dart';
 import '../../core/ui/app_bottom_sheet.dart';
 import '../../core/ui/miuix_dialog.dart';
-import 'timetable_schedule_event.dart';
-import 'timetable_schedule_event_edit_page.dart';
-import 'timetable_schedule_event_layout.dart';
 import 'timetable_api.dart';
 import 'timetable_controller.dart';
+import 'timetable_course_detail_sheet.dart';
+import 'timetable_entry_add_pages.dart';
+import 'timetable_entry_edit_page.dart';
+import 'timetable_entry_form_widgets.dart';
+import 'timetable_schedule_event.dart';
+import 'timetable_schedule_event_layout.dart';
 import 'timetable_theme.dart';
-import 'timetable_manual_course_form.dart';
 
-/// 「+」原地弹出三选一（spec §14.1）：课程（现有每周重复的手动课）/ 考试 / 其他。
+/// 「+」原地弹出三选一：课程 / 考试 / 日程，分别进入对应独立添加页。
 Future<void> showAddEntrySheet(
   BuildContext anchorContext, {
   required TimetableController controller,
@@ -27,15 +29,14 @@ Future<void> showAddEntrySheet(
         key: Key('add_entry_course'),
         value: 'course',
         label: '课程',
-        description: '每周重复',
       ),
       MiuixOptionItem(key: Key('add_entry_exam'), value: 'exam', label: '考试'),
-      MiuixOptionItem(key: Key('add_entry_other'), value: 'other', label: '其他'),
+      MiuixOptionItem(key: Key('add_entry_other'), value: 'other', label: '日程'),
     ],
   );
   if (choice == null || !anchorContext.mounted) return;
   if (choice == 'course') {
-    await showManualCourseForm(anchorContext, controller: controller);
+    await showAddCoursePage(anchorContext, controller: controller);
     return;
   }
   // 默认日期：看本周时为今天；看别的周时为该周第一天。
@@ -45,16 +46,22 @@ Future<void> showAddEntrySheet(
           controller.viewingWeek,
           controller.visibleDays(controller.viewingWeek).first,
         );
-  await showScheduleEventEditPage(
+  if (choice == 'exam') {
+    await showAddExamPage(
+      anchorContext,
+      controller: controller,
+      initialDate: date,
+    );
+    return;
+  }
+  await showAddSchedulePage(
     anchorContext,
     controller: controller,
-    kind: choice == 'exam' ? ScheduleKind.exam : ScheduleKind.other,
     initialDate: date,
   );
 }
 
-/// 日程详情弹层（spec §14.2）：日期、时间、地点、备注；底部「编辑」「删除」。
-/// 改过的教务考试显示「已修改」+「恢复原考试」（§14.3）。
+/// 考试/日程详情底部弹层：与课程详情弹层统一视觉层次，不接入预测性返回手势。
 Future<void> showScheduleEventDetailSheet(
   BuildContext context, {
   required ScheduleEvent event,
@@ -68,7 +75,9 @@ Future<void> showScheduleEventDetailSheet(
   return showAppModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
+    enablePredictiveBackScale: false,
     backgroundColor: Colors.transparent,
+    constraints: const BoxConstraints(maxWidth: 560),
     builder: (_) => detail,
   );
 }
@@ -102,7 +111,7 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
   }
 
   Future<void> _edit(ScheduleEvent e) async {
-    await showScheduleEventEditPage(
+    await showScheduleEditPage(
       context,
       controller: widget.controller,
       initial: e,
@@ -127,7 +136,7 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
       AppSnackBar(
         tone: AppSnackBarTone.success,
         behavior: SnackBarBehavior.floating,
-        content: Text('已删除'),
+        content: const Text('已删除'),
       ),
     );
   }
@@ -177,149 +186,251 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
           return const SizedBox.shrink();
         }
         final c = widget.controller;
+        final colors = TimetableTheme.colorsOf(context);
         final accent = scheduleAccentOnWhite(c, e);
         // 原始 examKey（不能用展示事件的 jwxtKey：编辑后日期/时间可能已变）。
         final examKey = e.isFromJwxt ? c.jwxtExamKeyOf(e.id) : null;
         final overridden =
             examKey != null && c.isJwxtOverridden(examKey: examKey);
-        return Container(
-          decoration: BoxDecoration(
-            color: TimetableTheme.colorsOf(context).surface,
-            borderRadius: BorderRadius.vertical(
-              top: Radius.circular(TimetableTheme.sheetTopRadius),
-            ),
+        final week = c.actualWeek(e.date);
+        final dateLine = week != null && week >= 1 && week <= c.maxWeeks
+            ? '${scheduleDateText(e.date)} · 第 $week 周'
+            : scheduleDateText(e.date);
+        final hasNote = e.note.trim().isNotEmpty;
+
+        return ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.86,
           ),
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.paddingOf(context).bottom + 12,
-          ),
-          child: Column(
-            key: const Key('schedule_detail_sheet'),
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 8),
-              Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: TimetableTheme.colorsOf(context).divider,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Row(
+          child: Material(
+            color: colors.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            clipBehavior: Clip.antiAlias,
+            child: SafeArea(
+              top: false,
+              maintainBottomViewPadding: true,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+                child: Column(
+                  key: const Key('schedule_detail_sheet'),
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Container(
-                      width: 4,
-                      height: 22,
-                      decoration: BoxDecoration(
-                        color: accent,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        e.title,
-                        style: TimetableTheme.titleStyle(
-                          color: TimetableTheme.colorsOf(context).titleText,
-                        ),
-                      ),
-                    ),
-                    SchedulePill(text: schedulePillLabel(e), color: accent),
-                  ],
-                ),
-              ),
-              _Row(
-                icon: Icons.calendar_today_outlined,
-                text: scheduleDateText(e.date),
-              ),
-              _Row(icon: Icons.access_time, text: scheduleTimeText(e)),
-              _Row(
-                icon: Icons.place_outlined,
-                text: e.location.isEmpty ? '地点未填写' : e.location,
-                muted: e.location.isEmpty,
-              ),
-              _Row(
-                icon: Icons.notes_outlined,
-                text: e.note.isEmpty ? '无备注' : e.note,
-                muted: e.note.isEmpty,
-              ),
-              if (e.isExam && (e.courseCode ?? '').isNotEmpty)
-                _Row(icon: Icons.tag, text: '课程号 ${e.courseCode}'),
-              if (overridden)
-                Padding(
-                  key: const Key('schedule_detail_modified'),
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.edit_outlined,
-                        size: 20,
-                        color: TimetableTheme.colorsOf(context).hint,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          '已修改',
-                          style: TimetableTheme.bodyStyle(
-                            color: TimetableTheme.colorsOf(context).labelText,
+                    const Center(child: SheetDragHandle()),
+                    const SizedBox(height: 14),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 5,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            color: accent,
+                            borderRadius: BorderRadius.circular(3),
                           ),
                         ),
-                      ),
-                      TextButton(
-                        key: const Key('schedule_detail_restore'),
-                        onPressed: _busy ? null : () => _restore(examKey),
-                        style: TextButton.styleFrom(
-                          foregroundColor: TimetableTheme.colorsOf(context)
-                              .accent,
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            e.title,
+                            style: TimetableTheme.titleStyle(
+                              color: colors.titleText,
+                            ),
+                          ),
                         ),
-                        child: const Text('恢复原考试'),
+                        const SizedBox(width: 8),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              key: const Key('schedule_detail_edit'),
+                              tooltip: e.isExam ? '编辑考试' : '编辑日程',
+                              padding: const EdgeInsets.all(6),
+                              onPressed: _busy ? null : () => _edit(e),
+                              constraints: const BoxConstraints.tightFor(
+                                width: 44,
+                                height: 36,
+                              ),
+                              style: IconButton.styleFrom(
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              icon: Icon(
+                                Icons.edit_outlined,
+                                size: 20,
+                                color: colors.labelText,
+                              ),
+                            ),
+                            IconButton(
+                              key: const Key('schedule_detail_delete'),
+                              tooltip: e.isExam ? '删除考试' : '删除日程',
+                              padding: const EdgeInsets.all(6),
+                              onPressed: _busy ? null : () => _delete(e),
+                              constraints: const BoxConstraints.tightFor(
+                                width: 44,
+                                height: 36,
+                              ),
+                              style: IconButton.styleFrom(
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              icon: Icon(
+                                Icons.delete_outline,
+                                size: 20,
+                                color: colors.danger,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        SchedulePill(text: schedulePillLabel(e), color: accent),
+                        if (!e.isFromJwxt) const _ScheduleTag(label: '手动添加'),
+                        if (e.isExam && (e.courseCode ?? '').isNotEmpty)
+                          _ScheduleTag(label: '课程号 ${e.courseCode}'),
+                        if (overridden)
+                          _ScheduleTag(
+                            key: const Key('schedule_detail_modified'),
+                            label: '已修改',
+                            accent: true,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: colors.pageBg,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 6,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _ScheduleInfoRow(
+                            icon: Icons.access_time_rounded,
+                            text: scheduleTimeText(e),
+                            secondaryText: dateLine,
+                            emphasized: true,
+                          ),
+                          Divider(
+                            height: 1,
+                            color: colors.divider.withValues(alpha: 0.6),
+                          ),
+                          _ScheduleInfoRow(
+                            icon: Icons.place_outlined,
+                            text: e.location.isEmpty ? '地点未填写' : e.location,
+                            muted: e.location.isEmpty,
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (overridden) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: colors.pageBg,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.history_rounded,
+                              size: 18,
+                              color: colors.accent,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '已在本地修改此教务考试',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: colors.labelText,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              key: const Key('schedule_detail_restore'),
+                              onPressed: _busy ? null : () => _restore(examKey),
+                              style: TextButton.styleFrom(
+                                foregroundColor: colors.accent,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                minimumSize: const Size(0, 34),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              child: const Text(
+                                '恢复原考试',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
-                  ),
-                ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: SizedBox(
-                        height: 44,
-                        child: FilledButton(
-                          key: const Key('schedule_detail_edit'),
-                          onPressed: _busy ? null : () => _edit(e),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: TimetableTheme.colorsOf(context)
-                                .chipBg,
-                            foregroundColor: TimetableTheme.colorsOf(context)
-                                .titleText,
-                            elevation: 0,
-                            shape: const StadiumBorder(),
+                    const SizedBox(height: 10),
+                    Material(
+                      color: colors.pageBg,
+                      borderRadius: BorderRadius.circular(16),
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        onTap: _busy ? null : () => _edit(e),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
                           ),
-                          child: const Text('编辑'),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      height: 44,
-                      child: OutlinedButton.icon(
-                        key: const Key('schedule_detail_delete'),
-                        onPressed: _busy ? null : () => _delete(e),
-                        icon: const Icon(Icons.delete_outline, size: 20),
-                        label: const Text('删除'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: TimetableTheme.colorsOf(context)
-                              .danger,
-                          shape: const StadiumBorder(),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Icon(
+                                  Icons.notes_rounded,
+                                  size: 18,
+                                  color: hasNote
+                                      ? colors.labelText
+                                      : colors.hint,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  hasNote ? e.note.trim() : '添加备注…',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: hasNote
+                                        ? colors.titleText
+                                        : colors.hint,
+                                  ),
+                                ),
+                              ),
+                              Icon(
+                                Icons.chevron_right,
+                                size: 18,
+                                color: colors.chevron,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ],
                 ),
               ),
-            ],
+            ),
           ),
         );
       },
@@ -327,35 +438,93 @@ class _ScheduleEventDetailSheetState extends State<ScheduleEventDetailSheet> {
   }
 }
 
-class _Row extends StatelessWidget {
-  const _Row({required this.icon, required this.text, this.muted = false});
+class _ScheduleTag extends StatelessWidget {
+  const _ScheduleTag({super.key, required this.label, this.accent = false});
+
+  final String label;
+  final bool accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = TimetableTheme.colorsOf(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: accent ? colors.accentSoft : colors.pageBg,
+        borderRadius: BorderRadius.circular(6),
+        border: accent
+            ? Border.all(color: colors.accent.withValues(alpha: 0.35))
+            : null,
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: accent ? FontWeight.w500 : FontWeight.w400,
+          color: accent ? colors.accent : colors.labelText,
+        ),
+      ),
+    );
+  }
+}
+
+class _ScheduleInfoRow extends StatelessWidget {
+  const _ScheduleInfoRow({
+    required this.icon,
+    required this.text,
+    this.secondaryText = '',
+    this.emphasized = false,
+    this.muted = false,
+  });
 
   final IconData icon;
   final String text;
+  final String secondaryText;
+  final bool emphasized;
   final bool muted;
 
   @override
   Widget build(BuildContext context) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 48),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        child: Row(
-          children: [
-            Icon(icon, size: 20, color: TimetableTheme.colorsOf(context).hint),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                text,
-                style: TimetableTheme.bodyStyle(
-                  color: muted
-                      ? TimetableTheme.colorsOf(context).hint
-                      : TimetableTheme.colorsOf(context).labelText,
-                ),
-              ),
+    final colors = TimetableTheme.colorsOf(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(
+              icon,
+              size: 18,
+              color: muted ? colors.hint : colors.labelText,
             ),
-          ],
-        ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  text,
+                  style: TextStyle(
+                    fontSize: emphasized ? 15 : 14,
+                    fontWeight: emphasized ? FontWeight.w600 : FontWeight.w400,
+                    color: muted
+                        ? colors.hint
+                        : (emphasized ? colors.titleText : colors.labelText),
+                  ),
+                ),
+                if (secondaryText.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    secondaryText,
+                    style: TextStyle(fontSize: 12, color: colors.labelText),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

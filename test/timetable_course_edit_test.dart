@@ -3,6 +3,7 @@
 // 编号对齐课表测试用例 §24（EV / EX / JE / HT）。
 // 全部为虚构数据（「测试课甲」「张老师」「测试楼 A101」），不读真实样例。
 import 'dart:io';
+import 'dart:ui' show Tristate;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,17 +11,17 @@ import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/core/app_select.dart';
 import 'package:nuist_sta_app/core/theme.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_group.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_entry_add_pages.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_entry_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_overrides.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_detail_sheet.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_detail_sheet.dart';
 
 final _c = TimetableController.instance;
 
@@ -168,8 +169,10 @@ void main() {
   Set<int> selectedWeeks(WidgetTester tester) => {
     for (var w = 1; w <= 20; w++)
       if (tester
-          .widget<FilterChip>(find.byKey(Key('course_form_week_$w')))
-          .selected)
+              .getSemantics(find.byKey(Key('course_form_week_$w')))
+              .flagsCollection
+              .isSelected ==
+          Tristate.isTrue)
         w,
   };
 
@@ -184,25 +187,21 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
     }
 
-    // 1. 从「+ -> 课程」进入添加表单，校验必填与周次快捷互斥/清空限制
+    // 1. 从「+ -> 课程」进入独立添加页，校验必填与周次快捷互斥/清空限制
     await tester.tap(find.byTooltip('添加'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('课程'));
     await tester.pumpAndSettle();
-    tester
-        .widget<AppSelectFormField<int>>(
-          find.byKey(const Key('manual_course_day')),
-        )
-        .onChanged!(1);
-    await tester.pump();
-    await tester.tap(find.byKey(const Key('manual_course_save')));
+    await tester.tap(find.byKey(const Key('add_course_save')));
     await tester.pumpAndSettle();
     expect(find.text('请填写课程名称'), findsOneWidget);
 
-    await tester.enterText(find.byKey(const Key('manual_course_name')), '自习课');
-    await tester.ensureVisible(find.byKey(const Key('course_form_weeks')));
+    await tester.enterText(find.byKey(const Key('add_course_name')), '自习课');
+    await tester.tap(find.byKey(const Key('add_course_slot_0')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('course_form_weeks')));
+    await tester.ensureVisible(find.byKey(const Key('slot_editor_weeks')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('slot_editor_weeks')));
     await tester.pumpAndSettle();
     expect(selectedWeeks(tester), {for (var w = _week; w <= 20; w++) w});
     await tester.tap(find.text('全部'));
@@ -223,30 +222,31 @@ void main() {
     expect(selectedWeeks(tester), {for (var w = 1; w <= 20; w += 2) w});
     await tester.tap(find.byKey(const Key('course_form_weeks_confirm')));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('slot_editor_confirm')));
+    await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('manual_course_save')));
+    await tester.tap(find.byKey(const Key('add_course_save')));
     await _settleIo(tester);
     final saved = _c.manualCourses.single;
     expect(saved.isManual, isTrue);
     expect(saved.slots.single.occursInWeek(8), isFalse);
     expect(saved.slots.single.occursInWeek(7), isTrue);
 
-    // 2. 节次联动与冲突提示 + 窄屏深色键盘备注自动聚焦
+    // 2. 二级时段弹窗节次联动与冲突提示 + 窄屏深色键盘备注自动聚焦
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
     await tester.pumpWidget(
       MaterialApp(
-        home: ManualCourseForm(
+        home: TimetableCourseEditPage(
           controller: _c,
+          course: _c.jwxtCourses.single,
           initialSlot: _c.jwxtCourses.single.slots.single,
+          openSlotIndex: 0,
         ),
       ),
     );
     await tester.pumpAndSettle();
-    Finder field(String name) => find.descendant(
-      of: find.byKey(Key('course_form_$name')),
-      matching: find.byType(AppSelectFormField<int>),
-    );
+    Finder field(String name) => find.byKey(Key('slot_editor_$name'));
     int? value(String name) =>
         tester.widget<AppSelectFormField<int>>(field(name)).initialValue;
     Future<void> startAt(int start) async {
@@ -274,15 +274,16 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    expect((value('start'), value('end')), (1, 2));
-    expect(find.byKey(const Key('manual_course_conflict')), findsOneWidget);
+    expect((value('start'), value('end_1')), (1, 2));
     await startAt(5);
-    expect((value('start'), value('end')), (5, 6));
-    expect(find.byKey(const Key('manual_course_conflict')), findsNothing);
+    expect((value('start'), value('end_5')), (5, 6));
     await startAt(_c.lastPeriod);
-    expect((value('start'), value('end')), (_c.lastPeriod, _c.lastPeriod));
+    expect(
+      (value('start'), value('end_${_c.lastPeriod}')),
+      (_c.lastPeriod, _c.lastPeriod),
+    );
     await startAt(2);
-    expect((value('start'), value('end')), (2, 3));
+    expect((value('start'), value('end_2')), (2, 3));
 
     tester.view.physicalSize = const Size(320, 640);
     tester.view.devicePixelRatio = 1;
@@ -298,14 +299,18 @@ void main() {
               .copyWith(textScaler: const TextScaler.linear(1.6)),
           child: child!,
         ),
-        home: ManualCourseForm(controller: _c, autofocusNote: true),
+        home: TimetableCourseEditPage(
+          controller: _c,
+          course: saved,
+          autofocusNote: true,
+        ),
       ),
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     final note = tester.widget<EditableText>(
       find.descendant(
-        of: find.byKey(const Key('manual_course_note')),
+        of: find.byKey(const Key('slot_editor_note')),
         matching: find.byType(EditableText),
       ),
     );
@@ -333,12 +338,9 @@ void main() {
     expect(find.text('恢复原课程'), findsNothing);
     await tester.tap(find.byKey(const Key('course_detail_edit')));
     await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const Key('manual_course_name')),
-      '自习课新版',
-    );
+    await tester.enterText(find.byKey(const Key('course_form_name')), '自习课新版');
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('manual_course_save')));
+    await tester.tap(find.byKey(const Key('course_form_save')));
     await tester.pumpAndSettle();
     await _settleIo(tester);
     expect(
@@ -378,7 +380,7 @@ void main() {
     final detailRoute = ModalRoute.of(tester.element(detail))!;
     await tester.tap(find.byKey(const Key('course_detail_jwxt_edit')));
     await tester.pumpAndSettle();
-    final field = find.byKey(const Key('jwxt_edit_name'));
+    final field = find.byKey(const Key('course_form_name'));
     final editRoute = ModalRoute.of(tester.element(field))! as PageRoute;
     expect(editRoute.fullscreenDialog, isFalse);
     expect(editRoute.popGestureEnabled, isTrue);
@@ -404,13 +406,13 @@ void main() {
     expect(field, findsNothing);
     expect(detailRoute.isCurrent, isTrue);
 
-    // 2. 手动添加表单有改动时关闭弹出未保存拦截；恢复原值后重新放行返回，选放弃则不保存
+    // 2. 独立添加课程页有改动时关闭弹出未保存拦截；恢复原值后重新放行返回，选放弃则不保存
     await _pumpLauncher(
       tester,
-      (context) => showManualCourseForm(context, controller: _c),
+      (context) => showAddCoursePage(context, controller: _c),
       theme: appDarkTheme(),
     );
-    final mField = find.byKey(const Key('manual_course_name'));
+    final mField = find.byKey(const Key('add_course_name'));
     await tester.enterText(mField, '待保存课程');
     await tester.pump();
     expect(
@@ -431,16 +433,16 @@ void main() {
     await tester.enterText(mField, '待保存的课程');
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('course_form_close')));
+    await tester.tap(find.byKey(const Key('add_course_close')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('course_form_discard_cancel')));
+    await tester.tap(find.byKey(const Key('add_course_discard_cancel')));
     await tester.pumpAndSettle();
     expect(tester.widget<TextFormField>(mField).controller!.text, '待保存的课程');
-    await tester.tap(find.byKey(const Key('course_form_close')));
+    await tester.tap(find.byKey(const Key('add_course_close')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('course_form_discard_confirm')));
+    await tester.tap(find.byKey(const Key('add_course_discard_confirm')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('manual_course_name')), findsNothing);
+    expect(find.byKey(const Key('add_course_name')), findsNothing);
     expect(_c.manualCourses, hasLength(1));
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
@@ -506,47 +508,50 @@ void main() {
     await _settleIo(tester);
     expect(_c.isJwxtOverridden(courseId: 'j1'), isFalse);
 
-    // 2. 教务课表单改类型/节次，范围选择取消保留草稿、选单次只改本周
+    // 2. 教务课多时段统一编辑页改名称/类型/节次/全球备注与单独备注
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: JwxtCourseEditPage(controller: _c, cell: cellOf('j1')),
+    await _pumpLauncher(
+      tester,
+      (ctx) => showCourseEditPage(
+        ctx,
+        controller: _c,
+        course: cellOf('j1').course,
+        initialSlot: cellOf('j1').slot,
+        cell: cellOf('j1'),
       ),
     );
+    await tester.enterText(find.byKey(const Key('course_form_name')), '测试课乙');
+    await tester.enterText(find.byKey(const Key('course_form_note')), '全局课程备注');
+    await tester.tap(find.byKey(const Key('course_edit_slot_0')));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const Key('jwxt_edit_name')), '测试课乙');
     tester
         .widget<AppSelectFormField<CourseKind>>(
-          find.byKey(const Key('course_form_kind')),
+          find.byKey(const Key('slot_editor_kind')),
         )
         .onChanged!(CourseKind.lab);
     await tester.pump();
-    final start = find.descendant(
-      of: find.byKey(const Key('course_form_start')),
-      matching: find.byType(AppSelectFormField<int>),
-    );
+    final start = find.byKey(const Key('slot_editor_start'));
     tester.widget<AppSelectFormField<int>>(start).onChanged!(5);
     await tester.pump();
-    await tester.tap(find.byKey(const Key('jwxt_edit_save')));
+    await tester.enterText(find.byKey(const Key('slot_editor_note')), '周一实验备注');
+    await tester.tap(find.byKey(const Key('slot_editor_confirm')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('course_form_scope_sheet')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('course_form_scope_cancel')));
-    await tester.pumpAndSettle();
-    expect(_c.cellsForDay(_week, 1).single.course.name, '测试课甲');
-
-    await tester.tap(find.byKey(const Key('jwxt_edit_save')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('course_form_scope_once')));
+    await tester.tap(find.byKey(const Key('course_form_save')));
     await _settleIo(tester);
     final edited = _c.cellsForDay(_week, 1).single;
     expect(edited.course.name, '测试课乙');
+    expect(edited.course.note, '全局课程备注');
+    expect(edited.slot.note, '周一实验备注');
     expect((edited.slot.startNode, edited.slot.endNode), (5, 6));
     expect(
       courseKindOf(course: edited.course, slot: edited.slot),
       CourseKind.lab,
     );
-    expect(_c.cellsForDay(_week + 1, 1).single.course.name, '测试课甲');
+    final wednesday = _c.cellsForDay(_week, 3).single;
+    expect(wednesday.course.name, '测试课乙');
+    expect(wednesday.course.note, '全局课程备注');
+    expect(wednesday.slot.note, '');
 
     // 3. 单日挪课叠加改节次 diff 可恢复底层原位置
     _c.debugReset();
@@ -586,32 +591,36 @@ void main() {
     expect(_c.slotOverrides, isEmpty);
     expect(_c.cellsForDay(_week, 1).single.slot.startNode, 3);
 
-    // 4. 教务课转独立考试提示且只迁移本次；随后恢复原文并测删除全部时段二次确认
+    // 4. 教务课二级弹窗转独立考试提示且只迁移本次；随后恢复原文并测删除全部时段二次确认
     _c.debugReset();
     _load(jwxt: [jwxt]);
     await _pumpLauncher(
       tester,
       (ctx) => showCourseDetailSheet(ctx, cell: cellOf('j1'), controller: _c),
     );
+    expect(find.byKey(const Key('course_detail_progress')), findsOneWidget);
     await tester.tap(find.byKey(const Key('course_detail_jwxt_edit')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('course_form_kind')));
+    await tester.tap(find.byKey(const Key('course_edit_slot_0')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('考试').last);
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const Key('jwxt_edit_name')), '测试课甲考试');
     await tester.enterText(
-      find.byKey(const Key('jwxt_edit_location')),
+      find.byKey(const Key('slot_editor_location')),
       '测试楼 B202',
     );
-    await tester.tap(find.byKey(const Key('jwxt_edit_save')));
+    await tester.tap(find.byKey(const Key('slot_editor_to_exam')));
     await tester.pumpAndSettle();
-    expect(find.text('仅修改本周这节课'), findsOneWidget);
+    expect(find.text('将本次课转为考试'), findsOneWidget);
     await tester.tap(find.byKey(const Key('course_form_exam_cancel')));
     await tester.pumpAndSettle();
     expect(_c.scheduleEvents, isEmpty);
 
-    await tester.tap(find.byKey(const Key('jwxt_edit_save')));
+    await tester.tap(find.byKey(const Key('course_edit_slot_0')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('slot_editor_location')),
+      '测试楼 B202',
+    );
+    await tester.tap(find.byKey(const Key('slot_editor_to_exam')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('course_form_exam_confirm')));
     await _settleIo(tester);
@@ -620,7 +629,8 @@ void main() {
     expect(_c.cellsForDay(_week, 3).single.course.name, '测试课甲');
     final exam = _c.scheduleEvents.single;
     expect(exam.kind, ScheduleKind.exam);
-    expect(exam.title, '测试课甲考试');
+    expect(exam.title, '测试课甲');
+    expect(exam.location, '测试楼 B202');
 
     // 通过日程详情修改转换后的考试地点
     await _pumpLauncher(
@@ -674,11 +684,7 @@ void main() {
       _load();
       await _pumpLauncher(
         tester,
-        (context) => showScheduleEventEditPage(
-          context,
-          controller: _c,
-          kind: ScheduleKind.other,
-        ),
+        (context) => showAddSchedulePage(context, controller: _c),
         theme: dark ? appDarkTheme() : appLightTheme(),
       );
       final titleField = find.byKey(const Key('schedule_form_title'));
@@ -710,4 +716,310 @@ void main() {
       expect(find.byKey(const Key('schedule_form_title')), findsNothing);
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));
   }
+
+  group('同课吸附、剩余大节统计与统一编辑聚合', () {
+    test('按课程号与归一化课名吸附，不同非空课程号同名不误合', () {
+      const a1 = Course(
+        id: 'C1|01',
+        name: '大学物理(上)',
+        code: 'PHY101',
+        source: CourseSource.jwxt,
+        slots: [CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: '1111')],
+      );
+      const a2 = Course(
+        id: 'C1|02',
+        name: '大学物理实验',
+        code: 'PHY101',
+        source: CourseSource.jwxt,
+        slots: [
+          CourseSlot(
+            day: 3,
+            startNode: 5,
+            endNode: 6,
+            weeks: '1100',
+            isLab: true,
+          ),
+        ],
+      );
+      const manualPeer = Course(
+        id: 'm_phy',
+        name: '大学物理（上）',
+        source: CourseSource.manual,
+        slots: [CourseSlot(day: 5, startNode: 3, endNode: 4, weeks: '0011')],
+      );
+      const otherCodeSameName = Course(
+        id: 'C2|01',
+        name: '大学物理（上）',
+        code: 'PHY999',
+        source: CourseSource.jwxt,
+        slots: [CourseSlot(day: 2, startNode: 1, endNode: 2, weeks: '1111')],
+      );
+
+      final group = resolveCourseGroup([
+        a1,
+        a2,
+        manualPeer,
+        otherCodeSameName,
+      ], a1);
+      expect(group.courseIds, {'C1|01', 'C1|02', 'm_phy'});
+      expect(group.slots, hasLength(3));
+      expect(group.primary.id, 'C1|01');
+    });
+
+    test('剩余大节按当前真实时刻统计并扣除单日删除', () async {
+      final w16 = '1' * 4; // 1-4周
+      final c1 = Course(
+        id: 'PHY|01',
+        name: '大学物理',
+        code: 'PHY101',
+        source: CourseSource.jwxt,
+        slots: [
+          CourseSlot(day: 1, startNode: 1, endNode: 2, weeks: w16),
+          CourseSlot(day: 3, startNode: 3, endNode: 4, weeks: w16),
+        ],
+      );
+      _load(jwxt: [c1]);
+      // 第 2 周周一 10:00（周一 1-2 节 08:00-09:40 已下课）
+      final now = DateTime(2026, 9, 7, 10, 0);
+      final p1 = _c.courseProgressOf(c1, now: now);
+      // 总计 8 节，第 1 周 2 节 + 第 2 周周一 1 节已过 -> 剩 5 节
+      expect(p1.totalSessions, 8);
+      expect(p1.remainingSessions, 5);
+      expect(p1.label, '还剩 5 节');
+
+      // 删除第 3 周周三的课后再算
+      final wed3 = _c.cellsForDay(3, 3).single;
+      await _c.deleteOccurrence(wed3);
+      final p2 = _c.courseProgressOf(c1, now: now);
+      expect(p2.totalSessions, 7);
+      expect(p2.remainingSessions, 4);
+      expect(p2.label, '还剩 4 节');
+
+      // 学期结束后显示已结课
+      final afterTerm = DateTime(2026, 12, 31);
+      expect(_c.courseProgressOf(c1, now: afterTerm).label, '已结课');
+    });
+
+    test('全局备注与单时段备注互不覆盖且教务课可新增/恢复时段', () async {
+      final jwxt = _course('j1', '高等数学', source: CourseSource.jwxt);
+      _load(jwxt: [jwxt]);
+      final group = _c.courseGroupOf(_c.courses.single);
+      await _c.saveCourseGroupForm(
+        group: group,
+        name: '高等数学',
+        teacher: '张老师',
+        teacherChanged: false,
+        globalNote: '带教材',
+        slots: [
+          CourseSlotDraft(
+            sourceCourse: jwxt,
+            sourceSlot: jwxt.slots.single,
+            sourceSlotIndex: 0,
+            day: 1,
+            startNode: 3,
+            endNode: 4,
+            weeks: [1, 2, 3, 4],
+            location: '测试楼 A101',
+            note: '周一习题课',
+            kind: CourseKind.standard,
+            teacher: '张老师',
+          ),
+          CourseSlotDraft(
+            day: 4,
+            startNode: 5,
+            endNode: 6,
+            weeks: [1, 2],
+            location: '实验楼 B201',
+            note: '实验预习',
+            kind: CourseKind.lab,
+            teacher: '张老师',
+          ),
+        ],
+      );
+      final updated = _c.courses.single;
+      expect(updated.note, '带教材');
+      expect(updated.slots, hasLength(2));
+      expect(updated.slots[0].note, '周一习题课');
+      expect(updated.slots[1].note, '实验预习');
+      expect(updated.slots[1].kind, CourseKind.lab);
+
+      // 恢复原课程应一并清除新增时段与全局备注
+      expect(await _c.restoreJwxtCourse('j1'), isTrue);
+      final restored = _c.courses.single;
+      expect(restored.note, '');
+      expect(restored.slots, hasLength(1));
+    });
+
+    test('同时段同地点不同周次自动合并展示与草稿合并保存', () async {
+      final j1 = Course(
+        id: 'j_merge',
+        name: '计算机网络',
+        code: 'CS301',
+        source: CourseSource.jwxt,
+        slots: [
+          CourseSlot(
+            day: 2,
+            startNode: 3,
+            endNode: 4,
+            weeks: weeksToBits([3], 20),
+            location: '明德楼 A201',
+            teacher: '李老师',
+          ),
+          CourseSlot(
+            day: 2,
+            startNode: 3,
+            endNode: 4,
+            weeks: weeksToBits([6, 7], 20),
+            location: '明德楼 A201',
+            teacher: '李老师',
+          ),
+          CourseSlot(
+            day: 4,
+            startNode: 1,
+            endNode: 2,
+            weeks: weeksToBits([3, 5, 7], 20),
+            location: '实验楼 C102',
+            teacher: '李老师',
+          ),
+        ],
+      );
+      final mPeer = Course(
+        id: 'm_merge',
+        name: '计算机网络',
+        source: CourseSource.manual,
+        slots: [
+          CourseSlot(
+            day: 2,
+            startNode: 3,
+            endNode: 4,
+            weeks: weeksToBits([9, 10], 20),
+            location: '明德楼 A201',
+            teacher: '李老师',
+          ),
+        ],
+      );
+      _load(jwxt: [j1], manual: [mPeer]);
+
+      final group = _c.courseGroupOf(_c.courses.first);
+      final merged = group.mergedSchedules;
+      expect(merged, hasLength(2));
+      expect(
+        (merged[0].day, merged[0].startNode, merged[0].endNode),
+        (2, 3, 4),
+      );
+      expect(merged[0].weeks, [3, 6, 7, 9, 10]);
+      expect(
+        (merged[1].day, merged[1].startNode, merged[1].endNode),
+        (4, 1, 2),
+      );
+      expect(merged[1].weeks, [3, 5, 7]);
+
+      // 草稿合并后修改周次保存，副原时段清空不残留
+      final drafts = mergeCourseSlotDrafts([
+        for (final item in group.slots)
+          CourseSlotDraft(
+            sourceCourse: item.course,
+            sourceSlot: item.slot,
+            sourceSlotIndex: item.slotIndex,
+            day: item.slot.day,
+            startNode: item.slot.startNode,
+            endNode: item.slot.endNode,
+            weeks: [
+              for (var w = 1; w <= item.slot.weeks.length; w++)
+                if (item.slot.hasClassInWeek(w)) w,
+            ],
+            location: item.slot.location,
+            teacher: item.slot.teacher,
+          ),
+      ]);
+      expect(drafts, hasLength(2));
+      expect(drafts[0].weeks, [3, 6, 7, 9, 10]);
+
+      final updatedDrafts = [
+        drafts[0].copyWith(weeks: [3, 6]),
+        drafts[1],
+      ];
+      await _c.saveCourseGroupForm(
+        group: group,
+        name: '计算机网络',
+        teacher: '李老师',
+        teacherChanged: false,
+        globalNote: '',
+        slots: updatedDrafts,
+      );
+      final afterGroup = _c.courseGroupOf(_c.courses.first);
+      expect(afterGroup.mergedSchedules[0].weeks, [3, 6]);
+      expect(_c.cellsForDay(7, 2).where((c) => c.activeThisWeek), isEmpty);
+      expect(_c.cellsForDay(9, 2).where((c) => c.activeThisWeek), isEmpty);
+      expect(_c.cellsForDay(6, 2).where((c) => c.activeThisWeek), hasLength(1));
+    });
+
+    testWidgets('编辑页聚焦当前时段卡、点周次区域打开完整编辑浮窗且二级浮窗不接预测性返回手势', (tester) async {
+      final multi = Course(
+        id: 'j_multi',
+        name: '高等数学',
+        code: 'MATH101',
+        source: CourseSource.jwxt,
+        slots: [
+          for (var d = 1; d <= 5; d++)
+            CourseSlot(
+              day: d,
+              startNode: 1,
+              endNode: 2,
+              weeks: weeksToBits([1, 2, 3, 4], 20),
+              location: '明德楼 A10$d',
+              teacher: '王老师',
+            ),
+        ],
+      );
+      _load(jwxt: [multi]);
+      final targetCell = _c
+          .cellsForDay(1, 5)
+          .firstWhere((c) => c.course.id == 'j_multi');
+
+      await _pumpLauncher(
+        tester,
+        (ctx) => showCourseEditPage(
+          ctx,
+          controller: _c,
+          course: targetCell.course,
+          initialSlot: targetCell.slot,
+          cell: targetCell,
+        ),
+        theme: appLightTheme(),
+      );
+
+      // 1. 水平卡片条应自动滚动聚焦到末尾的「当前」卡片（下标 4）。
+      final strip = tester.widget<ListView>(
+        find.byKey(const Key('course_edit_slot__strip')),
+      );
+      expect(strip.controller!.offset, greaterThan(0));
+      expect(find.byKey(const Key('course_edit_slot_4')), findsOneWidget);
+
+      // 2. 点击卡片内周次区域仍唤起完整「编辑上课时段」浮窗，而非直接弹周次浮窗。
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const Key('course_edit_slot_4')),
+          matching: find.byIcon(Icons.tune_rounded),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('course_slot_editor_sheet')), findsOneWidget);
+      expect(find.byKey(const Key('course_form_weeks_sheet')), findsNothing);
+
+      // 3. 「编辑上课时段」与「选择上课周次」浮窗均不接入预测性返回手势，提交返回逐层关闭。
+      expect(await _backGesture(tester, 'startBackGesture'), isFalse);
+      await tester.tap(find.byKey(const Key('slot_editor_weeks')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('course_form_weeks_sheet')), findsOneWidget);
+      expect(await _backGesture(tester, 'startBackGesture'), isFalse);
+      await _backGesture(tester, 'commitBackGesture');
+      expect(find.byKey(const Key('course_form_weeks_sheet')), findsNothing);
+      expect(find.byKey(const Key('course_slot_editor_sheet')), findsOneWidget);
+
+      await _backGesture(tester, 'commitBackGesture');
+      expect(find.byKey(const Key('course_slot_editor_sheet')), findsNothing);
+      expect(find.byKey(const Key('course_form_name')), findsOneWidget);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+  });
 }

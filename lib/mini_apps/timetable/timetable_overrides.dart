@@ -222,10 +222,12 @@ class SlotOrigin {
     required this.original,
     required this.moved,
     this.weeksEdited = false,
+    this.added = false,
+    this.addedIndex,
   });
   final String courseId;
 
-  /// 教务原始时段。
+  /// 教务原始时段；[added] 为 true 时指向新增时段自身。
   final CourseSlot original;
 
   /// true = 被调到新位置的时段；false = 原位置剩下的周。
@@ -233,6 +235,12 @@ class SlotOrigin {
 
   /// true = 用户通过课程编辑主动修改了周次，单/双周展示应以修改后时段为准。
   final bool weeksEdited;
+
+  /// true = 本地为教务课新增的时段（持久化于 [CourseEdit.addedSlots]）。
+  final bool added;
+
+  /// 对应 [CourseEdit.addedSlots] 中的下标（仅 [added] 为 true 时有效）。
+  final int? addedIndex;
 }
 
 final Expando<SlotOrigin> _origins = Expando<SlotOrigin>('slotOrigin');
@@ -708,6 +716,7 @@ class CourseEdit {
     this.note,
     this.courseKind,
     this.slotEdits = const [],
+    this.addedSlots = const [],
     this.deleted = false,
     this.updatedAt = '',
   });
@@ -727,6 +736,9 @@ class CourseEdit {
 
   /// 按教务原始时段定位的本地安排，保留同门课的其他时段。
   final List<CourseSlotEdit> slotEdits;
+
+  /// 本地为该教务课新增的上课时段，恢复原课程时一并清除。
+  final List<CourseSlotPatch> addedSlots;
   final bool deleted;
   final String updatedAt;
 
@@ -736,29 +748,37 @@ class CourseEdit {
       location != null ||
       note != null ||
       courseKind != null ||
-      slotEdits.isNotEmpty;
+      slotEdits.isNotEmpty ||
+      addedSlots.isNotEmpty;
 
   bool get isEmpty => !deleted && !hasFieldEdits;
 
   CourseEdit copyWith({
     String? name,
+    bool clearName = false,
     String? teacher,
+    bool clearTeacher = false,
     String? location,
+    bool clearLocation = false,
     String? note,
+    bool clearNote = false,
     CourseKind? courseKind,
+    bool clearCourseKind = false,
     List<CourseSlotEdit>? slotEdits,
+    List<CourseSlotPatch>? addedSlots,
     bool? deleted,
     String? updatedAt,
   }) => CourseEdit(
     courseId: courseId,
     origFingerprint: origFingerprint,
     origName: origName,
-    name: name ?? this.name,
-    teacher: teacher ?? this.teacher,
-    location: location ?? this.location,
-    note: note ?? this.note,
-    courseKind: courseKind ?? this.courseKind,
+    name: clearName ? null : (name ?? this.name),
+    teacher: clearTeacher ? null : (teacher ?? this.teacher),
+    location: clearLocation ? null : (location ?? this.location),
+    note: clearNote ? null : (note ?? this.note),
+    courseKind: clearCourseKind ? null : (courseKind ?? this.courseKind),
     slotEdits: slotEdits ?? this.slotEdits,
+    addedSlots: addedSlots ?? this.addedSlots,
     deleted: deleted ?? this.deleted,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -774,6 +794,8 @@ class CourseEdit {
     if (courseKind != null) 'courseKind': courseKind!.name,
     if (slotEdits.isNotEmpty)
       'slotEdits': [for (final edit in slotEdits) edit.toJson()],
+    if (addedSlots.isNotEmpty)
+      'addedSlots': [for (final patch in addedSlots) patch.toJson()],
     'deleted': deleted,
     'updatedAt': updatedAt,
   };
@@ -797,6 +819,11 @@ class CourseEdit {
         if (raw['slotEdits'] is List)
           for (final item in raw['slotEdits'] as List)
             ?CourseSlotEdit.tryParse(item),
+      ],
+      addedSlots: [
+        if (raw['addedSlots'] is List)
+          for (final item in raw['addedSlots'] as List)
+            ?CourseSlotPatch.tryParse(item),
       ],
       deleted: raw['deleted'] == true,
       updatedAt: s('updatedAt') ?? '',
@@ -854,10 +881,10 @@ List<Course> applyCourseEdits(
       }
       if (slotEdit != null) {
         if (!replaced.add(slotEdit)) continue;
+        // CourseEdit.note 仅表示课程全局备注，不覆写单时段的单独备注。
         final base = original.copyWith(
           teacher: e.teacher,
           location: e.location,
-          note: e.note,
           kind: e.courseKind,
         );
         for (final patch in slotEdit.replacements) {
@@ -883,7 +910,7 @@ List<Course> applyCourseEdits(
         weeksLabel: s.weeksLabel,
         teacher: e.teacher ?? s.teacher,
         location: e.location ?? s.location,
-        note: e.note ?? s.note,
+        note: s.note,
         isLab: s.isLab,
         kind: e.courseKind ?? s.kind,
         nameOverride: s.nameOverride,
@@ -898,7 +925,31 @@ List<Course> applyCourseEdits(
       );
       slots.add(n);
     }
-    out.add(c.copyWith(name: e.name, slots: slots));
+    for (var i = 0; i < e.addedSlots.length; i++) {
+      final patch = e.addedSlots[i];
+      final base = CourseSlot(
+        day: patch.day,
+        startNode: patch.startNode,
+        endNode: patch.endNode,
+        weeks: patch.weeks,
+        teacher: e.teacher ?? '',
+        location: e.location ?? '',
+        kind: e.courseKind,
+      );
+      final added = patch.apply(base);
+      tagSlotOrigin(
+        added,
+        SlotOrigin(
+          courseId: c.id,
+          original: added,
+          moved: false,
+          added: true,
+          addedIndex: i,
+        ),
+      );
+      slots.add(added);
+    }
+    out.add(c.copyWith(name: e.name, note: e.note, slots: slots));
   }
   return out;
 }

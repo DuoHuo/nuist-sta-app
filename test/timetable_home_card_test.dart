@@ -4,13 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_course_edit_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_entry_add_pages.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_entry_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_home_card.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_manual_course_form.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_models.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_overrides.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_week_layout.dart';
 
@@ -212,9 +211,9 @@ void main() {
     await tester.tap(find.text('测试课甲'));
     await tester.pumpAndSettle();
     expect(find.text('课表页占位'), findsOneWidget);
-    expect(find.byType(JwxtCourseEditPage), findsNothing);
-    expect(find.byType(ManualCourseForm), findsNothing);
-    expect(find.byType(ScheduleEventEditPage), findsNothing);
+    expect(find.byType(TimetableCourseEditPage), findsNothing);
+    expect(find.byType(TimetableAddCoursePage), findsNothing);
+    expect(find.byType(TimetableScheduleEditPage), findsNothing);
     expect(_c.consumePendingOpen(), isNull);
   });
 

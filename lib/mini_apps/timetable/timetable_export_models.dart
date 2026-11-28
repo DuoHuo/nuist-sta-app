@@ -138,7 +138,7 @@ class TimetableExportSnapshot {
             'endNode': cell.slot.endNode,
             'location': cell.slot.location,
             'teacher': cell.slot.teacher,
-            'note': cell.slot.note,
+            'note': combineCourseNotes(cell.course.note, cell.slot.note),
             'credit': cell.course.credit ?? 0,
             'color': hexColor(coursePairFor(c, cell.course).bg.toARGB32()),
           });

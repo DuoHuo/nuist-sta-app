@@ -50,6 +50,7 @@ Future<TimetableColorPick?> showTimetableColorPicker(
   return showAppModalBottomSheet<TimetableColorPick>(
     context: context,
     isScrollControlled: true,
+    enablePredictiveBackScale: false,
     backgroundColor: Colors.transparent,
     builder: (_) => picker,
   );

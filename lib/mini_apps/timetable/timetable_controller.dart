@@ -12,6 +12,7 @@ import '../../core/refresh/silent_refresh.dart';
 import 'timetable_api.dart';
 import 'timetable_change_format.dart';
 import 'timetable_colors.dart';
+import 'timetable_course_group.dart';
 import 'timetable_date_edits.dart';
 import 'timetable_exam_parser.dart';
 import 'timetable_import_models.dart';
@@ -847,10 +848,20 @@ class TimetableController extends ChangeNotifier {
     }
     final courseEdit = _courseEdits[courseId];
     if (courseEdit != null &&
-        courseEdit.slotEdits.any(
-          (e) =>
-              e.replacements.any((p) => p.color != null || p.useDefaultColor),
-        )) {
+        (courseEdit.slotEdits.any(
+              (e) => e.replacements.any(
+                (p) => p.color != null || p.useDefaultColor,
+              ),
+            ) ||
+            courseEdit.addedSlots.any(
+              (p) => p.color != null || p.useDefaultColor,
+            ))) {
+      CourseSlotPatch clearPatchColor(CourseSlotPatch patch) =>
+          CourseSlotPatch.tryParse({
+            ...patch.toJson(),
+            'color': null,
+            'useDefaultColor': false,
+          })!;
       nextCourseEdits = {
         ..._courseEdits,
         courseId: courseEdit.copyWith(
@@ -860,14 +871,12 @@ class TimetableController extends ChangeNotifier {
                 original: edit.original,
                 originalWeeks: edit.originalWeeks,
                 replacements: [
-                  for (final patch in edit.replacements)
-                    CourseSlotPatch.tryParse({
-                      ...patch.toJson(),
-                      'color': null,
-                      'useDefaultColor': false,
-                    })!,
+                  for (final patch in edit.replacements) clearPatchColor(patch),
                 ],
               ),
+          ],
+          addedSlots: [
+            for (final patch in courseEdit.addedSlots) clearPatchColor(patch),
           ],
         ),
       };
@@ -1073,9 +1082,32 @@ class TimetableController extends ChangeNotifier {
   }
 
   /// 学期级冲突：与 [candidate] 同星期、节次重叠且周次相交的课程（教务+手动，跳过隐藏）。
-  /// 编辑已有课程时传 [excludeId] 排除自身。
-  List<Course> conflictsFor(CourseSlot candidate, {String? excludeId}) =>
-      courseConflicts(combinedCourses, candidate, excludeId: excludeId);
+  /// 编辑已有课程时传 [excludeId] 或 [excludeIds] 排除自身。
+  List<Course> conflictsFor(
+    CourseSlot candidate, {
+    String? excludeId,
+    Set<String>? excludeIds,
+  }) => courseConflicts(
+    combinedCourses,
+    candidate,
+    excludeId: excludeId,
+    excludeIds: excludeIds,
+  );
+
+  /// 解析 [target] 所属的同课程吸附分组（按课程号或归一化课名聚合）。
+  CourseGroup courseGroupOf(Course target) =>
+      resolveCourseGroup(combinedCourses, target);
+
+  /// 计算 [target] 所属课程组在本学期的总大节数与剩余大节数（按当前真实时刻计）。
+  CourseGroupProgress courseProgressOf(Course target, {DateTime? now}) =>
+      computeCourseGroupProgress(
+        group: courseGroupOf(target),
+        totalWeeks: totalWeeks,
+        hasTermStart: !weekPending,
+        now: now ?? clock(),
+        cellsForDay: cellsForDay,
+        periods: periods,
+      );
 
   Object? _combinedCourseSources;
   List<Course> _combinedCourses = const [];
@@ -3871,6 +3903,455 @@ class TimetableController extends ChangeNotifier {
     return saved.forSlot(replacement);
   }, resultFields: _savedResultFields);
 
+  /// 新建手动课程（支持一次添加多个上课时段、全局备注与自选颜色）。
+  Future<Course?> addManualCourseWithDrafts({
+    required String name,
+    required String teacher,
+    required String globalNote,
+    required List<CourseSlotDraft> slots,
+    int? userArgb,
+  }) => _log.operation<Course?>('course.add_manual_multi', () async {
+    final trimmedName = name.trim();
+    final trimmedTeacher = teacher.trim();
+    final trimmedGlobalNote = globalNote.trim();
+    if (trimmedName.isEmpty || slots.isEmpty) return null;
+    final builtSlots = <CourseSlot>[];
+    for (final draft in slots) {
+      final weeks = draft.weeks.where((w) => w >= 1 && w <= 104).toSet();
+      if (weeks.isEmpty ||
+          draft.day < 1 ||
+          draft.day > 7 ||
+          draft.startNode < 1 ||
+          draft.endNode < draft.startNode ||
+          draft.endNode > lastPeriod) {
+        return null;
+      }
+      builtSlots.add(
+        CourseSlot(
+          day: draft.day,
+          startNode: draft.startNode,
+          endNode: draft.endNode,
+          weeks: weeksToBits(weeks, totalWeeks),
+          teacher: trimmedTeacher,
+          location: draft.location.trim(),
+          note: draft.note.trim(),
+          kind: draft.kind,
+        ),
+      );
+    }
+    final created = await addManualCourse(
+      Course(
+        id: '',
+        name: trimmedName,
+        note: trimmedGlobalNote,
+        slots: _mergeFormSlots(builtSlots),
+      ),
+    );
+    if (userArgb != null) {
+      await setUserCourseColor(created.id, userArgb | 0xFF000000);
+    }
+    return manualCourseById(created.id) ?? created;
+  }, resultFields: _savedResultFields);
+
+  /// 统一保存按同课吸附后的多时段课程表单。
+  ///
+  /// - 教务课（含同课号吸附的多门教务课）：通过 [CourseEdit] 写全局名称/教师/备注、
+  ///   原时段差异覆盖（[CourseEdit.slotEdits]）及本地新增时段（[CourseEdit.addedSlots]），
+  ///   不修改教务原快照；恢复原课程时一并清除。
+  /// - 手动课：合并同组历史同名手动课到主课，迁移关联单日修改与配色。
+  /// - 全部文件在单次 [TimetableStore.writeBatch] 内落盘，失败不污染内存。
+  Future<Course?> saveCourseGroupForm({
+    required CourseGroup group,
+    required String name,
+    required String teacher,
+    required bool teacherChanged,
+    required String globalNote,
+    required List<CourseSlotDraft> slots,
+    int? userArgb,
+    bool colorChanged = false,
+  }) => _log.operation<Course?>('course.save_group', () async {
+    final trimmedName = name.trim();
+    final trimmedTeacher = teacher.trim();
+    final trimmedGlobalNote = globalNote.trim();
+    if (trimmedName.isEmpty || slots.isEmpty) return null;
+    for (final draft in slots) {
+      final validWeeks = draft.weeks.where((w) => w >= 1 && w <= 104).toSet();
+      if (validWeeks.isEmpty ||
+          draft.day < 1 ||
+          draft.day > 7 ||
+          draft.startNode < 1 ||
+          draft.endNode < draft.startNode ||
+          draft.endNode > lastPeriod) {
+        return null;
+      }
+    }
+
+    final nowIso = DateTime.now().toIso8601String();
+    final primary = group.primary;
+    final jwxtMembers = [
+      for (final c in group.courses)
+        if (!c.isManual) c,
+    ];
+    final manualMembers = [
+      for (final c in group.courses)
+        if (c.isManual) c,
+    ];
+
+    Map<String, CourseEdit>? nextCourseEdits;
+    List<Course>? nextManual;
+    List<CourseDateEdit>? nextDateEdits;
+    Map<String, int>? nextUserColors;
+    var manualChanged = false;
+    var courseEditsChanged = false;
+    var dateEditsChanged = false;
+    var userColorsChanged = false;
+
+    final workingCourseEdits = Map<String, CourseEdit>.of(_courseEdits);
+    final workingManual = List<Course>.of(_manualCourses);
+    final workingDateEdits = List<CourseDateEdit>.of(_dateEdits);
+    final workingUserColors = Map<String, int>.of(_userColors);
+
+    // 统一按草稿构造目标 CourseSlot。
+    CourseSlot slotFromDraft(CourseSlotDraft draft, {int minWeeksLen = 0}) {
+      final weeks = draft.weeks.where((w) => w >= 1 && w <= 104).toSet();
+      final len = minWeeksLen > totalWeeks ? minWeeksLen : totalWeeks;
+      final effectiveTeacher = teacherChanged ? trimmedTeacher : draft.teacher;
+      return CourseSlot(
+        day: draft.day,
+        startNode: draft.startNode,
+        endNode: draft.endNode,
+        weeks: weeksToBits(weeks, len),
+        teacher: effectiveTeacher,
+        location: draft.location.trim(),
+        note: draft.note.trim(),
+        isLab: draft.sourceSlot?.isLab ?? false,
+        kind: draft.kind,
+        color: colorChanged ? null : draft.color,
+        useDefaultColor: colorChanged ? false : draft.useDefaultColor,
+      );
+    }
+
+    final survivingIds = <String>{};
+
+    if (jwxtMembers.isNotEmpty) {
+      final primaryJwxt = jwxtMembers.first;
+      // 按归属分拣草稿：教务原时段、教务新增时段、原有手动课时段。
+      final jwxtOrigGroups = <String, Map<int, List<CourseSlot>>>{};
+      final jwxtAddedDrafts = <CourseSlotDraft>[];
+      final manualSlotsByCourse = <String, List<CourseSlot>>{
+        for (final m in manualMembers) m.id: <CourseSlot>[],
+      };
+
+      for (final j in jwxtMembers) {
+        final rawCourse = _jwxtCourseById(j.id);
+        if (rawCourse == null) continue;
+        jwxtOrigGroups[j.id] = {
+          for (var i = 0; i < rawCourse.slots.length; i++) i: <CourseSlot>[],
+        };
+      }
+
+      // 被合并进同一张时段卡的其余教务/手动原时段不再单独输出，其周次已并入主草稿。
+      for (final draft in slots) {
+        final srcCourse = draft.sourceCourse;
+        final srcSlot = draft.sourceSlot;
+        if (srcCourse == null || srcSlot == null) {
+          jwxtAddedDrafts.add(draft);
+          continue;
+        }
+        if (srcCourse.isManual &&
+            manualSlotsByCourse.containsKey(srcCourse.id)) {
+          manualSlotsByCourse[srcCourse.id]!.add(
+            slotFromDraft(draft, minWeeksLen: srcSlot.weeks.length),
+          );
+          continue;
+        }
+        final originTag = slotOriginOf(srcSlot);
+        if (originTag != null && originTag.added) {
+          jwxtAddedDrafts.add(draft);
+          continue;
+        }
+        final rawCourse = _jwxtCourseById(srcCourse.id);
+        final rawSlot = rawCourse == null
+            ? null
+            : _jwxtOriginal(srcCourse.id, srcSlot, draft.sourceSlotIndex ?? -1);
+        final rawIndex = rawCourse == null || rawSlot == null
+            ? -1
+            : _indexOfEqualSlot(rawCourse.slots, rawSlot, -1);
+        if (rawCourse != null &&
+            rawIndex >= 0 &&
+            jwxtOrigGroups[srcCourse.id] != null) {
+          var minLen = rawCourse.slots[rawIndex].weeks.length;
+          for (final extra in draft.extraSources) {
+            if (extra.slot.weeks.length > minLen) {
+              minLen = extra.slot.weeks.length;
+            }
+          }
+          jwxtOrigGroups[srcCourse.id]![rawIndex]!.add(
+            slotFromDraft(draft, minWeeksLen: minLen),
+          );
+        } else {
+          jwxtAddedDrafts.add(draft);
+        }
+      }
+
+      for (final j in jwxtMembers) {
+        final rawCourse = _jwxtCourseById(j.id);
+        final baseEdit = _editBase(j.id);
+        if (rawCourse == null || baseEdit == null) continue;
+        survivingIds.add(j.id);
+
+        final nameVal = trimmedName == rawCourse.name ? null : trimmedName;
+        final clearName = nameVal == null;
+        final noteVal = trimmedGlobalNote.isEmpty ? null : trimmedGlobalNote;
+        final clearNote = noteVal == null;
+        final teacherVal = teacherChanged ? trimmedTeacher : baseEdit.teacher;
+        final clearTeacher = !teacherChanged && baseEdit.teacher == null;
+
+        final perOrig = jwxtOrigGroups[j.id] ?? const {};
+        final slotEdits = <CourseSlotEdit>[];
+        for (var i = 0; i < rawCourse.slots.length; i++) {
+          final rawSlot = rawCourse.slots[i];
+          final reps = _mergeFormSlots(perOrig[i] ?? const []);
+          // nextEdit 清空顶层 location / courseKind，各时段差异均按最终 base 计算。
+          final base = rawSlot.copyWith(teacher: teacherVal);
+          // 仅当与教务原时段不完全相同时才记录 slotEdit。
+          final unchanged =
+              reps.length == 1 &&
+              reps.single.ref == base.ref &&
+              reps.single.weeks == base.weeks &&
+              reps.single.teacher == base.teacher &&
+              reps.single.location == base.location &&
+              reps.single.note == base.note &&
+              reps.single.kind == base.kind &&
+              reps.single.nameOverride == base.nameOverride &&
+              reps.single.color == base.color &&
+              reps.single.useDefaultColor == base.useDefaultColor;
+          if (!unchanged) {
+            slotEdits.add(
+              CourseSlotEdit(
+                original: rawSlot.ref,
+                originalWeeks: rawSlot.weeks,
+                replacements: [
+                  for (final value in reps)
+                    CourseSlotPatch.between(base, value),
+                ],
+              ),
+            );
+          }
+        }
+
+        final addedPatches = <CourseSlotPatch>[
+          if (j.id == primaryJwxt.id)
+            for (final draft in jwxtAddedDrafts)
+              () {
+                final built = slotFromDraft(draft);
+                final blank = CourseSlot(
+                  day: built.day,
+                  startNode: built.startNode,
+                  endNode: built.endNode,
+                  weeks: built.weeks,
+                  teacher: teacherVal ?? '',
+                );
+                return CourseSlotPatch.between(blank, built);
+              }(),
+        ];
+
+        final nextEdit = baseEdit.copyWith(
+          name: nameVal,
+          clearName: clearName,
+          teacher: teacherVal,
+          clearTeacher: clearTeacher,
+          clearLocation: true,
+          note: noteVal,
+          clearNote: clearNote,
+          clearCourseKind: true,
+          slotEdits: slotEdits,
+          addedSlots: addedPatches,
+          deleted: false,
+          updatedAt: nowIso,
+        );
+        if (nextEdit.isEmpty) {
+          if (workingCourseEdits.remove(j.id) != null) {
+            courseEditsChanged = true;
+          }
+        } else {
+          workingCourseEdits[j.id] = nextEdit;
+          courseEditsChanged = true;
+        }
+      }
+
+      // 同步同组吸附的已有手动课（空时段则移除）。
+      for (final m in manualMembers) {
+        final idx = workingManual.indexWhere((c) => c.id == m.id);
+        if (idx < 0) continue;
+        final mergedSlots = _mergeFormSlots(
+          manualSlotsByCourse[m.id] ?? const [],
+        );
+        if (mergedSlots.isEmpty) {
+          workingManual.removeAt(idx);
+          workingUserColors.remove(m.id);
+          final beforeLen = workingDateEdits.length;
+          workingDateEdits.removeWhere((e) => e.courseId == m.id);
+          if (workingDateEdits.length != beforeLen) dateEditsChanged = true;
+          manualChanged = true;
+          userColorsChanged = true;
+        } else {
+          survivingIds.add(m.id);
+          workingManual[idx] = workingManual[idx].copyWith(
+            name: trimmedName,
+            note: trimmedGlobalNote,
+            slots: _carrySplitFrom(workingManual[idx].slots, mergedSlots),
+          );
+          manualChanged = true;
+        }
+      }
+    } else {
+      // 全为手动课：规整到主手动课，合并历史同名分裂记录。
+      final idx = workingManual.indexWhere((c) => c.id == primary.id);
+      if (idx < 0) return null;
+      survivingIds.add(primary.id);
+      final rebuiltSlots = _mergeFormSlots([
+        for (final draft in slots)
+          slotFromDraft(
+            draft,
+            minWeeksLen: draft.sourceSlot?.weeks.length ?? totalWeeks,
+          ),
+      ]);
+      final oldPrimary = workingManual[idx];
+      var updatedPrimary = oldPrimary.copyWith(
+        name: trimmedName,
+        note: trimmedGlobalNote,
+        slots: _carrySplitFrom(oldPrimary.slots, rebuiltSlots),
+      );
+      if (updatedPrimary.colorIndex == null &&
+          updatedPrimary.assignedColorIndex == null) {
+        updatedPrimary = updatedPrimary.copyWith(
+          assignedColorIndex: _colorForOne(updatedPrimary),
+        );
+      }
+      workingManual[idx] = updatedPrimary;
+      manualChanged = true;
+
+      final mergedIds = {
+        for (final m in manualMembers)
+          if (m.id != primary.id) m.id,
+      };
+      if (mergedIds.isNotEmpty) {
+        workingManual.removeWhere((c) => mergedIds.contains(c.id));
+        for (final mid in mergedIds) {
+          if (workingUserColors.remove(mid) != null) {
+            userColorsChanged = true;
+          }
+        }
+        // 将副手动课上的单日修改迁移到主手动课 ID。
+        for (var i = 0; i < workingDateEdits.length; i++) {
+          final e = workingDateEdits[i];
+          if (mergedIds.contains(e.courseId)) {
+            workingDateEdits[i] = CourseDateEdit.tryParse({
+              ...e.toJson(),
+              'courseId': primary.id,
+            })!;
+            dateEditsChanged = true;
+          }
+        }
+      }
+    }
+
+    if (colorChanged) {
+      for (final id in survivingIds) {
+        if (userArgb == null) {
+          workingUserColors.remove(id);
+        } else {
+          workingUserColors[id] = userArgb | 0xFF000000;
+        }
+      }
+      userColorsChanged = true;
+      // 清除组内单日局部颜色，保持与 setUserCourseColor 一致。
+      final nextDates = <CourseDateEdit>[];
+      for (final e in workingDateEdits) {
+        if (!survivingIds.contains(e.courseId) ||
+            (e.color == null && !e.useDefaultColor)) {
+          nextDates.add(e);
+        } else {
+          dateEditsChanged = true;
+          final cleaned = e.copyWith(clearColor: true, useDefaultColor: false);
+          if (!cleaned.isEmpty) nextDates.add(cleaned);
+        }
+      }
+      if (dateEditsChanged) {
+        workingDateEdits
+          ..clear()
+          ..addAll(nextDates);
+      }
+    }
+
+    // 清理被全量改名/改教师覆盖的组内单日局部字段。
+    final originalName = primary.name.trim();
+    final globalNameChanged = trimmedName != originalName;
+    if (globalNameChanged || teacherChanged) {
+      final cleaned = <CourseDateEdit>[];
+      for (final e in workingDateEdits) {
+        if (!survivingIds.contains(e.courseId) || e.isDelete) {
+          cleaned.add(e);
+          continue;
+        }
+        final updated = e.copyWith(
+          clearName: globalNameChanged,
+          clearTeacher: teacherChanged,
+        );
+        if (updated.name != e.name || updated.teacher != e.teacher) {
+          dateEditsChanged = true;
+        }
+        if (!updated.isEmpty) cleaned.add(updated);
+      }
+      if (dateEditsChanged) {
+        workingDateEdits
+          ..clear()
+          ..addAll(cleaned);
+      }
+    }
+
+    if (courseEditsChanged) {
+      nextCourseEdits = Map.unmodifiable(workingCourseEdits);
+    }
+    if (manualChanged) {
+      nextManual = List.unmodifiable(workingManual);
+    }
+    if (dateEditsChanged) {
+      nextDateEdits = List.unmodifiable(workingDateEdits);
+    }
+    if (userColorsChanged) {
+      nextUserColors = Map.of(workingUserColors);
+    }
+
+    await _inScope(
+      () => TimetableStore.writeBatch(() async {
+        if (nextManual != null) {
+          await TimetableStore.saveManualCourses(nextManual);
+        }
+        if (nextCourseEdits != null) {
+          await ScheduleStore.saveCourseEdits(nextCourseEdits);
+        }
+        if (nextDateEdits != null) {
+          await ScheduleStore.saveCourseDateEdits(nextDateEdits);
+        }
+        if (nextUserColors != null) {
+          await TimetableStore.saveUserCourseColors(nextUserColors);
+        }
+      }),
+    );
+
+    if (nextManual != null) _manualCourses = nextManual;
+    if (nextCourseEdits != null) _courseEdits = nextCourseEdits;
+    if (nextDateEdits != null) _dateEdits = nextDateEdits;
+    if (nextUserColors != null) _userColors = nextUserColors;
+    _clampViewingWeek();
+    _scheduleVersion++;
+    notifyListeners();
+    _fireScheduleChanged(ScheduleChangeReason.courseEdit);
+    return courses.where((c) => c.id == primary.id).firstOrNull;
+  }, resultFields: _savedResultFields);
+
   /// 将当前单周的一次课程安排移为独立考试，连续节次仍算同一次安排。
   /// 原课程仅删除这一次；考试之后的编辑、删除不再关联原课程。
   /// 从底层时段移除这一周，撤销整天调课也不会重新出现原课程。
@@ -3930,20 +4411,52 @@ class TimetableController extends ChangeNotifier {
           if (course.id == stored.id) stored.copyWith(slots: slots) else course,
       ]);
     } else {
-      final raw = _jwxtOriginal(base.course.id, original, base.slotIndex);
+      final originTag = slotOriginOf(original);
       final edit = _editBase(base.course.id);
-      if (raw == null || edit == null) return null;
-      final replacements = <CourseSlot>[];
-      for (var index = 0; index < base.course.slots.length; index++) {
-        final slot = base.course.slots[index];
-        final origin = _jwxtOriginal(base.course.id, slot, index);
-        if (origin == null || !_sameSlot(origin, raw)) continue;
-        replacements.add(index == base.slotIndex ? replacement : slot);
+      if (edit == null) return null;
+      if (originTag != null &&
+          originTag.added &&
+          originTag.addedIndex != null) {
+        final idx = originTag.addedIndex!;
+        if (idx < 0 || idx >= edit.addedSlots.length) return null;
+        final nextAdded = [...edit.addedSlots];
+        if (weeksOf(replacement).isEmpty) {
+          nextAdded.removeAt(idx);
+        } else {
+          final blank = CourseSlot(
+            day: replacement.day,
+            startNode: replacement.startNode,
+            endNode: replacement.endNode,
+            weeks: replacement.weeks,
+            teacher: edit.teacher ?? '',
+            location: edit.location ?? '',
+            kind: edit.courseKind,
+          );
+          nextAdded[idx] = CourseSlotPatch.between(blank, replacement);
+        }
+        nextCourseEdits = Map.unmodifiable({
+          ..._courseEdits,
+          base.course.id: edit.copyWith(
+            addedSlots: nextAdded,
+            updatedAt: DateTime.now().toIso8601String(),
+          ),
+        });
+      } else {
+        final raw = _jwxtOriginal(base.course.id, original, base.slotIndex);
+        if (raw == null) return null;
+        final replacements = <CourseSlot>[];
+        for (var index = 0; index < base.course.slots.length; index++) {
+          final slot = base.course.slots[index];
+          if (slotOriginOf(slot)?.added ?? false) continue;
+          final origin = _jwxtOriginal(base.course.id, slot, index);
+          if (origin == null || !_sameSlot(origin, raw)) continue;
+          replacements.add(index == base.slotIndex ? replacement : slot);
+        }
+        nextCourseEdits = Map.unmodifiable({
+          ..._courseEdits,
+          base.course.id: _withJwxtSlotReplacements(raw, replacements, edit),
+        });
       }
-      nextCourseEdits = Map.unmodifiable({
-        ..._courseEdits,
-        base.course.id: _withJwxtSlotReplacements(raw, replacements, edit),
-      });
     }
     final exam = ScheduleEvent(
       id: 'event-${DateTime.now().microsecondsSinceEpoch}-${_eventSeq++}',
@@ -4021,12 +4534,37 @@ class TimetableController extends ChangeNotifier {
       final slots = [...stored.slots]..[target] = replacement;
       return updateManualCourse(stored.copyWith(slots: _mergeFormSlots(slots)));
     }
+    final originTag = slotOriginOf(original);
+    if (originTag != null && originTag.added && originTag.addedIndex != null) {
+      final edit = _editBase(course.id);
+      final idx = originTag.addedIndex!;
+      if (edit == null || idx < 0 || idx >= edit.addedSlots.length) return null;
+      final nextAdded = [...edit.addedSlots];
+      final blank = CourseSlot(
+        day: replacement.day,
+        startNode: replacement.startNode,
+        endNode: replacement.endNode,
+        weeks: replacement.weeks,
+        teacher: edit.teacher ?? '',
+        location: edit.location ?? '',
+        kind: edit.courseKind,
+      );
+      nextAdded[idx] = CourseSlotPatch.between(blank, replacement);
+      await _setCourseEdit(
+        edit.copyWith(
+          addedSlots: nextAdded,
+          updatedAt: DateTime.now().toIso8601String(),
+        ),
+      );
+      return courses.where((value) => value.id == course.id).firstOrNull;
+    }
     final raw = _jwxtOriginal(course.id, original, index);
     final edit = _editBase(course.id);
     if (raw == null || edit == null) return null;
     final replacements = <CourseSlot>[];
     for (var i = 0; i < course.slots.length; i++) {
       final slot = course.slots[i];
+      if (slotOriginOf(slot)?.added ?? false) continue;
       final origin = _jwxtOriginal(course.id, slot, i);
       if (origin == null || !_sameSlot(origin, raw)) continue;
       replacements.add(i == index ? replacement : slot);
@@ -4051,7 +4589,6 @@ class TimetableController extends ChangeNotifier {
     final base = raw.copyWith(
       teacher: edit.teacher,
       location: edit.location,
-      note: edit.note,
       kind: edit.courseKind,
     );
     final record = CourseSlotEdit(
@@ -4182,6 +4719,69 @@ class TimetableController extends ChangeNotifier {
       _manualCourses = [..._manualCourses]..[index] = next;
       await _persistManual(ScheduleChangeReason.move);
     } else {
+      final originTag = slotOriginOf(slot);
+      if (originTag != null &&
+          originTag.added &&
+          originTag.addedIndex != null) {
+        final edit = _editBase(course.id);
+        final idx = originTag.addedIndex!;
+        if (edit == null || idx < 0 || idx >= edit.addedSlots.length) {
+          return const MoveResult.error(MoveError.invalidSlot);
+        }
+        final currentAdded = [
+          for (var i = 0; i < edit.addedSlots.length; i++)
+            edit.addedSlots[i].apply(
+              CourseSlot(
+                day: edit.addedSlots[i].day,
+                startNode: edit.addedSlots[i].startNode,
+                endNode: edit.addedSlots[i].endNode,
+                weeks: edit.addedSlots[i].weeks,
+                teacher: edit.teacher ?? '',
+                location: edit.location ?? '',
+                kind: edit.courseKind,
+              ),
+            ),
+        ];
+        final movedAdded = moveManualSlots(
+          currentAdded,
+          idx,
+          affected,
+          toDay: toDay,
+          toStart: toStartPeriod,
+          toEnd: toEnd,
+        );
+        final nextPatches = [
+          for (final item in movedAdded)
+            CourseSlotPatch.between(
+              CourseSlot(
+                day: item.day,
+                startNode: item.startNode,
+                endNode: item.endNode,
+                weeks: item.weeks,
+                teacher: edit.teacher ?? '',
+                location: edit.location ?? '',
+                kind: edit.courseKind,
+              ),
+              item,
+            ),
+        ];
+        await _setCourseEdit(
+          edit.copyWith(
+            addedSlots: nextPatches,
+            updatedAt: DateTime.now().toIso8601String(),
+          ),
+        );
+        return MoveResult.moved(
+          affectedWeeks: affected,
+          conflictNames: _conflictNames(
+            course.id,
+            toDay,
+            toStartPeriod,
+            toEnd,
+            affected,
+          ),
+        );
+      }
       final origin = _jwxtOriginal(course.id, slot, slotIndex);
       if (origin == null) return const MoveResult.error(MoveError.invalidSlot);
       final edit = _courseEdits[course.id];
@@ -4191,6 +4791,7 @@ class TimetableController extends ChangeNotifier {
         var movingIndex = -1;
         for (var i = 0; i < course.slots.length; i++) {
           final candidate = course.slots[i];
+          if (slotOriginOf(candidate)?.added ?? false) continue;
           final raw = _jwxtOriginal(course.id, candidate, i);
           if (raw == null || !_sameSlot(raw, origin)) continue;
           if (i == slotIndex) movingIndex = peers.length;
@@ -4859,11 +5460,22 @@ class TimetableController extends ChangeNotifier {
         if (course.id == original.id) current = course;
       }
       final changes = <CourseDetailChange>[];
+      if (current != null && original.note != current.note) {
+        changes.add(
+          CourseDetailChange(
+            field: '课程备注',
+            before: original.note.isEmpty ? '未填写' : original.note,
+            after: current.note.isEmpty ? '未填写' : current.note,
+          ),
+        );
+      }
       for (final raw in original.slots) {
         final replacements = <CourseSlot>[
           if (current != null)
             for (final slot in current.slots)
-              if (_sameSlot(slotOriginOf(slot)?.original ?? slot, raw)) slot,
+              if (!(slotOriginOf(slot)?.added ?? false) &&
+                  _sameSlot(slotOriginOf(slot)?.original ?? slot, raw))
+                slot,
         ];
         final retained = <int>{};
         for (final slot in replacements) {
@@ -4902,6 +5514,20 @@ class TimetableController extends ChangeNotifier {
                   '${formatWeeks(removed, maxSegments: null)} · '
                   '${_detailTime(raw.day, raw.startNode, raw.endNode)}',
               after: '已删除',
+            ),
+          );
+        }
+      }
+      if (current != null) {
+        for (final slot in current.slots) {
+          if (!(slotOriginOf(slot)?.added ?? false)) continue;
+          changes.add(
+            CourseDetailChange(
+              field: '上课安排',
+              before: '未安排',
+              after:
+                  '${formatWeeks(weeksOf(slot), maxSegments: null)} · '
+                  '${_detailTime(slot.day, slot.startNode, slot.endNode)}',
             ),
           );
         }

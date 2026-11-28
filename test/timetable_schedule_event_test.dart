@@ -8,11 +8,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:nuist_sta_app/core/theme.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_entry_add_pages.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_entry_edit_page.dart';
+import 'package:nuist_sta_app/mini_apps/timetable/timetable_entry_form_widgets.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_exams_card.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_exams_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_detail_sheet.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_edit_page.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_event_layout.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_schedule_store.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
@@ -202,7 +204,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 50));
       }
 
-      // 1. 「+」三项；选「其他」进添加日程后返回
+      // 1. 「+」三项；选「日程」进独立添加页后返回
       await tester.tap(find.byTooltip('添加'));
       await tester.pumpAndSettle();
       for (final k in [
@@ -212,13 +214,13 @@ void main() {
       ]) {
         expect(find.byKey(Key(k)), findsOneWidget);
       }
-      await tester.tap(find.text('其他'));
+      await tester.tap(find.text('日程'));
       await tester.pumpAndSettle();
       expect(find.text('添加日程'), findsOneWidget);
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
 
-      // 2. EV02 名称为空保存禁用，填写保存为手动考试（EV15）；EV03 结束时间不晚于开始时间报错
+      // 2. EV02 名称为空校验、填写保存为手动考试（EV15）；EV03 结束时间不晚于开始时间报错
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();
       final bad = _event(
@@ -230,7 +232,7 @@ void main() {
       );
       await tester.pumpWidget(
         MaterialApp(
-          home: ScheduleEventEditPage(controller: _c, initial: bad),
+          home: TimetableScheduleEditPage(controller: _c, initial: bad),
         ),
       );
       await tester.pump();
@@ -243,17 +245,13 @@ void main() {
       await tester.pumpAndSettle();
       await tester.pumpWidget(
         MaterialApp(
-          home: ScheduleEventEditPage(
-            controller: _c,
-            kind: ScheduleKind.exam,
-            initialDate: _tuesday,
-          ),
+          home: TimetableAddExamPage(controller: _c, initialDate: _tuesday),
         ),
       );
       await tester.pump();
-      TextButton save() =>
-          tester.widget(find.byKey(const Key('schedule_form_save')));
-      expect(save().onPressed, isNull);
+      await tester.tap(find.byKey(const Key('schedule_form_save')));
+      await tester.pump();
+      expect(find.text('请填写名称'), findsOneWidget);
       await tester.enterText(
         find.byKey(const Key('schedule_form_title')),
         '测试考试甲',
@@ -263,7 +261,6 @@ void main() {
         '测试楼 B202',
       );
       await tester.pump();
-      expect(save().onPressed, isNotNull);
       await tester.tap(find.byKey(const Key('schedule_form_save')));
       await _settleIo(tester);
       final manualExam = _c.scheduleEvents.single;
@@ -326,14 +323,10 @@ void main() {
       expect(_c.isJwxtOverridden(examKey: key), isFalse);
       expect(_c.scheduleEvents.single.location, '测试楼 B202');
 
-      // 5. 日程编辑页支持正常退出返回
+      // 5. 日程添加页支持正常退出返回
       await _pumpLauncher(
         tester,
-        (context) => showScheduleEventEditPage(
-          context,
-          controller: _c,
-          kind: ScheduleKind.other,
-        ),
+        (context) => showAddSchedulePage(context, controller: _c),
       );
       final route =
           ModalRoute.of(
@@ -541,7 +534,7 @@ void main() {
         expect(isOutsideTermWeeks(_c, DateTime(2026, 8, 30)), isTrue);
         await _pumpLauncher(
           tester,
-          (context) => showScheduleEventEditPage(
+          (context) => showAddSchedulePage(
             context,
             controller: _c,
             initialDate: outside,

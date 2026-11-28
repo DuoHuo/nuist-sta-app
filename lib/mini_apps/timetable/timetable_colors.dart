@@ -296,15 +296,17 @@ bool slotsConflict(CourseSlot a, CourseSlot b) =>
     weeksIntersect(a.weeks, b.weeks);
 
 /// 学期级冲突：[courses] 中与 [candidate] 任一时段冲突的课程（保持输入顺序）。
-/// 跳过隐藏课程与 id == [excludeId] 的课程（编辑自身时传入）。
+/// 跳过隐藏课程与 id 在 [excludeId] / [excludeIds] 中的课程（编辑自身时传入）。
 List<Course> courseConflicts(
   Iterable<Course> courses,
   CourseSlot candidate, {
   String? excludeId,
+  Set<String>? excludeIds,
 }) => [
   for (final c in courses)
     if (!c.hidden &&
         (excludeId == null || c.id != excludeId) &&
+        (excludeIds == null || !excludeIds.contains(c.id)) &&
         c.slots.any((s) => slotsConflict(s, candidate)))
       c,
 ];

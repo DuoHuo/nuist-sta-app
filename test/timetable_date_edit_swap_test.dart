@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_api.dart';
-import 'package:nuist_sta_app/mini_apps/timetable/timetable_apply_weeks_sheet.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_controller.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_date_edits.dart';
 import 'package:nuist_sta_app/mini_apps/timetable/timetable_delete_scope_sheet.dart';
@@ -675,12 +674,6 @@ void main() {
       expect(single!.scope, DateEditScope.oneDay);
       expect(single.weeks, isEmpty);
       expect(cellOf(_mon2, 'MATH|01').course.name, '高数·当天');
-
-      expect(applyWeeksSummary([1, 2, 3], 3), '全部 3 周');
-      expect(applyWeeksSummary([3, 5, 8], 16), '第 3、5、8 周');
-      expect(applyWeeksSummary([3, 5, 7], 16), '第 3–7 周（单）');
-      expect(isAllSemesterWeeks([1, 2, 3, 4], 4), isTrue);
-      expect(isAllSemesterWeeks([1, 2], 4), isFalse);
     });
 
     test('删除范围：oneDay / weekdayMatch / 文案', () async {

@@ -178,6 +178,21 @@ void main() {
     controller.debugReset();
     controller.debugSetSnapshot(
       TimetableSnapshot(
+        courses: const [
+          Course(
+            id: 'c1',
+            name: '示例课程',
+            slots: [
+              CourseSlot(
+                day: 1,
+                startNode: 1,
+                endNode: 2,
+                weeks: '11111111111111111111',
+                location: '明德楼 A101',
+              ),
+            ],
+          ),
+        ],
         periods: TimetableController.defaultPeriods(),
         settings: TimetableSettings(termStartDate: DateTime(2026, 11, 2)),
       ),
@@ -256,6 +271,19 @@ void main() {
     await _backGesture(tester, 'commitBackGesture');
     expect(find.text('切换周数与课表'), findsNothing);
     expect(find.text('右栏弹层'), findsOneWidget);
+
+    // 真实课程格点击打开课程详情弹层：不接入预测性返回手势（startBackGesture 为 false），
+    // 提交系统返回直接走标准关闭且不穿透底层课表页。
+    await tester.tap(find.text('示例课程').first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('course_detail_title')), findsOneWidget);
+    expect(await _backGesture(tester, 'startBackGesture'), isFalse);
+    await _backGesture(tester, 'commitBackGesture');
+    expect(find.byKey(const Key('course_detail_title')), findsNothing);
+    expect(
+      find.byKey(const Key('timetable_schedule_switcher_button')),
+      findsOneWidget,
+    );
 
     // 切回右栏后，右栏弹层可正常接手手势并关闭。
     navigation.interact(1);
